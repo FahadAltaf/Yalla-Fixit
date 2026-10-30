@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { Bookmark, BookmarkPlus, Check, ChevronDown, DatabaseZap, Loader2, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
+import { DateRangePicker } from "@/components/data-table/toolbars/date-range-picker";
 import { timeAgo } from "@/components/dashboard/shared/kaizen";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -26,6 +27,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { addDaysToDateString, todayInZone } from "@/lib/scheduling/org-time";
 import type { SavedFilter } from "@/lib/server/reports/access";
 import { cn } from "@/lib/utils";
@@ -69,32 +71,17 @@ export function ReportDateRange({
   label?: string;
   max?: string;
 }) {
+  /* The same date range picker as Ready to invoice (28 Oct): one button, a two-month calendar. */
   return (
     <div className="flex flex-wrap items-center gap-2">
       {label ? <span className="text-muted-foreground text-xs whitespace-nowrap">{label}</span> : null}
-      <Input
-        type="date"
-        aria-label={`${label ?? "Dates"} from`}
-        className="h-9 w-[150px]"
-        value={from}
-        max={to || max}
-        onChange={(e) => e.target.value && onChange(e.target.value, to < e.target.value ? e.target.value : to)}
-      />
-      <span className="text-muted-foreground text-xs">to</span>
-      <Input
-        type="date"
-        aria-label={`${label ?? "Dates"} to`}
-        className="h-9 w-[150px]"
-        value={to}
-        min={from}
-        max={max}
-        onChange={(e) => e.target.value && onChange(from > e.target.value ? e.target.value : from, e.target.value)}
-      />
+      <DateRangePicker from={from} to={to} max={max} label={`${label ?? "Report"} dates`} onChange={onChange} />
     </div>
   );
 }
 
-export function useReportFilters<F extends ReportFilters>(report: ReportKey, defaults: F) {
+export function useReportFilters<F extends ReportFilters>(report: ReportKey, defaults: F, options: { restoreLastUsed?: boolean } = {}) {
+  const restoreLastUsed = options.restoreLastUsed ?? true;
   const searchParams = useSearchParams();
   const fromLink = useMemo(() => {
     const picked: Partial<F> = {};
@@ -129,7 +116,7 @@ export function useReportFilters<F extends ReportFilters>(report: ReportKey, def
         if (cancelled) return;
         setSaved(response.saved);
         /* The person's last selection, except its dates: a report opens on the last 30 days (26 Oct). */
-        if (!fromLink && response.lastUsed) {
+        if (restoreLastUsed && !fromLink && response.lastUsed) {
           const last = known(response.lastUsed) as Record<string, string>;
           for (const key of DATE_KEYS) delete last[key];
           setFiltersState({ ...defaults, ...(last as Partial<F>) });
@@ -143,7 +130,7 @@ export function useReportFilters<F extends ReportFilters>(report: ReportKey, def
     return () => {
       cancelled = true;
     };
-  }, [report, defaults, fromLink, known]);
+  }, [report, defaults, fromLink, known, restoreLastUsed]);
 
   /* Remember the selection, a moment after the last change. */
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -317,6 +304,7 @@ const RESOURCE_LABELS: Record<string, string> = {
   estimates: "quotations",
   work_orders: "work orders",
   appointments: "appointments",
+  time_off: "time off",
 };
 const STALE_MS = 60 * 60 * 1000;
 /* The sync runs every 15 minutes at go-live; an hour behind is worth a second look. */
@@ -364,6 +352,37 @@ export function QuotationStatusBadge({ statusKey, label }: { statusKey: string; 
 }
 
 /** A soft warning pill: past a limit, lapsing, missing data. */
+/**
+ * A list of people in a table cell (28 Oct): the first name, and "+2" for the
+ * rest, whose tooltip lists everyone. Keeps rows one line high.
+ */
+export function NamesCell({ names }: { names: string[] }) {
+  if (!names.length) return <span className="text-muted-foreground text-sm">—</span>;
+  const [first, ...rest] = names;
+  return (
+    <div className="flex items-center gap-1.5 text-sm whitespace-nowrap">
+      <span>{first}</span>
+      {rest.length ? (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Badge variant="secondary" className="h-5 cursor-help rounded-full px-1.5 tabular-nums" onClick={(event) => event.stopPropagation()}>
+              +{rest.length}
+            </Badge>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" align="start">
+            <p className="mb-0.5 font-medium">{plural(names.length, "technician")}</p>
+            {names.map((name, i) => (
+              <p key={`${name}-${i}`} className="opacity-80">
+                {name}
+              </p>
+            ))}
+          </TooltipContent>
+        </Tooltip>
+      ) : null}
+    </div>
+  );
+}
+
 export function FlagBadge({ tone = "warning", children }: { tone?: "warning" | "danger" | "muted"; children: React.ReactNode }) {
   return (
     <Badge

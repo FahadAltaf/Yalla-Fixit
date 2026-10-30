@@ -10,12 +10,11 @@ import { z } from "zod";
  *
  * The defaults are the BRD's §6.6 suggestions, which it says are "to be
  * confirmed with Sharon". They are shown as suggestions on the page until
- * someone saves a value. One setting has no default on purpose:
+ * someone saves a value.
  *
- *   compliance.thresholdPercent  90 % (meeting) or 97 % (document)? (D-09)
- *     TC12's expected penalty only holds at 97 %, so picking either would
- *     be deciding an employee-penalty rule in code. Penalties are not
- *     calculated until an administrator sets it.
+ *   compliance.thresholdPercent  90 % (decided 29 Oct, D-09; the BRD
+ *     gave 90 % or 97 %). It may still be cleared, and then no penalty
+ *     is worked out.
  */
 
 const HH_MM = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -24,6 +23,11 @@ const wholeDays = (max: number) => z.number().int().min(0).max(max);
 const minutes = z.number().int().min(0).max(240);
 const aed = z.number().min(0).max(100_000).multipleOf(0.01);
 const userIds = z.array(z.uuid()).max(50);
+/* A link into Zoho FSM (BRD B5: its standard and custom reports are linked, not rebuilt). */
+const fsmLink = z
+  .url({ protocol: /^https$/, message: "Use the full https:// address of the report in Zoho FSM" })
+  .max(1000)
+  .nullable();
 
 export const reportingSettingsSchema = z.object({
   finance: z.object({
@@ -54,12 +58,20 @@ export const reportingSettingsSchema = z.object({
     shiftCheckInAlertDelayMinutes: minutes,
     appointmentCheckInAlertDelayMinutes: minutes,
     lateArrivalToleranceMinutes: minutes,
-    /** Subtracted from each shift for available hours. 0 until D-22 says
-        whether a working day is 8 h or 9 h. */
+    /** Hours a working day, net of breaks (D-22, Sami 28 Oct: 8). A
+        technician's own daily hours (data centre: 12) replace it. */
+    standardDailyHours: z.number().min(1).max(24),
+    /** 29 Oct: a technician whose Service Type is Data Center works this
+        many hours a day, all of it available (not overtime). Their own
+        daily hours in Scheduling still come first. */
+    dataCentreDailyHours: z.number().min(1).max(24),
+    /** Subtracted from each working day's hours. 0: the 8-hour day has no break. */
     unpaidBreakMinutes: minutes,
+    /** N5 and N6 (BRD B3): the coordinators told of a missed check-in. Empty = nobody until set. */
+    checkInAlertRecipientUserIds: userIds,
   }),
   compliance: z.object({
-    /** No default: see the note at the top (D-09). */
+    /** 90 (D-09, 29 Oct). Null: no penalty is worked out. */
     thresholdPercent: z.number().min(0).max(100).nullable(),
     penaltyPerMissAed: aed,
     monthlyCapAed: aed,
@@ -67,9 +79,15 @@ export const reportingSettingsSchema = z.object({
     disputeCutoffDay: z.number().int().min(1).max(28),
     /** E3: the final monthly report. Empty = nobody until set. */
     hrRecipientUserIds: userIds,
-    /** Provisional (D-15): read an appointment's FSM actual start and end
-        as its check-in and check-out. Off until the business confirms it;
-        until then no appointment check-in is counted as performed. */
+    /** BRD §6.8 and N12: who decides a technician's dispute (D-10). Only
+        they may accept or reject one. Empty = nobody until set. */
+    disputeReviewerUserIds: userIds,
+    /** N10: the supervisors told when a technician falls below the
+        threshold, besides the technician and their team leader. */
+    belowThresholdRecipientUserIds: userIds,
+    /** No longer read (26 Oct): an appointment's check-in is the
+        technician's own FSM time sheet, else its actual times. Kept so a
+        stored value still parses. */
     appointmentActualsAsCheckIns: z.boolean(),
   }),
   capacity: z.object({
@@ -84,6 +102,18 @@ export const reportingSettingsSchema = z.object({
   exceptions: z.object({
     /** N13: a completed job still without the invoice flag after this many days. */
     completedWithoutFlagAfterDays: wholeDays(365),
+  }),
+  /**
+   * BRD B5: the reports Zoho FSM already has, opened from the portal. Their
+   * addresses are particular to the FSM account, so an administrator pastes
+   * them in; a report without one says so instead of guessing.
+   */
+  fsmLinks: z.object({
+    checkInLog: fsmLink,
+    appointmentsByStatus: fsmLink,
+    workOrdersByStatus: fsmLink,
+    revenue: fsmLink,
+    ratings: fsmLink,
   }),
 });
 
@@ -106,6 +136,7 @@ export const reportingSettingsOverridesSchema = z
     compliance: shape.compliance.partial().strict(),
     capacity: shape.capacity.partial().strict(),
     exceptions: shape.exceptions.partial().strict(),
+    fsmLinks: shape.fsmLinks.partial().strict(),
   })
   .partial()
   .strict();
@@ -124,18 +155,24 @@ export function getReportingSettingsDefaults(): ReportingSettings {
       shiftCheckInAlertDelayMinutes: 15,
       appointmentCheckInAlertDelayMinutes: 15,
       lateArrivalToleranceMinutes: 15,
+      standardDailyHours: 8,
+      dataCentreDailyHours: 12,
       unpaidBreakMinutes: 0,
+      checkInAlertRecipientUserIds: [],
     },
     compliance: {
-      thresholdPercent: null,
+      thresholdPercent: 90,
       penaltyPerMissAed: 50,
       monthlyCapAed: 500,
       disputeCutoffDay: 25,
       hrRecipientUserIds: [],
+      disputeReviewerUserIds: [],
+      belowThresholdRecipientUserIds: [],
       appointmentActualsAsCheckIns: false,
     },
     capacity: { horizonDays: 14, spareBelowPercent: 50, alertRecipientUserIds: [] },
     exceptions: { completedWithoutFlagAfterDays: 3 },
+    fsmLinks: { checkInLog: null, appointmentsByStatus: null, workOrdersByStatus: null, revenue: null, ratings: null },
   };
 }
 

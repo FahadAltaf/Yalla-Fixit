@@ -15,16 +15,19 @@ import {
   attendanceDayExportRow,
   attendanceSummaryExportRow,
 } from "@/components/data-table/columns/column-compliance";
-import { ReportToolbar, type ReportSelect } from "@/components/data-table/toolbars/report-toolbar";
+import { DatePicker } from "@/components/data-table/toolbars/date-range-picker";
+import { ReportFiltersButton, ReportToolbar, type ReportSelect } from "@/components/data-table/toolbars/report-toolbar";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { useDebounce } from "@/hooks/use-debounce";
+import { todayInZone } from "@/lib/scheduling/org-time";
 import type { AttendanceReport } from "@/lib/server/reports/compliance";
 import { exportFilename, exportTable, type ExportFormat } from "@/lib/snagging/export-table";
 import { reportsService } from "@/modules/reports/reports-service";
 
-import { DataAsOf, ReportDateRange, SavedFiltersMenu, lastThirtyDays, plural, useReportFilters } from "./shared";
+import { HowItWorks, attendanceHowItWorks } from "./how-it-works";
+import { ReportDateRange, SavedFiltersMenu, plural, useReportFilters } from "./shared";
 
 /**
  * Daily attendance (BRD 5.2 B5; DEV-451): per technician per day, the
@@ -36,12 +39,19 @@ import { DataAsOf, ReportDateRange, SavedFiltersMenu, lastThirtyDays, plural, us
  * shows meanwhile is the roster (shift, leave, holiday, rest day) and the
  * day's work in FSM: first job start and last job end, which is evidence
  * of attendance but not a check-in.
+ *
+ * Days is one day at a time (29 Oct), picked with a single date; the
+ * monthly summary takes a start and an end. The filters change the figures
+ * as well as the table, so they sit up by the dates.
  */
 
 type View = "days" | "summary";
 type Report = AttendanceReport & { can: { view: boolean; export: boolean } };
 
-const DEFAULTS = { view: "days", from: "", to: "", technician: "", team: "", status: "", q: "" };
+const DEFAULTS = { view: "days", day: "", from: "", to: "", technician: "", team: "", client: "", status: "", q: "" };
+
+/* The monthly summary opens on this month so far. */
+const thisMonth = (today: string) => ({ from: `${today.slice(0, 7)}-01`, to: today });
 
 export function AttendancePage() {
   const { filters, setFilters, ready, saved, saveAs, remove, apply } = useReportFilters("attendance", DEFAULTS);
@@ -54,17 +64,22 @@ export function AttendancePage() {
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
 
+  const today = todayInZone();
+  const day = filters.day || today;
+  const range = { from: filters.from || thisMonth(today).from, to: filters.to || thisMonth(today).to };
   const query = useMemo(
     () => ({
       view,
-      from: filters.from,
-      to: filters.to,
+      /* Days: the one day picked (today until one is). Summary: the start and end picked. */
+      from: view === "days" ? day : range.from,
+      to: view === "days" ? day : range.to,
       technician: filters.technician,
       team: filters.team,
+      client: filters.client,
       q: debouncedQ,
       ...(view === "days" ? { status: filters.status } : {}),
     }),
-    [view, filters, debouncedQ],
+    [view, day, range.from, range.to, filters.technician, filters.team, filters.client, filters.status, debouncedQ],
   );
 
   const ticket = useRef(0);
@@ -128,6 +143,7 @@ export function AttendancePage() {
   const selects: ReportSelect[] = [
     { key: "technician", allLabel: "All technicians", options: (data?.options.technicians ?? []).map((t) => ({ value: t.id, label: t.name })) },
     { key: "team", allLabel: "All teams", options: (data?.options.teams ?? []).map((t) => ({ value: t.id, label: t.name })) },
+    { key: "client", allLabel: "All clients", options: (data?.options.clients ?? []).map((c) => ({ value: c, label: c })) },
     ...(view === "days"
       ? [
           {
@@ -166,7 +182,8 @@ export function AttendancePage() {
       filters={filters}
       onFiltersChange={change}
       selects={selects}
-      clearable={["technician", "team", "status"]}
+      clearable={["technician", "team", "client", "status"]}
+      filtersInToolbar={false}
       canExport={Boolean(data?.can.export)}
       exporting={exporting}
       onExport={(format) => void doExport(format)}
@@ -194,14 +211,16 @@ export function AttendancePage() {
       <PageHeading
         eyebrow="Reports"
         title="Daily attendance"
-        description="Per technician per day: the shift, check-in and check-out (FSM Attendance), late, early and absent, and leave. The monthly summary is the one HR asked for."
+        description="Per technician per day: the expected hours (their shift, widened to the day's jobs as on the Scheduling board), check-in and check-out from FSM Attendance, the flags and leave. The monthly summary is the one HR asked for."
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <ReportDateRange
-              from={filters.from || data?.from || lastThirtyDays().from}
-              to={filters.to || data?.to || lastThirtyDays().to}
-              onChange={(from, to) => change({ ...filters, from, to })}
-            />
+            <HowItWorks content={attendanceHowItWorks(data ? { lateToleranceMinutes: data.lateToleranceMinutes } : undefined)} />
+            {view === "days" ? (
+              <DatePicker value={day} max={today} label="Day" onChange={(next) => change({ ...filters, day: next })} />
+            ) : (
+              <ReportDateRange from={range.from} to={range.to} max={today} onChange={(from, to) => change({ ...filters, from, to })} />
+            )}
+            <ReportFiltersButton filters={filters} onFiltersChange={change} selects={selects} clearable={["technician", "team", "client", "status"]} />
             <SavedFiltersMenu
               saved={saved}
               current={filters}
@@ -216,6 +235,7 @@ export function AttendancePage() {
         }
       />
 
+      {/* The views sit above the figures (29 Oct): Days and the summary have their own dates, so their own figures. */}
       <PillTabs<View>
         value={view}
         onChange={(next) => switchView(next)}
@@ -224,15 +244,6 @@ export function AttendancePage() {
           { value: "summary", label: "Monthly summary" },
         ]}
       />
-
-      <div className="flex flex-col gap-1">
-        <DataAsOf asOf={data?.dataAsOf ?? null} resources={["attendance", "appointments"]} />
-        {data ? (
-          <p className="text-muted-foreground text-xs">
-            {data.from} to {data.to}, {plural(data.overall.technicians, "technician")}. Late means checked in more than {data.lateToleranceMinutes} minutes after the shift began.
-          </p>
-        ) : null}
-      </div>
 
       {data && !data.measured ? (
         <Alert>
@@ -257,13 +268,13 @@ export function AttendancePage() {
       {error ? <ErrorState title="Could not load the attendance report" message={error} onRetry={() => void load()} retrying={loading} /> : null}
 
       {overall && data ? (
-        <StatCardGrid columns={5}>
+        <StatCardGrid columns={3}>
           <StatCard label="Shift days" value={overall.shiftDays.toLocaleString("en-US")} headline={`Across ${plural(overall.technicians, "technician")}`} caption="Rostered, leave days excluded" />
           <StatCard
             label="Days with work"
             value={overall.jobDays.toLocaleString("en-US")}
             headline={overall.shiftDays ? `${Math.round((overall.jobDays / overall.shiftDays) * 100)}% of shift days` : "No shift days"}
-            caption="An appointment with actual times in FSM"
+            caption="On an appointment with actual times in FSM (crews included)"
           />
           <StatCard
             label="Leave days"
@@ -275,19 +286,54 @@ export function AttendancePage() {
           <StatCard
             label="Late"
             value={data.measured ? overall.lateDays : "—"}
-            headline={data.measured ? "Checked in after the tolerance" : "Needs FSM check-ins (B-01)"}
+            headline={data.measured ? "Checked in after the shift start" : "Needs FSM check-ins (B-01)"}
+            caption={data.measured ? `${plural(overall.earlyDays, "day")} left early · ${plural(overall.outsideShiftDays, "day")} outside the shift` : undefined}
             tone={data.measured && overall.lateDays ? "progress" : "neutral"}
           />
           <StatCard
             label="Absent"
-            value={data.measured ? overall.absentDays : "—"}
-            headline={data.measured ? "No check-in, no leave" : "Needs FSM check-ins (B-01)"}
+            value={data.measured ? overall.absentDays.toLocaleString("en-US") : "—"}
+            headline={data.measured ? "No check-in, no work in FSM, no leave" : "Needs FSM check-ins (B-01)"}
+            caption={
+              data.measured && overall.absentRestDayMissingDays
+                ? `${overall.absentRestDayMissingDays.toLocaleString("en-US")} by technicians with no rest day set`
+                : undefined
+            }
             tone={data.measured && overall.absentDays ? "bad" : "neutral"}
+          />
+          <StatCard
+            label="Worked, no check-in"
+            value={data.measured ? overall.workedWithoutCheckInDays.toLocaleString("en-US") : "—"}
+            headline={data.measured ? "FSM shows their work, but no check-in" : "Needs FSM check-ins (B-01)"}
+            caption={data.measured ? `${plural(overall.noCheckOutDays, "day")} never checked out` : undefined}
+            tone={data.measured && overall.workedWithoutCheckInDays ? "progress" : "neutral"}
           />
         </StatCardGrid>
       ) : (
-        <StatGridSkeleton count={5} columns={5} />
+        <StatGridSkeleton count={6} columns={3} />
       )}
+
+      {data?.measured && data.notes.noRestDays ? (
+        <Alert>
+          <Info className="size-4" />
+          <AlertTitle>Rest days are not set for {plural(data.notes.noRestDays, "technician")}</AlertTitle>
+          <AlertDescription>
+            Every day is a working day for them, so an absence may be their day off. Set each technician&apos;s rest day in Scheduling →
+            Technicians.
+          </AlertDescription>
+        </Alert>
+      ) : null}
+
+      {data?.notes.crewsUnknown ? (
+        <Alert>
+          <Info className="size-4" />
+          <AlertTitle>Some crews could not be read from Zoho FSM</AlertTitle>
+          <AlertDescription>
+            {plural(data.notes.crewsUnknown, "appointment")} in these dates list fewer people than FSM says are on them, so a crew member&apos;s
+            job may be missing from their day. Refresh to read them again.
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       {view === "summary" ? (
         <Card className="py-0">

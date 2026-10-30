@@ -4,17 +4,21 @@ import { z } from "zod";
 import { computeAttendance, summariseAttendance, type AttendanceDay, type AttendanceSummary } from "@/lib/reports/attendance";
 import { computeAvailability, datesBetween, MAX_RANGE_DAYS } from "@/lib/reports/available-hours";
 import {
+  breakdownOf,
   complianceMonthPhase,
   computeCompliance,
+  isCancelled,
   missesInOutage,
   monthRange,
   requiredEvents,
+  type ComplianceBreakdown,
   type ComplianceEventKind,
   type EventOutcome,
   type RecordedCheckIn,
   type TechnicianCompliance,
   type Waiver,
 } from "@/lib/reports/compliance";
+import { disputeStatus, type Dispute, type DisputeStatus } from "@/lib/reports/compliance-disputes";
 import type { ReportingSettings } from "@/lib/reporting/settings";
 import { addDaysToDateString, todayInZone, zonedDateString } from "@/lib/scheduling/org-time";
 import { readReportingSettings } from "@/lib/server/reporting/settings";
@@ -118,13 +122,27 @@ const SOURCES: CheckInSources = { shift: true, appointment: true };
  * actually worked in the period (an appointment with actual times). Being
  * booked is not enough: FSM test resources are booked and never work.
  */
-function inScope(roster: Roster, worked: Set<string>, filters: { technician?: string; team?: string }) {
+function inScope(
+  roster: Roster,
+  worked: Set<string>,
+  filters: { technician?: string; team?: string; client?: string },
+  appointments: ComplianceAppointmentRow[] = [],
+) {
+  /* BRD B5 "filters by technician, team and client": a client keeps those booked on its appointments in the dates. */
+  const forClient = filters.client
+    ? new Set(appointments.filter((a) => a.clientName === filters.client && !isCancelled(a)).flatMap((a) => a.technicianIds))
+    : null;
   return [...roster.values()].filter((t) => {
     if (filters.technician && t.fsmId !== filters.technician) return false;
     if (filters.team && teamKeyOf(t) !== filters.team) return false;
+    if (forClient && !forClient.has(t.fsmId)) return false;
     return t.isActive || Boolean(t.leavingDate) || worked.has(t.fsmId);
   });
 }
+
+/** The clients of the appointments in the dates, for the client filter. */
+const clientsOf = (appointments: Array<{ clientName: string | null }>) =>
+  [...new Set(appointments.map((a) => a.clientName).filter((c): c is string => Boolean(c)))].sort((a, b) => a.localeCompare(b));
 
 const workedIn = (appointments: ComplianceAppointmentRow[]) =>
   new Set(appointments.filter((a) => a.actualStart).flatMap((a) => a.technicianIds));
@@ -133,7 +151,7 @@ const workedIn = (appointments: ComplianceAppointmentRow[]) =>
 // The month, worked out (shared by the report, waivers and finalising)
 // ---------------------------------------------------------------------
 
-type MonthWork = {
+export type MonthWork = {
   month: string;
   from: string;
   /** Measured up to: the month's end, or today while it runs. */
@@ -149,12 +167,14 @@ type MonthWork = {
   crewsUnknown: number;
   /** Whether the `hr` tables can be read (migration 20261023100000 applied and exposed). */
   storageReady: boolean;
+  /** The clients of the month's appointments, for the client filter. */
+  clients: string[];
 };
 
-async function workOutMonth(
+export async function workOutMonth(
   admin: SupabaseClient,
   month: string,
-  filters: { technician?: string; team?: string } = {},
+  filters: { technician?: string; team?: string; client?: string } = {},
 ): Promise<MonthWork> {
   const today = todayInZone();
   const settings = await readReportingSettings(admin);
@@ -178,11 +198,12 @@ async function workOutMonth(
       owed: new Map(),
       crewsUnknown: 0,
       storageReady: true,
+      clients: [],
     };
   }
 
   const loaded = await loadComplianceAppointments(admin, { from: range.from, to });
-  const technicians = inScope(roster, workedIn(loaded.appointments), filters);
+  const technicians = inScope(roster, workedIn(loaded.appointments), filters, loaded.appointments);
   const scopeIds = new Set(technicians.map((t) => t.fsmId));
   const appointments = loaded.appointments
     .map((a) => ({ ...a, technicianIds: a.technicianIds.filter((t) => scopeIds.has(t)) }))
@@ -194,6 +215,8 @@ async function workOutMonth(
       to,
       technicians,
       unpaidBreakMinutes: settings.attendance.unpaidBreakMinutes,
+      standardDailyHours: settings.attendance.standardDailyHours,
+      dataCentreDailyHours: settings.attendance.dataCentreDailyHours,
     }),
   );
 
@@ -250,7 +273,71 @@ async function workOutMonth(
     owed,
     crewsUnknown: loaded.crewsUnknown,
     storageReady,
+    clients: clientsOf(loaded.appointments),
   };
+}
+
+// ---------------------------------------------------------------------
+// Disputes (DEV-449), as stored
+// ---------------------------------------------------------------------
+
+/** A month's disputes with their decisions; empty until migration 20261029100000 is applied. */
+export async function loadDisputes(
+  admin: SupabaseClient,
+  month: string,
+  technicianFsmId?: string,
+): Promise<{ disputes: Dispute[]; ready: boolean }> {
+  let query = admin
+    .schema("hr")
+    .from("disputes")
+    .select("id, event_key, technician_fsm_id, event_kind, month, event_date, due_at, appointment_number, reason, on_behalf, raised_by_label, raised_at")
+    .eq("month", month)
+    .order("raised_at", { ascending: false })
+    .limit(5000);
+  if (technicianFsmId) query = query.eq("technician_fsm_id", technicianFsmId);
+  const { data, error } = await query;
+  if (error) {
+    if (hrMissing(error) || /disputes/i.test(error.message ?? "")) return { disputes: [], ready: false };
+    throw new Error(`disputes: ${error.message}`);
+  }
+  const ids = (data ?? []).map((d) => String(d.id));
+  const decisions = new Map<string, Record<string, unknown>>();
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data: rows, error: decisionError } = await admin
+      .schema("hr")
+      .from("dispute_decisions")
+      .select("dispute_id, outcome, waiver_reason, note, decided_by_label, decided_at")
+      .in("dispute_id", ids.slice(i, i + 200));
+    if (decisionError) throw new Error(`dispute decisions: ${decisionError.message}`);
+    for (const r of rows ?? []) decisions.set(String(r.dispute_id), r);
+  }
+  const disputes = (data ?? []).map<Dispute>((d) => {
+    const x = decisions.get(String(d.id));
+    return {
+      id: String(d.id),
+      eventKey: String(d.event_key),
+      technicianFsmId: String(d.technician_fsm_id),
+      kind: d.event_kind as ComplianceEventKind,
+      month: String(d.month),
+      date: String(d.event_date),
+      dueAt: (d.due_at as string | null) ?? null,
+      appointmentNumber: (d.appointment_number as string | null) ?? null,
+      reason: String(d.reason),
+      onBehalf: d.on_behalf === true,
+      raisedBy: String(d.raised_by_label ?? "Unknown user"),
+      raisedAt: String(d.raised_at),
+      decision: x
+        ? {
+            outcome: x.outcome === "accepted" ? "accepted" : "rejected",
+            waiverReason: (x.waiver_reason as string | null) ?? null,
+            note: (x.note as string | null) ?? null,
+            decidedBy: String(x.decided_by_label ?? "Unknown user"),
+            decidedAt: String(x.decided_at),
+          }
+        : null,
+    };
+  });
+  return { disputes, ready: true };
 }
 
 // ---------------------------------------------------------------------
@@ -259,11 +346,14 @@ async function workOutMonth(
 
 export const complianceFiltersSchema = z.object({
   month: MONTH.optional(),
-  view: z.enum(["technicians", "events"]).default("technicians"),
+  view: z.enum(["technicians", "events", "disputes"]).default("technicians"),
   technician: id.optional(),
   team: id.optional(),
+  client: text.optional(),
   /** Events: which outcome (missed by default). */
   state: z.enum(["missed", "waived", "performed", "all"]).optional(),
+  /** Disputes: which (all by default). */
+  dispute: z.enum(["open", "accepted", "rejected"]).optional(),
   q: text.optional(),
 });
 
@@ -282,17 +372,23 @@ export type ComplianceRow = {
   /** Owed in the period, measured or not. */
   owedShift: number;
   owedAppointment: number;
+  /** By kind of check-in, as worked out; null on a finalised month (its statement keeps totals only). */
+  breakdown: ComplianceBreakdown | null;
 };
 
 export type ComplianceEventRow = Omit<EventOutcome, "waiver"> & {
   technicianName: string;
+  /** The dispute on this check-in, if one was raised. */
+  dispute: { id: string; status: DisputeStatus } | null;
   waiverReason: string | null;
   waivedBy: string | null;
   waivedAt: string | null;
 };
 
+export type ComplianceDisputeRow = Dispute & { technicianName: string; status: DisputeStatus };
+
 export type ComplianceReport = {
-  view: "technicians" | "events";
+  view: "technicians" | "events" | "disputes";
   month: string;
   from: string;
   to: string;
@@ -314,15 +410,22 @@ export type ComplianceReport = {
     belowThreshold: number | null;
     owedShift: number;
     owedAppointment: number;
+    /** Disputes still to be decided (BRD §6.8). */
+    disputesOpen: number;
+    disputes: number;
   };
   technicians: ComplianceRow[];
   events: ComplianceEventRow[];
+  disputes: ComplianceDisputeRow[];
+  /** False until migration 20261029100000 is applied: no disputes. */
+  disputesReady: boolean;
   total: number;
   notes: { crewsUnknown: number; noRestDays: number };
   options: {
     technicians: Array<{ id: string; name: string }>;
     teams: Array<{ id: string; name: string }>;
     months: Array<{ id: string; name: string }>;
+    clients: string[];
   };
   dataAsOf: Record<string, string | null>;
 };
@@ -345,8 +448,14 @@ export async function buildComplianceReport(
     .maybeSingle();
   if (monthError && !hrMissing(monthError)) throw new Error(`compliance months: ${monthError.message}`);
 
-  const work = await workOutMonth(admin, month, { technician: filters.technician, team: filters.team });
-  const asOf = await dataAsOf(admin);
+  const [work, asOf, stored] = await Promise.all([
+    workOutMonth(admin, month, { technician: filters.technician, team: filters.team, client: filters.client }),
+    dataAsOf(admin),
+    loadDisputes(admin, month),
+  ]);
+  const inView = new Set(work.technicians.map((t) => t.fsmId));
+  const monthDisputes = stored.disputes.filter((d) => inView.has(d.technicianFsmId) || (!filters.technician && !filters.team && !filters.client));
+  const disputeOf = new Map(monthDisputes.map((d) => [d.eventKey, d]));
   const { roster } = work;
 
   let rows: ComplianceRow[];
@@ -382,6 +491,7 @@ export async function buildComplianceReport(
           penaltyPayableAed: s.penalty_payable === null ? null : Number(s.penalty_payable),
           owedShift: 0,
           owedAppointment: 0,
+          breakdown: null,
         };
       })
       .filter((r) => (!filters.technician || r.fsmId === filters.technician) && (!filters.team || teamKeyOf(roster.get(r.fsmId)!) === filters.team));
@@ -403,6 +513,7 @@ export async function buildComplianceReport(
         penaltyPayableAed: r?.penaltyPayableAed ?? (work.settings.thresholdPercent === null ? null : 0),
         owedShift: owed.shift,
         owedAppointment: owed.appointment,
+        breakdown: breakdownOf(r?.events ?? []),
       };
     });
   }
@@ -429,12 +540,24 @@ export async function buildComplianceReport(
     belowThreshold: settingsUsed.thresholdPercent === null ? null : rows.filter((r) => r.belowThreshold).length,
     owedShift: sum((r) => r.owedShift),
     owedAppointment: sum((r) => r.owedAppointment),
+    disputesOpen: monthDisputes.filter((d) => !d.decision).length,
+    disputes: monthDisputes.length,
   };
 
   let technicians: ComplianceRow[] = [];
   let events: ComplianceEventRow[] = [];
+  let disputes: ComplianceDisputeRow[] = [];
   let total = 0;
-  if (filters.view === "events") {
+  if (filters.view === "disputes") {
+    /* Open first, then the latest raised. */
+    const all = monthDisputes
+      .map<ComplianceDisputeRow>((d) => ({ ...d, technicianName: roster.get(d.technicianFsmId)?.name ?? d.technicianFsmId, status: disputeStatus(d) }))
+      .filter((d) => !filters.dispute || d.status === filters.dispute)
+      .filter((d) => !needle || `${d.technicianName} ${d.appointmentNumber ?? ""} ${d.reason}`.toLowerCase().includes(needle))
+      .sort((a, b) => Number(b.status === "open") - Number(a.status === "open") || b.raisedAt.localeCompare(a.raisedAt));
+    disputes = page(all, paging, Boolean(options.all));
+    total = all.length;
+  } else if (filters.view === "events") {
     const state = filters.state ?? "missed";
     const all = [...work.results.values()]
       .flatMap((r) => r.events)
@@ -442,12 +565,14 @@ export async function buildComplianceReport(
       .map<ComplianceEventRow>(({ waiver, ...e }) => ({
         ...e,
         technicianName: roster.get(e.technicianFsmId)?.name ?? e.technicianFsmId,
+        dispute: disputeOf.has(e.key) ? { id: disputeOf.get(e.key)!.id, status: disputeStatus(disputeOf.get(e.key)!) } : null,
         waiverReason: waiver?.reason ?? null,
         waivedBy: waiver?.waivedBy ?? null,
         waivedAt: waiver?.waivedAt ?? null,
       }))
       .filter((e) => !needle || `${e.technicianName} ${e.appointmentNumber ?? ""}`.toLowerCase().includes(needle))
-      .sort((a, b) => (a.dueAt ?? "").localeCompare(b.dueAt ?? "") || a.technicianName.localeCompare(b.technicianName));
+      /* Latest first (28 Oct: every table descending). */
+      .sort((a, b) => (b.dueAt ?? "").localeCompare(a.dueAt ?? "") || a.technicianName.localeCompare(b.technicianName));
     events = page(all, paging, Boolean(options.all));
     total = all.length;
   } else {
@@ -470,12 +595,14 @@ export async function buildComplianceReport(
     overall,
     technicians,
     events,
+    disputes,
+    disputesReady: stored.ready,
     total,
     notes: {
       crewsUnknown: work.crewsUnknown,
       noRestDays: work.technicians.filter((t) => t.restWeekdays.length === 0).length,
     },
-    options: { technicians: technicianOptions(roster), teams: teamOptions(roster), months: monthOptions(today) },
+    options: { technicians: technicianOptions(roster), teams: teamOptions(roster), months: monthOptions(today), clients: work.clients },
     dataAsOf: asOf,
   };
 }
@@ -581,6 +708,11 @@ export async function finalizeMonth(admin: SupabaseClient, month: string, actor:
   if (work.phase.phase !== "final") {
     throw new ComplianceError(`Disputes for ${month} are open until ${work.phase.cutoffDate}.`, 409);
   }
+  const { disputes } = await loadDisputes(admin, month);
+  const undecided = disputes.filter((d) => !d.decision).length;
+  if (undecided) {
+    throw new ComplianceError(`${undecided} dispute${undecided === 1 ? " is" : "s are"} still to be decided. Figures are final only after disputes.`, 409);
+  }
   if (!work.sources.shift || !work.sources.appointment) {
     throw new ComplianceError(
       "A month is finalised only on complete check-in data. Shift check-ins cannot be read from FSM yet (B-01).",
@@ -632,6 +764,7 @@ export const attendanceFiltersSchema = z.object({
   to: DATE.optional(),
   technician: id.optional(),
   team: id.optional(),
+  client: text.optional(),
   /** Days: which kind of day. */
   status: z.enum(["working", "leave", "holiday", "rest_day", "left"]).optional(),
   q: text.optional(),
@@ -642,8 +775,13 @@ export type AttendanceRow = AttendanceDay & {
   teamName: string;
   /** From FSM appointment actual times: when work started and ended that day. Not a check-in. */
   firstJobAt: string | null;
+  /** The latest actual end; null while none has ended. */
   lastJobAt: string | null;
+  /** An appointment that day is started in FSM and not yet finished (no actual end). */
+  jobOpen: boolean;
   jobs: number;
+  /** Of those, the ones FSM shows them doing (lead or own time sheet); the rest they were only crewed on. */
+  ownJobs: number;
 };
 
 export type AttendanceSummaryRow = AttendanceSummary & { name: string; teamName: string; jobDays: number };
@@ -654,12 +792,27 @@ export type AttendanceReport = {
   to: string;
   measured: boolean;
   lateToleranceMinutes: number;
-  overall: { technicians: number; shiftDays: number; leaveDays: number; jobDays: number; presentDays: number; lateDays: number; absentDays: number };
+  overall: {
+    technicians: number;
+    shiftDays: number;
+    leaveDays: number;
+    jobDays: number;
+    presentDays: number;
+    lateDays: number;
+    earlyDays: number;
+    outsideShiftDays: number;
+    absentDays: number;
+    /** Of the absent days, those of technicians with no rest day set: perhaps their day off. */
+    absentRestDayMissingDays: number;
+    workedWithoutCheckInDays: number;
+    noCheckOutDays: number;
+  };
   days: AttendanceRow[];
   summary: AttendanceSummaryRow[];
   total: number;
-  notes: { leaveRecords: number; holidays: number; noRestDays: number };
-  options: { technicians: Array<{ id: string; name: string }>; teams: Array<{ id: string; name: string }> };
+  /** crewsUnknown: appointments with fewer people than FSM's crew size (a crew read FSM refused). */
+  notes: { leaveRecords: number; holidays: number; noRestDays: number; crewsUnknown: number };
+  options: { technicians: Array<{ id: string; name: string }>; teams: Array<{ id: string; name: string }>; clients: string[] };
   dataAsOf: Record<string, string | null>;
 };
 
@@ -682,39 +835,54 @@ export async function buildAttendanceReport(
     loadComplianceAppointments(admin, { from, to }),
     loadShiftCheckIns(admin, { from, to }),
   ]);
-  const asOf = await dataAsOf(admin);
-  const technicians = inScope(roster, workedIn(loaded.appointments), filters);
+  const technicians = inScope(roster, workedIn(loaded.appointments), filters, loaded.appointments);
   const input = await loadAvailabilityInput(admin, {
     from,
     to,
     technicians,
     unpaidBreakMinutes: settings.attendance.unpaidBreakMinutes,
+    standardDailyHours: settings.attendance.standardDailyHours,
+    dataCentreDailyHours: settings.attendance.dataCentreDailyHours,
   });
   const availability = computeAvailability(input);
+  /* When each FSM source was read, now that all of them have been (time off with the available hours). */
+  const asOf = await dataAsOf(admin);
   /* FSM Attendance: each technician's first check-in and last check-out of the day. */
   const measured = true;
+  const booked = loaded.appointments.filter((a) => (a.status ?? "").toLowerCase() !== "cancelled" && a.scheduledStart && a.scheduledEnd);
   const days = computeAttendance({
     availability,
     recorded: shiftCheckIns,
     leave: input.leave.map((l) => ({ ...l, category: l.category ?? null })),
     lateToleranceMinutes: settings.attendance.lateArrivalToleranceMinutes,
+    /* The expected hours widen to each technician's scheduled jobs, as on the Scheduling board. */
+    scheduled: booked.flatMap((a) => a.technicianIds.map((t) => ({ technicianFsmId: t, start: a.scheduledStart!, end: a.scheduledEnd! }))),
+    /* Work FSM shows them doing: the lead, or their own time sheet. A planned crew place is not proof. */
+    worked: loaded.appointments.filter((a) => a.actualStart).flatMap((a) => a.workedBy.map((t) => ({ technicianFsmId: t, at: a.actualStart! }))),
+    today,
+    now: new Date().toISOString(),
     shiftCheckInsAvailable: measured,
   });
 
   /* Work done per technician and day, from the appointments' actual times. */
-  const jobs = new Map<string, { first: string; last: string; count: number }>();
+  const jobs = new Map<string, { first: string; last: string | null; open: boolean; count: number; own: number }>();
   for (const a of loaded.appointments) {
     if (!a.actualStart) continue;
     const date = zonedDateString(a.actualStart);
-    for (const tech of new Set(a.technicianIds)) {
+    const own = new Set(a.workedBy);
+    for (const tech of new Set([...a.technicianIds, ...a.workedBy])) {
       const key = `${tech}|${date}`;
-      const end = a.actualEnd ?? a.actualStart;
+      /* 29 Oct: started and not finished has no end; its start is not one (it showed as "09:29 – 09:29"). */
+      const end = a.actualEnd ?? null;
+      const mine = own.has(tech) ? 1 : 0;
       const entry = jobs.get(key);
-      if (!entry) jobs.set(key, { first: a.actualStart, last: end, count: 1 });
+      if (!entry) jobs.set(key, { first: a.actualStart, last: end, open: !end, count: 1, own: mine });
       else {
         if (a.actualStart < entry.first) entry.first = a.actualStart;
-        if (end > entry.last) entry.last = end;
+        if (end && (!entry.last || end > entry.last)) entry.last = end;
+        entry.open ||= !end;
         entry.count += 1;
+        entry.own += mine;
       }
     }
   }
@@ -728,7 +896,9 @@ export async function buildAttendanceReport(
       teamName: teamNameOf(roster, tech),
       firstJobAt: job?.first ?? null,
       lastJobAt: job?.last ?? null,
+      jobOpen: job?.open ?? false,
       jobs: job?.count ?? 0,
+      ownJobs: job?.own ?? 0,
     };
   });
 
@@ -772,7 +942,12 @@ export async function buildAttendanceReport(
       jobDays: summary.reduce((a, s) => a + s.jobDays, 0),
       presentDays: summary.reduce((a, s) => a + s.presentDays, 0),
       lateDays: summary.reduce((a, s) => a + s.lateDays, 0),
+      earlyDays: summary.reduce((a, s) => a + s.earlyDays, 0),
+      outsideShiftDays: summary.reduce((a, s) => a + s.outsideShiftDays, 0),
       absentDays: summary.reduce((a, s) => a + s.absentDays, 0),
+      absentRestDayMissingDays: summary.reduce((a, s) => a + (s.restDayMissing ? s.absentDays : 0), 0),
+      workedWithoutCheckInDays: summary.reduce((a, s) => a + s.workedWithoutCheckInDays, 0),
+      noCheckOutDays: summary.reduce((a, s) => a + s.noCheckOutDays, 0),
     },
     days: pageDays,
     summary: pageSummary,
@@ -781,8 +956,9 @@ export async function buildAttendanceReport(
       leaveRecords: input.leave.length,
       holidays: [...input.holidays].length,
       noRestDays: technicians.filter((t) => t.restWeekdays.length === 0).length,
+      crewsUnknown: loaded.crewsUnknown,
     },
-    options: { technicians: technicianOptions(roster), teams: teamOptions(roster) },
+    options: { technicians: technicianOptions(roster), teams: teamOptions(roster), clients: clientsOf(loaded.appointments) },
     dataAsOf: asOf,
   };
 }

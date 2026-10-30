@@ -31,8 +31,11 @@ test("the BRD §6.6 suggestions are the defaults", () => {
   assert.equal(d.exceptions.completedWithoutFlagAfterDays, 3);
 });
 
-test("the compliance threshold has no default (D-09: 90 % or 97 % is undecided)", () => {
-  assert.equal(getReportingSettingsDefaults().compliance.thresholdPercent, null);
+test("the compliance threshold is 90 % (D-09, decided 29 Oct), and the Data Center day 12 h", () => {
+  const defaults = getReportingSettingsDefaults();
+  assert.equal(defaults.compliance.thresholdPercent, 90);
+  assert.equal(defaults.attendance.dataCentreDailyHours, 12);
+  assert.deepEqual(defaults.compliance.disputeReviewerUserIds, []);
 });
 
 test("the unpaid break is 0 until D-22 decides 8 h or 9 h", () => {
@@ -106,7 +109,7 @@ test("the audit diff names each changed leaf, and nothing else", () => {
   const before = getReportingSettingsDefaults();
   const after = mergeReportingSettings(before, {
     quotations: { ageingDaysByStatus: { approved: 6 } },
-    compliance: { thresholdPercent: 90 },
+    compliance: { thresholdPercent: 97 },
   }).settings;
   assert.deepEqual(diffSettingsPaths(before, after), [
     "compliance.thresholdPercent",

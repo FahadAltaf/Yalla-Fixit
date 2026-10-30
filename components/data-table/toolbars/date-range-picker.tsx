@@ -88,3 +88,46 @@ export function DateRangePicker({
     </Popover>
   );
 }
+
+/** The same button and calendar for one day (29 Oct: Daily attendance's Days view). */
+export function DatePicker({
+  value,
+  onChange,
+  min,
+  max,
+  label = "Date",
+  className,
+}: {
+  /** "YYYY-MM-DD". */
+  value: string;
+  onChange: (value: string) => void;
+  min?: string;
+  max?: string;
+  label?: string;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button variant="outline" className={cn("justify-start font-normal whitespace-nowrap", className)} aria-label={label}>
+          <CalendarIcon className="size-4" />
+          {value ? <span className="tabular-nums">{format(toDate(value), "EEE, MMM dd, yyyy")}</span> : <span className="text-muted-foreground">Pick a day</span>}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-auto p-0" align="start">
+        <Calendar
+          mode="single"
+          defaultMonth={value ? toDate(value) : max ? toDate(max) : undefined}
+          selected={value ? toDate(value) : undefined}
+          onSelect={(day) => {
+            if (!day) return;
+            setOpen(false);
+            onChange(toText(day));
+          }}
+          disabled={[...(min ? [{ before: toDate(min) }] : []), ...(max ? [{ after: toDate(max) }] : [])]}
+        />
+      </PopoverContent>
+    </Popover>
+  );
+}

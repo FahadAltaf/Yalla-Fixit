@@ -158,7 +158,7 @@ export function FinanceQueriesPage() {
       <SectionCard
         icon={<CircleHelp />}
         title={shown === "waiting" ? "Waiting on you" : shown === "done" ? "Done" : "All queries and requests"}
-        description={shown === "done" ? "Answered, verified or rejected. Newest first." : "Oldest waiting first."}
+        description={shown === "done" ? "Answered, verified or rejected. Newest first." : "Newest first."}
         bodyClassName="border-t"
         action={
           <Button variant="outline" size="sm" onClick={() => refreshAll()} disabled={loading}>

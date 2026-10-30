@@ -23,6 +23,8 @@ const schema = z.object({
     hiddenFromLists: z.boolean().optional(),
     // ISO weekdays off, 1 = Monday .. 7 = Sunday.
     restWeekdays: z.array(z.number().int().min(1).max(7)).max(7).nullable().optional(),
+    // Hours a working day; null = the standard day (8 h). Data centre staff: 12.
+    dailyHours: z.number().min(1).max(24).multipleOf(0.25).nullable().optional(),
   }),
 });
 
@@ -56,6 +58,8 @@ export async function PUT(req: NextRequest) {
         : null;
     }
 
+    if ("dailyHours" in attributes) patch.daily_hours = attributes.dailyHours ?? null;
+
     if (Object.keys(patch).length === 0) {
       return NextResponse.json({ error: "No attributes to update" }, { status: 400 });
     }
@@ -78,6 +82,13 @@ export async function PUT(req: NextRequest) {
     if (error?.code === "23514") {
       return NextResponse.json(
         { error: "A resigned technician needs a leaving date" },
+        { status: 400 },
+      );
+    }
+    // 42703: daily_hours before migration 20261028100000 is applied.
+    if (error?.code === "42703" && "daily_hours" in patch) {
+      return NextResponse.json(
+        { error: "Daily hours can be saved once the 28 Oct database update is applied" },
         { status: 400 },
       );
     }

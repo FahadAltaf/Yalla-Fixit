@@ -305,6 +305,8 @@ export interface TechnicianReference {
   hidden_from_lists?: boolean;
   /** ISO weekdays off, 1 = Monday .. 7 = Sunday. Null = not recorded. */
   rest_weekdays?: number[] | null;
+  /** Hours a working day, net of breaks; null = the standard day (8 h). Migration 20261028100000. */
+  daily_hours?: number | null;
 }
 
 export type TechnicianEmploymentStatus = "active" | "resigned";

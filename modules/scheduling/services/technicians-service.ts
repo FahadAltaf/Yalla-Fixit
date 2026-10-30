@@ -23,6 +23,8 @@ export interface TechnicianAttributeUpdate {
   hiddenFromLists?: boolean;
   /** ISO weekdays off, 1 = Monday .. 7 = Sunday. */
   restWeekdays?: number[] | null;
+  /** Hours a working day; null = the standard day (8 h). */
+  dailyHours?: number | null;
 }
 
 // Client-side: set attributes on one or many technicians at once (#15 bulk edit).

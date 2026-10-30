@@ -126,6 +126,10 @@ const WEEKDAYS = [
   { value: 7, label: "Sun" },
 ];
 
+/* Working hours a day (Sami, 28 Oct): 8 for most, 12 for some data centre staff. */
+const STANDARD_DAY = "standard";
+const DAILY_HOURS = [6, 8, 9, 10, 12];
+
 // The FSM id, and what is unusual about this technician, under their name.
 function technicianSubtitle(t: TechnicianReference): string {
   const notes = [t.fsm_resource_id];
@@ -404,6 +408,7 @@ export default function SchedulingDashboard({ technicians }: Props) {
         if ("leavingDate" in attrs) next.leaving_date = attrs.leavingDate ?? null;
         if (attrs.hiddenFromLists !== undefined) next.hidden_from_lists = attrs.hiddenFromLists;
         if ("restWeekdays" in attrs) next.rest_weekdays = attrs.restWeekdays ?? null;
+        if ("dailyHours" in attrs) next.daily_hours = attrs.dailyHours ?? null;
         return next;
       }),
     );
@@ -1436,7 +1441,27 @@ function ManageTechnicianDialog({
               </button>
             ))}
           </div>
-          <p className="text-muted-foreground mt-1.5 text-xs">Not counted as available hours. Leave none ticked if not recorded.</p>
+          <p className="text-muted-foreground mt-1.5 text-xs">
+            Not counted as available hours. Everyone has one day off in seven: until it is ticked, the reports count 6 of
+            every 7 days.
+          </p>
+        </div>
+
+        <div>
+          <p className="mb-2 text-sm font-medium">Working hours a day</p>
+          <Select
+            value={technician.daily_hours ? String(technician.daily_hours) : STANDARD_DAY}
+            onChange={(v) => onApplyAttributes({ dailyHours: v === STANDARD_DAY ? null : Number(v) })}
+            options={[
+              { value: STANDARD_DAY, label: "Standard day (8 h)" },
+              ...DAILY_HOURS.map((h) => ({ value: String(h), label: `${h} hours` })),
+            ]}
+            className="w-56"
+            ariaLabel="Working hours a day"
+          />
+          <p className="text-muted-foreground mt-1.5 text-xs">
+            Available hours for each working day, without breaks. 12 hours for data centre staff on long shifts.
+          </p>
         </div>
 
         <label className="flex items-start gap-2.5 text-sm">

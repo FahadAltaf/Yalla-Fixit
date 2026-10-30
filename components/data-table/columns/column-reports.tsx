@@ -4,12 +4,13 @@ import type { ColumnDef } from "@tanstack/react-table";
 import { CalendarClock, CalendarDays, ClipboardList, Clock, FileText, UserRound, Wrench } from "lucide-react";
 
 import { aed } from "@/components/dashboard/finance/shared";
-import { FlagBadge, QuotationStatusBadge, plural } from "@/components/dashboard/reports/shared";
+import { FlagBadge, NamesCell, QuotationStatusBadge, plural } from "@/components/dashboard/reports/shared";
 import { IconText } from "@/components/data-table/columns/icon-text";
 import { IdentityCell } from "@/components/ui/entity-avatar";
 import type { MissingActualsRow, UnflaggedRow } from "@/lib/reports/exceptions";
 import type { QuotationRow } from "@/lib/reports/quotations";
-import { formatZonedDate, formatZonedDateTime } from "@/lib/scheduling/org-time";
+import { viewerDateTime } from "@/lib/reports/viewer-time";
+import { formatZonedDate } from "@/lib/scheduling/org-time";
 
 /**
  * Columns for the P5 reports, built like every other table here
@@ -53,8 +54,8 @@ export const QUOTATION_COLUMNS: ColumnDef<QuotationRow>[] = [
   },
   {
     id: "value",
-    header: () => <div className="text-right">Value (before VAT)</div>,
-    cell: ({ row }) => <div className="text-right text-sm font-medium tabular-nums">{aed(row.original.value)}</div>,
+    header: () => <div>Value (before VAT)</div>,
+    cell: ({ row }) => <div className="text-sm font-medium tabular-nums">{aed(row.original.value)}</div>,
     enableSorting: false,
   },
   {
@@ -180,8 +181,8 @@ export function getUnflaggedColumns(afterDays: number): ColumnDef<UnflaggedRow>[
     },
     {
       id: "value",
-      header: () => <div className="text-right">Value (before VAT)</div>,
-      cell: ({ row }) => <div className="text-right text-sm font-medium tabular-nums">{aed(row.original.value)}</div>,
+      header: () => <div>Value (before VAT)</div>,
+      cell: ({ row }) => <div className="text-sm font-medium tabular-nums">{aed(row.original.value)}</div>,
       enableSorting: false,
     },
     {
@@ -253,12 +254,7 @@ export const MISSING_ACTUALS_COLUMNS: ColumnDef<MissingActualsRow>[] = [
   {
     id: "crew",
     header: "Technicians",
-    cell: ({ row }) =>
-      row.original.technicianNames.length ? (
-        <span className="text-sm">{row.original.technicianNames.join(", ")}</span>
-      ) : (
-        <span className="text-muted-foreground text-sm">—</span>
-      ),
+    cell: ({ row }) => <NamesCell names={row.original.technicianNames} />,
     enableSorting: false,
   },
   {
@@ -266,7 +262,7 @@ export const MISSING_ACTUALS_COLUMNS: ColumnDef<MissingActualsRow>[] = [
     header: "Scheduled",
     cell: ({ row }) =>
       row.original.scheduledStart ? (
-        <IconText icon={CalendarDays}>{formatZonedDateTime(row.original.scheduledStart)}</IconText>
+        <IconText icon={CalendarDays}>{viewerDateTime(row.original.scheduledStart)}</IconText>
       ) : (
         <span className="text-muted-foreground text-sm">—</span>
       ),

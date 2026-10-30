@@ -32,9 +32,11 @@ export async function listTechniciansForViewer(): Promise<TechnicianReference[]>
   const load = (columns: string) =>
     admin.from("technician_reference").select(columns).order("display_name", { ascending: true });
 
-  let { data, error } = await load(`${baseColumns}, board_position`);
-  // board_position arrives with migration 20260917090000. Until it's applied,
-  // load without it so the board still opens (Custom order just stays empty).
+  // daily_hours arrives with migration 20261028100000 and board_position with
+  // 20260917090000. Until each is applied, load without it so the board still
+  // opens (the standard day, and Custom order stays empty).
+  let { data, error } = await load(`${baseColumns}, board_position, daily_hours`);
+  if (error?.code === "42703") ({ data, error } = await load(`${baseColumns}, board_position`));
   if (error?.code === "42703") ({ data, error } = await load(baseColumns));
 
   if (error) throw new Error(`Failed to load technicians: ${error.message}`);
@@ -67,6 +69,7 @@ export async function listTechniciansForViewer(): Promise<TechnicianReference[]>
       leaving_date: (r.leaving_date as string | null) ?? null,
       hidden_from_lists: r.hidden_from_lists === true,
       rest_weekdays: Array.isArray(r.rest_weekdays) ? (r.rest_weekdays as number[]) : null,
+      daily_hours: r.daily_hours === null || r.daily_hours === undefined ? null : Number(r.daily_hours),
     };
   });
 }

@@ -9,22 +9,28 @@ import { coveredMinutes, isoWeekday, type TechnicianAvailability } from "./avail
  *   time utilization        job hours ÷ available hours
  *   commercial utilization  chargeable job hours ÷ available hours
  *
- * Rules (reporting-calculation-specification.md):
+ * Rules (reporting-calculation-specification.md, with Sami's answers of
+ * 28 Oct):
  *
- *  - Job hours are the union of a technician's [actual start, actual end)
- *    on Completed appointments, and Cannot Complete ones that have both
- *    actual times. Two appointments at the same time count once. A job
- *    shared by a crew counts in full for each of them (time, not revenue).
- *  - Job time is counted inside the technician's shift windows only; time
- *    outside them is reported beside utilization as "outside shift"
- *    (overtime is D-16). So a day with no available hours (holiday, rest
- *    day, leave, after leaving) adds nothing to either side of the ratio.
+ *  - Job hours are the union of a technician's own working time on
+ *    Completed appointments, and Cannot Complete ones that have both actual
+ *    times (they count). Two appointments at the same time count once.
+ *  - A technician's own time on a job (individual hours, not the crew's):
+ *    their FSM time sheet on it; else the appointment's actual times
+ *    trimmed to their own FSM attendance that day (check-in to check-out);
+ *    else the appointment's actual times, counted as unverified.
+ *  - Each day counts job time up to the hours available that day (the
+ *    daily hours, less leave; 6/7 of them while no rest day is entered).
+ *    Time beyond that, and any work on a rest day, holiday or leave, is
+ *    overtime: reported beside utilization, not in either ratio.
  *  - Chargeable (D-08): the work order's quotation has a total above zero,
  *    or, with no quotation, the work order itself has a value. A quotation
  *    totalling zero (inspection, internal work) is time only (TC09). Work
- *    with no value anywhere is time only too, and shown apart: that is
- *    where AMC and in-contract work would be, once FSM says how to tell
- *    it (D-14).
+ *    with no value anywhere is time only too, and shown apart.
+ *  - AMC and in-contract work is not chargeable (decided 29 Oct, D-08 and
+ *    D-14; the BRD's B2 said it was), whatever its value: time only, and
+ *    shown apart. FSM marks it on the work order: Work Type "AMC PPM", or
+ *    an AMC contract reference.
  *  - Ratios are over sums, never averages of percentages.
  *  - Missing actual times are never zero-length jobs: those appointments
  *    stay out of job hours and count against data completeness.
@@ -33,19 +39,37 @@ import { coveredMinutes, isoWeekday, type TechnicianAvailability } from "./avail
  * Pure: no database, no clock. Minutes throughout.
  */
 
-export type Chargeability = "chargeable" | "zero_value" | "no_value";
+export type Chargeability = "chargeable" | "contract" | "zero_value" | "no_value";
 
 export const CHARGEABILITY_LABELS: Record<Chargeability, string> = {
   chargeable: "Chargeable",
+  contract: "AMC / contract",
   zero_value: "Quotation of zero",
   no_value: "No value in FSM",
 };
 
-/** D-08: a quotation above zero; with no quotation, a work order with a value. */
-export function chargeabilityOf(input: { quotationTotal: number | null; workOrderTotal: number | null }): Chargeability {
+/** 29 Oct: how FSM marks AMC work on a work order (Work Type "AMC PPM", or a contract reference). */
+export function isContractWork(input: { workType?: string | null; amcContractRef?: string | null }): boolean {
+  return Boolean(input.amcContractRef?.trim()) || /\bamc\b/i.test(input.workType ?? "");
+}
+
+/** D-08: AMC work never; else a quotation above zero; with no quotation, a work order with a value. */
+export function chargeabilityOf(input: { quotationTotal: number | null; workOrderTotal: number | null; contract?: boolean }): Chargeability {
+  if (input.contract) return "contract";
   if (input.quotationTotal !== null) return input.quotationTotal > 0 ? "chargeable" : "zero_value";
   return (input.workOrderTotal ?? 0) > 0 ? "chargeable" : "no_value";
 }
+
+export type HoursSource = "time_sheet" | "attendance" | "appointment";
+
+export const HOURS_SOURCE_LABELS: Record<HoursSource, string> = {
+  time_sheet: "own time sheet",
+  attendance: "own check-in and check-out",
+  appointment: "appointment times (unverified)",
+};
+
+/** One technician's own working time on an appointment (the loader decides the source). */
+export type TechnicianWork = { start: string; end: string; source: HoursSource };
 
 export type UtilizationAppointment = {
   id: string;
@@ -61,6 +85,8 @@ export type UtilizationAppointment = {
   actualEnd: string | null;
   technicianIds: string[];
   chargeability: Chargeability;
+  /** Each technician's own time on it; anyone missing uses the appointment's actual times. */
+  work?: Record<string, TechnicianWork>;
 };
 
 export type UtilizationTechnician = { fsmId: string; name: string; teamLeaderId: string | null };
@@ -74,17 +100,27 @@ export type Measures = {
   commercialPercent: number | null;
 };
 
-export type TechnicianUtilization = Measures & {
+/** BRD B2: travel from FSM Trips, beside utilization and never in it (set by the report builder). */
+export type TravelMeasures = { travelMinutes?: number; travelTrips?: number };
+
+export type TechnicianUtilization = Measures &
+  TravelMeasures & {
   fsmId: string;
   name: string;
   teamKey: string;
   teamName: string;
   /** No shift set on the technician: the day shift was used. */
   shiftAssumed: boolean;
+  /** No rest day entered: 6 of every 7 days were counted. */
+  restDaysAssumed: boolean;
+  /** Hours a working day (the standard day, or their own). */
+  dailyMinutes: number;
   shiftDays: number;
   leaveMinutes: number;
-  /** Job time outside the shift windows (D-16), not in the ratio. */
-  outsideShiftMinutes: number;
+  /** Job time beyond what was available on its day, or on a day off: not in the ratios. */
+  overtimeMinutes: number;
+  /** Where the counted jobs' hours came from, per appointment. */
+  hoursFrom: Record<HoursSource, number>;
   /** Appointments counted in job hours. */
   appointments: number;
   /** Completed appointments, and how many have both actual times. */
@@ -98,11 +134,13 @@ export type TechnicianUtilization = Measures & {
   varianceMinutes: number;
 };
 
-export type TeamUtilization = Measures & {
+export type TeamUtilization = Measures &
+  TravelMeasures & {
   key: string;
   name: string;
   technicians: number;
-  outsideShiftMinutes: number;
+  overtimeMinutes: number;
+  hoursFrom: Record<HoursSource, number>;
   completed: number;
   withActualTimes: number;
   completenessPercent: number | null;
@@ -193,11 +231,6 @@ export function computeUtilization(input: {
   const rangeStart = zonedTimeToUtc(input.from, "00:00", input.timeZone).getTime();
   const rangeEnd = zonedTimeToUtc(addDaysToDateString(input.to, 1), "00:00", input.timeZone).getTime();
   const nameOf = (id: string) => input.technicians.get(id)?.name ?? id;
-  const teamOf = (id: string) => {
-    /* D-20: a team is a team leader and the technicians who report to them. */
-    const leader = input.technicians.get(id)?.teamLeaderId ?? null;
-    return leader ? { key: leader, name: `${nameOf(leader)}'s team` } : { key: "none", name: "No team" };
-  };
 
   /* The appointments of the period: by actual start, else scheduled start. */
   const details: AppointmentDetail[] = [];
@@ -220,33 +253,75 @@ export function computeUtilization(input: {
   }
 
   type Interval = { start: number; end: number };
-  const jobsByTech = new Map<string, { all: Interval[]; chargeable: Interval[]; byKind: Record<Chargeability, Interval[]> }>();
-  const perTechCounts = new Map<string, { appointments: number; completed: number; withActualTimes: number; scheduled: number; actual: number }>();
+  type Jobs = { all: Interval[]; byKind: Record<Chargeability, Interval[]> };
+  const blankSources = (): Record<HoursSource, number> => ({ time_sheet: 0, attendance: 0, appointment: 0 });
+  const jobsByTech = new Map<string, Jobs>();
+  const perTechCounts = new Map<
+    string,
+    { appointments: number; completed: number; withActualTimes: number; scheduled: number; actual: number; sources: Record<HoursSource, number> }
+  >();
   for (const d of details) {
     for (const id of d.technicianIds) {
-      const counts = perTechCounts.get(id) ?? { appointments: 0, completed: 0, withActualTimes: 0, scheduled: 0, actual: 0 };
+      const counts = perTechCounts.get(id) ?? { appointments: 0, completed: 0, withActualTimes: 0, scheduled: 0, actual: 0, sources: blankSources() };
       if (d.status === "Completed") {
         counts.completed += 1;
         if (!d.missingActuals) counts.withActualTimes += 1;
       }
       if (d.countsInJobHours) {
+        /* Their own time on the job, else the appointment's. */
+        const own = d.work?.[id];
+        const interval = own ? { start: ms(own.start), end: ms(own.end) } : { start: ms(d.actualStart), end: ms(d.actualEnd) };
+        const ownMinutes = Number.isFinite(interval.start) && Number.isFinite(interval.end) && interval.end > interval.start ? (interval.end - interval.start) / MINUTE : 0;
         counts.appointments += 1;
-        if (d.scheduledMinutes !== null && d.actualMinutes !== null) {
+        counts.sources[own?.source ?? "appointment"] += 1;
+        if (d.scheduledMinutes !== null) {
           counts.scheduled += d.scheduledMinutes;
-          counts.actual += d.actualMinutes;
+          counts.actual += ownMinutes;
         }
-        const jobs = jobsByTech.get(id) ?? { all: [], chargeable: [], byKind: { chargeable: [], zero_value: [], no_value: [] } };
-        const interval = { start: ms(d.actualStart), end: ms(d.actualEnd) };
-        jobs.all.push(interval);
-        jobs.byKind[d.chargeability].push(interval);
-        if (d.chargeability === "chargeable") jobs.chargeable.push(interval);
-        jobsByTech.set(id, jobs);
+        if (ownMinutes > 0) {
+          const jobs = jobsByTech.get(id) ?? { all: [], byKind: { chargeable: [], contract: [], zero_value: [], no_value: [] } };
+          jobs.all.push(interval);
+          jobs.byKind[d.chargeability].push(interval);
+          jobsByTech.set(id, jobs);
+        }
       }
       perTechCounts.set(id, counts);
     }
   }
 
-  const jobMinutesBy: Record<Chargeability, number> = { chargeable: 0, zero_value: 0, no_value: 0 };
+  const dayBounds = new Map<string, { start: number; end: number }>();
+  const boundsOf = (date: string) => {
+    let b = dayBounds.get(date);
+    if (!b) {
+      b = { start: zonedTimeToUtc(date, "00:00", input.timeZone).getTime(), end: zonedTimeToUtc(addDaysToDateString(date, 1), "00:00", input.timeZone).getTime() };
+      dayBounds.set(date, b);
+    }
+    return b;
+  };
+
+  type TeamSum = Omit<TeamUtilization, "key" | "name" | "technicians" | "timePercent" | "commercialPercent" | "completenessPercent"> & {
+    key: string;
+    name: string;
+    members: Set<string>;
+  };
+  const blankTeam = (key: string, name: string): TeamSum => ({
+    key,
+    name,
+    members: new Set(),
+    availableMinutes: 0,
+    jobMinutes: 0,
+    chargeableMinutes: 0,
+    overtimeMinutes: 0,
+    completed: 0,
+    withActualTimes: 0,
+    varianceMinutes: 0,
+    scheduledMinutes: 0,
+    hoursFrom: blankSources(),
+  });
+  const teams = new Map<string, TeamSum>();
+  const teamOfLeader = (leader: string | null) => (leader ? { key: leader, name: `${nameOf(leader)}'s team` } : { key: "none", name: "No team" });
+
+  const jobMinutesBy: Record<Chargeability, number> = { chargeable: 0, contract: 0, zero_value: 0, no_value: 0 };
   const trend = new Map<string, TrendPoint>();
   const technicians: TechnicianUtilization[] = [];
 
@@ -255,20 +330,56 @@ export function computeUtilization(input: {
     const counts = perTechCounts.get(avail.fsmId);
     let jobMinutes = 0;
     let chargeableMinutes = 0;
-    let latestWindowEnd = rangeEnd;
+    let overtimeMinutes = 0;
+    let workedAny = 0;
+    /* The day's team; with none given at all, the roster's. */
+    const leaderOn = (day: { teamLeaderId?: string | null } | undefined) =>
+      day?.teamLeaderId !== undefined ? day.teamLeaderId : (input.technicians.get(avail.fsmId)?.teamLeaderId ?? null);
+    /* With no rest day entered, a week holds 6/7 of its days' hours, and any day up to a full
+       day's: six full days make 100 %, a seventh is overtime. */
+    const weekLeft = new Map<string, number>();
     for (const day of avail.days) {
-      if (day.status !== "working" || !day.windowStart || !day.windowEnd) continue;
-      const ws = Date.parse(day.windowStart);
-      const we = Date.parse(day.windowEnd);
-      latestWindowEnd = Math.max(latestWindowEnd, we);
-      /* A day with nothing available adds nothing to either side. */
-      const dayJob = jobs && day.availableMinutes > 0 ? coveredMinutes(ws, we, jobs.all) : 0;
-      const dayChargeable = jobs && day.availableMinutes > 0 ? coveredMinutes(ws, we, jobs.chargeable) : 0;
-      if (jobs && day.availableMinutes > 0) {
-        for (const kind of Object.keys(jobMinutesBy) as Chargeability[]) jobMinutesBy[kind] += coveredMinutes(ws, we, jobs.byKind[kind]);
+      if (!day.restDaysAssumed) continue;
+      const week = weekStart(day.date);
+      weekLeft.set(week, (weekLeft.get(week) ?? 0) + day.availableMinutes);
+    }
+    for (const day of avail.days) {
+      const b = boundsOf(day.date);
+      /* The day's own time, up to what was available that day; the rest is overtime. */
+      const worked = jobs ? coveredMinutes(b.start, b.end, jobs.all) : 0;
+      let counted = Math.min(worked, day.availableMinutes);
+      if (day.restDaysAssumed) {
+        const week = weekStart(day.date);
+        counted = Math.min(worked, day.dailyMinutes - day.leaveMinutes, weekLeft.get(week) ?? 0);
+        weekLeft.set(week, (weekLeft.get(week) ?? 0) - counted);
       }
-      jobMinutes += dayJob;
+      const chargeableWorked = jobs ? coveredMinutes(b.start, b.end, jobs.byKind.chargeable) : 0;
+      const dayChargeable = Math.min(chargeableWorked, counted);
+      /* What is left of the counted time, by kind: AMC, then a quotation of zero, then no value. */
+      const contractWorked = jobs ? coveredMinutes(b.start, b.end, jobs.byKind.contract) : 0;
+      const dayContract = Math.min(contractWorked, counted - dayChargeable);
+      const zeroWorked = jobs ? coveredMinutes(b.start, b.end, jobs.byKind.zero_value) : 0;
+      const dayZero = Math.min(zeroWorked, counted - dayChargeable - dayContract);
+      jobMinutesBy.chargeable += dayChargeable;
+      jobMinutesBy.contract += dayContract;
+      jobMinutesBy.zero_value += dayZero;
+      jobMinutesBy.no_value += counted - dayChargeable - dayContract - dayZero;
+      jobMinutes += counted;
       chargeableMinutes += dayChargeable;
+      overtimeMinutes += worked - counted;
+      workedAny += worked;
+
+      /* The team of that day: a move to another team does not take past days with it. */
+      if (day.availableMinutes > 0 || worked > 0) {
+        const t = teamOfLeader(leaderOn(day));
+        const team = teams.get(t.key) ?? blankTeam(t.key, t.name);
+        team.members.add(avail.fsmId);
+        team.availableMinutes += day.availableMinutes;
+        team.jobMinutes += counted;
+        team.chargeableMinutes += dayChargeable;
+        team.overtimeMinutes += worked - counted;
+        teams.set(t.key, team);
+      }
 
       const bucket = bucketOf(day.date, input.granularity);
       const point = trend.get(bucket.key) ?? {
@@ -283,21 +394,30 @@ export function computeUtilization(input: {
         commercialPercent: null,
       };
       point.availableMinutes += day.availableMinutes;
-      point.jobMinutes += dayJob;
+      point.jobMinutes += counted;
       point.chargeableMinutes += dayChargeable;
       if (day.date < point.from) point.from = day.date;
       if (day.date > point.to) point.to = day.date;
       trend.set(bucket.key, point);
     }
-    /* Everything the technician worked in the period, less what fell in a counted window. */
-    const allJob = jobs ? coveredMinutes(rangeStart, latestWindowEnd, jobs.all) : 0;
-    const outsideShiftMinutes = Math.max(0, allJob - jobMinutes);
 
     const availableMinutes = avail.totals.availableMinutes;
     /* Someone with nothing available and no work in the period is not in the report. */
-    if (availableMinutes === 0 && allJob === 0 && !(counts && counts.completed > 0)) continue;
+    if (availableMinutes === 0 && workedAny === 0 && !(counts && counts.completed > 0)) continue;
 
-    const team = teamOf(avail.fsmId);
+    /* Shown under the team of the period's last day; the team view splits by day. */
+    const lastDay = avail.days[avail.days.length - 1];
+    const team = teamOfLeader(leaderOn(lastDay));
+    const sources = counts?.sources ?? blankSources();
+    const rowTeam = teams.get(team.key) ?? blankTeam(team.key, team.name);
+    rowTeam.completed += counts?.completed ?? 0;
+    rowTeam.withActualTimes += counts?.withActualTimes ?? 0;
+    rowTeam.varianceMinutes += (counts?.actual ?? 0) - (counts?.scheduled ?? 0);
+    rowTeam.scheduledMinutes += counts?.scheduled ?? 0;
+    for (const k of Object.keys(sources) as HoursSource[]) rowTeam.hoursFrom[k] += sources[k];
+    rowTeam.members.add(avail.fsmId);
+    teams.set(team.key, rowTeam);
+
     technicians.push({
       ...withPercents({ availableMinutes, jobMinutes, chargeableMinutes }),
       fsmId: avail.fsmId,
@@ -305,9 +425,12 @@ export function computeUtilization(input: {
       teamKey: team.key,
       teamName: team.name,
       shiftAssumed: avail.shiftAssumed,
+      restDaysAssumed: avail.restDaysAssumed,
+      dailyMinutes: avail.dailyMinutes,
       shiftDays: avail.totals.shiftDays,
       leaveMinutes: avail.totals.leaveMinutes,
-      outsideShiftMinutes,
+      overtimeMinutes,
+      hoursFrom: sources,
       appointments: counts?.appointments ?? 0,
       completed: counts?.completed ?? 0,
       withActualTimes: counts?.withActualTimes ?? 0,
@@ -318,49 +441,43 @@ export function computeUtilization(input: {
     });
   }
 
-  /* Lowest time utilization first (who has room), nothing-available last. */
-  technicians.sort((a, b) => (a.timePercent ?? 1000) - (b.timePercent ?? 1000) || a.name.localeCompare(b.name));
+  /* Highest utilization first (28 Oct: every table descending); no figure last. */
+  technicians.sort((a, b) => (b.timePercent ?? -1) - (a.timePercent ?? -1) || a.name.localeCompare(b.name));
 
-  const teams = new Map<string, TeamUtilization>();
-  const blank = () => ({
-    technicians: 0,
-    availableMinutes: 0,
-    jobMinutes: 0,
-    chargeableMinutes: 0,
-    timePercent: null,
-    commercialPercent: null,
-    outsideShiftMinutes: 0,
-    completed: 0,
-    withActualTimes: 0,
-    completenessPercent: null,
-    varianceMinutes: 0,
-    scheduledMinutes: 0,
-  });
-  const overallSum: Omit<TeamUtilization, "key" | "name"> = blank();
-  for (const t of technicians) {
-    const team = teams.get(t.teamKey) ?? { key: t.teamKey, name: t.teamName, ...blank() };
-    for (const target of [team, overallSum]) {
-      target.technicians += 1;
-      target.availableMinutes += t.availableMinutes;
-      target.jobMinutes += t.jobMinutes;
-      target.chargeableMinutes += t.chargeableMinutes;
-      target.outsideShiftMinutes += t.outsideShiftMinutes;
-      target.completed += t.completed;
-      target.withActualTimes += t.withActualTimes;
-      target.varianceMinutes += t.varianceMinutes;
-      target.scheduledMinutes += t.scheduledMinutes;
-    }
-    teams.set(t.teamKey, team);
-  }
-  const finish = <T extends Omit<TeamUtilization, "key" | "name">>(m: T): T => ({
-    ...withPercents(m),
-    completenessPercent: percent(m.withActualTimes, m.completed),
-  });
+  const inReport = new Set(technicians.map((t) => t.fsmId));
+  const finish = (m: TeamSum): TeamUtilization => {
+    const { members, ...rest } = m;
+    return {
+      ...withPercents(rest),
+      technicians: [...members].filter((id) => inReport.has(id)).length,
+      completenessPercent: percent(m.withActualTimes, m.completed),
+    };
+  };
+
+  /* Overall: the same sums; completeness over appointments, not technician-appointment pairs. */
+  const sum = (pick: (t: TechnicianUtilization) => number) => technicians.reduce((s, t) => s + pick(t), 0);
+  const completedAppointments = details.filter((d) => d.status === "Completed" && d.technicianIds.some((id) => inReport.has(id)));
+  const overallSources = blankSources();
+  for (const t of technicians) for (const k of Object.keys(overallSources) as HoursSource[]) overallSources[k] += t.hoursFrom[k];
+  const overall = {
+    ...withPercents({ availableMinutes: sum((t) => t.availableMinutes), jobMinutes: sum((t) => t.jobMinutes), chargeableMinutes: sum((t) => t.chargeableMinutes) }),
+    technicians: technicians.length,
+    overtimeMinutes: sum((t) => t.overtimeMinutes),
+    completed: completedAppointments.length,
+    withActualTimes: completedAppointments.filter((d) => !d.missingActuals).length,
+    completenessPercent: percent(completedAppointments.filter((d) => !d.missingActuals).length, completedAppointments.length),
+    varianceMinutes: sum((t) => t.varianceMinutes),
+    scheduledMinutes: sum((t) => t.scheduledMinutes),
+    hoursFrom: overallSources,
+  };
 
   return {
     technicians,
-    teams: [...teams.values()].map(finish).sort((a, b) => (a.key === "none" ? 1 : b.key === "none" ? -1 : a.name.localeCompare(b.name))),
-    overall: finish(overallSum),
+    teams: [...teams.values()]
+      .map(finish)
+      .filter((t) => t.technicians > 0)
+      .sort((a, b) => (a.key === "none" ? 1 : b.key === "none" ? -1 : (b.timePercent ?? -1) - (a.timePercent ?? -1) || a.name.localeCompare(b.name))),
+    overall,
     trend: [...trend.values()].sort((a, b) => a.key.localeCompare(b.key)).map((p) => withPercents(p)),
     appointments: details.sort((a, b) => (b.actualStart ?? b.scheduledStart ?? "").localeCompare(a.actualStart ?? a.scheduledStart ?? "")),
     jobMinutesBy,

@@ -33,15 +33,15 @@ export const TECHNICIAN_CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000; // 6 hours
 // Excludes Administrator, Dispatcher, Manager, CallCenter Agent, etc.
 // (per YFI: "we only need to see ones with the user profile Field Agent,
 // Limited Field Agent, and YFI Field Agent V2").
-const TECHNICIAN_PROFILES = new Set(["Field Agent", "Limited Field Agent", "YFI Field Agent V2"]);
+export const TECHNICIAN_PROFILES = new Set(["Field Agent", "Limited Field Agent", "YFI Field Agent V2"]);
 
 // The /users listing includes invited, inactive and deleted accounts. The FSM
 // top-level `status` is "active" even for a user who was only invited and
 // never accepted -- what actually mirrors the "Active Users" tab in Zoho is
 // `client_status`. Per YFI (Q-2): "We only need to consider Active Users."
-const ACTIVE_CLIENT_STATUS = "Active";
+export const ACTIVE_CLIENT_STATUS = "Active";
 
-type ZohoUser = {
+export type ZohoUser = {
   id: string;
   full_name?: string;
   email?: string;
@@ -52,7 +52,7 @@ type ZohoUser = {
   Service_Resources?: { id: string; Name?: string; isActive?: boolean } | null;
 };
 
-type Resource = {
+export type Resource = {
   // The immutable FSM *service resource* ID (Service_Resources.id), NOT the
   // parent user's id -- these are distinct records in FSM and
   // LEAVE-002/TAG-006/BR-019 require the former.
@@ -65,7 +65,7 @@ type Resource = {
 // Some people hold more than one active FSM account under the same full name
 // (different emails). Qualify the duplicates with the email so a scheduler can
 // tell which account they are assigning work to.
-function buildDisplayNamer(resources: Resource[]) {
+export function buildDisplayNamer(resources: Resource[]) {
   const nameCounts = new Map<string, number>();
   for (const r of resources) {
     const key = r.name ?? "";

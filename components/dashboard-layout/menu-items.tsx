@@ -7,6 +7,7 @@ import {
   UserRoles,
 } from "@/types/types";
 import {
+  BadgeCheck,
   Bell,
   CalendarClock,
   ReceiptText,
@@ -128,6 +129,14 @@ export const baseSectionsItems: MenuItem[] = [
     icon: <Bell className="size-4 text-primary" />,
     isActive: false,
   },
+  /* A technician's own compliance (BRD §6.7); those who can open the full report use that instead. */
+  {
+    title: "My compliance",
+    url: "/my-compliance",
+    icon: <BadgeCheck className="size-4 text-primary" />,
+    isActive: false,
+    canSee: (user: User) => !hasResourceAction(user, ResourceType.COMPLIANCE, ActionType.VIEW),
+  },
   {
     title: "Todos",
     url: "/todos",
@@ -225,6 +234,12 @@ export const baseSectionsItems: MenuItem[] = [
         title: "App compliance",
         url: "/reports/compliance",
         resource: ResourceType.COMPLIANCE,
+      },
+      /* BRD B5: the reports kept in Zoho FSM, linked from here. */
+      {
+        title: "Zoho FSM reports",
+        url: "/reports/fsm",
+        canSee: canUseReports,
       },
     ],
   },

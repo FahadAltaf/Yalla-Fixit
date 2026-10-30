@@ -146,5 +146,6 @@ test("filters: created range, owner, client, value band, status, flags, search",
   assert.deepEqual(ids({ q: "17002" }), ["b"]);
   assert.equal(filterQuotations(rows, { status: "expired" }, { ignoreStatus: true }).length, 3);
   assert.equal(valueBandOf(5_000), "5k_20k");
-  assert.deepEqual(sortQuotationRows(rows).map((r) => r.id), ["a", "b", "c"]);
+  /* Newest first. */
+  assert.deepEqual(sortQuotationRows(rows).map((r) => r.id), ["b", "a", "c"]);
 });

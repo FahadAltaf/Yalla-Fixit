@@ -28,7 +28,8 @@ import { exportFilename, exportTable, type ExportFormat } from "@/lib/snagging/e
 import { todayInZone } from "@/lib/scheduling/org-time";
 import { reportsService } from "@/modules/reports/reports-service";
 
-import { DataAsOf, ReportDateRange, SavedFiltersMenu, lastThirtyDays, plural, useReportFilters } from "./shared";
+import { HowItWorks, exceptionsHowItWorks } from "./how-it-works";
+import { ReportDateRange, SavedFiltersMenu, lastThirtyDays, plural, useReportFilters } from "./shared";
 
 /**
  * Exception reports (BRD 5.2 B5; DEV-453):
@@ -201,6 +202,7 @@ export function ExceptionsPage() {
         description="Lists that protect the invoicing queue and the utilization figures from gaps in the FSM data."
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            <HowItWorks content={exceptionsHowItWorks(data && "afterDays" in data ? { afterDays: data.afterDays } : undefined)} />
             <ReportDateRange
               label={view === "unflagged" ? "Completed" : "Scheduled"}
               from={filters.from || (data && "from" in data ? data.from : "") || lastThirtyDays().from}
@@ -220,8 +222,6 @@ export function ExceptionsPage() {
           { value: "actual_times", label: "Missing actual times" },
         ]}
       />
-
-      <DataAsOf asOf={data?.dataAsOf ?? null} resources={view === "unflagged" ? ["work_orders", "estimates"] : ["appointments", "time_sheets"]} />
 
       {error ? <ErrorState title="Could not load the exception report" message={error} onRetry={() => void load()} retrying={loading} /> : null}
 
@@ -290,7 +290,7 @@ export function ExceptionsPage() {
           {actual && actual.overall.completed > 0 ? (
             <div className="grid gap-6 lg:grid-cols-2">
               <CompletenessTable icon={<Users />} title="By team" rows={actual.byTeam} />
-              <CompletenessTable icon={<Gauge />} title="By technician (least complete first)" rows={actual.byTechnician.slice(0, 12)} />
+              <CompletenessTable icon={<Gauge />} title="By technician (most missing first)" rows={actual.byTechnician.slice(0, 12)} />
             </div>
           ) : null}
 
@@ -326,18 +326,18 @@ function CompletenessTable({ icon, title, rows }: { icon: React.ReactNode; title
         <TableHeader>
           <TableRow>
             <TableHead className="pl-5">Name</TableHead>
-            <TableHead className="text-right">Completed</TableHead>
-            <TableHead className="text-right">With times</TableHead>
-            <TableHead className="pr-5 text-right">Completeness</TableHead>
+            <TableHead>Completed</TableHead>
+            <TableHead>With times</TableHead>
+            <TableHead className="pr-5">Completeness</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {rows.map((row) => (
             <TableRow key={row.key}>
               <TableCell className="pl-5">{row.name}</TableCell>
-              <TableCell className="text-right tabular-nums">{row.completed}</TableCell>
-              <TableCell className="text-right tabular-nums">{row.withActualTimes}</TableCell>
-              <TableCell className="pr-5 text-right font-medium tabular-nums">
+              <TableCell className="tabular-nums">{row.completed}</TableCell>
+              <TableCell className="tabular-nums">{row.withActualTimes}</TableCell>
+              <TableCell className="pr-5 font-medium tabular-nums">
                 {row.completenessPercent === null ? "—" : `${row.completenessPercent}%`}
               </TableCell>
             </TableRow>

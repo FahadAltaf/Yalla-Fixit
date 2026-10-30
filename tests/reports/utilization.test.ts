@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { computeAvailability, type AvailabilityTechnician } from "@/lib/reports/available-hours";
 import {
   chargeabilityOf,
+  isContractWork,
   computeUtilization,
   weekStart,
   type Chargeability,
@@ -11,7 +12,7 @@ import {
 } from "@/lib/reports/utilization";
 import { addDaysToDateString } from "@/lib/scheduling/org-time";
 
-/* Day shift 08:00-17:00 with a 60-minute unpaid break: the BRD's 8-hour day. */
+/* The 8-hour working day without a break (Sami, 28 Oct); Sundays off. */
 const SHIFTS = { dayStart: "08:00", dayEnd: "17:00", nightStart: "20:00", nightEnd: "08:00" };
 const TZ = "Asia/Dubai";
 const dubai = (date: string, time: string) => `${date}T${time}:00+04:00`;
@@ -65,7 +66,7 @@ function run(input: {
     shiftTimes: SHIFTS,
     holidays: input.holidays ?? [],
     leave: input.leave ?? [],
-    unpaidBreakMinutes: 60,
+    unpaidBreakMinutes: 0,
     timeZone: TZ,
   });
   return computeUtilization({
@@ -170,7 +171,7 @@ test("missing actual times are left out of job hours and lower completeness", ()
   assert.equal(result.appointments.filter((a) => a.missingActuals).length, 1);
 });
 
-test("Cannot Complete counts only with both actual times, and not in completeness", () => {
+test("Cannot Complete counts only with both actual times (Sami, 28 Oct), and not in completeness", () => {
   const result = run({
     from: "2026-10-05",
     to: "2026-10-05",
@@ -185,22 +186,23 @@ test("Cannot Complete counts only with both actual times, and not in completenes
   assert.equal(t.completenessPercent, null);
 });
 
-test("job time outside the shift is reported beside utilization, not in it", () => {
+test("any time of day counts; beyond the day's hours, and on a rest day, it is overtime", () => {
   const result = run({
     from: "2026-10-03",
     to: "2026-10-05",
     appointments: [
-      appt(["T1"], "2026-10-05", "16:00", "19:00"), // Monday: 1 h in the shift, 2 h after it
-      appt(["T1"], "2026-10-04", "09:00", "12:00"), // Sunday, a rest day
+      appt(["T1"], "2026-10-05", "05:00", "19:00"), // Monday: a 14-hour crew day, 8 counted, 6 overtime
+      appt(["T1"], "2026-10-04", "09:00", "12:00"), // Sunday, a rest day: all overtime
     ],
   });
   const t = result.technicians[0];
-  assert.equal(t.jobMinutes, 60);
-  assert.equal(t.outsideShiftMinutes, 5 * 60);
+  assert.equal(t.jobMinutes, 8 * 60, "a 05:00 start is not outside anything");
+  assert.equal(t.overtimeMinutes, 9 * 60);
   assert.equal(t.availableMinutes, 2 * 8 * 60, "Saturday and Monday; the rest day adds nothing");
+  assert.equal(result.overall.overtimeMinutes, 9 * 60);
 });
 
-test("a crew's job counts in full for each technician", () => {
+test("without their own records, each crew member gets the appointment's time (unverified)", () => {
   const result = run({
     from: "2026-10-05",
     to: "2026-10-05",
@@ -211,8 +213,95 @@ test("a crew's job counts in full for each technician", () => {
     result.technicians.map((t) => t.jobMinutes),
     [240, 240],
   );
+  assert.deepEqual(result.technicians[0].hoursFrom, { time_sheet: 0, attendance: 0, appointment: 1 });
   assert.equal(result.teams[0].jobMinutes, 480);
   assert.equal(result.teams[0].technicians, 2);
+});
+
+test("Sami, 28 Oct: individual hours from each one's time sheet or check-in and check-out", () => {
+  const result = run({
+    from: "2026-10-05",
+    to: "2026-10-05",
+    techs: [tech("T1"), tech("T2"), tech("T3")],
+    appointments: [
+      appt(["T1", "T2", "T3"], "2026-10-05", "08:00", "23:59", {
+        scheduledStart: dubai("2026-10-05", "08:00"),
+        scheduledEnd: dubai("2026-10-05", "12:00"),
+        work: {
+          T1: { start: dubai("2026-10-05", "08:00"), end: dubai("2026-10-05", "11:00"), source: "time_sheet" },
+          /* Checked out at 13:00: the never-closed 23:59 end does not count for them. */
+          T2: { start: dubai("2026-10-05", "08:00"), end: dubai("2026-10-05", "13:00"), source: "attendance" },
+          /* Not checked in during it: nothing. */
+          T3: { start: dubai("2026-10-05", "08:00"), end: dubai("2026-10-05", "08:00"), source: "attendance" },
+        },
+      }),
+    ],
+  });
+  const by = Object.fromEntries(result.technicians.map((t) => [t.fsmId, t]));
+  assert.equal(by.T1.jobMinutes, 180);
+  assert.equal(by.T2.jobMinutes, 300);
+  assert.equal(by.T3.jobMinutes, 0);
+  assert.equal(by.T1.varianceMinutes, -60, "their own time against the booking");
+  assert.deepEqual(by.T2.hoursFrom, { time_sheet: 0, attendance: 1, appointment: 0 });
+  assert.equal(result.overall.completed, 1, "one appointment, not three technician-appointments");
+});
+
+test("no rest day entered: six full days make 100 %, a seventh day is overtime", () => {
+  const week = ["2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08", "2026-10-09", "2026-10-10", "2026-10-11"];
+  const six = run({
+    from: "2026-10-05",
+    to: "2026-10-11",
+    techs: [tech("T1", { restWeekdays: [] })],
+    appointments: week.slice(0, 6).map((d) => appt(["T1"], d, "05:00", "17:00")),
+  }).technicians[0];
+  assert.equal(six.availableMinutes, 48 * 60);
+  assert.equal(six.jobMinutes, 48 * 60);
+  assert.equal(six.timePercent, 100);
+  assert.equal(six.overtimeMinutes, 6 * 4 * 60, "12-hour days: 4 h over each");
+
+  const seven = run({
+    from: "2026-10-05",
+    to: "2026-10-11",
+    techs: [tech("T1", { restWeekdays: [] })],
+    appointments: week.map((d) => appt(["T1"], d, "08:00", "16:00")),
+  }).technicians[0];
+  assert.equal(seven.jobMinutes, 48 * 60);
+  assert.equal(seven.overtimeMinutes, 8 * 60, "the seventh day");
+});
+
+test("a past day counts for the team the technician was in that day", () => {
+  const availability = computeAvailability({
+    technicians: [
+      tech("T1", { teamLeaderId: "L2", history: { team_leader_fsm_id: [{ from: "2000-01-01", value: "L1" }, { from: "2026-10-07", value: "L2" }] } }),
+    ],
+    from: "2026-10-05",
+    to: "2026-10-08",
+    shiftTimes: SHIFTS,
+    holidays: [],
+    leave: [],
+    unpaidBreakMinutes: 0,
+    today: "2026-10-28",
+    timeZone: TZ,
+  });
+  const result = computeUtilization({
+    from: "2026-10-05",
+    to: "2026-10-08",
+    availability,
+    technicians: new Map([
+      ["T1", { fsmId: "T1", name: "Tech T1", teamLeaderId: "L2" }],
+      ["L1", { fsmId: "L1", name: "Lead One", teamLeaderId: null }],
+      ["L2", { fsmId: "L2", name: "Lead Two", teamLeaderId: null }],
+    ]),
+    appointments: [appt(["T1"], "2026-10-05", "09:00", "11:00"), appt(["T1"], "2026-10-08", "09:00", "10:00")],
+    granularity: "day",
+    timeZone: TZ,
+  });
+  const team = Object.fromEntries(result.teams.map((t) => [t.key, t]));
+  assert.equal(team.L1.availableMinutes, 2 * 480, "5 and 6 Oct in Lead One's team");
+  assert.equal(team.L1.jobMinutes, 120);
+  assert.equal(team.L2.availableMinutes, 2 * 480, "7 and 8 Oct in Lead Two's team");
+  assert.equal(team.L2.jobMinutes, 60);
+  assert.equal(result.technicians[0].teamName, "Lead Two's team", "the row shows the team of the last day");
 });
 
 test("scheduled against actual variance", () => {
@@ -268,12 +357,22 @@ test("appointments outside the period, and leavers with nothing, are left out", 
 });
 
 test("chargeability kinds are reported apart", () => {
-  const kinds: Chargeability[] = ["chargeable", "zero_value", "no_value"];
+  const kinds: Chargeability[] = ["chargeable", "contract", "zero_value", "no_value"];
   const result = run({
     from: "2026-10-05",
     to: "2026-10-05",
     appointments: kinds.map((k, i) => appt(["T1"], "2026-10-05", `${String(9 + i * 2).padStart(2, "0")}:00`, `${String(10 + i * 2).padStart(2, "0")}:00`, { chargeability: k })),
   });
-  assert.deepEqual(result.jobMinutesBy, { chargeable: 60, zero_value: 60, no_value: 60 });
-  assert.equal(result.technicians[0].chargeableMinutes, 60);
+  assert.deepEqual(result.jobMinutesBy, { chargeable: 60, contract: 60, zero_value: 60, no_value: 60 });
+  assert.equal(result.technicians[0].chargeableMinutes, 60, "AMC work counts for time only");
+  assert.equal(result.technicians[0].jobMinutes, 240);
+});
+
+test("29 Oct: AMC and in-contract work is never chargeable, whatever its value", () => {
+  assert.equal(isContractWork({ workType: "AMC PPM", amcContractRef: null }), true);
+  assert.equal(isContractWork({ workType: null, amcContractRef: "16607-TALAL-26-27" }), true);
+  assert.equal(isContractWork({ workType: null, amcContractRef: "  " }), false);
+  assert.equal(isContractWork({ workType: "Maintenance", amcContractRef: null }), false);
+  assert.equal(chargeabilityOf({ quotationTotal: 1200, workOrderTotal: 1200, contract: true }), "contract");
+  assert.equal(chargeabilityOf({ quotationTotal: 1200, workOrderTotal: 1200, contract: false }), "chargeable");
 });

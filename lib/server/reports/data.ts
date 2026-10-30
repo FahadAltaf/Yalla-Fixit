@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import type { AvailabilityInput, AvailabilityTechnician, LeaveInterval, ShiftTimes } from "@/lib/reports/available-hours";
+import type { AttributeHistory, AvailabilityInput, AvailabilityTechnician, HistoryField, LeaveInterval, ShiftTimes } from "@/lib/reports/available-hours";
 import type { CapacityAppointment } from "@/lib/reports/capacity";
 import type { RecordedCheckIn } from "@/lib/reports/compliance";
 import type {
@@ -10,14 +10,16 @@ import type {
   ExceptionWorkOrder,
 } from "@/lib/reports/exceptions";
 import type { QuotationRecord } from "@/lib/reports/quotations";
-import { chargeabilityOf, type UtilizationAppointment } from "@/lib/reports/utilization";
-import { addDaysToDateString, todayInZone, zonedTimeToUtc } from "@/lib/scheduling/org-time";
+import { chargeabilityOf, isContractWork, type TechnicianWork, type UtilizationAppointment } from "@/lib/reports/utilization";
+import { addDaysToDateString, todayInZone, zonedDateString, zonedTimeToUtc } from "@/lib/scheduling/org-time";
 import {
   fetchPlannedCrewsLive,
   fetchQuotationFlagsLive,
+  fetchTechniciansLive,
+  fetchTimeOffLive,
   fetchWorkOrderLive,
-  readModuleSince,
   type QuotationFlag,
+  readModuleSince,
 } from "@/lib/server/finance/fsm-live";
 import { lookupId, lookupName } from "@/lib/server/finance/fsm-sync/mappers";
 import { readAllRows } from "@/lib/server/snagging/read-all";
@@ -81,14 +83,21 @@ const APPOINTMENT_FIELDS = [
 ];
 
 /** Appointments scheduled from a date on (later ones too, future included). */
-async function liveAppointments(admin: SupabaseClient, fromIso: string): Promise<LiveAppointment[]> {
-  const { rows } = await readModuleSince(admin, {
-    module: "Service_Appointments",
-    sortField: "Scheduled_Start_Date_Time",
-    fields: APPOINTMENT_FIELDS,
-    fromIso,
-    resource: "appointments",
-  });
+/* `refresh`: read FSM now, not the ten-minute copy (the check-in alerts need what is true this minute). */
+type Fresh = { refresh?: boolean };
+
+async function liveAppointments(admin: SupabaseClient, fromIso: string, options: Fresh = {}): Promise<LiveAppointment[]> {
+  const { rows } = await readModuleSince(
+    admin,
+    {
+      module: "Service_Appointments",
+      sortField: "Scheduled_Start_Date_Time",
+      fields: APPOINTMENT_FIELDS,
+      fromIso,
+      resource: "appointments",
+    },
+    options,
+  );
   return rows.map((r) => ({
     id: String(r.id),
     number: str(r.Name),
@@ -110,14 +119,14 @@ async function liveAppointments(admin: SupabaseClient, fromIso: string): Promise
 type TimeSheet = { technicianId: string; appointmentId: string; start: string | null; end: string | null };
 
 /** Time logged per technician per appointment, from a date on. */
-async function liveTimeSheets(admin: SupabaseClient, fromIso: string): Promise<TimeSheet[]> {
+async function liveTimeSheets(admin: SupabaseClient, fromIso: string, options: Fresh = {}): Promise<TimeSheet[]> {
   const { rows } = await readModuleSince(admin, {
     module: "Time_Sheets",
     sortField: "Start_Date_Time",
     fields: ["Service_Resource", "Service_Appointment", "Start_Date_Time", "End_Date_Time"],
     fromIso,
     resource: "time_sheets",
-  });
+  }, options);
   return rows
     .map((r) => ({
       technicianId: lookupId(r.Service_Resource) ?? "",
@@ -167,7 +176,16 @@ async function liveQuotations(admin: SupabaseClient) {
   return { byId, byWorkOrder };
 }
 
-type LiveWorkOrderValue = { id: string; number: string | null; subTotal: number | null; estimateId: string | null; clientName: string | null };
+type LiveWorkOrderValue = {
+  id: string;
+  number: string | null;
+  subTotal: number | null;
+  estimateId: string | null;
+  clientName: string | null;
+  /** AMC work (29 Oct): FSM's Work Type and AMC contract reference. */
+  workType: string | null;
+  amcContractRef: string | null;
+};
 
 /* At most this many older work orders are read one by one for a report. */
 const MAX_OLDER_WORK_ORDERS = 40;
@@ -186,7 +204,7 @@ async function workOrdersFor(
   const { rows } = await readModuleSince(admin, {
     module: "Work_Orders",
     sortField: "Created_Time",
-    fields: ["Name", "Sub_Total", "Estimate", "Company", "Contact", "Status", "Completed_Time"],
+    fields: ["Name", "Sub_Total", "Estimate", "Company", "Contact", "Status", "Completed_Time", "Work_Type__C", "AMC_Contract_Ref__C"],
     fromIso: isoFrom(fromDate, -120),
     resource: "work_orders",
   });
@@ -198,6 +216,8 @@ async function workOrdersFor(
       subTotal: r.Sub_Total === null || r.Sub_Total === undefined ? null : Number(r.Sub_Total),
       estimateId: lookupId(r.Estimate),
       clientName: lookupName(r.Company) ?? lookupName(r.Contact),
+      workType: str(r.Work_Type__C),
+      amcContractRef: lookupName(r.AMC_Contract_Ref__C) ?? str(r.AMC_Contract_Ref__C),
     });
   }
   const older = ids.filter((x) => !out.has(x) && !hasQuotation(x)).slice(0, MAX_OLDER_WORK_ORDERS);
@@ -206,7 +226,15 @@ async function workOrdersFor(
     for (const live of read) {
       if (!live) continue;
       const w = live.workOrder;
-      out.set(w.id, { id: w.id, number: w.number, subTotal: w.subTotal, estimateId: w.estimateId, clientName: w.companyName ?? w.contactName });
+      out.set(w.id, {
+        id: w.id,
+        number: w.number,
+        subTotal: w.subTotal,
+        estimateId: w.estimateId,
+        clientName: w.companyName ?? w.contactName,
+        workType: w.workType,
+        amcContractRef: null,
+      });
     }
   }
   return out;
@@ -254,39 +282,119 @@ export async function loadQuotationRecords(admin: SupabaseClient): Promise<Quota
 // ---------------------------------------------------------------------
 
 export type ReportTechnician = ExceptionTechnician &
-  AvailabilityTechnician & { isActive: boolean; employmentStatus: string | null; email: string | null };
+  AvailabilityTechnician & {
+    isActive: boolean;
+    employmentStatus: string | null;
+    email: string | null;
+    /** Their portal account (technician_reference.user_profile_id), for their own compliance (N9, N11). */
+    userProfileId: string | null;
+  };
+
+/* Until migration 20261028100000 is applied there is no daily_hours column: everyone has the standard day.
+   service_type: the Service Type in Scheduling; a Data Center technician's day is 12 hours (29 Oct). */
+async function technicianRows(admin: SupabaseClient): Promise<Record<string, unknown>[]> {
+  try {
+    return await readAllRows<Record<string, unknown>>(
+      (from, to) =>
+        admin
+          .from("technician_reference")
+          .select(
+            "fsm_resource_id, display_name, is_active, shift, team_leader_fsm_id, rest_weekdays, leaving_date, employment_status, email, user_profile_id, hidden_from_lists, daily_hours, service_type:lookup_options!technician_reference_service_type_id_fkey(name)",
+          )
+          .order("fsm_resource_id")
+          .range(from, to),
+      "technicians",
+    );
+  } catch (error) {
+    if (!/daily_hours/i.test(error instanceof Error ? error.message : String(error))) throw error;
+    return readAllRows<Record<string, unknown>>(
+      (from, to) =>
+        admin
+          .from("technician_reference")
+          .select(
+            "fsm_resource_id, display_name, is_active, shift, team_leader_fsm_id, rest_weekdays, leaving_date, employment_status, email, user_profile_id, hidden_from_lists, service_type:lookup_options!technician_reference_service_type_id_fkey(name)",
+          )
+          .order("fsm_resource_id")
+          .range(from, to),
+      "technicians",
+    );
+  }
+}
 
 /**
- * Every technician, active or not (history keeps leavers), except accounts
- * hidden from lists: those are test and development accounts (DEV-458).
+ * The dated changes of each technician's shift, team leader, rest days and
+ * daily hours (Sami, 28 Oct: past reports keep the assignments of the
+ * time). Empty until migration 20261028100000 is applied.
  */
-export async function loadTechnicians(admin: SupabaseClient): Promise<Map<string, ReportTechnician>> {
-  const rows = await readAllRows<Record<string, unknown>>(
-    (from, to) =>
-      admin
-        .from("technician_reference")
-        .select(
-          "fsm_resource_id, display_name, is_active, shift, team_leader_fsm_id, rest_weekdays, leaving_date, employment_status, email, hidden_from_lists",
-        )
-        .order("fsm_resource_id")
-        .range(from, to),
-    "technicians",
-  );
-  const out = new Map<string, ReportTechnician>();
+export async function loadAttributeHistory(admin: SupabaseClient): Promise<Map<string, AttributeHistory>> {
+  const out = new Map<string, AttributeHistory>();
+  let rows: Record<string, unknown>[] = [];
+  try {
+    rows = await readAllRows<Record<string, unknown>>(
+      (from, to) =>
+        admin
+          .from("technician_attribute_history")
+          .select("fsm_resource_id, field, value, effective_date, recorded_at")
+          .order("fsm_resource_id")
+          .order("effective_date")
+          .order("recorded_at")
+          .range(from, to),
+      "technician history",
+    );
+  } catch (error) {
+    if (!/technician_attribute_history|PGRST205|42P01|schema cache/i.test(error instanceof Error ? error.message : String(error))) throw error;
+    return out;
+  }
   for (const r of rows) {
-    if (r.hidden_from_lists === true) continue;
+    const id = String(r.fsm_resource_id);
+    const field = String(r.field) as HistoryField;
+    const history = out.get(id) ?? {};
+    (history[field] ??= []).push({ from: String(r.effective_date), value: r.value });
+    out.set(id, history);
+  }
+  return out;
+}
+
+/**
+ * The technicians (28 Oct): live from Zoho FSM, as the scheduling sync picks
+ * them (active users with a technician profile and a service resource). What
+ * FSM does not hold comes from the portal's record of each: the team leader,
+ * shift, rest days, leaving date and employment status. A technician no
+ * longer in FSM is kept from the portal's record, inactive, so the work they
+ * did in the dates still counts (history keeps leavers). Accounts hidden from
+ * lists (test and development, DEV-458) are left out.
+ */
+function serviceTypeOf(r: Record<string, unknown> | undefined): string | null {
+  const s = r?.service_type as { name?: unknown } | Array<{ name?: unknown }> | null | undefined;
+  return str(Array.isArray(s) ? s[0]?.name : s?.name);
+}
+
+export async function loadTechnicians(admin: SupabaseClient): Promise<Map<string, ReportTechnician>> {
+  const [live, rows, history] = await Promise.all([fetchTechniciansLive(admin), technicianRows(admin), loadAttributeHistory(admin)]);
+  const portalOf = new Map(rows.map((r) => [String(r.fsm_resource_id), r]));
+  const extras = (r: Record<string, unknown> | undefined) => ({
+    dailyHours: r?.daily_hours === null || r?.daily_hours === undefined ? null : Number(r.daily_hours),
+    serviceType: serviceTypeOf(r),
+    history: r ? history.get(String(r.fsm_resource_id)) : undefined,
+    teamLeaderId: str(r?.team_leader_fsm_id),
+    shift: (r?.shift === "night" ? "night" : r?.shift === "morning" ? "morning" : null) as ReportTechnician["shift"],
+    restWeekdays: Array.isArray(r?.rest_weekdays) ? (r.rest_weekdays as unknown[]).map(Number) : [],
+    leavingDate: str(r?.leaving_date),
+    employmentStatus: str(r?.employment_status),
+    userProfileId: str(r?.user_profile_id),
+  });
+  const out = new Map<string, ReportTechnician>();
+  /* From FSM: who is a technician now, their name, email and whether active. */
+  for (const t of live) {
+    const portal = portalOf.get(t.fsmResourceId);
+    if (portal?.hidden_from_lists === true) continue;
+    out.set(t.fsmResourceId, { fsmId: t.fsmResourceId, name: t.displayName, isActive: t.isActive, email: t.email, ...extras(portal) });
+  }
+  /* No longer in FSM: kept from the portal's record, inactive, for the work they did. */
+  for (const r of rows) {
     const fsmId = String(r.fsm_resource_id);
-    out.set(fsmId, {
-      fsmId,
-      name: String(r.display_name ?? fsmId),
-      teamLeaderId: str(r.team_leader_fsm_id),
-      shift: r.shift === "night" ? "night" : r.shift === "morning" ? "morning" : null,
-      restWeekdays: Array.isArray(r.rest_weekdays) ? (r.rest_weekdays as unknown[]).map(Number) : [],
-      leavingDate: str(r.leaving_date),
-      isActive: r.is_active !== false,
-      employmentStatus: str(r.employment_status),
-      email: str(r.email),
-    });
+    if (out.has(fsmId) || r.hidden_from_lists === true) continue;
+    out.set(fsmId, { fsmId, name: String(r.display_name ?? fsmId), isActive: false, email: str(r.email), ...extras(r) });
   }
   return out;
 }
@@ -392,10 +500,13 @@ export async function loadUtilizationAppointments(
 ): Promise<{ appointments: UtilizationAppointment[]; crewsUnknown: number }> {
   const startIso = isoFrom(range.from, -1);
   const endIso = isoFrom(range.to, 2);
-  const [all, sheets, quotations] = await Promise.all([
+  const [all, sheets, quotations, checkIns] = await Promise.all([
     liveAppointments(admin, isoFrom(range.from, -7)),
     liveTimeSheets(admin, isoFrom(range.from, -7)),
     liveQuotations(admin),
+    /* Each technician's own day (FSM Attendance), for their own hours on a crew's job. */
+    /* Not caught (29 Oct): a failed read must not look like nobody checked in. */
+    loadShiftCheckIns(admin, { from: addDaysToDateString(range.from, -1), to: range.to }),
     /* The work-order list is read alongside, ready for workOrdersFor below. */
     workOrdersFor(admin, [], range.from, () => true),
   ]);
@@ -411,6 +522,62 @@ export async function loadUtilizationAppointments(
     range.from,
     (id) => quotations.byWorkOrder.has(id),
   );
+
+  /* Own time sheets on an appointment (earliest start, latest end), and each technician's day. */
+  const ownSheet = new Map<string, { start: number; end: number }>();
+  for (const t of sheets) {
+    const start = t.start ? Date.parse(t.start) : NaN;
+    const end = t.end ? Date.parse(t.end) : NaN;
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
+    const key = `${t.technicianId}|${t.appointmentId}`;
+    const seen = ownSheet.get(key);
+    ownSheet.set(key, seen ? { start: Math.min(seen.start, start), end: Math.max(seen.end, end) } : { start, end });
+  }
+  /* Each FSM Attendance record as it is (29 Oct): one check-in and its check-out, which may be the next morning. */
+  const sessionsOf = new Map<string, Array<{ start: number; end: number | null; date: string }>>();
+  const sessionByKey = new Map<string, { start: number; end: number | null; date: string }>();
+  for (const c of checkIns) {
+    const startIso = c.sessionStart ?? c.at;
+    const key = `${c.technicianFsmId}|${startIso}`;
+    let session = sessionByKey.get(key);
+    if (!session) {
+      session = { start: Date.parse(startIso), end: null, date: zonedDateString(startIso) };
+      sessionByKey.set(key, session);
+      sessionsOf.set(c.technicianFsmId, [...(sessionsOf.get(c.technicianFsmId) ?? []), session]);
+    }
+    if (c.kind === "shift_check_out") session.end = Date.parse(c.at);
+  }
+  /**
+   * Sami, 28 Oct: individual hours, not the crew's. Their own time sheet;
+   * else the appointment's actual times trimmed to their own check-in and
+   * check-out (nothing, if they were checked in that day but not during
+   * it); else nothing here, and the appointment's times count, as
+   * unverified. A session still open counts to the appointment's end.
+   */
+  const workOf = (a: LiveAppointment, crew: string[]): Record<string, TechnicianWork> | undefined => {
+    const start = a.actualStart ? Date.parse(a.actualStart) : NaN;
+    const end = a.actualEnd ? Date.parse(a.actualEnd) : NaN;
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end < start) return undefined;
+    const out: Record<string, TechnicianWork> = {};
+    for (const id of crew) {
+      const sheet = ownSheet.get(`${id}|${a.id}`);
+      if (sheet) {
+        out[id] = { start: new Date(sheet.start).toISOString(), end: new Date(sheet.end).toISOString(), source: "time_sheet" };
+        continue;
+      }
+      const date = zonedDateString(a.actualStart!);
+      const mine = sessionsOf.get(id) ?? [];
+      const during = mine.filter((s) => s.start < end && (s.end ?? end) > start);
+      if (during.length) {
+        const from = Math.max(start, Math.min(...during.map((s) => s.start)));
+        const to = Math.max(from, Math.min(end, Math.max(...during.map((s) => s.end ?? end))));
+        out[id] = { start: new Date(from).toISOString(), end: new Date(to).toISOString(), source: "attendance" };
+      } else if (mine.some((s) => s.date === date)) {
+        out[id] = { start: new Date(start).toISOString(), end: new Date(start).toISOString(), source: "attendance" };
+      }
+    }
+    return out;
+  };
 
   const appointments = rows.map<UtilizationAppointment>((a) => {
     const wo = a.workOrderId ? wos.get(a.workOrderId) : undefined;
@@ -431,7 +598,9 @@ export async function loadUtilizationAppointments(
       chargeability: chargeabilityOf({
         quotationTotal: quotation ? (quotation.subTotal ?? 0) : null,
         workOrderTotal: wo?.subTotal ?? null,
+        contract: wo ? isContractWork(wo) : false,
       }),
+      work: workOf(a, crews.get(a.id) ?? []),
     };
   });
   return { appointments, crewsUnknown: unknown };
@@ -502,18 +671,27 @@ export async function loadCapacityAppointments(
 // Compliance and attendance (P7)
 // ---------------------------------------------------------------------
 
-export type ComplianceAppointmentRow = CapacityAppointment & { actualStart: string | null; actualEnd: string | null };
+export type ComplianceAppointmentRow = CapacityAppointment & {
+  actualStart: string | null;
+  actualEnd: string | null;
+  /** Who FSM shows did the work (29 Oct): the lead, and anyone who logged a time sheet on it. A planned crew member is not evidence. */
+  workedBy: string[];
+  leadId: string | null;
+};
 
 /** Every appointment scheduled in the dates, any status (the calculation drops cancelled ones), with who was on it and its actual times. */
 export async function loadComplianceAppointments(
   admin: SupabaseClient,
   range: { from: string; to: string },
+  options: Fresh = {},
 ): Promise<{ appointments: ComplianceAppointmentRow[]; crewsUnknown: number }> {
   const startIso = isoFrom(range.from);
   const endIso = isoFrom(range.to, 1);
-  const [all, sheets] = await Promise.all([liveAppointments(admin, startIso), liveTimeSheets(admin, startIso)]);
+  const [all, sheets] = await Promise.all([liveAppointments(admin, startIso, options), liveTimeSheets(admin, startIso, options)]);
   const rows = all.filter((a) => a.scheduledStart && a.scheduledStart >= startIso && a.scheduledStart < endIso);
   const { crews, unknown } = await crewsOf(admin, rows, sheets);
+  const logged = new Map<string, Set<string>>();
+  for (const t of sheets) logged.set(t.appointmentId, (logged.get(t.appointmentId) ?? new Set()).add(t.technicianId));
   return {
     appointments: rows.map((a) => ({
       id: a.id,
@@ -526,29 +704,36 @@ export async function loadComplianceAppointments(
       actualStart: a.actualStart,
       actualEnd: a.actualEnd,
       technicianIds: crews.get(a.id) ?? [],
+      workedBy: [...new Set([...(a.leadId ? [a.leadId] : []), ...(logged.get(a.id) ?? [])])],
+      leadId: a.leadId,
     })),
     crewsUnknown: unknown,
   };
 }
 
 /** Shift check-ins and check-outs (FSM Attendance: first check-in, last check-out of each day), around the dates. */
-export async function loadShiftCheckIns(admin: SupabaseClient, range: { from: string; to: string }): Promise<RecordedCheckIn[]> {
-  const { rows } = await readModuleSince(admin, {
-    module: "Attendance",
-    sortField: "First_Check_In",
-    fields: ["Service_Resource", "Date", "First_Check_In", "Last_Check_Out", "Status", "Working_Duration"],
-    fromIso: isoFrom(range.from, -1),
-    resource: "attendance",
-  });
+export async function loadShiftCheckIns(admin: SupabaseClient, range: { from: string; to: string }, options: Fresh = {}): Promise<RecordedCheckIn[]> {
+  const { rows } = await readModuleSince(
+    admin,
+    {
+      module: "Attendance",
+      sortField: "First_Check_In",
+      fields: ["Service_Resource", "Date", "First_Check_In", "Last_Check_Out", "Status", "Working_Duration"],
+      fromIso: isoFrom(range.from, -1),
+      resource: "attendance",
+    },
+    options,
+  );
   const endIso = isoFrom(range.to, 2);
   const out: RecordedCheckIn[] = [];
   for (const r of rows) {
     const technicianFsmId = lookupId(r.Service_Resource);
     const checkIn = str(r.First_Check_In);
     if (!technicianFsmId || !checkIn || checkIn >= endIso) continue;
-    out.push({ technicianFsmId, kind: "shift_check_in", at: checkIn });
+    /* One record per technician per day: its check-out stays with its check-in (29 Oct). */
+    out.push({ technicianFsmId, kind: "shift_check_in", at: checkIn, sessionStart: checkIn });
     const checkOut = str(r.Last_Check_Out);
-    if (checkOut) out.push({ technicianFsmId, kind: "shift_check_out", at: checkOut });
+    if (checkOut) out.push({ technicianFsmId, kind: "shift_check_out", at: checkOut, sessionStart: checkIn });
   }
   return out;
 }
@@ -590,12 +775,19 @@ export async function loadAppointmentCheckIns(
 
 export async function loadAvailabilityInput(
   admin: SupabaseClient,
-  input: { from: string; to: string; technicians: AvailabilityTechnician[]; unpaidBreakMinutes: number },
+  input: {
+    from: string;
+    to: string;
+    technicians: AvailabilityTechnician[];
+    unpaidBreakMinutes: number;
+    standardDailyHours?: number;
+    dataCentreDailyHours?: number;
+  },
 ): Promise<AvailabilityInput> {
   /* Leave overlapping the range, with a day either side for night shifts. */
   const startIso = zonedTimeToUtc(addDaysToDateString(input.from, -1)).toISOString();
   const endIso = zonedTimeToUtc(addDaysToDateString(input.to, 2)).toISOString();
-  const [{ data: config, error }, { data: holidayRows, error: holidayError }, leaveRows] = await Promise.all([
+  const [{ data: config, error }, { data: holidayRows, error: holidayError }, leaveRows, timeOff] = await Promise.all([
     admin.from("settings").select("day_shift_start, day_shift_end, night_shift_start, night_shift_end").eq("id", 1).single(),
     admin.from("org_public_holidays").select("holiday_date").gte("holiday_date", input.from).lte("holiday_date", input.to),
     readAllRows<Record<string, unknown>>(
@@ -610,6 +802,9 @@ export async function loadAvailabilityInput(
           .range(from, to),
       "leave",
     ),
+    /* Time off entered in Zoho FSM counts as leave too (28 Oct). */
+    /* Not caught (29 Oct): FSM leave that cannot be read must not count as nobody on leave. */
+    fetchTimeOffLive(admin),
   ]);
   if (error) throw new Error(`shift settings: ${error.message}`);
   if (holidayError) throw new Error(`public holidays: ${holidayError.message}`);
@@ -621,14 +816,17 @@ export async function loadAvailabilityInput(
   };
 
   const wanted = new Set(input.technicians.map((t) => t.fsmId));
-  const leave: LeaveInterval[] = leaveRows
-    .filter((r) => wanted.has(String(r.technician_fsm_id)))
-    .map((r) => ({
-      technicianFsmId: String(r.technician_fsm_id),
-      startAt: String(r.start_at),
-      endAt: String(r.end_at),
-      category: str(r.leave_category) ?? str(r.leave_type),
-    }));
+  const leave: LeaveInterval[] = [
+    ...leaveRows
+      .filter((r) => wanted.has(String(r.technician_fsm_id)))
+      .map((r) => ({
+        technicianFsmId: String(r.technician_fsm_id),
+        startAt: String(r.start_at),
+        endAt: String(r.end_at),
+        category: str(r.leave_category) ?? str(r.leave_type),
+      })),
+    ...timeOff.filter((t) => wanted.has(t.technicianFsmId) && t.startAt < endIso && t.endAt > startIso),
+  ];
 
   return {
     technicians: input.technicians,
@@ -638,5 +836,8 @@ export async function loadAvailabilityInput(
     holidays: (holidayRows ?? []).map((h) => String(h.holiday_date)),
     leave,
     unpaidBreakMinutes: input.unpaidBreakMinutes,
+    standardDailyMinutes: Math.round((input.standardDailyHours ?? 8) * 60),
+    dataCentreDailyMinutes: Math.round((input.dataCentreDailyHours ?? 12) * 60),
+    today: todayInZone(),
   };
 }

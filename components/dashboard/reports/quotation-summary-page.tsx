@@ -19,7 +19,8 @@ import type { QuotationReport } from "@/lib/server/reports/reports";
 import { exportFilename, exportTable, type ExportFormat } from "@/lib/snagging/export-table";
 import { reportsService } from "@/modules/reports/reports-service";
 
-import { DataAsOf, ReportDateRange, SavedFiltersMenu, lastThirtyDays, plural, useReportFilters } from "./shared";
+import { HowItWorks, quotationsHowItWorks } from "./how-it-works";
+import { ReportDateRange, SavedFiltersMenu, lastThirtyDays, plural, useReportFilters } from "./shared";
 
 /**
  * The quotation summary (BRD 5.2 B1; DEV-442). Per status: how many, how
@@ -116,6 +117,7 @@ export function QuotationSummaryPage() {
         description="The quotation pipeline from FSM: what is waiting in each status, for how long, and what is about to lapse. Values are before VAT."
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            <HowItWorks content={quotationsHowItWorks(data ? { limits: data.limits, expiryWarningDays: data.expiryWarningDays } : undefined)} />
             <ReportDateRange
               label="Created"
               from={filters.from || data?.from || lastThirtyDays().from}
@@ -126,7 +128,6 @@ export function QuotationSummaryPage() {
           </div>
         }
       />
-      <DataAsOf asOf={data?.dataAsOf ?? null} resources={["estimates"]} />
 
       {data ? (
         <StatCardGrid columns={4}>

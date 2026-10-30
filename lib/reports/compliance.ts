@@ -62,6 +62,13 @@ export type RecordedCheckIn = {
   at: string;
   /** For the appointment kinds. */
   appointmentId?: string | null;
+  /**
+   * For the shift kinds: the check-in of the FSM Attendance record this
+   * came from (29 Oct). FSM keeps one record per technician per day with
+   * its first check-in and last check-out; both belong to the same shift
+   * day, so an overnight check-out is never filed under the next day.
+   */
+  sessionStart?: string;
 };
 
 export type Waiver = {
@@ -128,7 +135,7 @@ function eligibleDays(tech: TechnicianAvailability) {
   const days = new Map<string, { start: string | null; end: string | null }>();
   for (const day of tech.days) {
     if (day.status !== "working") continue;
-    const shiftMinutes = day.windowMinutes - day.breakMinutes;
+    const shiftMinutes = day.dailyMinutes;
     if (shiftMinutes > 0 && day.leaveMinutes >= shiftMinutes) continue;
     days.set(day.date, { start: day.windowStart, end: day.windowEnd });
   }
@@ -200,7 +207,7 @@ export function shiftDateFor(windows: ShiftWindow[], at: string, timeZone?: stri
 function recordedIndex(recorded: RecordedCheckIn[], windows: Map<string, ShiftWindow[]>, timeZone?: string) {
   const index = new Map<string, string>();
   for (const r of recorded) {
-    const ref = isShiftKind(r.kind) ? shiftDateFor(windows.get(r.technicianFsmId) ?? [], r.at, timeZone) : r.appointmentId;
+    const ref = isShiftKind(r.kind) ? shiftDateFor(windows.get(r.technicianFsmId) ?? [], r.sessionStart ?? r.at, timeZone) : r.appointmentId;
     if (!ref) continue;
     const key = eventKey(r.technicianFsmId, r.kind, ref);
     const earlier = index.get(key);
@@ -270,6 +277,36 @@ export function computeCompliance(input: {
       events,
     };
   });
+}
+
+export type KindCounts = { owed: number; performed: number; missed: number; waived: number };
+export type ComplianceBreakdown = {
+  /** Shift days with a check-in or check-out owed. */
+  days: number;
+  /** Appointments with a check-in or check-out owed. */
+  appointments: number;
+  kinds: Record<ComplianceEventKind, KindCounts>;
+};
+
+/** How a technician's figures are made up (29 Oct, the hover on each figure): by kind of check-in. */
+export function breakdownOf(events: EventOutcome[]): ComplianceBreakdown {
+  const blank = (): KindCounts => ({ owed: 0, performed: 0, missed: 0, waived: 0 });
+  const kinds: Record<ComplianceEventKind, KindCounts> = {
+    shift_check_in: blank(),
+    shift_check_out: blank(),
+    appointment_check_in: blank(),
+    appointment_check_out: blank(),
+  };
+  const days = new Set<string>();
+  const appointments = new Set<string>();
+  for (const e of events) {
+    const k = kinds[e.kind];
+    k.owed += 1;
+    k[e.state] += 1;
+    if (e.appointmentId) appointments.add(e.appointmentId);
+    else days.add(e.date);
+  }
+  return { days: days.size, appointments: appointments.size, kinds };
 }
 
 /**

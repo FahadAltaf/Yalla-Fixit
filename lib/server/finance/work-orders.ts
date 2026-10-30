@@ -1623,7 +1623,8 @@ export async function listFinanceRequests(admin: SupabaseClient, filters: z.infe
   }));
 
   const all = [...queries, ...requests];
-  const waiting = all.filter((r) => r.status === "waiting").sort((a, b) => a.askedAt.localeCompare(b.askedAt));
+  /* Newest first, waiting and done alike (28 Oct). */
+  const waiting = all.filter((r) => r.status === "waiting").sort((a, b) => b.askedAt.localeCompare(a.askedAt));
   const done = all.filter((r) => r.status !== "waiting").sort((a, b) => (b.respondedAt ?? b.askedAt).localeCompare(a.respondedAt ?? a.askedAt));
   const now = Date.now();
   const counts = {

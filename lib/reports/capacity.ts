@@ -11,7 +11,11 @@ import { coveredMinutes, type DayStatus, type TechnicianAvailability } from "./a
  *    Dubai), so two bookings at the same time count once. The portal's
  *    night shift (00:00-09:00) lies within one day; a shift crossing
  *    midnight would split its bookings across the two dates.
- *  - Available: the available-hours engine (DEV-443).
+ *  - Available: the available-hours engine (DEV-443), each working day in
+ *    full: the technician's day (8 h; 12 h Data Center; or their own),
+ *    less leave. Not the 6/7 that Utilization uses while no rest day is
+ *    entered (decided 29 Oct): on a calendar a person works the whole day
+ *    or has it off, so 12 h booked on a 12 h day is full, not over.
  *  - Over-booked: booked above available. Booking a technician on a rest
  *    day, a holiday or leave is over-booking too.
  *  - Spare: booked below the setting's share of available.
@@ -44,6 +48,10 @@ export type CapacityCell = {
   status: CellStatus;
   /** Why nothing is available, for a technician's day. */
   dayStatus?: DayStatus;
+  /** A technician's day, for the hover (29 Oct): hours a day, leave, and whether no rest day is entered. */
+  dayMinutes?: number;
+  leaveMinutes?: number;
+  restDaysAssumed?: boolean;
 };
 
 export type CapacityRow = {
@@ -136,13 +144,17 @@ export function computeCapacity(input: {
     const cells = bounds.map<CapacityCell>((b, i) => {
       const day = avail.days[i];
       const bookedMinutes = bookings.length ? coveredMinutes(b.start, b.end, bookings) : 0;
-      const availableMinutes = day?.availableMinutes ?? 0;
+      /* The whole working day less leave; never the 6/7 (29 Oct). */
+      const availableMinutes = day && day.status === "working" ? Math.max(0, day.dailyMinutes - day.leaveMinutes) : 0;
       return {
         date: b.date,
         bookedMinutes,
         availableMinutes,
         status: cellStatus(bookedMinutes, availableMinutes, input.spareBelowPercent),
         dayStatus: day?.status,
+        dayMinutes: day?.dailyMinutes,
+        leaveMinutes: day?.leaveMinutes,
+        restDaysAssumed: day?.restDaysAssumed,
       };
     });
     /* A leaver with nothing booked is not on the board. */
@@ -190,7 +202,8 @@ export function computeCapacity(input: {
         spareDays: cells.filter((c) => c.status === "spare").length,
       };
     })
-    .sort((a, b) => (a.key === "none" ? 1 : b.key === "none" ? -1 : a.name.localeCompare(b.name)));
+    /* Most overbooked days first (28 Oct: every table descending); no team last. */
+    .sort((a, b) => (a.key === "none" ? 1 : b.key === "none" ? -1 : b.overDays - a.overDays || a.name.localeCompare(b.name)));
 
   const days = bounds.map<CapacityDay>((b, i) => {
     const bookedMinutes = teamRows.reduce((s, t) => s + t.cells[i].bookedMinutes, 0);

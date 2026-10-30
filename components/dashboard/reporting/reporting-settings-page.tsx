@@ -6,6 +6,7 @@ import {
   BadgeAlert,
   CalendarClock,
   Clock,
+  ExternalLink,
   History,
   Loader2,
   ReceiptText,
@@ -52,7 +53,7 @@ import { reportingService } from "@/modules/reporting/reporting-service";
  * from the defaults (lib/reporting/settings.ts explains why).
  */
 
-type View = "finance" | "quotations" | "attendance" | "compliance" | "planning" | "holidays" | "history" | "fsm";
+type View = "finance" | "quotations" | "attendance" | "compliance" | "planning" | "links" | "holidays" | "history" | "fsm";
 type SectionKey = Exclude<View, "holidays" | "history" | "fsm">;
 
 type NumberField = {
@@ -68,7 +69,9 @@ type NumberField = {
 type TimeField = { kind: "time"; path: string; label: string; hint?: string };
 type PeopleField = { kind: "people"; path: string; label: string; hint?: string };
 type ToggleField = { kind: "toggle"; path: string; label: string; hint?: string };
-type Field = NumberField | TimeField | PeopleField | ToggleField;
+/* A web address; empty means not set. */
+type UrlField = { kind: "url"; path: string; label: string; hint?: string };
+type Field = NumberField | TimeField | PeopleField | ToggleField | UrlField;
 
 const SECTIONS: Record<SectionKey, { title: string; description: string; icon: React.ReactNode; fields: Field[] }> = {
   finance: {
@@ -103,12 +106,36 @@ const SECTIONS: Record<SectionKey, { title: string; description: string; icon: R
       { kind: "number", path: "attendance.lateArrivalToleranceMinutes", label: "Late arrival tolerance", unit: "minutes", min: 0, max: 240 },
       {
         kind: "number",
+        path: "attendance.standardDailyHours",
+        label: "Standard working day",
+        unit: "hours",
+        hint: "Available hours for each working day (Sami, 28 Oct: 8 hours, no break). A technician with other hours has them set in Scheduling → Technicians.",
+        min: 1,
+        max: 24,
+      },
+      {
+        kind: "number",
+        path: "attendance.dataCentreDailyHours",
+        label: "Data Center working day",
+        unit: "hours",
+        hint: "For technicians whose Service Type is Data Center (29 Oct: 12 hours). These are their available hours, not overtime. Hours set on the technician come first.",
+        min: 1,
+        max: 24,
+      },
+      {
+        kind: "number",
         path: "attendance.unpaidBreakMinutes",
-        label: "Unpaid break per shift",
+        label: "Unpaid break per day",
         unit: "minutes",
-        hint: "Taken off each shift for available hours. 0 until it is confirmed whether a working day is 8 or 9 hours (D-22).",
+        hint: "Taken off each working day's hours. 0: the 8-hour day is already without a break (D-22, answered 28 Oct).",
         min: 0,
         max: 240,
+      },
+      {
+        kind: "people",
+        path: "attendance.checkInAlertRecipientUserIds",
+        label: "Check-in alert recipients",
+        hint: "The coordinators told when a technician misses a shift check-in (N5) or an appointment check-in (N6). Nobody is told until this is set.",
       },
     ],
   },
@@ -122,7 +149,7 @@ const SECTIONS: Record<SectionKey, { title: string; description: string; icon: R
         path: "compliance.thresholdPercent",
         label: "Compliance threshold",
         unit: "%",
-        hint: "Penalties apply below this. Not set by default: the BRD gives 90 % and 97 % in different places, and it is still to be decided (D-09).",
+        hint: "Penalties apply below this (decided 29 Oct: 90 %). Cleared, no penalty is worked out.",
         min: 0,
         max: 100,
         step: 0.1,
@@ -130,12 +157,18 @@ const SECTIONS: Record<SectionKey, { title: string; description: string; icon: R
       { kind: "number", path: "compliance.penaltyPerMissAed", label: "Penalty per missed check-in", unit: "AED", min: 0, max: 100000, step: 0.01 },
       { kind: "number", path: "compliance.monthlyCapAed", label: "Monthly cap per technician", unit: "AED", min: 0, max: 100000, step: 0.01 },
       { kind: "number", path: "compliance.disputeCutoffDay", label: "Disputes close on day", unit: "of the month", min: 1, max: 28 },
-      { kind: "people", path: "compliance.hrRecipientUserIds", label: "Monthly report recipients", hint: "HR and managers. Nobody receives the final report until this is set." },
+      { kind: "people", path: "compliance.hrRecipientUserIds", label: "Monthly report recipients", hint: "HR and managers (E3). Sent when the month is finalised. Nobody receives it until this is set." },
       {
-        kind: "toggle",
-        path: "compliance.appointmentActualsAsCheckIns",
-        label: "Count FSM actual times as appointment check-ins",
-        hint: "Provisional, to confirm (D-15). On: an appointment's actual start and end in FSM count as its check-in and check-out. Off: appointment check-ins wait for FSM's check-in data (B-01).",
+        kind: "people",
+        path: "compliance.disputeReviewerUserIds",
+        label: "Dispute reviewers",
+        hint: "Who accepts or rejects a technician's dispute, and is told when one is raised (N12). Only they can decide one. Nobody can until this is set.",
+      },
+      {
+        kind: "people",
+        path: "compliance.belowThresholdRecipientUserIds",
+        label: "Below-threshold recipients",
+        hint: "Supervisors told when a technician's compliance falls below the threshold (N10), besides the technician and their team leader.",
       },
     ],
   },
@@ -156,6 +189,19 @@ const SECTIONS: Record<SectionKey, { title: string; description: string; icon: R
       },
       { kind: "people", path: "capacity.alertRecipientUserIds", label: "Over-booking alert recipients", hint: "The coordinators (N14, optional in the BRD). Nobody is told until this is set." },
       { kind: "number", path: "exceptions.completedWithoutFlagAfterDays", label: "Completed without invoice flag after", unit: "days", min: 0, max: 365 },
+    ],
+  },
+  links: {
+    title: "Zoho FSM report links",
+    description:
+      "The reports the BRD keeps in Zoho FSM (B5), opened from Reports → Zoho FSM reports. Open each report in FSM, copy the address from the browser and paste it here. A report without an address shows as not linked yet.",
+    icon: <ExternalLink />,
+    fields: [
+      { kind: "url", path: "fsmLinks.checkInLog", label: "Check-in and check-out log", hint: "FSM standard report: the raw check-in events from the mobile app." },
+      { kind: "url", path: "fsmLinks.appointmentsByStatus", label: "Appointments by status", hint: "FSM standard report." },
+      { kind: "url", path: "fsmLinks.workOrdersByStatus", label: "Work orders by type and by status", hint: "FSM standard report." },
+      { kind: "url", path: "fsmLinks.revenue", label: "Revenue per technician, per client, AMC vs one-time", hint: "FSM custom report: to be built in FSM." },
+      { kind: "url", path: "fsmLinks.ratings", label: "Rating and feedback trend", hint: "FSM custom report: to be built in FSM." },
     ],
   },
 };
@@ -188,6 +234,7 @@ function display(value: unknown, field: Field, users: PickableUser[]): string {
   }
   if (field.kind === "number") return `${value} ${field.unit}`;
   if (field.kind === "toggle") return value ? "on" : "off";
+  if (field.kind === "url") return value ? String(value) : "not set";
   return String(value);
 }
 
@@ -351,6 +398,7 @@ export function ReportingSettingsPage() {
           { value: "attendance", label: "Check-in alerts", count: changedIn("attendance") || undefined },
           { value: "compliance", label: "Compliance", count: changedIn("compliance") || undefined },
           { value: "planning", label: "Capacity and exceptions", count: changedIn("planning") || undefined },
+          { value: "links", label: "FSM report links", count: changedIn("links") || undefined },
           { value: "holidays", label: "Public holidays" },
           { value: "history", label: "Change history", count: history.length },
           { value: "fsm", label: "FSM data" },
@@ -416,7 +464,7 @@ function SettingField({
   const userOptions: Option[] = useMemo(() => users.map((u) => ({ value: u.id, label: u.name })), [users]);
 
   return (
-    <div className={cn("grid content-start gap-1.5", field.kind === "people" && "md:col-span-2")}>
+    <div className={cn("grid content-start gap-1.5", (field.kind === "people" || field.kind === "url") && "md:col-span-2")}>
       <div className="flex items-center justify-between gap-2">
         <Label htmlFor={id}>{field.label}</Label>
         {changed && !disabled ? (
@@ -465,6 +513,17 @@ function SettingField({
           <Switch id={id} checked={Boolean(value)} disabled={disabled} onCheckedChange={(checked) => onChange(checked)} />
           <span className="text-muted-foreground text-sm">{value ? "On" : "Off"}</span>
         </div>
+      ) : field.kind === "url" ? (
+        <Input
+          id={id}
+          type="url"
+          inputMode="url"
+          disabled={disabled}
+          value={String(value ?? "")}
+          placeholder="https://fsm.zoho.com/..."
+          aria-invalid={Boolean(problem) || undefined}
+          onChange={(event) => onChange(event.target.value.trim() ? event.target.value.trim() : null)}
+        />
       ) : field.kind === "time" ? (
         <Input
           id={id}

@@ -1,11 +1,23 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { after } from "next/server";
 
 import { invoicingStatus, lineBillable } from "@/lib/finance/progress";
 import { assertReadOnlyRequest, createFsmReader, financeFsmReadEnabled } from "@/lib/server/finance/fsm-read";
-import { crewFromDetail, lookupId, lookupName, mapEstimate, mapLineItem, mapWorkOrder } from "@/lib/server/finance/fsm-sync/mappers";
+import {
+  crewFromDetail,
+  lookupId,
+  lookupName,
+  mapAppointment,
+  mapEstimate,
+  mapLineItem,
+  mapWorkOrder,
+  type CrewMember,
+} from "@/lib/server/finance/fsm-sync/mappers";
 import { FSM_BASE_URL, fsmAuthHeaders, getFsmAccessToken } from "@/lib/server/zoho/fsm-client";
+import { ACTIVE_CLIENT_STATUS, buildDisplayNamer, TECHNICIAN_PROFILES, type Resource, type ZohoUser } from "@/lib/server/zoho/service-resources";
 import type { QuotationData } from "@/components/dashboard/extensions/quotation-templates/quotation-templates";
 import { mapToQuotationData } from "@/lib/quotations/estimate-quotation-data";
+import { readAllRows } from "@/lib/server/snagging/read-all";
 
 /**
  * Ready to invoice reads Zoho FSM live (the user's direction, 22 Oct): work
@@ -650,8 +662,13 @@ export async function fetchFileLive(admin: SupabaseClient, fileId: string): Prom
 
 type SinceEntry = { fromIso: string; at: number; rows: FsmRecord[]; calls: number };
 const sinceCache = new Map<string, SinceEntry>();
-/* 40 pages: 8,000 records, far beyond four months of any module. */
-const MAX_SINCE_PAGES = 40;
+/*
+  150 pages: 30,000 records. Attendance runs about 50 records a day, so a
+  400-day report reads some 20,000 (29 Oct: the old 40 pages stopped at
+  about 160 days of it, silently). Reaching the end with more to read is
+  an error, never a shorter list.
+*/
+const MAX_SINCE_PAGES = 150;
 const PAGES_AT_ONCE = 4;
 const lastRead = new Map<string, string>();
 
@@ -710,6 +727,12 @@ export async function readModuleSince(
       }
     }
   }
+  if (!done) {
+    throw new FsmLiveError(
+      `Zoho FSM holds more ${input.resource} for these dates than one read takes (${MAX_SINCE_PAGES * PER_PAGE} records). Choose shorter dates.`,
+      413,
+    );
+  }
   sinceCache.set(key, { fromIso: input.fromIso, at: Date.now(), rows, calls: reader.calls() });
   noteRead(input.resource);
   return { rows, calls: reader.calls(), cached: false };
@@ -723,7 +746,9 @@ export async function readModuleSince(
      1. what this server read before, while the appointment is unchanged;
      2. the portal's earlier copy of FSM (fsm.appointment_resources), when
         FSM's Modified_Time still matches the copy's, so it is current;
-     3. FSM itself, 8 at a time, at most `budget` a read.
+     3. FSM itself, 8 at a time, at most `budget` a read; and what is read
+        there is saved to that copy (29 Oct), so the next server to start
+        finds it in step 2 instead of reading FSM again.
    --------------------------------------------------------------------- */
 
 const crewCache = new Map<string, { modified: string | null; crew: string[] }>();
@@ -735,16 +760,42 @@ async function crewsFromCopy(admin: SupabaseClient, wanted: Array<{ id: string; 
   for (let i = 0; i < wanted.length; i += 200) {
     const chunk = wanted.slice(i, i + 200);
     const ids = chunk.map((a) => a.id);
-    const [copies, people] = await Promise.all([
-      admin.schema("fsm").from("appointments").select("fsm_appointment_id, modified_time").in("fsm_appointment_id", ids),
-      admin.schema("fsm").from("appointment_resources").select("fsm_appointment_id, technician_fsm_id").in("fsm_appointment_id", ids),
-    ]);
-    /* No copy (or not readable): FSM is asked instead. */
-    if (copies.error || people.error) return out;
-    const copyModified = new Map((copies.data ?? []).map((c) => [String(c.fsm_appointment_id), (c.modified_time as string | null) ?? null]));
+    /*
+      Every crew row, a page at a time (29 Oct): one request returns at most
+      1,000 rows, and 200 appointments' crews pass that, so the rest were cut
+      off silently and those appointments read from FSM on every load.
+    */
+    let copies: Array<Record<string, unknown>>;
+    let people: Array<Record<string, unknown>>;
+    try {
+      [copies, people] = await Promise.all([
+        readAllRows<Record<string, unknown>>(
+          (from, to) =>
+            admin.schema("fsm").from("appointments").select("fsm_appointment_id, modified_time").in("fsm_appointment_id", ids).order("fsm_appointment_id").range(from, to),
+          "fsm.appointments",
+        ),
+        readAllRows<Record<string, unknown>>(
+          (from, to) =>
+            admin
+              .schema("fsm")
+              .from("appointment_resources")
+              .select("fsm_appointment_id, technician_fsm_id")
+              .in("fsm_appointment_id", ids)
+              .order("fsm_appointment_id")
+              .order("technician_fsm_id")
+              .range(from, to),
+          "fsm.appointment_resources",
+        ),
+      ]);
+    } catch {
+      /* No copy (or not readable): FSM is asked instead. */
+      return out;
+    }
+    const copyModified = new Map(copies.map((c) => [String(c.fsm_appointment_id), (c.modified_time as string | null) ?? null]));
     const crewOf = new Map<string, string[]>();
-    for (const p of people.data ?? []) crewOf.set(String(p.fsm_appointment_id), [...(crewOf.get(String(p.fsm_appointment_id)) ?? []), String(p.technician_fsm_id)]);
+    for (const p of people) crewOf.set(String(p.fsm_appointment_id), [...(crewOf.get(String(p.fsm_appointment_id)) ?? []), String(p.technician_fsm_id)]);
     for (const a of chunk) {
+      /* An empty copy is not trusted: FSM is asked (an appointment nobody is on yet is read each time). */
       const crew = crewOf.get(a.id);
       if (crew?.length && sameInstant(copyModified.get(a.id) ?? null, a.modifiedAt)) out.set(a.id, crew);
     }
@@ -775,22 +826,158 @@ export async function fetchPlannedCrewsLive(
     toRead = toRead.filter((a) => !copied.has(a.id));
   }
   const now = toRead.slice(0, budget);
+  let failed: typeof now = [];
+  const toSave: Array<{ record: FsmRecord; crew: CrewMember[]; seenAt: string }> = [];
   if (now.length) {
-    const reader = await readerFor(admin, now.length);
+    /* Twice the reads: each one refused may be tried once more. */
+    const reader = await readerFor(admin, now.length * 2);
+    const read = async (a: (typeof now)[number]) => {
+      try {
+        const res = await reader.get(`/Service_Appointments/${encodeURIComponent(a.id)}`);
+        const record = res.ok ? dataOf(res.json)[0] : undefined;
+        if (!record) return false;
+        const members = crewFromDetail(record);
+        const crew = members.map((m) => m.technician_fsm_id);
+        crewCache.set(a.id, { modified: a.modifiedAt, crew });
+        crews.set(a.id, crew);
+        toSave.push({ record, crew: members, seenAt: new Date().toISOString() });
+        return true;
+      } catch {
+        return false;
+      }
+    };
     for (let i = 0; i < now.length; i += CREW_READS_AT_ONCE) {
-      await Promise.all(
-        now.slice(i, i + CREW_READS_AT_ONCE).map(async (a) => {
-          const res = await reader.get(`/Service_Appointments/${encodeURIComponent(a.id)}`);
-          if (!res.ok) return;
-          const record = dataOf(res.json)[0];
-          if (!record) return;
-          const crew = crewFromDetail(record).map((m) => m.technician_fsm_id);
-          crewCache.set(a.id, { modified: a.modifiedAt, crew });
-          crews.set(a.id, crew);
-        }),
-      );
+      const chunk = now.slice(i, i + CREW_READS_AT_ONCE);
+      const ok = await Promise.all(chunk.map(read));
+      failed.push(...chunk.filter((_, k) => !ok[k]));
+    }
+    /*
+      29 Oct: a read FSM refused (a cold load reads ~150 at once and some
+      come back limited) was dropped, and its crew silently lost a person
+      for that load. Once more, two at a time; what still fails is counted
+      as unread, never taken as a crew of one.
+    */
+    const retry = failed;
+    failed = [];
+    for (let i = 0; i < retry.length; i += 2) {
+      const chunk = retry.slice(i, i + 2);
+      const ok = await Promise.all(chunk.map(read));
+      failed.push(...chunk.filter((_, k) => !ok[k]));
     }
     noteRead("appointments");
   }
-  return { crews, unread: toRead.length - now.length };
+  if (toSave.length) saveCrewsAfterResponse(admin, toSave);
+  return { crews, unread: toRead.length - now.length + failed.length };
+}
+
+const CREW_SAVES_AT_ONCE = 10;
+
+/**
+ * The crews just read from FSM, into the portal's copy (fsm.appointments,
+ * fsm.appointment_resources) through its own writers, which never let an
+ * older FSM record replace a newer one. After the response, so a report
+ * never waits on it; a failed save is logged and only means FSM is read
+ * again next time. Nothing is written to FSM.
+ */
+function saveCrewsAfterResponse(admin: SupabaseClient, reads: Array<{ record: FsmRecord; crew: CrewMember[]; seenAt: string }>) {
+  const save = async () => {
+    try {
+      const rows = reads.map((r) => mapAppointment(r.record)).filter((row) => row.fsm_appointment_id && row.modified_time);
+      const stored = await admin.schema("fsm").rpc("upsert_appointments", { p_rows: rows });
+      if (stored.error) throw new Error(stored.error.message);
+      const saved = new Set(rows.map((row) => row.fsm_appointment_id));
+      const crews = reads.filter((r) => saved.has(String(r.record.id)));
+      for (let i = 0; i < crews.length; i += CREW_SAVES_AT_ONCE) {
+        await Promise.all(
+          crews.slice(i, i + CREW_SAVES_AT_ONCE).map(async (r) => {
+            const { error } = await admin
+              .schema("fsm")
+              .rpc("set_appointment_crew", { p_appointment_id: String(r.record.id), p_seen_at: r.seenAt, p_crew: r.crew });
+            if (error) console.error("[fsm-live] crew not saved:", r.record.id, error.message);
+          }),
+        );
+      }
+    } catch (error) {
+      console.error("[fsm-live] crews not saved:", error instanceof Error ? error.message : error);
+    }
+  };
+  try {
+    after(save);
+  } catch {
+    /* Outside a request (a script): save now. */
+    void save();
+  }
+}
+
+/* ---------------------------------------------------------------------
+   Technicians and their time off, live from Zoho FSM (28 Oct: the reports
+   read the roster from FSM, not the portal's six-hourly copy). The same
+   rules as the scheduling sync: active FSM users with a technician profile
+   and a service resource. One call for each (180 users, a handful of time
+   off records), kept ten minutes.
+   --------------------------------------------------------------------- */
+
+export type LiveTechnician = Resource & { displayName: string };
+export type LiveTimeOff = { technicianFsmId: string; startAt: string; endAt: string; category: string | null };
+
+let techniciansCache: Cached<LiveTechnician[]> | null = null;
+let timeOffCache: Cached<LiveTimeOff[]> | null = null;
+const MAX_USER_PAGES = 10;
+
+export async function fetchTechniciansLive(admin: SupabaseClient): Promise<LiveTechnician[]> {
+  const hit = fresh(techniciansCache ?? undefined);
+  if (hit) return hit;
+  const reader = await readerFor(admin, MAX_USER_PAGES);
+  const resources: Resource[] = [];
+  for (let page = 1; page <= MAX_USER_PAGES; page += 1) {
+    const res = await reader.get(`/users?page=${page}&per_page=${PER_PAGE}`);
+    if (res.status === 204) break;
+    if (!res.ok) throw failure(res.status, res.json);
+    const body = res.json as { users?: ZohoUser[]; info?: { more_records?: boolean } } | null;
+    for (const user of body?.users ?? []) {
+      if (!user.Service_Resources?.id) continue;
+      if (user.client_status !== ACTIVE_CLIENT_STATUS) continue;
+      if (!TECHNICIAN_PROFILES.has(user.profile?.name ?? user.profile?.api_name ?? "")) continue;
+      resources.push({
+        fsmResourceId: user.Service_Resources.id,
+        name: user.full_name ?? user.Service_Resources.Name ?? null,
+        email: user.email ?? null,
+        isActive: Boolean(user.Service_Resources.isActive),
+      });
+    }
+    if (!body?.info?.more_records) break;
+  }
+  const displayNameFor = buildDisplayNamer(resources);
+  const value = resources.map((r) => ({ ...r, displayName: displayNameFor(r) }));
+  techniciansCache = { at: Date.now(), value };
+  noteRead("technicians");
+  return value;
+}
+
+export async function fetchTimeOffLive(admin: SupabaseClient): Promise<LiveTimeOff[]> {
+  const hit = fresh(timeOffCache ?? undefined);
+  if (hit) return hit;
+  const reader = await readerFor(admin, MAX_LIST_PAGES);
+  const out: LiveTimeOff[] = [];
+  for (let page = 1; page <= MAX_LIST_PAGES; page += 1) {
+    const res = await reader.get(
+      `/Time_Off?per_page=${PER_PAGE}&page=${page}&fields=Service_Resource,Start_Date_Time,End_Date_Time,Time_Off_Type,Reason`,
+    );
+    if (res.status === 204) break;
+    if (!res.ok) throw failure(res.status, res.json);
+    for (const r of dataOf(res.json)) {
+      const technicianFsmId = lookupId(r.Service_Resource);
+      if (!technicianFsmId || !r.Start_Date_Time || !r.End_Date_Time) continue;
+      out.push({
+        technicianFsmId,
+        startAt: String(r.Start_Date_Time),
+        endAt: String(r.End_Date_Time),
+        category: r.Time_Off_Type ? String(r.Time_Off_Type) : r.Reason ? String(r.Reason) : null,
+      });
+    }
+    if (!(res.json as { info?: { more_records?: boolean } } | null)?.info?.more_records) break;
+  }
+  timeOffCache = { at: Date.now(), value: out };
+  noteRead("time_off");
+  return out;
 }

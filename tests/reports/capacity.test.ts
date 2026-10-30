@@ -26,7 +26,7 @@ const booking = (techs: string[], date: string, start: string, end: string, patc
   ...patch,
 });
 
-/* Monday 5 Oct to Sunday 11 Oct 2026; 8 h available a working day (one-hour break). */
+/* Monday 5 Oct to Sunday 11 Oct 2026; 8 h available a working day (Sami, 28 Oct: no break). */
 function run(appointments: CapacityAppointment[], spareBelowPercent = 50) {
   const people = [tech("T1", "L1"), tech("T2", "L1"), tech("T3", null), tech("T9", "L1", { leavingDate: "2026-09-01" })];
   const dates = datesBetween("2026-10-05", "2026-10-11");
@@ -37,7 +37,7 @@ function run(appointments: CapacityAppointment[], spareBelowPercent = 50) {
     shiftTimes: SHIFTS,
     holidays: [],
     leave: [],
-    unpaidBreakMinutes: 60,
+    unpaidBreakMinutes: 0,
     timeZone: TZ,
   });
   return computeCapacity({
@@ -109,4 +109,33 @@ test("spare days follow the setting", () => {
   const appointments = [booking(["T3"], "2026-10-05", "08:00", "11:00")]; // 3 of 8 h
   assert.equal(run(appointments, 50).technicians.find((t) => t.key === "T3")!.cells[0].status, "spare");
   assert.equal(run(appointments, 25).technicians.find((t) => t.key === "T3")!.cells[0].status, "ok");
+});
+
+test("29 Oct: a day counts in full in Capacity, never the 6/7 Utilization uses while no rest day is entered", () => {
+  const people = [tech("DC", null, { restWeekdays: [], serviceType: "Data Center" }), tech("M", null, { restWeekdays: [] })];
+  const dates = ["2026-10-29"];
+  const availability = computeAvailability({
+    technicians: people.map((p) => p.avail),
+    from: dates[0],
+    to: dates[0],
+    shiftTimes: SHIFTS,
+    holidays: [],
+    leave: [{ technicianFsmId: "M", startAt: dubai("2026-10-29", "08:00"), endAt: dubai("2026-10-29", "10:00") }],
+    unpaidBreakMinutes: 0,
+    timeZone: TZ,
+  });
+  assert.equal(Math.round(availability[0].days[0].availableMinutes), Math.round(12 * 60 * (6 / 7)), "Utilization's figure stays 6/7");
+  const result = computeCapacity({
+    dates,
+    availability,
+    technicians: new Map(people.map((p) => [p.ref.fsmId, p.ref])),
+    appointments: [booking(["DC"], "2026-10-29", "06:00", "18:00")],
+    spareBelowPercent: 50,
+    timeZone: TZ,
+  });
+  const dc = result.technicians.find((t) => t.key === "DC")!.cells[0];
+  assert.equal(dc.availableMinutes, 12 * 60, "a Data Center day is 12 h");
+  assert.equal(dc.status, "ok", "12 h booked on a 12 h day is full, not over-booked");
+  const m = result.technicians.find((t) => t.key === "M")!.cells[0];
+  assert.equal(m.availableMinutes, 6 * 60, "8 h less 2 h of leave");
 });

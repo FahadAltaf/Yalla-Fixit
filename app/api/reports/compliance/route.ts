@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { hasResourceAction } from "@/lib/role-permissions";
+import { readReportingSettings } from "@/lib/server/reporting/settings";
 import { buildComplianceReport, complianceFiltersSchema } from "@/lib/server/reports/compliance";
 import { pagingSchema } from "@/lib/server/reports/reports";
 import { logAccess, openReport } from "@/lib/server/reports/route-helpers";
@@ -10,8 +11,9 @@ import { ActionType, ResourceType } from "@/types/types";
  * App usage compliance (BRD 5.2 B4; DEV-447, 448, 450). Compliance View
  * opens it; Export adds `?export=csv|xlsx` (the HR report's figures).
  *
- * Query: month (YYYY-MM), view (technicians | events), technician, team,
- * state (events: missed | waived | performed | all), q, page, pageSize,
+ * Query: month (YYYY-MM), view (technicians | events | disputes),
+ * technician, team, client, state (events: missed | waived | performed |
+ * all), dispute (disputes: open | accepted | rejected), q, page, pageSize,
  * log=view.
  */
 
@@ -32,6 +34,10 @@ export async function GET(req: NextRequest) {
     ...request.can,
     waive: hasResourceAction(user, ResourceType.COMPLIANCE, ActionType.EDIT),
     finalize: hasResourceAction(user, ResourceType.COMPLIANCE, ActionType.APPROVE),
+    /* Raise a dispute for a technician: the supervisors and coordinators who waive. */
+    raise: hasResourceAction(user, ResourceType.COMPLIANCE, ActionType.EDIT),
+    /* Decide one: only the reviewers named in Reporting Settings (D-10). */
+    review: (await readReportingSettings(request.admin)).compliance.disputeReviewerUserIds.includes(request.gate.access.profile.id),
   };
 
   try {

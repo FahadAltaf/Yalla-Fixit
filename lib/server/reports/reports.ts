@@ -42,7 +42,7 @@ export const pagingSchema = z.object({
  */
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- kept so every report calls it the same way
 export async function dataAsOf(_admin?: SupabaseClient): Promise<Record<string, string | null>> {
-  return readTimes(["appointments", "work_orders", "estimates", "time_sheets", "attendance"]);
+  return readTimes(["appointments", "work_orders", "estimates", "time_sheets", "attendance", "technicians", "time_off"]);
 }
 
 /** The dates asked for, or the last 30 days. */

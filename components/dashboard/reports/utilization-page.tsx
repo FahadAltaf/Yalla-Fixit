@@ -1,14 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Gauge, TrendingUp, Users, Wrench } from "lucide-react";
-import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
+import { Gauge, Users, Wrench } from "lucide-react";
 import { toast } from "sonner";
 
-import { PageHeading, PillTabs, SectionCard, StatCard, StatCardGrid } from "@/components/dashboard/shared/kaizen";
+import { PageHeading, PillTabs, StatCard, StatCardGrid } from "@/components/dashboard/shared/kaizen";
 import { ErrorState, StatGridSkeleton } from "@/components/dashboard/shared/kaizen-states";
 import { DataTable } from "@/components/data-table";
 import {
+  COLUMN_HELP,
+  Explained,
   TECHNICIAN_UTILIZATION_COLUMNS,
   TECHNICIAN_UTILIZATION_EXPORT_COLUMNS,
   UTILIZATION_APPOINTMENT_COLUMNS,
@@ -16,11 +17,11 @@ import {
   hrs,
   pct,
   technicianUtilizationExportRow,
+  travelShare,
   utilizationAppointmentExportRow,
 } from "@/components/data-table/columns/column-utilization";
 import { ReportToolbar, type ReportSelect } from "@/components/data-table/toolbars/report-toolbar";
 import { Card } from "@/components/ui/card";
-import { type ChartConfig, ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useDebounce } from "@/hooks/use-debounce";
@@ -28,15 +29,15 @@ import { fsmRecordLink } from "@/lib/fsm-links";
 import { CHARGEABILITY_LABELS, type TeamUtilization } from "@/lib/reports/utilization";
 import type { UtilizationReport } from "@/lib/server/reports/planning";
 import { exportFilename, exportTable, type ExportFormat } from "@/lib/snagging/export-table";
-import { CHART_COLOR } from "@/lib/snagging/chart-palette";
 import { reportsService } from "@/modules/reports/reports-service";
 
-import { DataAsOf, ReportDateRange, SavedFiltersMenu, lastThirtyDays, plural, useReportFilters } from "./shared";
+import { HowItWorks, utilizationHowItWorks } from "./how-it-works";
+import { ReportDateRange, SavedFiltersMenu, lastThirtyDays, plural, useReportFilters } from "./shared";
 
 /**
  * Technician utilization (BRD 5.2 B2; DEV-444; screen in BRD 6.4): time
  * and commercial utilization side by side, per technician and team, with
- * the trend, data completeness and the appointments underneath. Travel is
+ * data completeness and the appointments underneath. Travel is
  * a column waiting for FSM trips (B-01).
  */
 
@@ -47,18 +48,13 @@ const DEFAULTS = {
   view: "technicians",
   from: "",
   to: "",
-  granularity: "",
   technician: "",
   team: "",
+  client: "",
   chargeability: "",
   missing: "",
   q: "",
 };
-
-const chartConfig = {
-  time: { label: "Time utilization", color: CHART_COLOR.brand },
-  commercial: { label: "Commercial utilization", color: CHART_COLOR.good },
-} satisfies ChartConfig;
 
 export function UtilizationPage() {
   const { filters, setFilters, ready, saved, saveAs, remove, apply } = useReportFilters("utilization", DEFAULTS);
@@ -76,9 +72,9 @@ export function UtilizationPage() {
       view,
       from: filters.from,
       to: filters.to,
-      granularity: filters.granularity,
       technician: filters.technician,
       team: filters.team,
+      client: filters.client,
       q: debouncedQ,
     };
     return view === "appointments" ? { ...shared, chargeability: filters.chargeability, missing: filters.missing } : shared;
@@ -148,16 +144,7 @@ export function UtilizationPage() {
   const selects: ReportSelect[] = [
     { key: "technician", allLabel: "All technicians", options: technicianOptions },
     { key: "team", allLabel: "All teams", options: teamOptions },
-    {
-      key: "granularity",
-      allLabel: "Trend: automatic",
-      options: [
-        { value: "day", label: "Trend: daily" },
-        { value: "week", label: "Trend: weekly" },
-        { value: "month", label: "Trend: monthly" },
-      ],
-      width: "w-full sm:w-40",
-    },
+    { key: "client", allLabel: "All clients", options: (data?.options.clients ?? []).map((c) => ({ value: c, label: c })) },
     ...(view === "appointments"
       ? [
           {
@@ -193,7 +180,7 @@ export function UtilizationPage() {
       onFiltersChange={change}
       selects={selects}
       switches={view === "appointments" ? [{ key: "missing", label: "Missing actual times only" }] : []}
-      clearable={["technician", "team", "granularity", "chargeability", "missing"]}
+      clearable={["technician", "team", "client", "chargeability", "missing"]}
       canExport={Boolean(data?.can.export) && view !== "teams"}
       exporting={exporting}
       onExport={(format) => void doExport(format)}
@@ -215,7 +202,6 @@ export function UtilizationPage() {
   };
 
   const overall = data?.overall;
-  const trend = (data?.trend ?? []).map((p) => ({ label: p.label, time: p.timePercent, commercial: p.commercialPercent }));
 
   return (
     <div className="flex flex-col gap-6">
@@ -225,6 +211,7 @@ export function UtilizationPage() {
         description="How busy each technician was against the hours they were available, and how much of that work could be billed."
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            <HowItWorks content={utilizationHowItWorks(data ? { standardDailyHours: data.notes.standardDailyHours, dataCentreDailyHours: data.notes.dataCentreDailyHours } : undefined)} />
             <ReportDateRange
               from={filters.from || data?.from || lastThirtyDays().from}
               to={filters.to || data?.to || lastThirtyDays().to}
@@ -244,21 +231,6 @@ export function UtilizationPage() {
         }
       />
 
-      <PillTabs<View>
-        value={view}
-        onChange={(next) => switchView(next)}
-        tabs={[
-          { value: "technicians", label: "By technician" },
-          { value: "teams", label: "By team" },
-          { value: "appointments", label: "Appointments" },
-        ]}
-      />
-
-      <div className="flex flex-col gap-1">
-        <DataAsOf asOf={data?.dataAsOf ?? null} resources={["appointments", "time_sheets", "work_orders", "estimates"]} />
-        {data ? <p className="text-muted-foreground text-xs">{periodLine(data)}</p> : null}
-      </div>
-
       {error ? <ErrorState title="Could not load the utilization report" message={error} onRetry={() => void load()} retrying={loading} /> : null}
 
       {overall ? (
@@ -273,11 +245,7 @@ export function UtilizationPage() {
             value={pct(overall.commercialPercent)}
             headline={`${hrs(overall.chargeableMinutes)} chargeable`}
           />
-          <StatCard
-            label="Outside shift"
-            value={hrs(overall.outsideShiftMinutes)}
-            headline="Job time outside shift hours, not in the ratios"
-          />
+          <StatCard label="Overtime" value={hrs(overall.overtimeMinutes)} headline="Beyond the day's hours, not in the ratios" />
           <StatCard
             label="Data completeness"
             value={pct(overall.completenessPercent)}
@@ -289,36 +257,27 @@ export function UtilizationPage() {
           <StatCard
             label="Travel"
             value={data?.travel.trips ? `${Math.round((data.travel.minutes / 60) * 10) / 10} h` : "—"}
-            headline={data?.travel.trips ? `${plural(data.travel.trips, "trip")} logged in FSM` : "No trips logged in FSM in these dates"}
+            headline={
+              data?.travel.trips
+                ? `${plural(data.travel.trips, "trip")} · ${pct(travelShare({ travelMinutes: data.travel.minutes, availableMinutes: overall.availableMinutes }))} of available hours`
+                : "No trips logged in FSM in these dates"
+            }
           />
         </StatCardGrid>
       ) : (
         <StatGridSkeleton count={5} columns={5} />
       )}
 
-      {data ? <Assumptions data={data} /> : null}
-
-      {trend.length > 1 ? (
-        <SectionCard
-          icon={<TrendingUp />}
-          title="Trend"
-          description="Utilization per period, over the summed hours of the technicians shown."
-          bodyClassName="px-5 pb-5"
-        >
-          <ChartContainer config={chartConfig} className="h-56 w-full">
-            <LineChart data={trend} margin={{ left: 0, right: 8, top: 8 }}>
-              <CartesianGrid vertical={false} />
-              {/* Room either side, so the first and last periods' labels are not cut at the card's edge. */}
-              <XAxis dataKey="label" tickLine={false} axisLine={false} tickMargin={8} minTickGap={24} padding={{ left: 24, right: 24 }} />
-              <YAxis tickLine={false} axisLine={false} width={40} unit="%" domain={[0, (max: number) => Math.max(100, Math.ceil(max / 10) * 10)]} />
-              <ChartTooltip content={<ChartTooltipContent labelKey="label" formatter={(value, name) => <TooltipRow name={String(name)} value={value} />} />} />
-              <ChartLegend content={<ChartLegendContent />} />
-              <Line dataKey="time" type="monotone" stroke="var(--color-time)" strokeWidth={2} dot={trend.length <= 12} connectNulls />
-              <Line dataKey="commercial" type="monotone" stroke="var(--color-commercial)" strokeWidth={2} dot={trend.length <= 12} connectNulls />
-            </LineChart>
-          </ChartContainer>
-        </SectionCard>
-      ) : null}
+      {/* The views sit right above the table they switch (28 Oct). */}
+      <PillTabs<View>
+        value={view}
+        onChange={(next) => switchView(next)}
+        tabs={[
+          { value: "technicians", label: "By technician" },
+          { value: "teams", label: "By team" },
+          { value: "appointments", label: "Appointments" },
+        ]}
+      />
 
       {view === "teams" ? (
         <Card className="gap-0 py-0">
@@ -369,78 +328,119 @@ export function UtilizationPage() {
   );
 }
 
-function TooltipRow({ name, value }: { name: string; value: unknown }) {
-  const key = name as keyof typeof chartConfig;
-  return (
-    <div className="flex w-full items-center gap-2">
-      <span className="size-2.5 shrink-0 rounded-[2px]" style={{ background: `var(--color-${key})` }} />
-      <span className="text-muted-foreground">{chartConfig[key]?.label ?? name}</span>
-      <span className="text-foreground ml-auto font-mono font-medium tabular-nums">{value === null || value === undefined ? "—" : `${value}%`}</span>
-    </div>
-  );
-}
-
-function periodLine(data: UtilizationReport) {
-  const trend = { day: "daily", week: "weekly", month: "monthly" }[data.granularity];
-  return `${data.from} to ${data.to}, ${plural(data.overall.technicians, "technician")}, ${trend} trend.`;
-}
-
-/** What the figures rest on, said plainly, so nobody reads a gap in the data as idle time. */
-function Assumptions({ data }: { data: UtilizationReport }) {
-  const n = data.notes;
-  const lines: string[] = [
-    "Chargeable: the quotation's total is above zero or, with no quotation, the work order has a value (to confirm, D-08). AMC and in-contract work cannot be told apart in FSM yet (D-14).",
-    `Available hours: shift times from Settings, ${n.unpaidBreakMinutes ? `less a ${n.unpaidBreakMinutes}-minute break` : "no unpaid break set (D-22)"}, ${plural(
-      n.holidays,
-      "public holiday",
-    )} and ${plural(n.leaveRecords, "leave record")} in the period.`,
-  ];
-  if (n.noRestDays) lines.push(`${plural(n.noRestDays, "technician")} with no rest days set: every day counts as a working day for them (D-16).`);
-  if (n.crewsUnknown) lines.push(`${plural(n.crewsUnknown, "appointment")} whose crew FSM has not been read for yet count for the lead technician only.`);
-  if (n.inactiveWithoutLeavingDate) lines.push(`${plural(n.inactiveWithoutLeavingDate, "inactive technician")} without a leaving date, included because they worked in the period.`);
-  if (data.jobMinutesBy.no_value > 0) lines.push(`${hrs(data.jobMinutesBy.no_value)} of job time is on work with no value in FSM, so counts for time only.`);
-  return (
-    <ul className="text-muted-foreground -mt-2 flex list-disc flex-col gap-0.5 pl-4 text-xs">
-      {lines.map((line) => (
-        <li key={line}>{line}</li>
-      ))}
-    </ul>
-  );
-}
-
 function TeamTable({ rows, onSelect }: { rows: TeamUtilization[]; onSelect: (team: TeamUtilization) => void }) {
   if (!rows.length) {
     return <EmptyState icon={<Users />} title="No teams in this period" description="Nobody had available hours or worked in these dates." className="py-10" />;
   }
+  /* The team's figures are its technicians' added up; hover explains each, as on the technicians table. */
+  const head = (label: string, key: keyof typeof COLUMN_HELP) => (
+    <Explained help={COLUMN_HELP[key]}>
+      <span className="decoration-muted-foreground/60 underline decoration-dotted underline-offset-4">{label}</span>
+    </Explained>
+  );
   return (
     <Table>
       <TableHeader>
         <TableRow>
           <TableHead className="pl-5">Team</TableHead>
-          <TableHead className="text-right">Technicians</TableHead>
-          <TableHead className="text-right">Available</TableHead>
-          <TableHead className="text-right">Job hours</TableHead>
-          <TableHead className="text-right">Time %</TableHead>
-          <TableHead className="text-right">Chargeable</TableHead>
-          <TableHead className="text-right">Commercial %</TableHead>
-          <TableHead className="text-right">Outside shift</TableHead>
-          <TableHead className="pr-5 text-right">Data complete</TableHead>
+          <TableHead>Technicians</TableHead>
+          <TableHead>{head("Available", "available")}</TableHead>
+          <TableHead>{head("Job hours", "job")}</TableHead>
+          <TableHead>{head("Time %", "time")}</TableHead>
+          <TableHead>{head("Chargeable", "chargeable")}</TableHead>
+          <TableHead>{head("Commercial %", "commercial")}</TableHead>
+          <TableHead>{head("Overtime", "outside")}</TableHead>
+          <TableHead>{head("Travel", "travel")}</TableHead>
+          <TableHead className="pr-5">{head("Data complete", "completeness")}</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
-        {rows.map((row) => (
-          <TableRow key={row.key} className="cursor-pointer" onClick={() => onSelect(row)}>
-            <TableCell className="pl-5 font-medium">{row.name}</TableCell>
-            <TableCell className="text-right tabular-nums">{row.technicians}</TableCell>
-            <TableCell className="text-right tabular-nums">{hrs(row.availableMinutes)}</TableCell>
-            <TableCell className="text-right tabular-nums">{hrs(row.jobMinutes)}</TableCell>
-            <TableCell className="text-right font-medium tabular-nums">{pct(row.timePercent)}</TableCell>
-            <TableCell className="text-right tabular-nums">{hrs(row.chargeableMinutes)}</TableCell>
-            <TableCell className="text-right font-medium tabular-nums">{pct(row.commercialPercent)}</TableCell>
-            <TableCell className="text-right tabular-nums">{row.outsideShiftMinutes ? hrs(row.outsideShiftMinutes) : "—"}</TableCell>
-            <TableCell className="pr-5 text-right tabular-nums">{pct(row.completenessPercent)}</TableCell>
-          </TableRow>
-        ))}
+        {rows.map((row) => {
+          const who = plural(row.technicians, "technician");
+          return (
+            <TableRow key={row.key} className="cursor-pointer" onClick={() => onSelect(row)}>
+              <TableCell className="pl-5 font-medium">{row.name}</TableCell>
+              <TableCell className="tabular-nums">{row.technicians}</TableCell>
+              <TableCell className="tabular-nums">
+                <Explained help={{ title: `${hrs(row.availableMinutes)} available`, lines: [`The available hours of the team's ${who}, added up.`] }}>
+                  {hrs(row.availableMinutes)}
+                </Explained>
+              </TableCell>
+              <TableCell className="tabular-nums">
+                <Explained help={{ title: `${hrs(row.jobMinutes)} of job time inside the shift`, lines: [`The job hours of the team's ${who}, added up.`] }}>
+                  {hrs(row.jobMinutes)}
+                </Explained>
+              </TableCell>
+              <TableCell className="font-medium tabular-nums">
+                <Explained
+                  help={{ title: `Time utilization ${pct(row.timePercent)}`, lines: [`${hrs(row.jobMinutes)} job ÷ ${hrs(row.availableMinutes)} available = ${pct(row.timePercent)}`] }}
+                >
+                  {pct(row.timePercent)}
+                </Explained>
+              </TableCell>
+              <TableCell className="tabular-nums">
+                <Explained
+                  help={{
+                    title: `${hrs(row.chargeableMinutes)} chargeable`,
+                    lines: [
+                      `Of the ${hrs(row.jobMinutes)} job hours, ${hrs(row.chargeableMinutes)} were on work with a value in FSM.`,
+                      `${hrs(Math.max(0, row.jobMinutes - row.chargeableMinutes))} were time only.`,
+                    ],
+                  }}
+                >
+                  {hrs(row.chargeableMinutes)}
+                </Explained>
+              </TableCell>
+              <TableCell className="font-medium tabular-nums">
+                <Explained
+                  help={{
+                    title: `Commercial utilization ${pct(row.commercialPercent)}`,
+                    lines: [`${hrs(row.chargeableMinutes)} chargeable ÷ ${hrs(row.availableMinutes)} available = ${pct(row.commercialPercent)}`],
+                  }}
+                >
+                  {pct(row.commercialPercent)}
+                </Explained>
+              </TableCell>
+              <TableCell className="tabular-nums">
+                {row.overtimeMinutes ? (
+                  <Explained help={{ title: `${hrs(row.overtimeMinutes)} overtime`, lines: [`The overtime of the team's ${who}, added up, on the days they were in it.`] }}>
+                    {hrs(row.overtimeMinutes)}
+                  </Explained>
+                ) : (
+                  "—"
+                )}
+              </TableCell>
+              <TableCell className="tabular-nums">
+                {row.travelTrips ? (
+                  <Explained
+                    help={{
+                      title: `${hrs(row.travelMinutes ?? 0)} travel`,
+                      lines: [`${row.travelTrips} trips by the team's ${who} in FSM.`, `${hrs(row.travelMinutes ?? 0)} ÷ ${hrs(row.availableMinutes)} available = ${pct(travelShare(row))} of the day.`],
+                    }}
+                  >
+                    {hrs(row.travelMinutes ?? 0)} · {pct(travelShare(row))}
+                  </Explained>
+                ) : (
+                  "—"
+                )}
+              </TableCell>
+              <TableCell className="pr-5 tabular-nums">
+                {row.completenessPercent === null ? (
+                  "—"
+                ) : (
+                  <Explained
+                    help={{
+                      title: `Data complete ${pct(row.completenessPercent)}`,
+                      lines: [`${row.withActualTimes} of ${row.completed} completed appointments have both actual times = ${pct(row.completenessPercent)}`],
+                    }}
+                  >
+                    {pct(row.completenessPercent)}
+                  </Explained>
+                )}
+              </TableCell>
+            </TableRow>
+          );
+        })}
       </TableBody>
     </Table>
   );

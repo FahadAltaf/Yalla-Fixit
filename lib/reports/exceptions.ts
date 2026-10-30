@@ -177,11 +177,16 @@ export function analyseActualTimes(input: {
       });
     }
   }
-  /* Least complete first: that is who to talk to. */
+  /* Most appointments missing actual times first (28 Oct: every table descending): that is who to talk to. */
   const finish = (map: Map<string, CompletenessRow>) =>
     [...map.values()]
       .map((r) => ({ ...r, completenessPercent: percent(r.withActualTimes, r.completed) }))
-      .sort((a, b) => (a.completenessPercent ?? 101) - (b.completenessPercent ?? 101) || a.name.localeCompare(b.name));
+      .sort(
+        (a, b) =>
+          b.completed - b.withActualTimes - (a.completed - a.withActualTimes) ||
+          (a.completenessPercent ?? 101) - (b.completenessPercent ?? 101) ||
+          a.name.localeCompare(b.name),
+      );
 
   return {
     rows: rows.sort((a, b) => (b.scheduledStart ?? "").localeCompare(a.scheduledStart ?? "")),

@@ -283,3 +283,134 @@ test("without FSM check-ins nobody is marked absent, late or early: the portal j
   assert.ok(days.every((d) => !d.measured && !d.absent && !d.late && !d.early));
   assert.equal(summariseAttendance(days)[0].shiftDays, 2, "the roster is still shown");
 });
+
+/* 29 Oct: FSM Attendance keeps one record per technician per day; its check-out stays with its check-in. */
+const record = (tech: string, checkIn: string, checkOut: string | null): RecordedCheckIn[] => [
+  { technicianFsmId: tech, kind: "shift_check_in", at: checkIn, sessionStart: checkIn },
+  ...(checkOut ? [{ technicianFsmId: tech, kind: "shift_check_out" as const, at: checkOut, sessionStart: checkIn }] : []),
+];
+
+test("attendance: a night worker on the morning shift keeps each night together, outside the shift, never late and early", () => {
+  const days = computeAttendance({
+    availability: availability({ from: "2026-09-30", to: "2026-10-01" }),
+    recorded: [
+      ...record("T1", dubai("2026-09-29", "18:46"), dubai("2026-09-30", "06:28")),
+      ...record("T1", dubai("2026-09-30", "18:36"), dubai("2026-10-01", "06:03")),
+    ],
+    leave: [],
+    lateToleranceMinutes: 15,
+    timeZone: TZ,
+  });
+  const d = days.find((x) => x.date === "2026-09-30")!;
+  assert.equal(d.checkIn, dubai("2026-09-30", "18:36"));
+  assert.equal(d.checkOut, dubai("2026-10-01", "06:03"), "the next morning's check-out, not the previous night's");
+  assert.equal(d.presentMinutes, 11 * 60 + 27);
+  assert.equal(d.outsideShift, true);
+  assert.equal(d.late, false);
+  assert.equal(d.early, false);
+  assert.equal(d.absent, false);
+});
+
+test("attendance: the day's jobs widen the expected hours, as on the Scheduling board; late and early stay with the shift", () => {
+  const days = computeAttendance({
+    availability: availability({ from: "2026-10-05", to: "2026-10-06" }),
+    recorded: [
+      ...record("T1", dubai("2026-10-05", "06:40"), dubai("2026-10-05", "17:30")),
+      /* An evening job only: inside the widened hours, so not outside the shift. */
+      ...record("T1", dubai("2026-10-06", "18:10"), dubai("2026-10-06", "22:00")),
+    ],
+    scheduled: [
+      { technicianFsmId: "T1", start: dubai("2026-10-05", "05:00"), end: dubai("2026-10-05", "17:00") },
+      { technicianFsmId: "T1", start: dubai("2026-10-06", "18:00"), end: dubai("2026-10-06", "22:00") },
+    ],
+    leave: [],
+    lateToleranceMinutes: 15,
+    timeZone: TZ,
+  });
+  const [mon, tue] = days;
+  assert.equal(mon.widenedForJobs, true);
+  assert.equal(mon.shiftStart, dubai("2026-10-05", "05:00"));
+  assert.equal(mon.windowStart, dubai("2026-10-05", "08:00"), "the shift as set is kept");
+  assert.equal(mon.late, false, "a 05:00 booking is a planning block: late counts from the 08:00 shift");
+  assert.equal(mon.early, false);
+  assert.equal(tue.outsideShift, false, "at their scheduled job");
+  assert.equal(tue.late, true, "but after the shift start");
+});
+
+test("attendance: work in FSM without a check-in is not an absence; a planned crew place alone is", () => {
+  const days = computeAttendance({
+    availability: availability({ technicians: [tech("T1"), tech("T2")], from: "2026-10-05", to: "2026-10-05" }),
+    recorded: [...record("T1", dubai("2026-09-30", "08:00"), null)],
+    scheduled: [
+      { technicianFsmId: "T1", start: dubai("2026-10-05", "09:00"), end: dubai("2026-10-05", "12:00") },
+      { technicianFsmId: "T2", start: dubai("2026-10-05", "09:00"), end: dubai("2026-10-05", "12:00") },
+    ],
+    worked: [{ technicianFsmId: "T1", at: dubai("2026-10-05", "09:05") }],
+    leave: [],
+    lateToleranceMinutes: 15,
+    today: "2026-10-29",
+    timeZone: TZ,
+  });
+  const by = Object.fromEntries(days.map((d) => [d.technicianFsmId, d]));
+  assert.equal(by.T1.absent, false);
+  assert.equal(by.T1.workedWithoutCheckIn, true);
+  assert.equal(by.T2.absent, true, "booked on the crew, but nothing shows they worked");
+  const [s1] = summariseAttendance(days.filter((d) => d.technicianFsmId === "T1"));
+  assert.equal(s1.workedWithoutCheckInDays, 1);
+  assert.equal(s1.absentDays, 0);
+});
+
+test("attendance: a past record never checked out is flagged; today's open one is not; no rest day set is flagged", () => {
+  const days = computeAttendance({
+    availability: availability({ technicians: [tech("T1", { restWeekdays: [] })], from: "2026-10-27", to: "2026-10-29" }),
+    recorded: [...record("T1", dubai("2026-10-27", "07:00"), null), ...record("T1", dubai("2026-10-29", "07:00"), null)],
+    leave: [],
+    lateToleranceMinutes: 15,
+    today: "2026-10-29",
+    timeZone: TZ,
+  });
+  const by = Object.fromEntries(days.map((d) => [d.date, d]));
+  assert.equal(by["2026-10-27"].noCheckOut, true);
+  assert.equal(by["2026-10-29"].noCheckOut, false, "still checked in today");
+  assert.equal(by["2026-10-28"].absent, true);
+  assert.equal(by["2026-10-28"].restDayMissing, true);
+});
+
+test("compliance: an overnight check-out counts for the shift day of its own check-in, not the next day", () => {
+  const avail = availability({ from: "2026-10-05", to: "2026-10-06" });
+  const required = requiredEvents({ availability: avail, appointments: [], timeZone: TZ }).filter((e) => e.date === "2026-10-05");
+  const result = computeCompliance({
+    required,
+    /* Checked in late on the 5th and out at 06:00 on the 6th: FSM's single record for the 5th. */
+    recorded: record("T1", dubai("2026-10-05", "09:00"), dubai("2026-10-06", "06:00")),
+    waivers: [],
+    settings: AT_97,
+    timeZone: TZ,
+  });
+  const out = result[0].events.find((e) => e.kind === "shift_check_out")!;
+  assert.equal(out.state, "performed");
+  assert.equal(out.recordedAt, dubai("2026-10-06", "06:00"));
+});
+
+test("attendance: nobody is absent today before their expected hours are over", () => {
+  const days = computeAttendance({
+    availability: availability({ from: "2026-10-29", to: "2026-10-29" }),
+    recorded: [],
+    leave: [],
+    lateToleranceMinutes: 15,
+    today: "2026-10-29",
+    now: dubai("2026-10-29", "12:00"),
+    timeZone: TZ,
+  });
+  assert.equal(days[0].absent, false, "the 08:00-17:00 shift is not over at noon");
+  const later = computeAttendance({
+    availability: availability({ from: "2026-10-29", to: "2026-10-29" }),
+    recorded: [],
+    leave: [],
+    lateToleranceMinutes: 15,
+    today: "2026-10-29",
+    now: dubai("2026-10-29", "17:30"),
+    timeZone: TZ,
+  });
+  assert.equal(later[0].absent, true);
+});

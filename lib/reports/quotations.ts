@@ -245,15 +245,9 @@ export function summariseByStatus(rows: QuotationRow[], limits: AgeingLimits): S
   }));
 }
 
-/** Longest-waiting first; closed statuses after open ones. */
+/** Newest first (28 Oct: every table descending): by when created, then by number. */
 export function sortQuotationRows(rows: QuotationRow[]): QuotationRow[] {
-  return [...rows].sort(
-    (a, b) =>
-      Number(b.open) - Number(a.open) ||
-      Number(b.breached) - Number(a.breached) ||
-      (b.daysInStatus ?? -1) - (a.daysInStatus ?? -1) ||
-      (a.number ?? "").localeCompare(b.number ?? ""),
-  );
+  return [...rows].sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? "") || (b.number ?? "").localeCompare(a.number ?? ""));
 }
 
 /** Dates for a preset range ending today. */

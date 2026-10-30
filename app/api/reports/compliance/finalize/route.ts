@@ -2,7 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { actorOf } from "@/lib/server/finance/route-helpers";
+import { createNotifier, supabaseNotificationStore } from "@/lib/server/notifications/notifier";
+import { readReportingSettings } from "@/lib/server/reporting/settings";
+import { sendHrReport } from "@/lib/server/reports/compliance-alerts";
 import { ComplianceError, finalizeMonth } from "@/lib/server/reports/compliance";
+import { loadTechnicians } from "@/lib/server/reports/data";
+import { sendEmail } from "@/lib/server/send-email";
 import { requireResourceAccess } from "@/lib/server/require-access";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { ActionType, ResourceType } from "@/types/types";
@@ -11,7 +16,8 @@ import { ActionType, ResourceType } from "@/types/types";
  * Finalise a month's compliance (BRD 5.2 B4; DEV-450): after the dispute
  * cut-off, the statements are frozen with the settings used and never
  * recalculated. Compliance Approve (a named person, not inherited by
- * administrators). Refused until shift check-ins can be read (B-01).
+ * administrators). Refused while a dispute is undecided. The final report
+ * to HR and the managers (E3) goes out from the frozen statements.
  *
  * Body: { month: "YYYY-MM" }
  */
@@ -27,7 +33,17 @@ export async function POST(req: NextRequest) {
   try {
     const admin = await createAdminServerClient();
     const statements = await finalizeMonth(admin, parsed.data.month, actorOf(gate.access.profile));
-    return NextResponse.json({ statements });
+    /* E3 now; the daily run sends it later if this one fails. */
+    let hrReport: string = "not sent";
+    try {
+      const settings = await readReportingSettings(admin);
+      const appUrl = (process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || "").replace(/\/$/, "");
+      const notify = createNotifier({ store: supabaseNotificationStore(admin), sendEmail: (mail) => sendEmail(mail), appUrl });
+      hrReport = await sendHrReport(admin, parsed.data.month, settings.compliance.hrRecipientUserIds, notify, appUrl, await loadTechnicians(admin));
+    } catch (error) {
+      console.error("Compliance E3 error:", error);
+    }
+    return NextResponse.json({ statements, hrReport });
   } catch (error) {
     if (error instanceof ComplianceError) return NextResponse.json({ error: error.message }, { status: error.status });
     console.error("Compliance finalise error:", error);
