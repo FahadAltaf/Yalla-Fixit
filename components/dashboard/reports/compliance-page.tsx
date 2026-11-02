@@ -330,7 +330,7 @@ export function CompliancePage() {
             label="Compliance"
             value={compliancePct(overall.compliancePercent)}
             headline={overall.required ? `${overall.performed} of ${plural(overall.required, "check-in")} performed` : "Nothing measured yet"}
-            caption={thresholdSet ? `Threshold ${data.settings.thresholdPercent}%` : "Threshold not set (D-09)"}
+            caption={thresholdSet ? `Threshold ${data.settings.thresholdPercent}%` : "No threshold set"}
           />
           <StatCard
             label="Missed"
@@ -358,7 +358,7 @@ export function CompliancePage() {
             value={overall.penaltyPayableAed === null ? "—" : aed(overall.penaltyPayableAed)}
             headline={
               overall.penaltyPayableAed === null
-                ? "Not calculated (D-09)"
+                ? "Not worked out: no threshold set"
                 : `AED ${data.settings.penaltyPerMissAed} a miss, capped at AED ${data.settings.monthlyCapAed}`
             }
             caption="For HR to decide; not deducted"
@@ -382,7 +382,7 @@ export function CompliancePage() {
       {view === "disputes" ? (
         <Card className="gap-0 py-0">
           {data && !data.disputesReady ? (
-            <p className="text-muted-foreground border-b px-4 py-3 text-sm">Disputes need migration 20261029100000 to be applied.</p>
+            <p className="text-muted-foreground border-b px-4 py-3 text-sm">Disputes are not set up yet: a database update is still to be applied.</p>
           ) : data && !data.can.review && overall?.disputesOpen ? (
             <p className="text-muted-foreground border-b px-4 py-3 text-sm">Only the dispute reviewers named in Settings → Reporting can decide a dispute.</p>
           ) : null}

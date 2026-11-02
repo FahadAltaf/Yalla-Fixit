@@ -25,6 +25,10 @@ export interface TechnicianAttributeUpdate {
   restWeekdays?: number[] | null;
   /** Hours a working day; null = the standard day (8 h). */
   dailyHours?: number | null;
+  /** The contract's weekly limit; null = daily hours x working days. */
+  weeklyHours?: number | null;
+  /** Days off a week, not fixed weekdays; null = 1. */
+  offDaysPerWeek?: number | null;
 }
 
 // Client-side: set attributes on one or many technicians at once (#15 bulk edit).

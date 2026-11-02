@@ -17,7 +17,6 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
    see and do. */
 export default async function FinanceQueueItemRoute({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  /* Suspense: the work order page reads ?as= (the team it acts as). */
   return UUID.test(id) ? (
     <FinanceQueueItemPage id={id} />
   ) : (

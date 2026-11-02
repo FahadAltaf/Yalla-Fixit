@@ -83,7 +83,7 @@ export async function raiseDispute(
     loadDisputes(admin, input.month, technician),
     admin.schema("hr").from("compliance_months").select("month").eq("month", input.month).maybeSingle(),
   ]);
-  if (!stored.ready) throw new ComplianceError("Disputes need migration 20261029100000 to be applied first.", 409);
+  if (!stored.ready) throw new ComplianceError("Disputes are not set up yet: a database update is still to be applied.", 409);
   const event = work.results.get(technician)?.events.find((e) => e.key === input.eventKey);
   const refusal = disputeRefusal({
     event,

@@ -3,15 +3,19 @@ import assert from "node:assert/strict";
 
 import { queueStatus } from "@/lib/finance/line-status";
 import {
+  completionRefusal,
   effectiveEntry,
   invoiceCap,
   invoicingStatus,
+  isEnded,
   isFlaggedToInvoice,
   isNonBillable,
   isVoid,
   lineBillable,
+  lineCompletion,
   readyForFinance,
   recognisedValue,
+  workOrderCompletion,
   type ProgressEntry,
 } from "@/lib/finance/progress";
 
@@ -112,4 +116,58 @@ test("a line's own Billing Status decides; the work order's when the line has no
   assert.equal(lineBillable(null, "Non Billable"), false);
   assert.equal(lineBillable("", "Not yet Invoiced"), true);
   assert.equal(lineBillable(null, null), true);
+});
+
+test("30 Oct: a line is Complete at 100 %, Partially complete below it, Not started at 0 or with nothing", () => {
+  assert.equal(lineCompletion(null), "not_started");
+  assert.equal(lineCompletion({ percent: 0 }), "not_started");
+  assert.equal(lineCompletion({ percent: 40 }), "partial");
+  assert.equal(lineCompletion({ percent: 100 }), "complete");
+});
+
+test("30 Oct: the work order is Complete only when every billable line is", () => {
+  const wo = (...c: Array<[boolean, "not_started" | "partial" | "complete"]>) => workOrderCompletion(c.map(([billable, completion]) => ({ billable, completion })));
+  assert.deepEqual(wo([true, "complete"], [true, "complete"]), { completion: "complete", complete: 2, billable: 2 });
+  assert.equal(wo([true, "complete"], [true, "partial"]).completion, "partial");
+  assert.equal(wo([true, "complete"], [true, "not_started"]).completion, "partial");
+  assert.equal(wo([true, "not_started"], [true, "not_started"]).completion, "not_started");
+  assert.equal(wo([true, "complete"], [false, "not_started"]).completion, "complete", "a Non Billable line is not waited for");
+});
+
+test("30 Oct: completing the work order is refused until every line is complete; partial is per line", () => {
+  const lines = [
+    { id: "L1", name: "Paint", billable: true, completion: "complete" as const },
+    { id: "L2", name: "Tiles", billable: true, completion: "partial" as const },
+  ];
+  assert.match(completionRefusal([{ line: null, percent: 100, purpose: "invoice" }], lines) ?? "", /Not complete yet: Tiles/);
+  assert.equal(
+    completionRefusal(
+      [
+        { line: "L2", percent: 100, purpose: "invoice" },
+        { line: null, percent: 100, purpose: "invoice" },
+      ],
+      lines,
+    ),
+    null,
+    "completing the last line and the work order together is fine",
+  );
+  assert.match(completionRefusal([{ line: null, percent: 60, purpose: "invoice" }], lines) ?? "", /line by line/);
+  assert.equal(completionRefusal([{ line: "L2", percent: 100, purpose: "revenue_only" }], lines), null, "Complete may be revenue only (30 Oct)");
+  assert.match(completionRefusal([{ line: "L2", percent: 0, purpose: "invoice" }], lines) ?? "", /above 0/);
+  assert.equal(completionRefusal([{ line: "L2", percent: 60, purpose: "revenue_only" }], lines), null);
+});
+
+test("30 Oct: Cancelled and Closed work orders are over, like Void: nothing to invoice or newly recognise", () => {
+  assert.equal(isEnded("Cancelled"), true);
+  assert.equal(isEnded("Canceled"), true);
+  assert.equal(isEnded("Closed"), true);
+  assert.equal(isEnded("Void"), true);
+  assert.equal(isEnded("In Progress"), false);
+  assert.equal(isEnded("Completed"), false);
+  const line = { amount: 650, invoicedAmount: 0 };
+  const entry = { lineId: "L1", percent: 100, purpose: "invoice" as const, recordedAt: "2026-10-30T08:00:00Z" };
+  assert.equal(invoiceCap(line, { workOrderStatus: "Cancelled", postToMaher: "To Be Invoiced", entry }), 0);
+  assert.equal(invoiceCap(line, { workOrderStatus: "Closed", postToMaher: null, entry }), 0);
+  assert.equal(recognisedValue({ amount: 650, invoicedAmount: 100 }, { workOrderStatus: "Cancelled", entry }), 100, "what was invoiced before stays");
+  assert.equal(invoicingStatus("Cancelled", "Non Billable"), "Cancelled", "Cancelled stays Cancelled, not Non-billable");
 });

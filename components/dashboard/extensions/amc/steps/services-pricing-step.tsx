@@ -24,7 +24,7 @@ import {
 } from "@/components/ui/table";
 
 import { ServiceTable } from "../components/service-table";
-import { emptyPriceListRow } from "../amc-constants";
+import { AMC_SERVICES, emptyPriceListRow, getServicesForUnitType } from "../amc-constants";
 import { CLAUSE_6_3_HANDYMAN, stripListMarker } from "../amc-contract-content";
 import { Button } from "@/components/ui/button";
 import { Hint } from "@/components/ui/hint";
@@ -38,6 +38,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { AmcFormData, AmcPriceListRow } from "../amc-types";
+import { contractClauseNumber } from "../amc-document-model";
+import { computeAmcData } from "../amc-pricing";
 
 interface StepProps {
   form: UseFormReturn<AmcFormData>;
@@ -91,16 +93,28 @@ function standardFixedPriceRates(settings: AmcSettings | null | undefined): stri
   return rates.length > 0 ? rates : CLAUSE_6_3_HANDYMAN.rates.map((rate) => rate.text);
 }
 
+const unitTypeLabel = (unitType: string) =>
+  unitType === "villa" ? "villas" : unitType === "apartment" ? "apartments" : "offices";
+
 export function ServicesPricingStep({ form, settings }: StepProps) {
   /* null while AMC Settings is loading, so the picker can say so instead of looking empty. */
   const savedManagers = settings
     ? settings.accountManagers.filter((manager) => manager.name.trim())
     : null;
   const unitType = form.watch("unitType");
+  // The catalogue's services this kind of property is not offered.
+  const offeredIds = new Set(getServicesForUnitType(unitType).map((service) => service.id));
+  const hiddenServices = AMC_SERVICES.filter((service) => !offeredIds.has(service.id)).map(
+    (service) => service.label,
+  );
   const showPriceList = form.watch("optionalSections.supplyInstallPriceList");
   const priceListRows = form.watch("priceListRows") ?? [];
   const showFixedRates = form.watch("optionalSections.additionalFixedPriceServices");
   const fixedPriceRates = form.watch("fixedPriceRates") ?? [];
+  /* The services decide which clauses print, and so the rates clause's number. */
+  form.watch("serviceRows");
+  const handymanClause =
+    showFixedRates && settings ? contractClauseNumber(computeAmcData(form.getValues(), "contract", settings), "handymanRates") : null;
 
   const setFixedRates = (next: string[]) =>
     form.setValue("fixedPriceRates", next, { shouldValidate: true });
@@ -144,15 +158,16 @@ export function ServicesPricingStep({ form, settings }: StepProps) {
           {/* FR1.4 — villa-only services stay hidden for apartments and
               offices. Naming them, so an absence reads as a rule rather
               than as a missing row. */}
-          {unitType !== "villa" && (
+          {/* Read from the catalogue, since the library offers some services
+              on offices or villas alone. */}
+          {hiddenServices.length > 0 && (
             <Alert>
               <AlertTriangle className="size-4" />
               <AlertTitle className="text-xs font-medium">
-                Villa-only services hidden
+                Some services are not offered on {unitTypeLabel(unitType)}
               </AlertTitle>
               <AlertDescription className="text-xs">
-                Water pump maintenance, roof drain cleaning and water tank
-                cleaning apply to villas only.
+                Hidden here: {hiddenServices.join(", ")}.
               </AlertDescription>
             </Alert>
           )}
@@ -364,9 +379,10 @@ export function ServicesPricingStep({ form, settings }: StepProps) {
                 <FormItem>
                   <div className="space-y-2 rounded-md border p-3">
                     <p className="text-muted-foreground text-xs">
-                      One rate per line, as it prints in clause 6.3 of the
-                      contract. These start from the standard rates in AMC
-                      Settings and apply to this proposal only.
+                      {/* The clause's number moves with what else is on the contract (AMC-057: it said 6.3, the contract printed 5.3). */}
+                      One rate per line, as it prints in{" "}
+                      {handymanClause ? `clause ${handymanClause}` : "its own clause"}{" "}
+                      of the contract. These start from the standard rates in AMC Settings and apply to this proposal only.
                     </p>
                     {fixedPriceRates.map((rate, index) => (
                       <div key={index} className="flex items-center gap-2">

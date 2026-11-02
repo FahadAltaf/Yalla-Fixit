@@ -18,6 +18,14 @@ BRD's worked examples. All worked examples were **recomputed**, not copied.
 
 ## Finance
 
+**Complete and partially complete (30 Oct)**, Operations only, on Ready to invoice. Each billable line is
+marked **Complete** (100 %, always to invoice) or **Partially complete** (above 0 and below 100 %, to invoice
+or revenue only); a line's % is never below what is already invoiced of it. The work order is **Complete**
+only when every billable line is; Operations then confirms it with **Complete work order**, which is refused
+while any line is not (it names them). There is no work-order-wide partial %: it is entered line by line.
+Finance invoices up to each line's "to invoice" %, as before. Stored as `finance.progress_entries` (the
+latest entry for a line counts); rules in `lib/finance/progress.ts`, enforced in `recordProgress`.
+
 **Completion % (DEV-434, E1)** = (cumulative invoiced + this item) ÷ estimate total.
 Basis pending **D-05**; until then: pre-tax line amounts over the pre-tax total, labelled as such.
 
@@ -69,11 +77,21 @@ available hours by 16).
   both actuals are present. A job shared by two technicians counts in full for each, for time. An
   appointment belongs to the period by its actual start, or its scheduled start when it has none.
   Built in P6: `lib/reports/utilization.ts`.
-- **Overtime (D-16)**: until decided, job time is clipped to the shift window for utilization, and job time
+- **Expected hours (2 Nov, replaces the clipping below)**: each technician's own limits, set in Scheduling →
+  Technicians: hours a day (8, 9 or 12 by contract; 12 for Data Center), a weekly hour limit (e.g. 48 or 60)
+  and off days a week (a number, not fixed weekdays; 1 when none is entered). The week is the measure: a week
+  expects min(weekly limit, hours a day × (7 − off days)), less a working day's share for each public
+  holiday and the leave taken. A week cut by the period's dates expects a working day's share for each of
+  its days less the off days, or for each day worked if more, never more than the full week; so one day
+  worked expects one day's share, and a month adds up as its weeks do. The daily trend expects a day's share
+  only on days worked. **Every hour worked counts** (any time of day, off days and holidays included), so
+  utilization can pass 100 %. Each week's hours beyond what it expected are shown beside as "Above expected"
+  (already inside both percentages). `expectedHours` in `lib/reports/utilization.ts`.
+- ~~**Overtime (D-16)**: until decided, job time is clipped to the shift window for utilization, and job time
   outside the window is reported beside it as "outside shift". Job time on a day with nothing available
   (holiday, rest day, full-day leave, after leaving) is outside shift too, so such a day adds nothing to
   either side of the ratio. Utilization can pass 100 % only by the unpaid break, which is a length, not a
-  time of day.
+  time of day.~~ Superseded 2 Nov.
 - **Chargeable job hours**: job hours on appointments whose work order's quotation totals more than zero
   before VAT; with no quotation, whose work order itself has a value (**D-08**). A zero-total quotation
   counts for time only (TC09). Work with no value anywhere is time only too, and reported apart as
@@ -82,7 +100,7 @@ available hours by 16).
   value: reported apart as "AMC / contract", time only. FSM marks it on the work order (**D-14**):
   `Work_Type__C` "AMC PPM", or an `AMC_Contract_Ref__C`. On 29 Oct, 4 of October's 328 counted
   appointments are marked; `Type = "Scheduled Maintenance"` alone is not taken as AMC.
-- **Time utilization** = actual ÷ available. **Commercial utilization** = chargeable ÷ available. Always
+- **Time utilization** = actual ÷ expected. **Commercial utilization** = chargeable ÷ expected. Always
   shown together.
 - **Travel** (blocked, B-01): Σ trip durations, shown as hours and as a share of available hours. Never
   added to job hours.

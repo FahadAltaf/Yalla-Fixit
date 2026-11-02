@@ -32,10 +32,13 @@ export async function listTechniciansForViewer(): Promise<TechnicianReference[]>
   const load = (columns: string) =>
     admin.from("technician_reference").select(columns).order("display_name", { ascending: true });
 
-  // daily_hours arrives with migration 20261028100000 and board_position with
-  // 20260917090000. Until each is applied, load without it so the board still
-  // opens (the standard day, and Custom order stays empty).
-  let { data, error } = await load(`${baseColumns}, board_position, daily_hours`);
+  // deactivated_at arrives with migration 20261020130000, daily_hours with
+  // 20261028100000, weekly_hours and off_days_per_week with 20261102100000
+  // and board_position with 20260917090000. Until each is applied, load
+  // without it so the board still opens (the standard day, Custom order and
+  // "inactive since" just stay empty).
+  let { data, error } = await load(`${baseColumns}, board_position, deactivated_at, daily_hours, weekly_hours, off_days_per_week`);
+  if (error?.code === "42703") ({ data, error } = await load(`${baseColumns}, board_position, deactivated_at, daily_hours`));
   if (error?.code === "42703") ({ data, error } = await load(`${baseColumns}, board_position`));
   if (error?.code === "42703") ({ data, error } = await load(baseColumns));
 
@@ -70,6 +73,9 @@ export async function listTechniciansForViewer(): Promise<TechnicianReference[]>
       hidden_from_lists: r.hidden_from_lists === true,
       rest_weekdays: Array.isArray(r.rest_weekdays) ? (r.rest_weekdays as number[]) : null,
       daily_hours: r.daily_hours === null || r.daily_hours === undefined ? null : Number(r.daily_hours),
+      deactivated_at: typeof r.deactivated_at === "string" ? r.deactivated_at : null,
+      weekly_hours: r.weekly_hours === null || r.weekly_hours === undefined ? null : Number(r.weekly_hours),
+      off_days_per_week: r.off_days_per_week === null || r.off_days_per_week === undefined ? null : Number(r.off_days_per_week),
     };
   });
 }

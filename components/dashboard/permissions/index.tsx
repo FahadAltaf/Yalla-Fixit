@@ -304,7 +304,8 @@ export default function PermissionManagementPage() {
               {
                 isOpen: (resource) => openModules.has(resource),
                 onToggle: toggleModule,
-              }
+              },
+              handleRecordAccessChange
             )}
             pageSize={tableData.length}
             currentPage={0}

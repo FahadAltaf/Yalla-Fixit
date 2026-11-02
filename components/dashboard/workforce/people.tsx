@@ -1,9 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { complianceService } from "@/modules/compliance";
+import { executeRESTBackend } from "@/lib/rest-server";
+import type { EmployeeRecord, LookupOption } from "@/lib/compliance/types";
+import { EMPLOYMENT_STATUS_LABEL, EMPLOYMENT_STATUSES, type ComplianceEmploymentStatus } from "@/lib/compliance/statuses";
 import {
   leaveService,
+  leaveTypesService,
   tagsService,
   rolesService,
   serviceTypesService,
@@ -12,6 +19,7 @@ import {
 } from "@/modules/scheduling";
 import {
   LeaveRecord,
+  LeaveType,
   TechnicianReference,
   TechnicianTag,
   TechnicianRole,
@@ -22,7 +30,6 @@ import { Button } from "@/components/ui/button";
 import { PageHeading } from "@/components/dashboard/shared/kaizen";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import StatusBadge from "@/components/ui/status-badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { ConfirmationAlertDialog } from "@/components/ui/confirmation-alert-dialog";
@@ -42,7 +49,6 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/actions/utils";
-import { LEAVE_CATEGORIES, type LeaveCategory } from "@/lib/scheduling/leave-categories";
 import {
   formatZonedDate,
   zonedTimeToUtc,
@@ -67,6 +73,7 @@ import {
   Search,
   Settings2,
   SlidersHorizontal,
+  Clock,
   Trash2,
   UsersRound,
   X,
@@ -79,11 +86,71 @@ import {
   TechnicianIdentity,
   TechnicianRowSkeleton,
   Unset,
-} from "./technician-cells";
+} from "@/components/dashboard/scheduling/technician-cells";
 import TimeSelect from "@/components/ui/time-select";
+import { ManageTechnicianDialog, type TechnicianDialogView } from "./manage-technician-dialog";
 import { Hint } from "@/components/ui/hint";
 
-type Props = { technicians: TechnicianReference[] };
+/*
+  Workforce People (C6, Sami 31 Oct 2026). This was Scheduling's
+  "Technicians & leave" page; it now lists everyone:
+
+  - FSM technicians, each with their compliance employee when linked;
+  - compliance employees not in FSM, who never hold scheduling fields or
+    leave, so they can never reach the board or a submission.
+
+  Every field is still stored where its module reads it: scheduling fields
+  and leave on the FSM technician (Scheduling's routes), compliance fields
+  on the employee (Compliance's routes).
+*/
+export type WorkforceAccess = {
+  scheduling: boolean;
+  compliance: boolean;
+  complianceCreate: boolean;
+  complianceEdit: boolean;
+  /** Settings → Workforce (the shared lists). */
+  lists: boolean;
+  /** Leave for employees not in FSM. */
+  leaveAdd: boolean;
+  leaveCancel: boolean;
+};
+
+type Props = { technicians: TechnicianReference[]; access: WorkforceAccess };
+
+// Who is shown: everyone, FSM technicians only (Scheduling's old page),
+// employees with no FSM user, or FSM technicians with no employee record.
+type Scope = "all" | "fsm" | "not_fsm" | "needs_maher";
+const SCOPES: { value: Scope; label: string }[] = [
+  { value: "all", label: "Everyone" },
+  { value: "fsm", label: "In FSM" },
+  { value: "not_fsm", label: "Not in FSM" },
+  { value: "needs_maher", label: "Needs a Maher ID" },
+];
+
+type Person = {
+  key: string;
+  name: string;
+  tech: TechnicianReference | null;
+  employee: EmployeeRecord | null;
+};
+
+/** The person page address: the employee when there is one, else the technician. */
+export function personHref(p: { employee: { id: string } | null; tech: { fsm_resource_id: string } | null }): string {
+  return p.employee ? `/workforce/${p.employee.id}` : `/workforce/fsm-${p.tech?.fsm_resource_id ?? ""}`;
+}
+
+const ACTIVE_STATUSES: ComplianceEmploymentStatus[] = ["active", "on_leave"];
+// "Who is on leave" (Sami, 31 Oct 2026), across both kinds of leave.
+type LeaveFilter = "any" | "now" | "upcoming" | "now_or_upcoming";
+const LEAVE_FILTERS: { value: LeaveFilter; label: string }[] = [
+  { value: "any", label: "Leave: anyone" },
+  { value: "now", label: "On leave now" },
+  { value: "upcoming", label: "Upcoming leave" },
+  { value: "now_or_upcoming", label: "On leave now or upcoming" },
+];
+
+// The compliance filters the old Employees list took, so its links still land.
+const COMPLIANCE_FILTER_KEYS = ["employment_status", "item_status", "site"] as const;
 
 // Columns of the technician list that can be filtered like a spreadsheet.
 type FilterColumn = "role" | "service" | "shift" | "supervisor" | "tags" | "availability";
@@ -105,41 +172,11 @@ const SHIFT_OPTIONS = [
   { value: "night", label: "Night" },
 ];
 
-const EMPLOYMENT_OPTIONS = [
-  { value: "active", label: "Active" },
-  { value: "resigned", label: "Resigned" },
-];
+// A leave period from either table: Scheduling's (FSM technicians) or the
+// Workforce one (employees not in FSM).
+type LeavePeriod = Pick<LeaveRecord, "leave_type" | "start_at" | "end_at" | "status">;
 
-// DEV-456: every category is excluded from available hours and compliance.
-const LEAVE_TYPE_OPTIONS = [
-  { value: "", label: "— Leave type —" },
-  ...LEAVE_CATEGORIES.map((c) => ({ value: c.value, label: c.label })),
-];
-
-const WEEKDAYS = [
-  { value: 1, label: "Mon" },
-  { value: 2, label: "Tue" },
-  { value: 3, label: "Wed" },
-  { value: 4, label: "Thu" },
-  { value: 5, label: "Fri" },
-  { value: 6, label: "Sat" },
-  { value: 7, label: "Sun" },
-];
-
-/* Working hours a day (Sami, 28 Oct): 8 for most, 12 for some data centre staff. */
-const STANDARD_DAY = "standard";
-const DAILY_HOURS = [6, 8, 9, 10, 12];
-
-// The FSM id, and what is unusual about this technician, under their name.
-function technicianSubtitle(t: TechnicianReference): string {
-  const notes = [t.fsm_resource_id];
-  if (t.employment_status === "resigned") notes.push(t.leaving_date ? `Resigned, leaving ${t.leaving_date}` : "Resigned");
-  else if (t.leaving_date) notes.push(`Leaving ${t.leaving_date}`);
-  if (t.hidden_from_lists) notes.push("Hidden from lists");
-  return notes.join(" · ");
-}
-
-function nearestActiveLeave(records: LeaveRecord[]): { record: LeaveRecord; current: boolean } | null {
+function nearestActiveLeave<T extends LeavePeriod>(records: T[]): { record: T; current: boolean } | null {
   const now = Date.now();
   const active = records.filter((r) => r.status === "active" && new Date(r.end_at).getTime() >= now);
   if (active.length === 0) return null;
@@ -182,7 +219,37 @@ function Select({
   );
 }
 
-export default function SchedulingDashboard({ technicians }: Props) {
+export default function WorkforcePeople({ technicians, access }: Props) {
+  const searchParams = useSearchParams();
+  const initialScope = (SCOPES.find((s) => s.value === searchParams.get("scope"))?.value ?? "all") as Scope;
+  const [scope, setScopeState] = useState<Scope>(initialScope);
+  const setScope = (next: Scope) => {
+    setScopeState(next);
+    const params = new URLSearchParams(window.location.search);
+    if (next === "all") params.delete("scope");
+    else params.set("scope", next);
+    const query = params.toString();
+    window.history.replaceState(window.history.state, "", query ? `/workforce?${query}` : "/workforce");
+  };
+  const [employees, setEmployees] = useState<EmployeeRecord[]>([]);
+  const [designations, setDesignations] = useState<LookupOption[]>([]);
+  const [nationalities, setNationalities] = useState<LookupOption[]>([]);
+  // Employee ids matching the compliance filters in the address, or null.
+  const complianceFilter = useMemo(() => {
+    const out: Record<string, string> = {};
+    COMPLIANCE_FILTER_KEYS.forEach((k) => {
+      const v = searchParams.get(k);
+      if (v) out[k] = v;
+    });
+    return Object.keys(out).length ? out : null;
+  }, [searchParams]);
+  const [filteredEmployeeIds, setFilteredEmployeeIds] = useState<Set<string> | null>(null);
+  const [leaveFilter, setLeaveFilter] = useState<LeaveFilter>(() =>
+    LEAVE_FILTERS.some((f) => f.value === searchParams.get("leave")) ? (searchParams.get("leave") as LeaveFilter) : "any",
+  );
+  // Current and upcoming leave of employees not in FSM, by employee id.
+  const [employeeLeave, setEmployeeLeave] = useState<Map<string, (LeavePeriod & { employee_id: string })[]>>(new Map());
+
   const [tags, setTags] = useState<TechnicianTag[]>([]);
   const [roles, setRoles] = useState<TechnicianRole[]>([]);
   const [services, setServices] = useState<TechnicianServiceType[]>([]);
@@ -198,23 +265,72 @@ export default function SchedulingDashboard({ technicians }: Props) {
   const [pageSize, setPageSize] = useState(10);
   const [refreshing, setRefreshing] = useState(false);
 
-  const [manageList, setManageList] = useState<null | "tags" | "roles" | "services">(null);
-  const [activeTechnician, setActiveTechnician] = useState<TechnicianReference | null>(null);
+  /* The row menu's dialog: which technician, and which view (attributes, working hours or leave). */
+  const [activeTechnician, setActiveTechnician] = useState<{ technician: TechnicianReference; view: TechnicianDialogView } | null>(null);
+  // FR-21: the managed list behind the Add Leave dropdown.
+  const [leaveTypes, setLeaveTypes] = useState<LeaveType[]>([]);
+  const [bulkLeaveOpen, setBulkLeaveOpen] = useState(false);
+  // FR-23: resigned technicians (inactive in FSM) are out of the way by
+  // default; the filter brings them back for a look at their history.
+  const [activeFilter, setActiveFilter] = useState<"active" | "inactive" | "all">(() => {
+    const status = searchParams.get("employment_status");
+    return status && !["active", "on_leave", "active_manpower"].includes(status) ? "all" : "active";
+  });
+
+  const loadEmployees = useCallback(async () => {
+    if (!access.compliance) return;
+    try {
+      const [all, designationList, nationalityList, filtered] = await Promise.all([
+        complianceService.listEmployees({ page: 0, pageSize: 500 }),
+        complianceService.listOptions("designation"),
+        complianceService.listOptions("nationality"),
+        complianceFilter ? complianceService.listEmployees({ ...complianceFilter, page: 0, pageSize: 500 }) : Promise.resolve(null),
+      ]);
+      setEmployees(all.data);
+      if (all.totalCount > all.data.length) {
+        toast.warning(`Showing the first ${all.data.length} of ${all.totalCount} employees; the rest are not listed here.`);
+      }
+      setDesignations(designationList);
+      setNationalities(nationalityList);
+      setFilteredEmployeeIds(filtered ? new Set(filtered.data.map((e) => e.id)) : null);
+      // Soft: before the leave migration is applied this simply finds nothing.
+      executeRESTBackend<(LeavePeriod & { employee_id: string })[]>("/api/workforce/leave", { params: { current: "1" } })
+        .then((rows) => {
+          const byEmployee = new Map<string, (LeavePeriod & { employee_id: string })[]>();
+          rows.forEach((r) => byEmployee.set(r.employee_id, [...(byEmployee.get(r.employee_id) ?? []), r]));
+          setEmployeeLeave(byEmployee);
+        })
+        .catch((e) => console.warn("Workforce leave not loaded:", e));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Failed to load employees");
+    }
+  }, [access.compliance, complianceFilter]);
+
+  // Again whenever the compliance filter in the address changes.
+  useEffect(() => {
+    void loadEmployees();
+  }, [loadEmployees]);
 
   const loadAll = async () => {
+    if (!access.scheduling) {
+      setLoading(false);
+      return;
+    }
     try {
-      const [tagList, assignmentMap, leave, roleList, serviceList] = await Promise.all([
+      const [tagList, assignmentMap, leave, roleList, serviceList, leaveTypeList] = await Promise.all([
         tagsService.listTags(),
         tagsService.listAssignmentsByTechnician(),
         leaveService.listLeave({ status: "active" }),
         rolesService.list(),
         serviceTypesService.list(),
+        leaveTypesService.list(),
       ]);
       setTags(tagList);
       setAssignments(assignmentMap);
       setLeaveRecords(leave);
       setRoles(roleList);
       setServices(serviceList);
+      setLeaveTypes(leaveTypeList);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to load scheduling data");
     } finally {
@@ -276,8 +392,10 @@ export default function SchedulingDashboard({ technicians }: Props) {
           return names.length ? names : [BLANK];
         }
         case "availability": {
+          // FR-21: the leave type is part of the value, so the column filters
+          // by type as well ("On leave · Annual", "Upcoming leave · Sick").
           const leave = leaveOf(t.fsm_resource_id);
-          return [leave ? (leave.current ? "On leave" : "Upcoming leave") : "Available"];
+          return [leave ? `${leave.current ? "On leave" : "Upcoming leave"} · ${leave.record.leave_type}` : "Available"];
         }
       }
     };
@@ -302,41 +420,96 @@ export default function SchedulingDashboard({ technicians }: Props) {
     });
   const activeFilterCount = Object.keys(columnFilters).length;
 
-  const visibleTechnicians = useMemo(() => {
-    let list = [...techs];
+  // One row per person. A technician carries its linked employee; an
+  // employee whose technician is not in the list (not in FSM, or no
+  // Scheduling access to see technicians) is a row of its own.
+  const people = useMemo<Person[]>(() => {
+    const byFsm = new Map(employees.filter((e) => e.technician).map((e) => [e.technician!.fsm_resource_id, e]));
+    const techIds = new Set(techs.map((t) => t.fsm_resource_id));
+    const rows: Person[] = techs.map((t) => ({ key: t.fsm_resource_id, name: t.display_name, tech: t, employee: byFsm.get(t.fsm_resource_id) ?? null }));
+    employees
+      .filter((e) => !e.technician || !techIds.has(e.technician.fsm_resource_id))
+      .forEach((e) => rows.push({ key: `emp:${e.id}`, name: e.full_name, tech: null, employee: e }));
+    return rows;
+  }, [techs, employees]);
+
+  // The person's nearest leave: on the technician when in FSM, else on the employee.
+  const leaveOfPerson = useCallback(
+    (p: Person) =>
+      p.tech
+        ? nearestActiveLeave(leaveByTechnician.get(p.tech.fsm_resource_id) ?? [])
+        : p.employee
+          ? nearestActiveLeave(employeeLeave.get(p.employee.id) ?? [])
+          : null,
+    [leaveByTechnician, employeeLeave],
+  );
+
+  const visiblePeople = useMemo(() => {
+    let list = [...people];
+    if (scope === "fsm") list = list.filter((p) => p.tech);
+    if (scope === "not_fsm") list = list.filter((p) => !p.tech && !p.employee?.technician);
+    if (scope === "needs_maher") list = list.filter((p) => p.tech && !p.employee);
+    if (filteredEmployeeIds) list = list.filter((p) => p.employee && filteredEmployeeIds.has(p.employee.id));
+    if (leaveFilter !== "any") {
+      list = list.filter((p) => {
+        const leave = leaveOfPerson(p);
+        if (!leave) return false;
+        if (leaveFilter === "now") return leave.current;
+        if (leaveFilter === "upcoming") return !leave.current;
+        return true;
+      });
+    }
+    if (activeFilter !== "all") {
+      const wantActive = activeFilter === "active";
+      list = list.filter((p) =>
+        p.tech ? p.tech.is_active === wantActive : ACTIVE_STATUSES.includes(p.employee!.employment_status) === wantActive,
+      );
+    }
     if (search.trim()) {
       const q = search.trim().toLowerCase();
-      list = list.filter((t) => t.display_name.toLowerCase().includes(q));
+      list = list.filter(
+        (p) =>
+          p.name.toLowerCase().includes(q) ||
+          (p.employee?.full_name.toLowerCase().includes(q) ?? false) ||
+          (p.employee?.maher_id.toLowerCase().includes(q) ?? false),
+      );
     }
+    // Scheduling column filters: a person not in FSM has no values there.
     (Object.entries(columnFilters) as [FilterColumn, Set<string>][]).forEach(([column, allowed]) => {
-      list = list.filter((t) => valuesOf(t, column).some((v) => allowed.has(v)));
+      list = list.filter((p) => p.tech && valuesOf(p.tech, column).some((v) => allowed.has(v)));
     });
-    return list.sort((a, b) => a.display_name.localeCompare(b.display_name));
-  }, [techs, search, columnFilters, valuesOf]);
+    return list.sort((a, b) => a.name.localeCompare(b.name));
+  }, [people, scope, filteredEmployeeIds, leaveFilter, leaveOfPerson, search, columnFilters, valuesOf, activeFilter]);
 
   // Paginate rather than rendering all ~90 technicians at once: a long
   // unbroken table is slow to scan and slow to render.
-  const total = visibleTechnicians.length;
+  const total = visiblePeople.length;
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
   const currentPage = Math.min(page, pageCount);
   const pageStart = (currentPage - 1) * pageSize;
-  const pageRows = visibleTechnicians.slice(pageStart, pageStart + pageSize);
+  const pageRows = visiblePeople.slice(pageStart, pageStart + pageSize);
 
   // Searching or resizing should always land you back on the first page,
   // otherwise a narrowed result set can look empty.
   useEffect(() => {
     setPage(1);
-  }, [search, pageSize, columnFilters]);
+  }, [search, pageSize, columnFilters, activeFilter, scope, leaveFilter]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
     try {
-      const result = await techniciansService.refreshFromFsm();
-      const removed = (result?.removed?.deleted?.length ?? 0) + (result?.removed?.referenced?.length ?? 0);
-      toast.success(
-        `Synced ${result?.resources?.length ?? 0} technicians from Zoho FSM` +
-        (removed > 0 ? ` (${removed} no longer listed)` : ""),
-      );
+      if (access.complianceEdit) {
+        // Runs Scheduling's sync, then the C3 site check.
+        await complianceService.refreshRoster();
+        toast.success("Synced technicians and sites from Zoho FSM");
+      } else {
+        const result = await techniciansService.refreshFromFsm();
+        const removed = (result?.removed?.deleted?.length ?? 0) + (result?.removed?.referenced?.length ?? 0);
+        toast.success(
+          `Synced ${result?.resources?.length ?? 0} technicians from Zoho FSM` +
+          (removed > 0 ? ` (${removed} no longer listed)` : ""),
+        );
+      }
       window.location.reload();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to refresh technicians");
@@ -351,7 +524,60 @@ export default function SchedulingDashboard({ technicians }: Props) {
   // placeholder), so after "set for all" it reads back what was set instead of
   // snapping to its label.
   const [showAllSelected, setShowAllSelected] = useState(false);
-  const selectedTechs = useMemo(() => techs.filter((t) => selected.has(t.fsm_resource_id)), [techs, selected]);
+  // Only ticked people still shown count: a filter change never leaves a
+  // hidden person inside a bulk edit.
+  const visibleKeys = useMemo(() => new Set(visiblePeople.map((p) => p.key)), [visiblePeople]);
+  const selectedTechs = useMemo(
+    () => techs.filter((t) => selected.has(t.fsm_resource_id) && visibleKeys.has(t.fsm_resource_id)),
+    [techs, selected, visibleKeys],
+  );
+  const selectedPeople = useMemo(() => visiblePeople.filter((p) => selected.has(p.key)), [visiblePeople, selected]);
+  const selectedEmployees = useMemo(
+    () => selectedPeople.map((p) => p.employee).filter((e): e is EmployeeRecord => Boolean(e)),
+    [selectedPeople],
+  );
+  const notInFsmSelected = selectedPeople.length - selectedTechs.length;
+  const commonEmployeeValue = (pick: (e: EmployeeRecord) => string | null | undefined) => {
+    const values = new Set(selectedEmployees.map((e) => pick(e) ?? ""));
+    return values.size === 1 ? [...values][0] : null;
+  };
+  const designationOptions = useMemo(
+    () => [{ value: "", label: "— Designation —" }, ...designations.map((d) => ({ value: d.id, label: d.name }))],
+    [designations],
+  );
+  const nationalityOptions = useMemo(
+    () => [{ value: "", label: "— Nationality —" }, ...nationalities.map((n) => ({ value: n.id, label: n.name }))],
+    [nationalities],
+  );
+  const STATUS_OPTIONS = [{ value: "", label: "— Status —" }, ...EMPLOYMENT_STATUSES.map((s) => ({ value: s, label: EMPLOYMENT_STATUS_LABEL[s] }))];
+  const [savingEmployees, setSavingEmployees] = useState(false);
+  // 13-7 decision 4: compliance fields in bulk, each employee through the
+  // ordinary update, so the FSM status rule and the audit apply
+  // to each. A refusal names the person and the rest still go through.
+  const applyEmployeeBulk = async (
+    patch: { designation_id?: string | null; nationality_id?: string | null; employment_status?: ComplianceEmploymentStatus },
+    what: string,
+    valueLabel?: string,
+  ) => {
+    setSavingEmployees(true);
+    const failed: string[] = [];
+    // Five at a time: each update checks and audits on its own (about 4 s
+    // each), so one by one a large selection took minutes.
+    for (let i = 0; i < selectedEmployees.length; i += 5) {
+      await Promise.all(
+        selectedEmployees.slice(i, i + 5).map((e) =>
+          complianceService.updateEmployee(e.id, patch).catch((error) => {
+            failed.push(`${e.full_name}: ${error instanceof Error ? error.message : "failed"}`);
+          }),
+        ),
+      );
+    }
+    setSavingEmployees(false);
+    await loadEmployees();
+    const done = selectedEmployees.length - failed.length;
+    if (done > 0) toast.success(`${what} set to ${valueLabel ?? "blank"} for ${done} employee${done === 1 ? "" : "s"}`);
+    if (failed.length) toast.error(`${failed.length} not changed. ${failed.slice(0, 3).join("; ")}${failed.length > 3 ? " …" : ""}`, { duration: 10000 });
+  };
   const commonValue = (pick: (t: TechnicianReference) => string | null | undefined) => {
     const values = new Set(selectedTechs.map((t) => pick(t) ?? ""));
     return values.size === 1 ? [...values][0] : null; // null = mixed
@@ -377,7 +603,8 @@ export default function SchedulingDashboard({ technicians }: Props) {
     setShowAllSelected(false);
   };
   const applyBulk = async (attrs: TechnicianAttributeUpdate, what: string, valueLabel?: string) => {
-    const ids = [...selected];
+    // People not in FSM are skipped: only FSM technicians hold these fields.
+    const ids = selectedTechs.map((t) => t.fsm_resource_id);
     if (!(await applyAttributes(ids, attrs))) return;
     const who = `${ids.length} technician${ids.length === 1 ? "" : "s"}`;
     toast.success(valueLabel ? `${what} set to ${valueLabel} for ${who}` : `${what} cleared for ${who}`, {
@@ -409,6 +636,8 @@ export default function SchedulingDashboard({ technicians }: Props) {
         if (attrs.hiddenFromLists !== undefined) next.hidden_from_lists = attrs.hiddenFromLists;
         if ("restWeekdays" in attrs) next.rest_weekdays = attrs.restWeekdays ?? null;
         if ("dailyHours" in attrs) next.daily_hours = attrs.dailyHours ?? null;
+        if ("weeklyHours" in attrs) next.weekly_hours = attrs.weeklyHours ?? null;
+        if ("offDaysPerWeek" in attrs) next.off_days_per_week = attrs.offDaysPerWeek ?? null;
         return next;
       }),
     );
@@ -432,33 +661,46 @@ export default function SchedulingDashboard({ technicians }: Props) {
 
   // Everything that matches the search and the column filters, across every
   // page: filter first, then tick the box, then edit in bulk.
-  const allVisibleSelected =
-    visibleTechnicians.length > 0 && visibleTechnicians.every((t) => selected.has(t.fsm_resource_id));
-  const toggleSelectAll = () =>
-    setSelected(allVisibleSelected ? new Set<string>() : new Set(visibleTechnicians.map((t) => t.fsm_resource_id)));
+  const allVisibleSelected = visiblePeople.length > 0 && visiblePeople.every((p) => selected.has(p.key));
+  const toggleSelectAll = () => setSelected(allVisibleSelected ? new Set<string>() : new Set(visiblePeople.map((p) => p.key)));
 
-  const selectedIds = [...selected];
+  const selectedIds = selectedTechs.map((t) => t.fsm_resource_id);
+  const fsmCount = techs.length;
+  const columnCount = 3 + (access.compliance ? 1 : 0) + (access.scheduling ? FILTER_COLUMNS.length : 0);
+  const notInFsmCount = people.filter((p) => !p.tech && !p.employee?.technician).length;
+  const needsMaherCount = people.filter((p) => p.tech && !p.employee).length;
 
   return (
     <>
       <div className="flex flex-col gap-4">
         <PageHeading
-          eyebrow="Scheduling"
-          title="Technicians & leave"
-          description={`${techs.length} technicians synced from Zoho FSM. Set role, service, shift, supervisor, tags, and leave.`}
+          eyebrow="Workforce"
+          title="People"
+          description={[
+            access.scheduling ? `${fsmCount} in FSM` : null,
+            access.compliance ? `${employees.length} employees` : null,
+            access.compliance ? `${notInFsmCount} not in FSM` : null,
+            access.scheduling && access.compliance ? `${needsMaherCount} need a Maher ID` : null,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
           actions={
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm">
-                  <Settings2 className="size-4" /> Manage lists
+            <div className="flex items-center gap-2">
+              {access.lists && (
+                <Button asChild variant="outline" size="sm">
+                  <Link href="/settings/workforce">
+                    <Settings2 className="size-4" /> Lists
+                  </Link>
                 </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onSelect={() => setManageList("roles")}>Roles</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setManageList("services")}>Service types</DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setManageList("tags")}>Tags</DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+              )}
+              {access.complianceCreate && (
+                <Button asChild size="sm">
+                  <Link href="/compliance/employees/new">
+                    <Plus className="size-4" /> New employee
+                  </Link>
+                </Button>
+              )}
+            </div>
           }
         />
 
@@ -467,20 +709,76 @@ export default function SchedulingDashboard({ technicians }: Props) {
           <div className="relative w-full max-w-xs">
             <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2" />
             <Input
-              placeholder="Search technicians..."
+              placeholder="Search name or Maher ID..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="pl-9"
-              aria-label="Search technicians"
+              aria-label="Search people"
             />
           </div>
+          {complianceFilter && (
+            <Button asChild variant="outline" size="sm">
+              <Link href="/workforce">
+                <X className="size-3.5" />
+                Compliance filter: {Object.values(complianceFilter).join(", ").replaceAll("_", " ")} · {visiblePeople.length} shown
+              </Link>
+            </Button>
+          )}
           {activeFilterCount > 0 && (
             <Button variant="outline" size="sm" onClick={() => setColumnFilters({})}>
               <X className="size-3.5" />
-              Clear {activeFilterCount} column filter{activeFilterCount === 1 ? "" : "s"} · {visibleTechnicians.length} shown
+              Clear {activeFilterCount} column filter{activeFilterCount === 1 ? "" : "s"} · {visiblePeople.length} shown
             </Button>
           )}
           <div className="flex items-center gap-2">
+            {/* FR-23: active technicians by default; inactive ones (resigned
+                in FSM) stay reachable for their history. */}
+            {access.scheduling && access.compliance && (
+              <UiSelect value={scope} onValueChange={(v) => setScope(v as Scope)}>
+                <SelectTrigger size="sm" className="h-8 w-max" aria-label="Who to show">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {SCOPES.map((s) => (
+                    <SelectItem key={s.value} value={s.value}>
+                      {s.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </UiSelect>
+            )}
+            <UiSelect
+              value={leaveFilter}
+              onValueChange={(v) => {
+                setLeaveFilter(v as LeaveFilter);
+                const params = new URLSearchParams(window.location.search);
+                if (v === "any") params.delete("leave");
+                else params.set("leave", v);
+                const query = params.toString();
+                window.history.replaceState(window.history.state, "", query ? `/workforce?${query}` : "/workforce");
+              }}
+            >
+              <SelectTrigger size="sm" className="h-8 w-max" aria-label="Who is on leave">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {LEAVE_FILTERS.map((f) => (
+                  <SelectItem key={f.value} value={f.value}>
+                    {f.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </UiSelect>
+            <UiSelect value={activeFilter} onValueChange={(v) => setActiveFilter(v as typeof activeFilter)}>
+              <SelectTrigger size="sm" className="h-8 w-max" aria-label="Active or inactive technicians">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="active">Active</SelectItem>
+                <SelectItem value="inactive">Inactive</SelectItem>
+                <SelectItem value="all">Active and inactive</SelectItem>
+              </SelectContent>
+            </UiSelect>
             {/* A native <select> was the one control on this page that did
                 not match the rest of the app; this is the same Select used
                 everywhere else. */}
@@ -496,7 +794,7 @@ export default function SchedulingDashboard({ technicians }: Props) {
                 ))}
               </SelectContent>
             </UiSelect>
-            <Button size="sm" className="h-8" onClick={handleRefresh} disabled={refreshing}>
+            <Button size="sm" className="h-8" onClick={handleRefresh} disabled={refreshing || (!access.scheduling && !access.complianceEdit)}>
               <RefreshCw className={cn("size-4", refreshing && "animate-spin")} />
               {refreshing ? "Syncing..." : "Refresh"}
             </Button>
@@ -504,34 +802,34 @@ export default function SchedulingDashboard({ technicians }: Props) {
         </div>
 
         {/* Bulk edit bar (#15) — appears when technicians are selected. */}
-        {selectedTechs.length > 0 && (
+        {selectedPeople.length > 0 && (
           <div className="border-primary/40 bg-primary/5 flex flex-col gap-2 rounded-md border p-2.5">
             {/* Who is selected, each removable; Clear is a real button. */}
             <div className="flex flex-wrap items-center gap-1.5">
-              <span className="text-sm font-medium">{selectedTechs.length} selected</span>
-              {(showAllSelected ? selectedTechs : selectedTechs.slice(0, 6)).map((t) => (
+              <span className="text-sm font-medium">{selectedPeople.length} selected</span>
+              {(showAllSelected ? selectedPeople : selectedPeople.slice(0, 6)).map((p) => (
                 <span
-                  key={t.fsm_resource_id}
+                  key={p.key}
                   className="bg-background inline-flex items-center gap-1 rounded-full border py-0.5 pr-1 pl-2 text-xs"
                 >
-                  {t.display_name}
+                  {p.name}
                   <button
                     type="button"
-                    onClick={() => deselect(t.fsm_resource_id)}
+                    onClick={() => deselect(p.key)}
                     className="text-muted-foreground hover:bg-muted hover:text-foreground rounded-full p-0.5"
-                    aria-label={`Deselect ${t.display_name}`}
+                    aria-label={`Deselect ${p.name}`}
                   >
                     <X className="size-3" />
                   </button>
                 </span>
               ))}
-              {selectedTechs.length > 6 && (
+              {selectedPeople.length > 6 && (
                 <button
                   type="button"
                   onClick={() => setShowAllSelected((v) => !v)}
                   className="text-primary text-xs hover:underline"
                 >
-                  {showAllSelected ? "Show fewer" : `+${selectedTechs.length - 6} more`}
+                  {showAllSelected ? "Show fewer" : `+${selectedPeople.length - 6} more`}
                 </button>
               )}
               <Button size="sm" variant="outline" className="ml-auto h-8" onClick={clearSelection}>
@@ -540,8 +838,11 @@ export default function SchedulingDashboard({ technicians }: Props) {
               </Button>
             </div>
             {/* Set for all. Each dropdown shows what the selection currently shares. */}
+            {access.scheduling && selectedTechs.length > 0 && (
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-muted-foreground text-xs">Set for all:</span>
+              <span className="text-muted-foreground text-xs">
+                Scheduling, {selectedTechs.length} in FSM{notInFsmSelected > 0 ? ` (${notInFsmSelected} not in FSM skipped)` : ""}:
+              </span>
               <Select
                 ariaLabel="Set role"
                 value={bulk.role ?? ""}
@@ -577,7 +878,57 @@ export default function SchedulingDashboard({ technicians }: Props) {
                 }
               />
               <BulkTagMenu tags={tags} selectedIds={selectedIds} onChanged={loadAll} />
+              {/* FR-21: one leave period for everyone ticked, e.g. a Public
+                  Holiday for the whole team. Inactive technicians are skipped. */}
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8"
+                onClick={() => setBulkLeaveOpen(true)}
+                disabled={!selectedTechs.some((t) => t.is_active)}
+              >
+                <Plus className="size-3.5" /> Add leave
+              </Button>
             </div>
+            )}
+            {access.complianceEdit && selectedEmployees.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-muted-foreground text-xs">
+                  Compliance, {selectedEmployees.length} employee{selectedEmployees.length === 1 ? "" : "s"}
+                  {selectedPeople.length > selectedEmployees.length ? ` (${selectedPeople.length - selectedEmployees.length} with no employee record skipped)` : ""}:
+                </span>
+                {(() => {
+                  const d = commonEmployeeValue((e) => e.designation?.id);
+                  const n = commonEmployeeValue((e) => e.nationality?.id);
+                  const s = commonEmployeeValue((e) => e.stored_employment_status);
+                  return (
+                    <>
+                      <Select
+                        ariaLabel="Set designation"
+                        value={d ?? ""}
+                        options={bulkOptions(designationOptions, d)}
+                        onChange={(v) => v && applyEmployeeBulk({ designation_id: v }, "Designation", designationOptions.find((o) => o.value === v)?.label)}
+                      />
+                      <Select
+                        ariaLabel="Set nationality"
+                        value={n ?? ""}
+                        options={bulkOptions(nationalityOptions, n)}
+                        onChange={(v) => v && applyEmployeeBulk({ nationality_id: v }, "Nationality", nationalityOptions.find((o) => o.value === v)?.label)}
+                      />
+                      <Select
+                        ariaLabel="Set employment status"
+                        value={s ?? ""}
+                        options={bulkOptions(STATUS_OPTIONS, s)}
+                        onChange={(v) =>
+                          v && applyEmployeeBulk({ employment_status: v as ComplianceEmploymentStatus }, "Status", STATUS_OPTIONS.find((o) => o.value === v)?.label)
+                        }
+                      />
+                      {savingEmployees && <Loader2 className="text-muted-foreground size-4 animate-spin" />}
+                    </>
+                  );
+                })()}
+              </div>
+            )}
           </div>
         )}
 
@@ -589,12 +940,13 @@ export default function SchedulingDashboard({ technicians }: Props) {
                   <Checkbox
                     checked={allVisibleSelected}
                     onCheckedChange={toggleSelectAll}
-                    aria-label={`Select all ${visibleTechnicians.length} matching technicians`}
-                    title={`Select all ${visibleTechnicians.length} matching technicians`}
+                    aria-label={`Select all ${visiblePeople.length} matching people`}
+                    title={`Select all ${visiblePeople.length} matching people`}
                   />
                 </TableHead>
-                <TableHead>Technician</TableHead>
-                {FILTER_COLUMNS.map((column) => (
+                <TableHead>Person</TableHead>
+                {access.compliance && <TableHead>Employee</TableHead>}
+                {access.scheduling && FILTER_COLUMNS.map((column) => (
                   <TableHead key={column}>
                     <span className="flex items-center gap-1">
                       {FILTER_LABELS[column]}
@@ -614,14 +966,14 @@ export default function SchedulingDashboard({ technicians }: Props) {
               {loading ? (
                 // Skeleton rows mirror the real row shape so nothing reflows
                 // when the data lands.
-                Array.from({ length: 5 }).map((_, i) => <TechnicianRowSkeleton key={i} columns={9} />)
+                Array.from({ length: 5 }).map((_, i) => <TechnicianRowSkeleton key={i} columns={columnCount} />)
               ) : pageRows.length === 0 ? (
                 <TableRow className="hover:bg-transparent">
-                  <TableCell colSpan={9} className="p-0">
+                  <TableCell colSpan={columnCount} className="p-0">
                     <EmptyState
                       className="border-0"
                       icon={<UsersRound className="size-5" />}
-                      title={search ? "No matching technicians" : "No technicians yet"}
+                      title={search ? "No matching people" : "Nobody here yet"}
                       description={
                         search
                           ? `Nothing matches “${search}”. Try a different name, or clear the search.`
@@ -636,7 +988,71 @@ export default function SchedulingDashboard({ technicians }: Props) {
                   </TableCell>
                 </TableRow>
               ) : (
-                pageRows.map((technician) => {
+                pageRows.map((person) => {
+                  const technician = person.tech;
+                  const employee = person.employee;
+                  const employeeCell = access.compliance ? (
+                    <TableCell>
+                      {employee ? (
+                        <div className="flex flex-col">
+                          <span className="text-sm">{employee.designation?.name ?? <Unset />}</span>
+                          <span className="text-muted-foreground text-xs">
+                            {employee.maher_id} · {EMPLOYMENT_STATUS_LABEL[employee.employment_status]}
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="text-muted-foreground text-xs">No employee record</span>
+                      )}
+                    </TableCell>
+                  ) : null;
+                  if (!technician) {
+                    // Not in FSM (or no Scheduling access): compliance only.
+                    return (
+                      <TableRow key={person.key} data-state={selected.has(person.key) ? "selected" : undefined}>
+                        <TableCell>
+                          <Checkbox
+                            checked={selected.has(person.key)}
+                            onCheckedChange={() => toggleSelect(person.key)}
+                            aria-label={`Select ${person.name}`}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <Link href={personHref(person)} className="hover:underline">
+                            <TechnicianIdentity
+                              name={person.name}
+                              subtitle={employee?.technician ? `FSM: ${employee.technician.display_name}` : "Not in FSM"}
+                              seed={person.key}
+                              inactive={!!employee && !ACTIVE_STATUSES.includes(employee.employment_status)}
+                            />
+                          </Link>
+                        </TableCell>
+                        {employeeCell}
+                        {access.scheduling && (
+                          <>
+                            <TableCell colSpan={FILTER_COLUMNS.length - 1}>
+                              <span className="text-muted-foreground text-xs">Not in FSM, not scheduled</span>
+                            </TableCell>
+                            <TableCell>
+                              {(() => {
+                                const leave = leaveOfPerson(person);
+                                return (
+                                  <AvailabilityCell
+                                    state={leave ? (leave.current ? "on-leave" : "upcoming") : "available"}
+                                    detail={leave ? `${leave.record.leave_type} · ${formatZonedDate(leave.record.start_at)} – ${formatZonedDate(leave.record.end_at)}` : undefined}
+                                  />
+                                );
+                              })()}
+                            </TableCell>
+                          </>
+                        )}
+                        <TableCell className="text-right">
+                          <Button asChild size="sm" variant="ghost">
+                            <Link href={personHref(person)}>Open</Link>
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  }
                   const leave = nearestActiveLeave(leaveByTechnician.get(technician.fsm_resource_id) ?? []);
                   const technicianTags = assignments[technician.fsm_resource_id] ?? [];
                   const id = technician.fsm_resource_id;
@@ -655,13 +1071,17 @@ export default function SchedulingDashboard({ technicians }: Props) {
                         />
                       </TableCell>
                       <TableCell>
-                        <TechnicianIdentity
-                          name={technician.display_name}
-                          subtitle={technicianSubtitle(technician)}
-                          seed={id}
-                          inactive={!technician.is_active}
-                        />
+                        <Link href={personHref(person)} className="hover:underline">
+                          <TechnicianIdentity
+                            name={technician.display_name}
+                            subtitle={employee ? employee.maher_id : access.compliance ? "Needs a Maher ID" : id}
+                            seed={id}
+                            inactive={!technician.is_active}
+                            inactiveSince={technician.deactivated_at ?? null}
+                          />
+                        </Link>
                       </TableCell>
+                      {employeeCell}
                       <TableCell>
                         <RoleCell name={technician.role_name} />
                       </TableCell>
@@ -709,11 +1129,20 @@ export default function SchedulingDashboard({ technicians }: Props) {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            <DropdownMenuItem onSelect={() => setActiveTechnician(technician)}>
-                              <SlidersHorizontal className="size-4" /> Edit attributes
+                            <DropdownMenuItem asChild>
+                              <Link href={personHref(person)}>
+                                <UsersRound className="size-4" /> Open profile
+                              </Link>
                             </DropdownMenuItem>
                             <DropdownMenuSeparator />
-                            <DropdownMenuItem onSelect={() => setActiveTechnician(technician)}>
+                            <DropdownMenuItem onSelect={() => setActiveTechnician({ technician, view: "attributes" })}>
+                              <SlidersHorizontal className="size-4" /> Edit attributes
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onSelect={() => setActiveTechnician({ technician, view: "hours" })}>
+                              <Clock className="size-4" /> Working hours
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem onSelect={() => setActiveTechnician({ technician, view: "leave" })}>
                               <Plus className="size-4" /> Add leave
                             </DropdownMenuItem>
                           </DropdownMenuContent>
@@ -730,7 +1159,7 @@ export default function SchedulingDashboard({ technicians }: Props) {
           {!loading && total > 0 && (
             <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3">
               <p className="text-muted-foreground text-sm">
-                Showing {pageStart + 1} to {Math.min(pageStart + pageSize, total)} of {total} technicians
+                Showing {pageStart + 1} to {Math.min(pageStart + pageSize, total)} of {total} people
               </p>
               <div className="flex items-center gap-1">
                 <Button
@@ -757,54 +1186,28 @@ export default function SchedulingDashboard({ technicians }: Props) {
           )}
         </div>
 
-        {manageList === "tags" && (
-          <ManageListDialog
-            title="Manage Tags"
-            noun="tag"
-            items={tags}
-            onCreate={(n) => tagsService.createTag(n)}
-            onRename={(id, n) => tagsService.updateTag(id, n)}
-            onDelete={(id) => tagsService.deleteTag(id).then(() => undefined)}
-            onOpenChange={(o) => !o && setManageList(null)}
-            onChanged={loadAll}
-          />
-        )}
-        {manageList === "roles" && (
-          <ManageListDialog
-            title="Manage Roles"
-            noun="role"
-            items={roles}
-            colorable
-            onCreate={(n) => rolesService.create(n)}
-            onRename={(id, n, c) => rolesService.update(id, n, c)}
-            onDelete={(id) => rolesService.remove(id).then(() => undefined)}
-            onOpenChange={(o) => !o && setManageList(null)}
-            onChanged={loadAll}
-          />
-        )}
-        {manageList === "services" && (
-          <ManageListDialog
-            title="Manage Service Types"
-            noun="service type"
-            items={services}
-            onCreate={(n) => serviceTypesService.create(n)}
-            onRename={(id, n) => serviceTypesService.update(id, n)}
-            onDelete={(id) => serviceTypesService.remove(id).then(() => undefined)}
-            onOpenChange={(o) => !o && setManageList(null)}
+        {bulkLeaveOpen && (
+          <BulkLeaveDialog
+            technicians={selectedTechs.filter((t) => t.is_active)}
+            leaveTypes={leaveTypes.map((t) => t.name)}
+            onOpenChange={(open) => !open && setBulkLeaveOpen(false)}
             onChanged={loadAll}
           />
         )}
 
         {activeTechnician && (
           <ManageTechnicianDialog
-            technician={techs.find((t) => t.fsm_resource_id === activeTechnician.fsm_resource_id) ?? activeTechnician}
+            key={`${activeTechnician.technician.fsm_resource_id}-${activeTechnician.view}`}
+            view={activeTechnician.view}
+            technician={techs.find((t) => t.fsm_resource_id === activeTechnician.technician.fsm_resource_id) ?? activeTechnician.technician}
             tags={tags}
+            leaveTypes={leaveTypes.map((t) => t.name)}
             roleOptions={roleOptions}
             serviceOptions={serviceOptions}
-            supervisorOptions={supervisorOptions.filter((o) => o.value !== activeTechnician.fsm_resource_id)}
-            assignedTags={assignments[activeTechnician.fsm_resource_id] ?? []}
-            leaveRecords={leaveRecords.filter((r) => r.technician_fsm_id === activeTechnician.fsm_resource_id)}
-            onApplyAttributes={(attrs) => applyAttributes([activeTechnician.fsm_resource_id], attrs)}
+            supervisorOptions={supervisorOptions.filter((o) => o.value !== activeTechnician.technician.fsm_resource_id)}
+            assignedTags={assignments[activeTechnician.technician.fsm_resource_id] ?? []}
+            leaveRecords={leaveRecords.filter((r) => r.technician_fsm_id === activeTechnician.technician.fsm_resource_id)}
+            onApplyAttributes={(attrs) => applyAttributes([activeTechnician.technician.fsm_resource_id], attrs)}
             onOpenChange={(open) => !open && setActiveTechnician(null)}
             onChanged={loadAll}
           />
@@ -1062,7 +1465,7 @@ function RoleColorPicker({
   );
 }
 
-function ManageListDialog({
+export function ManageListDialog({
   title,
   noun,
   items,
@@ -1072,6 +1475,13 @@ function ManageListDialog({
   onOpenChange,
   onChanged,
   colorable,
+  countNoun,
+  description,
+  deleteDescription,
+  inline,
+  canAdd = true,
+  canEdit = true,
+  canDelete = true,
 }: {
   title: string;
   noun: string;
@@ -1079,10 +1489,20 @@ function ManageListDialog({
   onCreate: (name: string) => Promise<unknown>;
   onRename: (id: string, name: string, color?: string | null) => Promise<unknown>;
   onDelete: (id: string) => Promise<void>;
-  onOpenChange: (open: boolean) => void;
+  onOpenChange?: (open: boolean) => void;
   onChanged: () => void;
   // FR-2: when set, each item gets a highlight-colour swatch (roles).
   colorable?: boolean;
+  // What technician_count counts, when it is not technicians (FR-21: leave records).
+  countNoun?: string;
+  description?: string;
+  deleteDescription?: (item: ListItem) => string;
+  // Settings → Workforce (31 Oct 2026): the same editor on the page, no dialog.
+  inline?: boolean;
+  // Hide what the list's route would refuse (default: everything allowed).
+  canAdd?: boolean;
+  canEdit?: boolean;
+  canDelete?: boolean;
 }) {
   const [newName, setNewName] = useState("");
   const [saving, setSaving] = useState(false);
@@ -1151,19 +1571,12 @@ function ManageListDialog({
     }
   };
 
-  return (
+  const explanation =
+    description ??
+    `These options appear wherever a ${noun} can be chosen. Renaming one updates it everywhere; deleting clears it from any technician that had it.`;
+  const body = (
     <>
-      <Dialog open onOpenChange={onOpenChange}>
-        <DialogContent className="w-[calc(100%-2rem)] sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>{title}</DialogTitle>
-            <DialogDescription>
-              These options appear wherever a {noun} can be chosen. Renaming one updates it everywhere;
-              deleting clears it from any technician that had it.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="flex gap-2">
+          {canAdd && <div className="flex gap-2">
             <Input
               placeholder={`New ${noun} name`}
               value={newName}
@@ -1173,9 +1586,9 @@ function ManageListDialog({
             <Button onClick={create} disabled={saving || !newName.trim()}>
               <Plus className="size-4" /> Add
             </Button>
-          </div>
+          </div>}
 
-          <div className="flex max-h-80 flex-col gap-2 overflow-y-auto">
+          <div className={cn("flex flex-col gap-2", !inline && "max-h-80 overflow-y-auto")}>
             {items.length === 0 && (
               <p className="text-muted-foreground rounded-md border border-dashed p-4 text-center text-sm">
                 No {noun}s yet. Add the first one above.
@@ -1195,37 +1608,63 @@ function ManageListDialog({
                 ) : (
                   <button
                     className="flex-1 text-left text-sm"
+                    disabled={!canEdit}
                     onClick={() => {
                       setEditingId(item.id);
                       setEditingName(item.name);
                     }}
                   >
                     {item.name}{" "}
-                    <span className="text-muted-foreground text-xs">({item.technician_count ?? 0} technicians)</span>
+                    <span className="text-muted-foreground text-xs">({item.technician_count ?? 0} {countNoun ?? "technicians"})</span>
                   </button>
                 )}
                 {colorable && (
                   <RoleColorPicker
                     name={item.name}
                     value={item.color ?? null}
-                    disabled={saving}
+                    disabled={saving || !canEdit}
                     onApply={(color) => changeColor(item, color)}
                   />
                 )}
-                <Button size="icon" variant="ghost" onClick={() => setDeleteTarget(item)}>
-                  <Trash2 className="text-destructive size-4" />
-                </Button>
+                {canDelete && (
+                  <Button size="icon" variant="ghost" onClick={() => setDeleteTarget(item)} aria-label={`Delete ${item.name}`}>
+                    <Trash2 className="text-destructive size-4" />
+                  </Button>
+                )}
               </div>
             ))}
           </div>
-        </DialogContent>
-      </Dialog>
+    </>
+  );
+
+  return (
+    <>
+      {inline ? (
+        <div className="flex flex-col gap-3">
+          <p className="text-muted-foreground text-sm">{explanation}</p>
+          {body}
+        </div>
+      ) : (
+        <Dialog open onOpenChange={onOpenChange}>
+          <DialogContent className="w-[calc(100%-2rem)] sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>{title}</DialogTitle>
+              <DialogDescription>{explanation}</DialogDescription>
+            </DialogHeader>
+            {body}
+          </DialogContent>
+        </Dialog>
+      )}
 
       <ConfirmationAlertDialog
         isOpen={!!deleteTarget}
         onOpenChange={(open) => !open && setDeleteTarget(null)}
         title={`Delete "${deleteTarget?.name}"?`}
-        description={`This clears the ${noun} from ${deleteTarget?.technician_count ?? 0} technician(s). This cannot be undone.`}
+        description={
+          deleteTarget && deleteDescription
+            ? deleteDescription(deleteTarget)
+            : `This clears the ${noun} from ${deleteTarget?.technician_count ?? 0} technician(s). This cannot be undone.`
+        }
         confirmText="Delete"
         variant="destructive"
         loading={saving}
@@ -1235,335 +1674,136 @@ function ManageListDialog({
   );
 }
 
-function ManageTechnicianDialog({
-  technician,
-  tags,
-  roleOptions,
-  serviceOptions,
-  supervisorOptions,
-  assignedTags,
-  leaveRecords,
-  onApplyAttributes,
+// FR-21: the Add Leave type picker. The free-text box it replaces let every
+// supervisor spell a type their own way; this offers the managed list only.
+function LeaveTypeSelect({
+  value,
+  onChange,
+  types,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  types: string[];
+}) {
+  if (types.length === 0) {
+    return (
+      <p className="text-muted-foreground rounded-md border border-dashed p-2 text-xs">
+        No leave types yet. Add Annual, Sick, Public Holiday and Offset under Settings → Workforce → Leave types.
+      </p>
+    );
+  }
+  return (
+    <UiSelect value={value} onValueChange={onChange}>
+      <SelectTrigger className="w-full" aria-label="Leave type">
+        <SelectValue placeholder="Leave type" />
+      </SelectTrigger>
+      <SelectContent>
+        {types.map((name) => (
+          <SelectItem key={name} value={name}>
+            {name}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </UiSelect>
+  );
+}
+
+// FR-21: one leave period for several technicians at once, which is how a
+// Public Holiday is entered for the whole team. One record per technician.
+function BulkLeaveDialog({
+  technicians,
+  leaveTypes,
   onOpenChange,
   onChanged,
 }: {
-  technician: TechnicianReference;
-  tags: TechnicianTag[];
-  roleOptions: { value: string; label: string }[];
-  serviceOptions: { value: string; label: string }[];
-  supervisorOptions: { value: string; label: string }[];
-  assignedTags: TechnicianTag[];
-  leaveRecords: LeaveRecord[];
-  onApplyAttributes: (attrs: TechnicianAttributeUpdate) => void;
+  technicians: TechnicianReference[];
+  leaveTypes: string[];
   onOpenChange: (open: boolean) => void;
   onChanged: () => void;
 }) {
-  const [assignedIds, setAssignedIds] = useState<Set<string>>(new Set(assignedTags.map((t) => t.id)));
-  const [busyTagId, setBusyTagId] = useState<string | null>(null);
-
-  const [leaveCategory, setLeaveCategory] = useState<LeaveCategory | "">("");
+  const [leaveType, setLeaveType] = useState("");
   const [startDate, setStartDate] = useState("");
   const [startTime, setStartTime] = useState("00:00");
   const [endDate, setEndDate] = useState("");
   const [endTime, setEndTime] = useState("23:30");
   const [notes, setNotes] = useState("");
-  const [savingLeave, setSavingLeave] = useState(false);
-  const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
 
-  // DEV-457: status and leaving date are saved together, because the
-  // database refuses "resigned" without a date.
-  const [employmentStatus, setEmploymentStatus] = useState<"active" | "resigned">(
-    technician.employment_status ?? "active",
-  );
-  const [leavingDate, setLeavingDate] = useState(technician.leaving_date ?? "");
-  const employmentChanged =
-    employmentStatus !== (technician.employment_status ?? "active") ||
-    leavingDate !== (technician.leaving_date ?? "");
-  const saveEmployment = () => {
-    if (employmentStatus === "resigned" && !leavingDate) {
-      toast.error("A resigned technician needs a leaving date");
-      return;
-    }
-    onApplyAttributes({ employmentStatus, leavingDate: leavingDate || null });
-  };
-  const restDays = new Set(technician.rest_weekdays ?? []);
-  const toggleRestDay = (day: number) => {
-    const next = new Set(restDays);
-    if (next.has(day)) next.delete(day);
-    else next.add(day);
-    onApplyAttributes({ restWeekdays: next.size > 0 ? [...next].sort((a, b) => a - b) : null });
-  };
-
-  const toggleTag = async (tagId: string) => {
-    if (busyTagId) return;
-    const currentlyAssigned = assignedIds.has(tagId);
-    setBusyTagId(tagId);
-    setAssignedIds((prev) => {
-      const next = new Set(prev);
-      if (currentlyAssigned) next.delete(tagId);
-      else next.add(tagId);
-      return next;
-    });
-    try {
-      if (currentlyAssigned) await tagsService.removeTag(technician.fsm_resource_id, tagId);
-      else await tagsService.assignTag(technician.fsm_resource_id, tagId);
-      onChanged();
-    } catch (error) {
-      setAssignedIds((prev) => {
-        const next = new Set(prev);
-        if (currentlyAssigned) next.add(tagId);
-        else next.delete(tagId);
-        return next;
-      });
-      toast.error(error instanceof Error ? error.message : "Failed to update tag");
-    } finally {
-      setBusyTagId(null);
-    }
-  };
-
-  const handleAddLeave = async () => {
-    if (!leaveCategory || !startDate || !endDate) {
+  const save = async () => {
+    if (!leaveType || !startDate || !endDate) {
       toast.error("Leave type, start date, and end date are required");
       return;
     }
-    setSavingLeave(true);
+    setSaving(true);
     try {
-      const { conflicts } = await leaveService.createLeave({
-        technicianFsmId: technician.fsm_resource_id,
-        leaveCategory,
+      const { records, conflicts, conflictsError } = await leaveService.createLeave({
+        technicianFsmIds: technicians.map((t) => t.fsm_resource_id),
+        leaveType,
         startAt: zonedTimeToUtc(startDate, startTime).toISOString(),
         endAt: zonedTimeToUtc(endDate, endTime).toISOString(),
         notes: notes.trim() || null,
       });
       toast.success(
-        conflicts.length > 0
-          ? `Leave saved — ${conflicts.length} existing assignment(s) now conflict on the schedule`
-          : "Leave saved",
+        `${leaveType} saved for ${records.length} technician${records.length === 1 ? "" : "s"}` +
+          (conflicts.length > 0 ? ` — ${conflicts.length} existing assignment(s) now conflict on the schedule` : "") +
+          (conflictsError ? " — the conflict check failed, so check the board for overlaps" : ""),
       );
-      setLeaveCategory("");
-      setStartDate("");
-      setEndDate("");
-      setNotes("");
       onChanged();
+      onOpenChange(false);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Failed to save leave");
     } finally {
-      setSavingLeave(false);
-    }
-  };
-
-  const handleCancelLeave = async (id: string) => {
-    setCancellingId(id);
-    try {
-      await leaveService.cancelLeave(id);
-      toast.success("Leave cancelled");
-      onChanged();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to cancel leave");
-    } finally {
-      setCancellingId(null);
+      setSaving(false);
     }
   };
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] w-[calc(100%-2rem)] overflow-y-auto sm:max-w-lg">
+      <DialogContent className="w-[calc(100%-2rem)] sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>{technician.display_name}</DialogTitle>
+          <DialogTitle>Add leave for {technicians.length} technician{technicians.length === 1 ? "" : "s"}</DialogTitle>
           <DialogDescription>
-            Role, service type, shift and supervisor are portal-only settings — they are never written back to
-            Zoho FSM. Tags and leave are managed here too.
+            The same type and period is recorded for each ticked technician. Use this for a Public Holiday.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid grid-cols-2 gap-3">
-          <label className="flex flex-col gap-1 text-xs font-medium">
-            Role
-            <Select value={technician.role_id ?? ""} options={roleOptions} onChange={(v) => onApplyAttributes({ roleId: v || null })} className="h-9" />
-          </label>
-          <label className="flex flex-col gap-1 text-xs font-medium">
-            Service type
-            <Select value={technician.service_type_id ?? ""} options={serviceOptions} onChange={(v) => onApplyAttributes({ serviceTypeId: v || null })} className="h-9" />
-          </label>
-          <label className="flex flex-col gap-1 text-xs font-medium">
-            Shift
-            <Select value={technician.shift ?? ""} options={SHIFT_OPTIONS} onChange={(v) => onApplyAttributes({ shift: (v || null) as "morning" | "night" | null })} className="h-9" />
-          </label>
-          <label className="flex flex-col gap-1 text-xs font-medium">
-            Supervisor
-            <Select value={technician.team_leader_fsm_id ?? ""} options={supervisorOptions} onChange={(v) => onApplyAttributes({ teamLeaderFsmId: v || null })} className="h-9" />
-          </label>
+        <div className="flex max-h-28 flex-wrap gap-1 overflow-y-auto">
+          {technicians.map((t) => (
+            <Badge key={t.fsm_resource_id} variant="secondary" className="font-normal">
+              {t.display_name}
+            </Badge>
+          ))}
         </div>
 
-        <div>
-          <p className="mb-2 text-sm font-medium">Employment</p>
-          <div className="grid grid-cols-2 gap-3">
+        <div className="flex flex-col gap-2">
+          <LeaveTypeSelect value={leaveType} onChange={setLeaveType} types={leaveTypes} />
+          <div className="grid grid-cols-2 gap-2">
             <label className="flex flex-col gap-1 text-xs font-medium">
-              Status
-              <Select
-                value={employmentStatus}
-                options={EMPLOYMENT_OPTIONS}
-                onChange={(v) => setEmploymentStatus(v === "resigned" ? "resigned" : "active")}
-                className="h-9"
-              />
+              Start date
+              <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
             </label>
             <label className="flex flex-col gap-1 text-xs font-medium">
-              Leaving date
-              <Input type="date" value={leavingDate} onChange={(e) => setLeavingDate(e.target.value)} className="h-9" />
+              Start time
+              <TimeSelect value={startTime} onChange={setStartTime} aria-label="Leave start time" />
+            </label>
+            <label className="flex flex-col gap-1 text-xs font-medium">
+              End date
+              <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+            </label>
+            <label className="flex flex-col gap-1 text-xs font-medium">
+              End time
+              <TimeSelect value={endTime} onChange={setEndTime} aria-label="Leave end time" />
             </label>
           </div>
-          <p className="text-muted-foreground mt-1.5 text-xs">
-            The first day they no longer work. From that day on they are left out of available hours, alerts and
-            compliance. Deactivate them in Zoho FSM as well.
-          </p>
-          {employmentChanged ? (
-            <Button size="sm" variant="outline" className="mt-2" onClick={saveEmployment}>
-              Save employment
-            </Button>
-          ) : null}
-        </div>
-
-        <div>
-          <p className="mb-2 text-sm font-medium">Weekly rest days</p>
-          <div className="flex flex-wrap gap-1.5">
-            {WEEKDAYS.map((day) => (
-              <button
-                key={day.value}
-                type="button"
-                aria-pressed={restDays.has(day.value)}
-                onClick={() => toggleRestDay(day.value)}
-                className={cn(
-                  "rounded-md border px-2.5 py-1 text-sm transition-colors",
-                  restDays.has(day.value) ? "border-primary bg-primary/10" : "hover:bg-muted/50",
-                )}
-              >
-                {day.label}
-              </button>
-            ))}
-          </div>
-          <p className="text-muted-foreground mt-1.5 text-xs">
-            Not counted as available hours. Everyone has one day off in seven: until it is ticked, the reports count 6 of
-            every 7 days.
-          </p>
-        </div>
-
-        <div>
-          <p className="mb-2 text-sm font-medium">Working hours a day</p>
-          <Select
-            value={technician.daily_hours ? String(technician.daily_hours) : STANDARD_DAY}
-            onChange={(v) => onApplyAttributes({ dailyHours: v === STANDARD_DAY ? null : Number(v) })}
-            options={[
-              { value: STANDARD_DAY, label: "Standard day (8 h)" },
-              ...DAILY_HOURS.map((h) => ({ value: String(h), label: `${h} hours` })),
-            ]}
-            className="w-56"
-            ariaLabel="Working hours a day"
-          />
-          <p className="text-muted-foreground mt-1.5 text-xs">
-            Available hours for each working day, without breaks. 12 hours for data centre staff on long shifts.
-          </p>
-        </div>
-
-        <label className="flex items-start gap-2.5 text-sm">
-          <Checkbox
-            checked={technician.hidden_from_lists === true}
-            onCheckedChange={(checked) => onApplyAttributes({ hiddenFromLists: checked === true })}
-            className="mt-0.5"
-          />
-          <span>
-            <span className="font-medium">Hide from lists</span>
-            <span className="text-muted-foreground block text-xs">
-              For test and dev accounts: kept off the schedule board and its pickers. Still listed here.
-            </span>
-          </span>
-        </label>
-
-        <div>
-          <p className="mb-2 text-sm font-medium">Tags</p>
-          <div className="flex max-h-40 flex-col gap-1 overflow-y-auto">
-            {tags.length === 0 && <p className="text-muted-foreground text-sm">No tags created yet.</p>}
-            {tags.map((tag) => {
-              const selected = assignedIds.has(tag.id);
-              return (
-                <button
-                  key={tag.id}
-                  type="button"
-                  onClick={() => toggleTag(tag.id)}
-                  disabled={busyTagId === tag.id}
-                  className={`flex items-center justify-between gap-2 rounded-md border px-2.5 py-1.5 text-left text-sm transition-colors disabled:opacity-60 ${selected ? "border-primary bg-primary/10" : "hover:bg-muted/50"
-                    }`}
-                >
-                  <span>{tag.name}</span>
-                  {busyTagId === tag.id ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : selected ? (
-                    <Check className="text-primary size-4" />
-                  ) : null}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        <div>
-          <p className="mb-2 text-sm font-medium">Leave</p>
-          <div className="mb-3 flex max-h-32 flex-col gap-1 overflow-y-auto">
-            {leaveRecords.length === 0 && <p className="text-muted-foreground text-sm">No leave records.</p>}
-            {leaveRecords.map((record) => (
-              <div key={record.id} className="flex items-center justify-between gap-2 rounded-md border p-2 text-sm">
-                <div>
-                  <span className="font-medium">{record.leave_type}</span>{" "}
-                  <span className="text-muted-foreground text-xs">
-                    {formatZonedDate(record.start_at)} – {formatZonedDate(record.end_at)}
-                  </span>{" "}
-                  <StatusBadge status={record.status} />
-                </div>
-                {record.status === "active" && (
-                  <Hint label="Cancel leave">
-                    <span tabIndex={0} className="inline-flex">
-                      <Button aria-label="Cancel leave" size="icon" variant="ghost" disabled={cancellingId === record.id} onClick={() => handleCancelLeave(record.id)}>
-                        <X className="size-4" />
-                      </Button>
-                    </span>
-                  </Hint>
-                )}
-              </div>
-            ))}
-          </div>
-
-          <div className="flex flex-col gap-2">
-            <Select
-              ariaLabel="Leave type"
-              value={leaveCategory}
-              options={LEAVE_TYPE_OPTIONS}
-              onChange={(v) => setLeaveCategory(v as LeaveCategory | "")}
-              className="h-9"
-            />
-            <div className="grid grid-cols-2 gap-2">
-              <label className="flex flex-col gap-1 text-xs font-medium">
-                Start date
-                <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
-              </label>
-              <label className="flex flex-col gap-1 text-xs font-medium">
-                Start time
-                <TimeSelect value={startTime} onChange={setStartTime} aria-label="Leave start time" />
-              </label>
-              <label className="flex flex-col gap-1 text-xs font-medium">
-                End date
-                <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
-              </label>
-              <label className="flex flex-col gap-1 text-xs font-medium">
-                End time
-                <TimeSelect value={endTime} onChange={setEndTime} aria-label="Leave end time" />
-              </label>
-            </div>
-            <Input placeholder="Notes (optional)" value={notes} onChange={(e) => setNotes(e.target.value)} />
-          </div>
+          <Input placeholder="Notes (optional)" value={notes} onChange={(e) => setNotes(e.target.value)} />
         </div>
 
         <DialogFooter>
-          <Button onClick={handleAddLeave} disabled={savingLeave}>
-            {savingLeave && <Loader2 className="size-4 animate-spin" />}
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
+            Cancel
+          </Button>
+          <Button onClick={save} disabled={saving || technicians.length === 0}>
+            {saving && <Loader2 className="size-4 animate-spin" />}
             Add Leave
           </Button>
         </DialogFooter>

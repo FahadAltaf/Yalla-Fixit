@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useSearchParams } from "next/navigation";
 import {
   CheckCheck,
   ChevronDown,
@@ -51,16 +50,29 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { fsmRecordLink } from "@/lib/fsm-links";
-import { INVOICE_STATUS_LABELS, withoutVat, withVat } from "@/lib/finance/line-status";
-import { PROGRESS_PURPOSE_LABELS, isNonBillable, isVoid, type ProgressPurpose } from "@/lib/finance/progress";
+import { INVOICE_STATUS_LABELS, QUEUE_STATUS_LABELS, invoiceTotals, withVat } from "@/lib/finance/line-status";
+import {
+  COMPLETION_LABELS,
+  PROGRESS_PURPOSE_LABELS,
+  isCancelledOrClosed,
+  isEnded,
+  isNonBillable,
+  isVoid,
+  lineCompletion,
+  workOrderCompletion,
+  type ProgressPurpose,
+} from "@/lib/finance/progress";
 import type { LiveAttachment, LiveServiceReport } from "@/lib/server/finance/fsm-live";
 import { formatZonedDate, formatZonedDateTime, todayInZone } from "@/lib/scheduling/org-time";
+import type { FsmCompletionResult } from "@/lib/server/finance/fsm-completion";
+import type { QueryList, QuerySide } from "@/lib/server/finance/queries";
 import type { WorkOrderAbilities } from "@/lib/server/finance/route-helpers";
 import type { WorkOrderDetail, WorkOrderEvent, WorkOrderEventType, WorkOrderInvoice, WorkOrderLine } from "@/lib/server/finance/work-orders";
 import { cn } from "@/lib/utils";
 import { financeService } from "@/modules/finance/finance-service";
 
 import { EvidenceLinks, ExclusionDialog, uploadEvidenceFiles } from "./exclusion-dialog";
+import { QueryThreadView, RaiseQueryDialog, type QueryPeople } from "./query-thread";
 import { InvoiceStatusBadge, InvoiceTotals, LineName, WorkOrderQueueBadge, WorkOrderStatusBadge, aed, daysSince } from "./shared";
 import { UploadInvoiceDialog } from "./upload-invoice-dialog";
 
@@ -77,8 +89,9 @@ import { UploadInvoiceDialog } from "./upload-invoice-dialog";
  * anything not invoiceable says why in a dialog. The Reports tab shows the
  * files FSM holds on the work order and its appointments (service
  * reports). An invoice moves the work order to In Progress by itself. The
- * workflow (BRD 5.1 Step 4): query, hold, resume; not to be invoiced with
- * evidence, verified or rejected. A one-click change (resume, verify) asks
+ * workflow (BRD 5.1 Step 4): hold, resume; queries as a thread between
+ * Finance and Operations (2 Nov, the Queries tab); Operations marks a work
+ * order not to be invoiced, with evidence. A one-click change (resume) asks
  * first; one made in a dialog does not ask again. Stored in the portal; FSM
  * is only read.
  *
@@ -86,16 +99,19 @@ import { UploadInvoiceDialog } from "./upload-invoice-dialog";
  * and opening it again costs no FSM call; Refresh reads it again.
  */
 
-/* Finance: invoice, query; Operations: % done, ready, answer; both: hold, not invoiceable (route-helpers, 27 Oct). */
+/* Finance: invoice; Operations: % done, ready; both: queries, hold, not invoiceable and back (route-helpers, 2 Nov). */
 type Can = WorkOrderAbilities;
 type Detail = WorkOrderDetail & { can: Can };
-type Action = "raise_query" | "answer_query" | "put_on_hold" | "resume";
+type Action = "put_on_hold" | "resume";
+type Queries = QueryList & { sides: QuerySide[]; tagOptions: QueryPeople };
 type NoteAsk = {
-  action: Action | "reject_exclusion";
+  action: Action | "mark_invoiceable";
   title: string;
   description: string;
   label: string;
   submit: string;
+  /** The note may be left empty. */
+  optional?: boolean;
 };
 
 const DETAIL_STALE_MS = 10 * 60_000;
@@ -115,10 +131,21 @@ const EVENT_META: Record<WorkOrderEventType, { label: string; Icon: LucideIcon }
   put_on_hold: { label: "Put on hold", Icon: PauseCircle },
   resumed: { label: "Resumed", Icon: PlayCircle },
   exclusion_requested: { label: "Marked not to be invoiced", Icon: ShieldAlert },
-  exclusion_verified: { label: "Exclusion verified", Icon: ShieldCheck },
+  exclusion_verified: { label: "Marked not invoiceable", Icon: ShieldCheck },
   exclusion_rejected: { label: "Exclusion rejected", Icon: XCircle },
+  exclusion_reverted: { label: "Marked invoiceable again", Icon: Undo2 },
   progress_recorded: { label: "Progress recorded", Icon: Percent },
+  fsm_completed: { label: "Completed in Zoho FSM", Icon: CheckCheck },
+  fsm_not_completed: { label: "Not completed in Zoho FSM", Icon: TriangleAlert },
 };
+
+/* 2 Nov: what Zoho FSM said to a completion; the portal's is saved whatever it says. */
+function toastFsm(fsm: FsmCompletionResult | null | undefined) {
+  if (!fsm) return;
+  if (fsm.state === "done") toast.success(fsm.message);
+  else if (fsm.state === "partial" || fsm.state === "refused") toast.warning(fsm.message, { duration: 12_000 });
+  else toast.message(fsm.message);
+}
 
 const formatWhen = (value: string) =>
   new Date(value).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
@@ -126,6 +153,9 @@ const formatWhen = (value: string) =>
 export function FinanceWorkOrderPage({ id }: { id: string }) {
   const url = `/api/finance/work-orders/${encodeURIComponent(id)}`;
   const { data, loading, error, reload } = useSection<Detail>(url, { staleMs: DETAIL_STALE_MS });
+  /* 2 Nov: this work order's queries, every one, with the people each side may tag. */
+  const queries = useSection<Queries>(`/api/finance/queries?view=all&workOrder=${encodeURIComponent(id)}&pageSize=100`, { staleMs: 60_000 });
+  const [raising, setRaising] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -133,16 +163,15 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
   /* The upload, limited to the lines ticked (null: every completed line). */
   const [upload, setUpload] = useState<{ only: string[] | null } | null>(null);
   const [blocked, setBlocked] = useState<{ title: string; description: string } | null>(null);
-  const [progressOpen, setProgressOpen] = useState(false);
-  /* Mark ready to invoice: the lines it is opened for (every one not yet ready, or one from the table). */
-  const [readyFor, setReadyFor] = useState<WorkOrderLine[] | null>(null);
+  /* Partially complete (30 Oct): the lines it is opened for (one from the table, or every line not complete). */
+  const [partialFor, setPartialFor] = useState<{ lines: WorkOrderLine[] } | null>(null);
+  /* Complete a line (30 Oct): only asked to invoice or revenue only; its % is 100. */
+  const [completeFor, setCompleteFor] = useState<{ line: WorkOrderLine } | null>(null);
   const [exclusionOpen, setExclusionOpen] = useState(false);
   const [noteAsk, setNoteAsk] = useState<NoteAsk | null>(null);
   const [note, setNote] = useState("");
   const [formSession, setFormSession] = useState(0);
   const { confirm, dialog } = useConfirm();
-  /* The team the page acts as: the Ready to invoice tab it was opened from (?as=). */
-  const askedTeam = useSearchParams().get("as");
   /*
     From a change going through until the work order has been read again:
     the page dims, its buttons wait and a bar runs along the header, for at
@@ -214,28 +243,28 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
 
   const { workOrder: wo, quotation, lines, invoicing, can: allowed, workflow } = data;
   /*
-    Each team its own buttons (27 Oct): Finance records invoices and raises
-    queries; Operations records % done, marks ready and answers queries; both
-    hold and mark not invoiceable. Someone in both acts as the Ready to
-    invoice tab they opened it from (Finance unless Operations).
+    The roles decide (2 Nov, no tabs): Finance records invoices; Operations
+    records % done and marks ready; both raise queries, hold and mark not
+    invoiceable. Someone in both gets both sets of buttons, writes as Finance
+    and, on a query waiting on Operations, answers as Operations.
   */
   const financeSide = allowed.invoice || allowed.query;
   const operationsSide = allowed.progress || allowed.markReady || allowed.answer;
   const bothTeams = financeSide && operationsSide;
-  const team: "finance" | "operations" = bothTeams ? (askedTeam === "operations" ? "operations" : "finance") : operationsSide ? "operations" : "finance";
-  const can: Can =
-    team === "finance" ? { ...allowed, progress: false, markReady: false, answer: false } : { ...allowed, invoice: false, query: false };
+  const team: "finance" | "operations" = financeSide ? "finance" : "operations";
+  const can: Can = allowed;
   const linesValue = lines.reduce((sum, l) => sum + (l.amount ?? 0), 0);
   const completed = lines.filter((l) => l.status === "Completed");
   /* Non-billable by its status, or by FSM's Billing Status with no line billable (WO3000: In Progress and Non Billable). */
   const nonBillable = isNonBillable(wo.invoicingStatus);
-  const fsmEnded = nonBillable || isVoid(wo.status);
+  /* Non-billable, or Void, Cancelled or Closed in FSM (30 Oct): nothing more is done on it here. */
+  const fsmEnded = nonBillable || isEnded(wo.status);
   const fsmLink = fsmRecordLink("Work_Orders", wo.id);
-  const openExclusion = data.exclusions.find((x) => x.decision === null) ?? null;
-  const verifiedExclusion = workflow === "excluded" ? ([...data.exclusions].reverse().find((x) => x.decision === "verified") ?? null) : null;
+  const verifiedExclusion = workflow === "excluded" ? ([...data.exclusions].reverse().find((x) => x.decision === "verified" && !x.revertedAt) ?? null) : null;
   const live = data.ledgerReady && workflow !== "excluded";
-  /* On hold is paused: nothing is invoiced until it is resumed (23 Oct). */
-  const canInvoice = can.invoice && live && !openExclusion && workflow !== "on_hold";
+  /* On hold is paused: nothing is invoiced until it is resumed (23 Oct); nor while a "not invoiceable" query is open (2 Nov). */
+  const notInvoiceableOpen = (queries.data?.rows ?? []).some((t) => t.status === "open" && t.kind === "not_invoiceable");
+  const canInvoice = can.invoice && live && workflow !== "on_hold" && !notInvoiceableOpen;
   const invoiceable = (list: WorkOrderLine[]) => list.filter((l) => l.remaining > 0);
   /* What may be invoiced now (lib/finance/progress.ts): all of it once Completed and flagged, else Operations' percentage. */
   const allowedNow = (l: WorkOrderLine) => l.cap > 0.005;
@@ -252,7 +281,7 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
   const nonBillableWithVat = vatSum(lines.filter((l) => !l.billable), (l) => l.amount ?? 0);
 
   const act = (action: Action, label: string, text?: string) =>
-    run(label, () => financeService.workOrderAction(id, { action, expectedStatus: workflow, note: text ?? null }));
+    run(label, () => financeService.workOrderAction(id, { action, expectedStatus: workflow, note: text ?? null, as: team }));
   const ask = (dialogAsk: NoteAsk) => {
     setNote("");
     setNoteAsk(dialogAsk);
@@ -280,12 +309,21 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
   const startInvoice = (how: "record" | "upload", candidates: WorkOrderLine[], picked: boolean) => {
     const waiting = candidates.filter((l) => !allowedNow(l));
     const usable = candidates.filter(allowedNow);
+    /* 2 Nov: each line's own reason, in words. */
+    const whyNot = (l: WorkOrderLine) =>
+      l.remaining <= 0.005
+        ? `"${l.name ?? "A line"}" is already invoiced in full`
+        : l.progress && l.progress.purpose === "invoice" && l.invoicedAmount > 0
+          ? `"${l.name ?? "A line"}" is already invoiced up to the ${l.progress.percent}% Operations marked done; Operations must mark more of it done first`
+          : l.progress && l.progress.purpose === "revenue_only"
+            ? `"${l.name ?? "A line"}" is marked done for revenue only, not to invoice`
+            : `"${l.name ?? "A line"}" is not marked complete or partly done to invoice${notReadyReason ? `, and ${notReadyReason}` : ""}`;
     if (!usable.length || (picked && waiting.length)) {
       setBlocked({
         title: "Not ready to invoice",
         description: picked
-          ? `${waiting.map((l) => l.name ?? "A line").join(", ")} cannot be invoiced yet: ${notReadyReason || "nothing more is allowed now"}. Untick ${waiting.length === 1 ? "it" : "them"}, or ask Operations to record how much is done to invoice.`
-          : `Nothing on this work order can be invoiced yet: ${notReadyReason || "nothing more is allowed now"}. Once it is Completed in FSM with its quotation flagged To Be Invoiced, or Operations records how much is done to invoice, it can be.`,
+          ? `${waiting.map(whyNot).join("; ")}. Untick ${waiting.length === 1 ? "it" : "them"} to invoice the rest.`
+          : `Nothing on this work order can be invoiced now. ${waiting.map(whyNot).join("; ")}.`,
       });
       return;
     }
@@ -318,28 +356,20 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
       </DropdownMenu>,
     );
   }
-  if (can.query && live && ["open", "in_progress", "on_hold"].includes(workflow) && data.queueStatus !== "invoiced") {
+  /* Void, Cancelled or Closed in FSM (30 Oct): nothing new starts; an open query can still be replied to, a hold resumed. */
+  const over = isEnded(wo.status);
+  /* 2 Nov: either side raises a query (Finance: a question or not invoiceable; Operations: a question to Finance). */
+  const querySide: QuerySide | null = team === "finance" ? (allowed.query ? "finance" : null) : allowed.answer ? "operations" : null;
+  const openQueries = (queries.data?.rows ?? []).filter((t) => t.status === "open");
+  if (querySide && live && !over && queries.data?.ready) {
     actions.push(
-      <Button
-        key="query"
-        variant="outline"
-        disabled={updating}
-        onClick={() =>
-          ask({
-            action: "raise_query",
-            title: "Raise a query",
-            description: "The coordinators are notified and the work order waits for their answer.",
-            label: "Question",
-            submit: "Send query",
-          })
-        }
-      >
+      <Button key="query" variant="outline" disabled={updating} onClick={() => setRaising(true)}>
         <CircleHelp className="size-4" />
-        Raise query
+        Raise a query
       </Button>,
     );
   }
-  if (can.hold && live && ["open", "in_progress"].includes(workflow) && data.queueStatus !== "invoiced") {
+  if (can.hold && live && !over && ["open", "in_progress"].includes(workflow) && data.queueStatus !== "invoiced") {
     actions.push(
       <Button
         key="hold"
@@ -377,48 +407,86 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
       </Button>,
     );
   }
-  if (can.answer && live && workflow === "query_raised") {
+  /*
+    Complete and partially complete (30 Oct), Operations only. Each line is
+    marked Complete (100 %, to invoice) or Partially complete (a % below 100,
+    to invoice or revenue only). The work order follows its lines and is
+    marked Complete only once every billable line is.
+  */
+  const completionOf = (l: WorkOrderLine) => lineCompletion(l.progress);
+  const woCompletion = workOrderCompletion(lines.map((l) => ({ billable: l.billable, completion: completionOf(l) })));
+  /* Confirmed as a whole: the entry that counts for every billable line is the work order's own 100 %. */
+  const lastProgressEvent = data.events.filter((e) => e.type === "progress_recorded").reduce<WorkOrderEvent | null>((a, e) => (!a || e.at > a.at ? e : a), null);
+  const woConfirmed =
+    woCompletion.completion === "complete" &&
+    (lines.filter((l) => l.billable).every((l) => l.progress?.wholeWorkOrder) || Boolean(lastProgressEvent?.note?.startsWith("Work order marked complete")));
+  const notComplete = lines.filter((l) => l.billable && completionOf(l) !== "complete");
+  /* 2 Nov: the work order's completion in one plain sentence, the same everywhere on the page. */
+  const linesWord = (n: number) => (n === 1 ? "line" : "lines");
+  const completionSentence =
+    woCompletion.completion === "complete"
+      ? woConfirmed
+        ? `Complete: all ${woCompletion.billable} ${linesWord(woCompletion.billable)} done, and Operations confirmed the work order complete.`
+        : `All ${woCompletion.billable} ${linesWord(woCompletion.billable)} complete. Operations can now confirm the work order complete.`
+      : woCompletion.completion === "partial"
+        ? `Partially complete: ${woCompletion.complete} of ${woCompletion.billable} ${linesWord(woCompletion.billable)} complete, ${notComplete.length} still to finish. The work order is complete once every line is.`
+        : `Not started: none of the ${woCompletion.billable} ${linesWord(woCompletion.billable)} is marked complete yet.`;
+  /* Not while it is on hold. */
+  const canComplete = can.progress && live && !fsmEnded && data.progressReady && workflow !== "on_hold";
+  /* The line table's Action column: Operations, when it may mark lines. */
+  const actionColumn = canComplete;
+  if (canComplete && !woConfirmed) {
     actions.push(
       <Button
-        key="answer"
+        key="complete"
+        variant="outline"
         disabled={updating}
-        onClick={() =>
-          ask({
-            action: "answer_query",
-            title: "Answer Finance's query",
-            description: data.queryText ?? "",
-            label: "Answer",
-            submit: "Send answer",
-          })
-        }
+        onClick={async () => {
+          if (notComplete.length) {
+            setBlocked({
+              title: "Not every line is complete",
+              description: `The work order can be marked complete only when every line is. Not complete yet: ${notComplete
+                .map((l) => `${l.name ?? "a line"} (${completionOf(l) === "partial" ? `partially complete, ${l.progress?.percent}%` : "not started"})`)
+                .join(", ")}. Mark each one Complete in the Line items table first.`,
+            });
+            return;
+          }
+          /*
+            30 Oct: no question here. Each line keeps the answer it was given
+            (to invoice or revenue only); one shared answer is recorded once for
+            the work order, mixed answers line by line.
+          */
+          if (
+            await confirm({
+              title: "Mark the work order complete?",
+              description: "Every line is complete. Each keeps what it was marked: to invoice or revenue only. Nothing is invoiced here.",
+              confirmText: "Mark complete",
+            })
+          ) {
+            const billable = lines.filter((l) => l.billable);
+            const answers = [...new Set(billable.map((l) => l.progress?.purpose ?? "invoice"))];
+            const entries =
+              answers.length === 1
+                ? [{ line: null, percent: 100, purpose: answers[0] }]
+                : billable.map((l) => ({ line: l.id, percent: 100, purpose: l.progress?.purpose ?? ("invoice" as const) }));
+            void run("Work order marked complete", async () => toastFsm((await financeService.recordProgress(id, { entries, note: "Work order marked complete" })).data.fsm));
+          }
+        }}
       >
-        Answer query
-      </Button>,
-    );
-  }
-  /* Operations: lines with more left than may be invoiced now can be marked ready (all of what is left). */
-  const notYetReady = lines.filter((l) => l.billable && l.remaining - l.cap > 0.005);
-  /* Not while it is on hold or a not-invoiceable request waits to be decided. */
-  const canMarkReady = can.markReady && live && !fsmEnded && !openExclusion && data.progressReady && workflow !== "on_hold";
-  /* The line table's Action column: Operations, when it may mark lines ready. */
-  const actionColumn = canMarkReady;
-  if (canMarkReady && notYetReady.length) {
-    actions.push(
-      <Button key="ready" variant="outline" disabled={updating} onClick={() => setReadyFor(notYetReady)}>
         <CheckCheck className="size-4" />
-        Mark ready to invoice
+        Complete work order
       </Button>,
     );
   }
-  if (can.progress && live && !fsmEnded && data.progressReady && invoicing.status !== "invoiced") {
+  if (canComplete && notComplete.some((l) => l.remaining > 0.005)) {
     actions.push(
-      <Button key="progress" variant="outline" disabled={updating} onClick={() => setProgressOpen(true)}>
+      <Button key="partial" variant="outline" disabled={updating} onClick={() => setPartialFor({ lines: notComplete.filter((l) => l.remaining > 0.005) })}>
         <Percent className="size-4" />
-        Record % done
+        Partially complete
       </Button>,
     );
   }
-  if (can.exclude && live && !fsmEnded && !openExclusion && invoicing.invoicedValue === 0) {
+  if (can.exclude && live && !fsmEnded && invoicing.invoicedValue === 0) {
     actions.push(
       <Button
         key="exclude"
@@ -433,68 +501,64 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
       </Button>,
     );
   }
+  if (can.exclude && data.ledgerReady && workflow === "excluded" && !fsmEnded) {
+    actions.push(
+      <Button
+        key="invoiceable"
+        variant="outline"
+        disabled={updating}
+        onClick={() =>
+          ask({
+            action: "mark_invoiceable",
+            title: "Mark invoiceable again",
+            description: "Add a note if you want to.",
+            label: "Note (optional)",
+            submit: "Mark invoiceable",
+            optional: true,
+          })
+        }
+      >
+        <Undo2 className="size-4" />
+        Mark invoiceable
+      </Button>,
+    );
+  }
 
   /* What the work order waits on, in a band along the header's bottom edge. */
   const band = !data.ledgerReady ? (
     <Band tone="neutral" icon={<Info />} title="Ready marks, workflow and invoices are off">
-      Apply migration 20261024100000 to mark work ready, pick it up and record MAHER invoices.
-    </Band>
-  ) : openExclusion ? (
-    <Band tone="warning" icon={<ShieldCheck />} title="Marked not to be invoiced: waiting for verification">
-      <p>
-        {openExclusion.requestedBy ?? "A coordinator"}: {openExclusion.reason}
-        {openExclusion.notes ? ` (${openExclusion.notes})` : ""}
-      </p>
-      <EvidenceLinks urlOf={(path) => financeService.workOrderEvidenceUrl(id, path)} paths={openExclusion.evidence} />
-      {can.verify ? (
-        <div className="mt-3 flex flex-wrap gap-2">
-          <Button
-            size="sm"
-            disabled={busy}
-            onClick={async () => {
-              const ok = await confirm({
-                title: "Verify the exclusion?",
-                description: "The work order is marked Excluded and is never invoiced.",
-                confirmText: "Verify",
-              });
-              if (ok) void run("Exclusion verified", () => financeService.decideWorkOrderExclusion(openExclusion.id, { decision: "verified" }));
-            }}
-          >
-            Verify exclusion
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            disabled={busy}
-            onClick={() =>
-              ask({
-                action: "reject_exclusion",
-                title: "Reject the exclusion",
-                description: "The work order stays where it was, with your note.",
-                label: "Note",
-                submit: "Reject",
-              })
-            }
-          >
-            Reject
-          </Button>
-        </div>
-      ) : (
-        <p className="mt-1 text-xs">It cannot be invoiced until this is decided.</p>
-      )}
+      Ready to invoice is not set up yet (a database update is still to be applied), so work cannot be marked complete, queried or invoiced here.
     </Band>
   ) : verifiedExclusion ? (
-    <Band tone="neutral" icon={<ShieldCheck />} title="Not to be invoiced">
+    <Band tone="neutral" icon={<ShieldCheck />} title="Not invoiceable">
       <p>
         {verifiedExclusion.reason}
-        {verifiedExclusion.notes ? ` (${verifiedExclusion.notes})` : ""}. Requested by {verifiedExclusion.requestedBy ?? "a coordinator"}, verified by{" "}
-        {verifiedExclusion.decidedBy ?? "—"}.
+        {verifiedExclusion.notes ? ` (${verifiedExclusion.notes})` : ""}. Marked by {verifiedExclusion.requestedBy ?? "someone"}
+        {verifiedExclusion.markedBySide ? ` (${verifiedExclusion.markedBySide === "finance" ? "Finance" : "Operations"})` : ""}
+        {verifiedExclusion.decidedAt ? `, ${at(verifiedExclusion.decidedAt)}` : ""}.
       </p>
       <EvidenceLinks urlOf={(path) => financeService.workOrderEvidenceUrl(id, path)} paths={verifiedExclusion.evidence} />
     </Band>
-  ) : workflow === "query_raised" ? (
-    <Band tone="warning" icon={<CircleHelp />} title="Waiting for the coordinator to answer">
-      {data.queryText ?? "No question recorded."}
+  ) : workflow === "query_raised" || openQueries.length ? (
+    <Band
+      tone="warning"
+      icon={<CircleHelp />}
+      title={
+        openQueries.length > 1
+          ? `${openQueries.length} open queries`
+          : openQueries[0]?.waitingOn
+            ? `Query waiting on ${openQueries[0].waitingOn === "finance" ? "Finance" : "Operations"}`
+            : "Open query"
+      }
+    >
+      {openQueries[0]?.subject ?? data.queryText ?? "No question recorded."}
+      <p className="mt-1 text-xs">Reply on the Queries tab.</p>
+      {can.invoice && notInvoiceableOpen ? (
+        <p className="mt-1 text-xs">
+          No invoice can be recorded while the &quot;not invoiceable&quot; query is open: Operations corrects the completion or withdraws the request, or you close
+          the query.
+        </p>
+      ) : null}
     </Band>
   ) : workflow === "on_hold" ? (
     <Band tone="warning" icon={<PauseCircle />} title="On hold">
@@ -510,10 +574,12 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
       {aed(invoicedWithVat)} invoiced; {aed(remainingWithVat)} still to invoice, of which {aed(readyWithVat)} can be invoiced now. All incl. VAT.
     </Band>
   ) : fsmEnded ? (
-    <Band tone="neutral" icon={<Info />} title={isVoid(wo.status) ? "Void in Zoho FSM" : "Non-billable"}>
+    <Band tone="neutral" icon={<Info />} title={isEnded(wo.status) ? `${wo.status} in Zoho FSM` : "Non-billable"}>
       {isVoid(wo.status)
         ? "The work order was voided in FSM: nothing is invoiced or recognised."
-        : isNonBillable(wo.status)
+        : isCancelledOrClosed(wo.status)
+          ? `The work order is ${wo.status} in FSM: it is not completed, invoiced or recognised here, and nothing new can be started on it.${invoicing.invoicedValue > 0 ? " What was invoiced before stays recorded." : ""}`
+          : isNonBillable(wo.status)
           ? "Non-billable in FSM and not to be invoiced (for example AMC or free service work). It is kept apart from billable work."
           : `Its Billing Status is Non Billable in Zoho FSM (it is ${wo.status ?? "open"}), so nothing on it is invoiced or recognised. It is kept apart from billable work.`}
     </Band>
@@ -537,7 +603,22 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
           <div className="min-w-0 space-y-1">
             <div className="flex flex-wrap items-center gap-2">
               {wo.type ? <Badge variant="outline">{wo.type}</Badge> : null}
-              <WorkOrderStatusBadge status={wo.status} />
+              {/* FSM's status, unless it says the same as the portal's beside the title (2 Nov). */}
+              {wo.status?.toLowerCase() !== QUEUE_STATUS_LABELS[data.queueStatus]?.toLowerCase() ? <WorkOrderStatusBadge status={wo.status} /> : null}
+              {/* 30 Oct: Operations' completion, beside FSM's own status. */}
+              {!fsmEnded && woCompletion.completion !== "not_started" ? (
+                <Badge
+                  variant="secondary"
+                  className={cn("border-0", woCompletion.completion === "complete" ? "bg-success/10 text-success" : "bg-warning/10 text-warning")}
+                  title={`Marked by Operations: ${woCompletion.complete} of ${woCompletion.billable} billable lines complete`}
+                >
+                  {woCompletion.completion === "complete"
+                    ? woConfirmed
+                      ? "Complete"
+                      : "All lines complete"
+                    : `Partially complete · ${woCompletion.complete} of ${woCompletion.billable} ${linesWord(woCompletion.billable)}`}
+                </Badge>
+              ) : null}
               {data.flagged ? (
                 <Badge variant="secondary" className="bg-success/10 text-success border-0">
                   To Be Invoiced
@@ -601,6 +682,10 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
             Invoices
             <TabCount value={data.invoices.length} />
           </TabsTrigger>
+          <TabsTrigger value="queries">
+            Queries
+            <TabCount value={openQueries.length || undefined} />
+          </TabsTrigger>
           <TabsTrigger value="history">
             History
             <TabCount value={data.events.length} />
@@ -646,18 +731,26 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
               tone={invoicing.status === "invoiced" ? "good" : "neutral"}
             />
             <StatCard
-              label="Lines completed"
-              value={`${completed.length} / ${lines.length}`}
-              headline="Completed in FSM"
-              caption={wo.completedAt ? `Work order completed ${formatZonedDate(wo.completedAt)}` : "Work order not completed in FSM"}
-              tone={lines.length && completed.length === lines.length ? "good" : "neutral"}
+              label="Lines complete"
+              value={`${woCompletion.complete} / ${woCompletion.billable}`}
+              headline={
+                woCompletion.completion === "complete"
+                  ? woConfirmed
+                    ? "Work order complete, confirmed by Operations"
+                    : "All lines complete; the work order is not yet confirmed"
+                  : woCompletion.completion === "partial"
+                    ? `Partially complete: ${notComplete.length} ${linesWord(notComplete.length)} still to finish`
+                    : "Not started"
+              }
+              caption={`In Zoho FSM: ${completed.length} of ${lines.length} completed${wo.completedAt ? `, work order completed ${formatZonedDate(wo.completedAt)}` : ""}`}
+              tone={woCompletion.completion === "complete" ? "good" : "neutral"}
             />
           </StatCardGrid>
 
           <SectionCard
             icon={<ListChecks />}
             title="Line items"
-            description="As in Zoho FSM, with where each stands for invoicing. Values are before VAT; the VAT-inclusive amount is under each."
+            description={`${completionSentence} Values are before VAT.`}
             bodyClassName="border-t"
             action={
               selectable && chosen.length ? (
@@ -708,7 +801,7 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
                     <TableHead className={selectable ? undefined : "pl-5"}>Line item</TableHead>
                     <TableHead>FSM status</TableHead>
                     <TableHead>Invoicing</TableHead>
-                    <TableHead>% done</TableHead>
+                    <TableHead>Completion</TableHead>
                     <TableHead className="text-right">Quantity</TableHead>
                     <TableHead className="text-right">Rate</TableHead>
                     {actionColumn ? <TableHead className="text-center">Action</TableHead> : null}
@@ -758,18 +851,19 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
                             </p>
                           ) : null}
                           {line.cap > 0.005 && line.cap < line.remaining - 0.005 ? (
-                            <p className="text-warning text-xs tabular-nums">Up to {aed(withVat(line.cap, line))} incl. VAT now</p>
+                            <p className="text-warning text-xs tabular-nums">Up to {aed(line.cap)} now</p>
                           ) : null}
                         </div>
                       </TableCell>
                       <TableCell>
-                        {line.progress ? (
-                          <div className="text-sm tabular-nums">
-                            <span className="font-medium">{line.progress.percent}%</span>
-                            <p className="text-muted-foreground text-xs">
-                              {PROGRESS_PURPOSE_LABELS[line.progress.purpose]}
-                              {line.progress.wholeWorkOrder ? " · whole work order" : ""}
-                            </p>
+                        {line.billable ? (
+                          <div className="flex flex-col items-start gap-1">
+                            <Badge variant={completionOf(line) === "complete" ? "default" : "outline"}>{COMPLETION_LABELS[completionOf(line)]}</Badge>
+                            {line.progress && completionOf(line) !== "not_started" ? (
+                              <p className="text-muted-foreground text-xs tabular-nums">
+                                {line.progress.percent}% · {PROGRESS_PURPOSE_LABELS[line.progress.purpose].toLowerCase()}
+                              </p>
+                            ) : null}
                           </div>
                         ) : (
                           <span className="text-muted-foreground text-sm">—</span>
@@ -783,21 +877,38 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
                       {/* Operations marks this one line ready to invoice (27 Oct), second-last column. */}
                       {actionColumn ? (
                         <TableCell className="text-center">
-                          {/* Until it is invoiced in full, a line's % and answer can be set or changed (27 Oct). */}
+                          {/* Until it is invoiced in full, a line can be marked or changed (30 Oct: Complete, or Partially complete). */}
                           {line.billable && line.remaining > 0.005 ? (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="h-8"
-                              disabled={updating}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setReadyFor([line]);
-                              }}
-                            >
-                              {line.progress ? <Pencil className="size-4" /> : <CheckCheck className="size-4" />}
-                              {line.progress ? "Edit" : "Mark ready"}
-                            </Button>
+                            <div className="flex justify-center gap-1.5">
+                              {completionOf(line) !== "complete" ? (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-8"
+                                  disabled={updating}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setCompleteFor({ line });
+                                  }}
+                                >
+                                  <CheckCheck className="size-4" />
+                                  Complete
+                                </Button>
+                              ) : null}
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                className="h-8"
+                                disabled={updating}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setPartialFor({ lines: [line] });
+                                }}
+                              >
+                                {completionOf(line) === "not_started" ? <Percent className="size-4" /> : <Pencil className="size-4" />}
+                                {completionOf(line) === "not_started" ? "Partial" : "Change"}
+                              </Button>
+                            </div>
                           ) : (
                             <span className="text-muted-foreground text-sm">—</span>
                           )}
@@ -805,9 +916,6 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
                       ) : null}
                       <TableCell className="pr-5 text-right font-medium tabular-nums">
                         {aed(line.amount)}
-                        {line.lineAmount !== null && line.lineAmount !== line.amount ? (
-                          <div className="text-muted-foreground text-xs font-normal">incl. VAT {aed(line.lineAmount)}</div>
-                        ) : null}
                       </TableCell>
                     </TableRow>
                   ))}
@@ -830,6 +938,20 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
           <InvoicesCard workOrderId={id} invoices={data.invoices} lines={lines} />
         </TabsContent>
 
+        <TabsContent value="queries" className="mt-4">
+          <QueriesCard
+            queries={queries.data}
+            error={queries.error}
+            loading={queries.loading}
+            preferredSide={bothTeams ? null : querySide}
+            lineNames={new Map(lines.map((l) => [l.id, l.name ?? "A line"]))}
+            onChanged={() => {
+              settle();
+              refreshAll();
+            }}
+          />
+        </TabsContent>
+
         <TabsContent value="history" className="mt-4">
           <HistoryCard events={data.events} />
         </TabsContent>
@@ -842,7 +964,12 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
           {quotation?.document ? (
             <QuotationDocument quotation={quotation} document={quotation.document} />
           ) : (
-            <SectionCard icon={<FileText />} title="Quotation" bodyClassName="px-5 pb-5">
+            <SectionCard
+              icon={<FileText />}
+              title="Quotation"
+              description={quotation ? "As in Zoho FSM." : undefined}
+              bodyClassName={quotation ? "px-5 pb-5" : "border-t"}
+            >
               {quotation ? (
                 <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-2">
                   <Fact label="Number" value={quotation.number ?? "—"} />
@@ -855,7 +982,11 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
                   <Fact label="Valid until" value={quotation.expiryDate ? formatZonedDate(quotation.expiryDate) : "—"} />
                 </dl>
               ) : (
-                <p className="text-muted-foreground text-sm">This work order has no quotation linked in Zoho FSM.</p>
+                <EmptyState
+                  icon={<FileText className="size-6" />}
+                  title="No quotation linked"
+                  description="This work order has no quotation linked in Zoho FSM. Once one is linked there, it shows here."
+                />
               )}
             </SectionCard>
           )}
@@ -879,14 +1010,11 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
             </Button>
             <SubmitButton
               pending={busy}
-              disabled={!note.trim()}
+              disabled={!note.trim() && !noteAsk?.optional}
               onClick={() => {
                 if (!noteAsk) return;
-                if (noteAsk.action === "reject_exclusion" && openExclusion) {
-                  void run("Exclusion rejected", () => financeService.decideWorkOrderExclusion(openExclusion.id, { decision: "rejected", note: note.trim() }));
-                } else if (noteAsk.action !== "reject_exclusion") {
-                  void act(noteAsk.action, `${noteAsk.submit}: done`, note.trim());
-                }
+                if (noteAsk.action === "mark_invoiceable") void run("Marked invoiceable", () => financeService.markInvoiceable(id, { note: note.trim() || null, as: team }));
+                else void act(noteAsk.action, `${noteAsk.submit}: done`, note.trim());
               }}
             >
               {noteAsk?.submit}
@@ -899,16 +1027,35 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
         key={`exclusion-${formSession}`}
         open={exclusionOpen}
         busy={busy}
-        verifiedAtOnce={team === "operations"}
+        verifiedAtOnce
         onClose={() => !busy && setExclusionOpen(false)}
         onSubmit={({ files, ...input }) => {
-          /* Operations' request is verified at once; Finance's waits for verification. */
-          void run(team === "operations" ? "Marked not invoiceable" : "Sent for verification", async () => {
+          /* Either side's word is enough: marked at once, and the other side is told (2 Nov). */
+          void run("Marked not invoiceable", async () => {
             const evidence = await uploadEvidenceFiles(files, (sign) => financeService.signWorkOrderEvidenceUpload(id, sign));
-            return financeService.requestWorkOrderExclusion(id, { ...input, evidence, as: team });
+            return financeService.markNotInvoiceable(id, { ...input, evidence, as: team });
           });
         }}
       />
+
+      {querySide && queries.data ? (
+        <RaiseQueryDialog
+          key={`query-${formSession}`}
+          open={raising}
+          onClose={() => setRaising(false)}
+          workOrderId={id}
+          workOrderNumber={wo.number}
+          side={querySide}
+          people={queries.data.tagOptions}
+          lines={lines.filter((l) => l.billable).map((l) => ({ id: l.id, name: l.name }))}
+          onRaised={() => {
+            setRaising(false);
+            setFormSession((n) => n + 1);
+            settle();
+            refreshAll();
+          }}
+        />
+      ) : null}
 
       {invoiceLines ? (
         <RecordInvoiceDialog
@@ -923,25 +1070,25 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
           }}
         />
       ) : null}
-      {progressOpen ? (
+      {partialFor ? (
         <ProgressDialog
           workOrderId={id}
-          lines={lines.filter((l) => l.billable)}
-          onClose={() => setProgressOpen(false)}
+          lines={partialFor.lines}
+          onClose={() => setPartialFor(null)}
           onRecorded={() => {
-            setProgressOpen(false);
+            setPartialFor(null);
             settle();
             refreshAll();
           }}
         />
       ) : null}
-      {readyFor ? (
-        <ReadyDialog
+      {completeFor ? (
+        <CompleteDialog
           workOrderId={id}
-          lines={readyFor}
-          onClose={() => setReadyFor(null)}
+          line={completeFor.line}
+          onClose={() => setCompleteFor(null)}
           onRecorded={() => {
-            setReadyFor(null);
+            setCompleteFor(null);
             settle();
             refreshAll();
           }}
@@ -1008,16 +1155,12 @@ function RecordInvoiceDialog({
 }) {
   const [key] = useState(() => crypto.randomUUID());
   const [included, setIncluded] = useState<Set<string>>(() => new Set(lines.map((l) => l.id)));
-  /* Typed with VAT, as on the MAHER invoice; kept before VAT, like FSM's line amounts. */
+  /* 2 Nov: each line is typed before VAT, its net amount; VAT is worked out once on the invoice total. */
   /* No more than may be invoiced now: all that is left once ready for Finance, else Operations' percentage (filled in). */
   const allowed = (line: WorkOrderLine) => Math.min(line.remaining, line.cap);
-  const [amounts, setAmounts] = useState<Record<string, string>>(() => Object.fromEntries(lines.map((l) => [l.id, String(withVat(allowed(l), l))])));
-  const leftWithVat = (line: WorkOrderLine) => withVat(allowed(line), line);
-  /* The before-VAT part; the last cent of a line paid in full is the line's, not rounding's. */
-  const beforeVat = (line: WorkOrderLine, typed: number) => {
-    const part = withoutVat(typed, line);
-    return part > allowed(line) && part - allowed(line) <= 0.011 ? allowed(line) : part;
-  };
+  const [amounts, setAmounts] = useState<Record<string, string>>(() => Object.fromEntries(lines.map((l) => [l.id, String(allowed(l))])));
+  const leftWithVat = (line: WorkOrderLine) => allowed(line);
+  const beforeVat = (_line: WorkOrderLine, typed: number) => typed;
   /* The MAHER invoice PDF (26 Oct, change 6): required, kept with the invoice. */
   const [file, setFile] = useState<File | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -1033,8 +1176,9 @@ function RecordInvoiceDialog({
       return { line: l, typed, amount: Number.isFinite(typed) ? beforeVat(l, typed) : NaN };
     });
   const badLine = allocations.find((a) => !(a.typed > 0) || a.typed > leftWithVat(a.line) + 0.005);
-  /* The invoice total is the lines with VAT, never typed (23 Oct); the server works it out the same way. */
-  const sumWithVat = round2(allocations.reduce((s, a) => s + (Number.isFinite(a.amount) ? withVat(a.amount, a.line) : 0), 0));
+  /* The invoice total: the lines' net total, plus VAT on it (2 Nov); the server works it out the same way. */
+  const totals = invoiceTotals(allocations.map((a) => ({ amount: a.amount, line: a.line })));
+  const sumWithVat = totals.total;
   const valid = allocations.length > 0 && !badLine && number.trim() && date && sumWithVat > 0 && file;
 
   const submit = async () => {
@@ -1069,7 +1213,7 @@ function RecordInvoiceDialog({
       <ActionDialogContent busy={busy} className="flex max-h-[calc(100dvh-2rem)] flex-col sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Record a MAHER invoice</DialogTitle>
-          <DialogDescription>Tick the lines it covers and how much of each, incl. VAT. The rest stays to invoice later.</DialogDescription>
+          <DialogDescription>Tick the lines it covers and how much of each, before VAT. VAT is added once, on the invoice total. The rest stays to invoice later.</DialogDescription>
         </DialogHeader>
 
         <div className="-mx-4 grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] gap-4 overflow-x-hidden overflow-y-auto px-4 py-0.5">
@@ -1104,7 +1248,7 @@ function RecordInvoiceDialog({
                       <LineName name={line.name} description={line.description} />
                       <p className="text-muted-foreground text-xs tabular-nums">
                         <span className="text-foreground font-medium">{aed(left)}</span> {line.cap < line.remaining - 0.005 ? "allowed now" : "left"}
-                        {line.invoicedAmount > 0 ? ` · ${aed(withVat(line.invoicedAmount, line))} invoiced before` : ""}
+                        {line.invoicedAmount > 0 ? ` · ${aed(line.invoicedAmount)} invoiced before` : ""}
                       </p>
                     </button>
                   </div>
@@ -1126,7 +1270,7 @@ function RecordInvoiceDialog({
                             value={line.amount ? String(percent) : ""}
                             onChange={(e) => {
                               const p = Number(e.target.value);
-                              if (Number.isFinite(p) && line.amount) setAmounts((prev) => ({ ...prev, [line.id]: String(withVat((line.amount! * p) / 100, line)) }));
+                              if (Number.isFinite(p) && line.amount) setAmounts((prev) => ({ ...prev, [line.id]: String(round2((line.amount! * p) / 100)) }));
                             }}
                           />
                           <span className="text-muted-foreground pointer-events-none absolute inset-y-0 right-2 flex items-center text-xs">%</span>
@@ -1139,7 +1283,7 @@ function RecordInvoiceDialog({
                             inputMode="decimal"
                             min={0}
                             step="0.01"
-                            aria-label={`Amount of ${line.name ?? "the line"} on this invoice, incl. VAT`}
+                            aria-label={`Amount of ${line.name ?? "the line"} on this invoice, before VAT`}
                             aria-invalid={over || undefined}
                             className={cn("h-7 pl-9 text-xs tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none", over && "border-destructive")}
                             value={value}
@@ -1152,7 +1296,7 @@ function RecordInvoiceDialog({
                           {over
                             ? `More than the ${aed(left)} left.`
                             : typed > 0
-                              ? `${aed(Math.max(0, round2(withVat(line.remaining, line) - typed)))} left on the line after`
+                              ? `${aed(Math.max(0, round2(line.remaining - typed)))} left on the line after`
                               : "Enter an amount or a %."}
                         </p>
                         {Math.abs(typed - left) >= 0.005 ? (
@@ -1173,7 +1317,7 @@ function RecordInvoiceDialog({
               );
             })}
           </div>
-          <InvoiceTotals total={sumWithVat} />
+          <InvoiceTotals totals={totals} />
 
           <div className="grid gap-1.5">
             <Label htmlFor="maher-file">MAHER invoice PDF</Label>
@@ -1253,9 +1397,10 @@ function RecordInvoiceDialog({
 }
 
 /* ---------------------------------------------------------------------
-   Operations: "X % done" (26 Oct, changes 4 and 5), for the whole work
-   order or line by line, either to invoice or for revenue only. It fills
-   Finance's side; Operations never records an invoice here.
+   Operations: Partially complete (30 Oct; "X % done" since 26 Oct), line by
+   line: a % above 0 and below 100 (100 % is Complete), either to invoice or
+   for revenue only. It fills Finance's side; Operations never records an
+   invoice here.
    --------------------------------------------------------------------- */
 
 function ProgressDialog({
@@ -1292,20 +1437,25 @@ function ProgressDialog({
     const text = (perLine[l.id] ?? "").trim();
     if (text === "") return null;
     if (!valid(text)) return "Enter a % from 0 to 100.";
+    if (Number(text) <= 0) return "Enter a % above 0.";
     if (Number(text) < floorOf(l) - 0.05) return `At least ${floorOf(l)}%: that much of this line is already invoiced.`;
     return null;
   };
   const percentOf = (l: WorkOrderLine) => (valid(perLine[l.id] ?? "") ? Number(perLine[l.id]) : null);
+  /* 30 Oct: 100 % is Complete, below it Partially complete; either way the answer is asked. */
+  const isComplete = (l: WorkOrderLine) => (percentOf(l) ?? 0) >= 100;
   /* A line is recorded when its % or the answer differs from what it has. */
   const changed = lines.filter((l) => {
     const pct = percentOf(l);
     return pct !== null && (!l.progress || Math.abs(l.progress.percent - pct) > 0.001 || l.progress.purpose !== purpose);
   });
+  const completing = changed.filter(isComplete);
+  const partial = changed.filter((l) => !isComplete(l));
   const entries = purpose ? changed.map((l) => ({ line: l.id, percent: percentOf(l)!, purpose })) : [];
   const lineProblems = lines.filter((l) => problemOf(l) !== null).length;
   const ok = entries.length > 0 && lineProblems === 0;
-  /* The overall % the lines come to, weighted by each line's value (incl. VAT). */
-  const valueOf = (l: WorkOrderLine) => withVat(l.amount ?? 0, l);
+  /* The overall % the lines come to, weighted by each line's net value. */
+  const valueOf = (l: WorkOrderLine) => l.amount ?? 0;
   const totalValue = lines.reduce((sum, l) => sum + valueOf(l), 0);
   const weighted = lines.some((l) => percentOf(l) !== null) && totalValue > 0
     ? round2((lines.reduce((sum, l) => sum + valueOf(l) * (percentOf(l) ?? 0), 0) / totalValue))
@@ -1315,18 +1465,25 @@ function ProgressDialog({
   const readyNow = round2(
     lines.reduce((sum, l) => {
       const pct = percentOf(l) ?? 0;
-      return pct - floorOf(l) <= 0.1 ? sum : sum + Math.max(0, (valueOf(l) * pct) / 100 - withVat(l.invoicedAmount, l));
+      return pct - floorOf(l) <= 0.1 ? sum : sum + Math.max(0, (valueOf(l) * pct) / 100 - l.invoicedAmount);
     }, 0),
   );
-  const question =
-    weighted !== null ? `Should ${weighted}% of the work order (these line percentages) be ready to invoice?` : "Should it be ready to invoice?";
+  const question = lines.length > 1 ? "Should these lines be ready to invoice?" : "Should this line be ready to invoice?";
+  /* What was done, in words, for the history and the message. */
+  const said =
+    completing.length && partial.length
+      ? `Marked ${completing.length} complete and ${partial.length} partially complete`
+      : completing.length
+        ? completing.length === 1 ? "Line marked complete" : `Marked ${completing.length} lines complete`
+        : "Marked partially complete";
 
   const submit = async () => {
     setBusy(true);
     setProblem(null);
     try {
-      await financeService.recordProgress(workOrderId, { entries, note: note.trim() || null });
-      toast.success("Progress recorded");
+      const result = await financeService.recordProgress(workOrderId, { entries, note: [said, note.trim()].filter(Boolean).join(": ") });
+      toast.success(said);
+      toastFsm(result.data.fsm);
       onRecorded();
     } catch (e) {
       setProblem(e instanceof Error ? e.message : "Nothing was recorded");
@@ -1339,13 +1496,15 @@ function ProgressDialog({
     <Dialog open onOpenChange={(next) => !next && !busy && onClose()}>
       <ActionDialogContent busy={busy} className="flex max-h-[calc(100dvh-2rem)] flex-col sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Record % done</DialogTitle>
-          <DialogDescription>How far the work has got. It fills Finance&apos;s side; nothing is invoiced here.</DialogDescription>
+          <DialogTitle>How much is done</DialogTitle>
+          <DialogDescription>
+            How much of {lines.length === 1 ? "this line" : "each line"} is done. Below 100% it is partially complete; 100% marks it Complete. Nothing is invoiced here.
+          </DialogDescription>
         </DialogHeader>
 
         <div className="-mx-4 grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] gap-4 overflow-x-hidden overflow-y-auto px-4 py-0.5">
           <div className="grid gap-2">
-            <Label>% done of each line</Label>
+            <Label>{lines.length === 1 ? "% done" : "% done of each line"}</Label>
             {lines.map((l) => {
               const lineProblem = problemOf(l);
               return (
@@ -1354,7 +1513,7 @@ function ProgressDialog({
                     <div className="min-w-0 flex-1">
                       <LineName name={l.name} description={l.description} />
                       <p className="text-muted-foreground text-xs tabular-nums">
-                        {aed(l.lineAmount ?? withVat(l.amount ?? 0, l))} incl. VAT
+                        {aed(l.amount ?? 0)} before VAT
                         {l.invoicedAmount > 0 ? ` · ${floorOf(l)}% invoiced` : ""}
                         {l.progress ? ` · last ${l.progress.percent}%` : ""}
                       </p>
@@ -1375,6 +1534,8 @@ function ProgressDialog({
                     <p className="text-destructive text-xs" role="alert">
                       {lineProblem}
                     </p>
+                  ) : isComplete(l) ? (
+                    <p className="text-success text-xs">100%: this line is marked Complete.</p>
                   ) : null}
                 </div>
               );
@@ -1390,7 +1551,7 @@ function ProgressDialog({
             <p className="text-muted-foreground text-xs">Leave a line empty to keep what it has.</p>
           </div>
 
-          {/* Finance invoices only what is ready to invoice: ask it for every % recorded. */}
+          {/* Finance invoices only what is ready to invoice: asked for every % recorded, Complete included (30 Oct). */}
           <div className="grid gap-2" role="radiogroup" aria-label="Ready to invoice">
             <Label>{question}</Label>
             <div className="grid gap-2">
@@ -1410,7 +1571,7 @@ function ProgressDialog({
                   <span className="text-muted-foreground block text-xs tabular-nums">
                     {p === "invoice"
                       ? weighted !== null
-                        ? `Finance may invoice ${aed(readyNow)} incl. VAT now.`
+                        ? `Finance may invoice ${aed(readyNow)} before VAT now.`
                         : "Finance may invoice this much now."
                       : "Booked as revenue at month end; not invoiced until it is ready to invoice."}
                   </span>
@@ -1431,7 +1592,7 @@ function ProgressDialog({
             Cancel
           </Button>
           <SubmitButton pending={busy} disabled={!ok} onClick={() => void submit()}>
-            Record
+            {completing.length && !partial.length ? "Mark complete" : "Save"}
           </SubmitButton>
         </DialogFooter>
       </ActionDialogContent>
@@ -1440,75 +1601,42 @@ function ProgressDialog({
 }
 
 /*
-  Mark ready to invoice (27 Oct, Operations only): how much of each line
-  ticked may be invoiced now, before FSM says Completed or the quotation is
-  flagged: all of it (100%, the default) or a part. Recorded per line as % done
-  to invoice, so it is in History and a later % done can change it again.
+  Complete a line (30 Oct): no % to enter (100 %; a part goes through
+  Partial or Change), only whether Finance may invoice it or it is revenue
+  only.
 */
-function ReadyDialog({
+function CompleteDialog({
   workOrderId,
-  lines,
+  line,
   onClose,
   onRecorded,
 }: {
   workOrderId: string;
-  lines: WorkOrderLine[];
+  line: WorkOrderLine;
   onClose: () => void;
   onRecorded: () => void;
 }) {
-  const [picked, setPicked] = useState<Set<string>>(() => new Set(lines.map((l) => l.id)));
-  /* Each line opens at what it has (its % and answer), else 100%; the answer, when all the lines share one. */
-  const [percent, setPercent] = useState<Record<string, string>>(() =>
-    Object.fromEntries(lines.map((l) => [l.id, l.progress ? String(l.progress.percent) : "100"])),
-  );
-  /* Asked, as in Record % done (27 Oct): ready to invoice, or revenue only. */
-  const [purpose, setPurpose] = useState<ProgressPurpose | null>(() => {
-    const given = [...new Set(lines.map((l) => l.progress?.purpose ?? null))];
-    return given.length === 1 ? given[0] : null;
-  });
-  const editing = lines.some((l) => l.progress);
+  const [purpose, setPurpose] = useState<ProgressPurpose | null>(null);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
-
-  /* Not below what is already invoiced of a line. */
-  const floorOf = (l: WorkOrderLine) => (l.amount && l.amount > 0 ? Math.ceil((l.invoicedAmount / l.amount) * 1000) / 10 : 0);
-  const pctOf = (l: WorkOrderLine) => {
-    const text = (percent[l.id] ?? "").trim();
-    const n = Number(text);
-    return text !== "" && Number.isFinite(n) && n >= 0 && n <= 100 ? n : null;
-  };
-  const problemOf = (l: WorkOrderLine): string | null => {
-    if (!picked.has(l.id)) return null;
-    const n = pctOf(l);
-    if (n === null) return "Enter a % from 0 to 100.";
-    if (n < floorOf(l) - 0.05) return `At least ${floorOf(l)}%: that much of this line is already invoiced.`;
-    return null;
-  };
-  const chosen = lines.filter((l) => picked.has(l.id));
-  /* What Finance may then invoice: each line's % of its value, less what is invoiced already. Incl. VAT. */
-  const total = round2(
-    chosen.reduce((sum, l) => {
-      const n = pctOf(l) ?? 0;
-      return n - floorOf(l) <= 0.1 ? sum : sum + Math.max(0, (withVat(l.amount ?? 0, l) * n) / 100 - withVat(l.invoicedAmount, l));
-    }, 0),
-  );
-  /* Something to save: a line ticked whose % or answer differs from what it has. */
-  const changes = chosen.filter((l) => !l.progress || Math.abs((pctOf(l) ?? -1) - l.progress.percent) > 0.001 || l.progress.purpose !== purpose);
-  const ok = changes.length > 0 && purpose !== null && chosen.every((l) => problemOf(l) === null);
+  const left = round2(Math.max(0, line.remaining));
 
   const submit = async () => {
     if (!purpose) return;
     setBusy(true);
     setProblem(null);
     try {
-      const entries = changes.map((l) => ({ line: l.id, percent: pctOf(l)!, purpose }));
-      const said = purpose === "invoice" ? "Marked ready to invoice" : "Marked done, revenue only";
-      await financeService.recordProgress(workOrderId, { entries, note: [said, note.trim()].filter(Boolean).join(": ") });
+      const said = "Line marked complete";
+      const result = await financeService.recordProgress(workOrderId, {
+        entries: [{ line: line.id, percent: 100, purpose }],
+        note: [said, note.trim()].filter(Boolean).join(": "),
+      });
       toast.success(said);
+      toastFsm(result.data.fsm);
       onRecorded();
     } catch (e) {
-      setProblem(e instanceof Error ? e.message : "Nothing was marked");
+      setProblem(e instanceof Error ? e.message : "Nothing was recorded");
     } finally {
       setBusy(false);
     }
@@ -1516,107 +1644,68 @@ function ReadyDialog({
 
   return (
     <Dialog open onOpenChange={(next) => !next && !busy && onClose()}>
-      <ActionDialogContent busy={busy} className="flex max-h-[calc(100dvh-2rem)] flex-col sm:max-w-md">
+      <ActionDialogContent busy={busy} className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>{editing ? "Change how much is done" : "Mark ready to invoice"}</DialogTitle>
-          <DialogDescription>How much of each line ticked is done (all of it, or a part), and whether Finance may invoice it now. Nothing is invoiced here.</DialogDescription>
+          <DialogTitle>Mark {line.name ?? "this line"} complete</DialogTitle>
+          <DialogDescription>100% done. Nothing is invoiced here.</DialogDescription>
         </DialogHeader>
-
-        <div className="-mx-4 grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] gap-4 overflow-x-hidden overflow-y-auto px-4 py-0.5">
-          <div className="grid gap-2">
-            {lines.map((l) => {
-              const on = picked.has(l.id);
-              const lineProblem = problemOf(l);
-              return (
-                <div
-                  key={l.id}
-                  className={cn("grid min-w-0 gap-1.5 rounded-lg border px-3 py-2", on && "border-brand/40 bg-brand-50/40", lineProblem && "border-destructive")}
-                >
-                  <div className="flex min-w-0 items-center gap-2.5">
-                    <Checkbox
-                      checked={on}
-                      onCheckedChange={(checked) =>
-                        setPicked((prev) => {
-                          const next = new Set(prev);
-                          if (checked) next.add(l.id);
-                          else next.delete(l.id);
-                          return next;
-                        })
-                      }
-                      aria-label={`Mark ${l.name ?? "the line"} ready`}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <LineName name={l.name} description={l.description} />
-                      <p className="text-muted-foreground text-xs tabular-nums">
-                        {aed(withVat(l.amount ?? 0, l))} incl. VAT
-                        {l.invoicedAmount > 0 ? ` · ${floorOf(l)}% invoiced` : ""}
-                        {l.progress ? ` · now ${l.progress.percent}%, ${PROGRESS_PURPOSE_LABELS[l.progress.purpose].toLowerCase()}` : ""}
-                      </p>
-                    </div>
-                    {on ? (
-                      <div className="w-24 shrink-0">
-                        <PercentInput
-                          id={`ready-${l.id}`}
-                          value={percent[l.id] ?? ""}
-                          min={floorOf(l)}
-                          invalid={Boolean(lineProblem)}
-                          onChange={(v) => setPercent((prev) => ({ ...prev, [l.id]: v }))}
-                          label={`% of ${l.name ?? "the line"} ready to invoice`}
-                        />
-                      </div>
-                    ) : null}
-                  </div>
-                  {lineProblem ? (
-                    <p className="text-destructive text-xs" role="alert">
-                      {lineProblem}
-                    </p>
-                  ) : null}
-                </div>
-              );
-            })}
-          </div>
-          {/* Finance invoices only what is ready to invoice: asked here as in Record % done. */}
-          <div className="grid gap-2" role="radiogroup" aria-label="Ready to invoice">
-            <Label>{chosen.length === 1 ? "Should this line be ready to invoice?" : "Should these lines be ready to invoice?"}</Label>
-            <div className="grid gap-2">
-              {(["invoice", "revenue_only"] as const).map((p) => (
-                <button
-                  key={p}
-                  type="button"
-                  role="radio"
-                  aria-checked={purpose === p}
-                  onClick={() => setPurpose(p)}
-                  className={cn("rounded-lg border px-3 py-2 text-left text-sm transition-colors", purpose === p ? "border-brand/40 bg-brand-50/40" : "hover:bg-muted/50")}
-                >
-                  <span className="font-medium">{p === "invoice" ? "Yes, ready to invoice" : "No, revenue only"}</span>
-                  <span className="text-muted-foreground block text-xs tabular-nums">
-                    {p === "invoice"
-                      ? chosen.length
-                        ? `Finance may invoice ${aed(total)} incl. VAT now.`
-                        : "Finance may invoice this much now."
-                      : "Booked as revenue at month end; not invoiced until it is ready to invoice."}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="ready-note">Note</Label>
-            <Textarea id="ready-note" rows={2} maxLength={2000} value={note} onChange={(e) => setNote(e.target.value)} placeholder="For example: client signed off the work" />
-          </div>
-          {problem ? <p className="text-destructive text-sm">{problem}</p> : null}
+        <PurposeChoice
+          question="Should this line be ready to invoice?"
+          purpose={purpose}
+          onChange={setPurpose}
+          invoiceHint={`Finance may invoice ${aed(left)} before VAT now.`}
+        />
+        <div className="grid gap-1.5">
+          <Label htmlFor="complete-note">Note</Label>
+          <Textarea id="complete-note" rows={2} maxLength={2000} value={note} onChange={(e) => setNote(e.target.value)} />
         </div>
-
+        {problem ? <p className="text-destructive text-sm">{problem}</p> : null}
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
-          <SubmitButton pending={busy} disabled={!ok} onClick={() => void submit()}>
-            {editing ? "Save" : purpose === "revenue_only" ? "Record" : "Mark ready"}
+          <SubmitButton pending={busy} disabled={!purpose} onClick={() => void submit()}>
+            Mark complete
           </SubmitButton>
         </DialogFooter>
       </ActionDialogContent>
     </Dialog>
+  );
+}
+
+/* Asked for every % recorded (27 Oct, and 30 Oct for Complete too): ready to invoice, or revenue only. */
+function PurposeChoice({
+  question,
+  purpose,
+  onChange,
+  invoiceHint,
+}: {
+  question: string;
+  purpose: ProgressPurpose | null;
+  onChange: (purpose: ProgressPurpose) => void;
+  invoiceHint: string;
+}) {
+  return (
+    <div className="grid gap-2" role="radiogroup" aria-label="Ready to invoice">
+      <Label>{question}</Label>
+      <div className="grid gap-2">
+        {(["invoice", "revenue_only"] as const).map((p) => (
+          <button
+            key={p}
+            type="button"
+            role="radio"
+            aria-checked={purpose === p}
+            onClick={() => onChange(p)}
+            className={cn("rounded-lg border px-3 py-2 text-left text-sm transition-colors", purpose === p ? "border-brand/40 bg-brand-50/40" : "hover:bg-muted/50")}
+          >
+            <span className="font-medium">{p === "invoice" ? "Yes, ready to invoice" : "No, revenue only"}</span>
+            <span className="text-muted-foreground block text-xs tabular-nums">
+              {p === "invoice" ? invoiceHint : "Booked as revenue at month end; not invoiced until it is ready to invoice."}
+            </span>
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -1781,6 +1870,69 @@ function ReportsCard({ workOrderId, appointments }: { workOrderId: string; appoi
    a page at a time.
    --------------------------------------------------------------------- */
 
+/* 2 Nov: the work order's queries, each a thread with the reply box for the side the page acts as. */
+function QueriesCard({
+  queries,
+  error,
+  loading,
+  preferredSide,
+  lineNames,
+  onChanged,
+}: {
+  queries: Queries | null;
+  error: string | null;
+  loading: boolean;
+  preferredSide: QuerySide | null;
+  lineNames: Map<string, string>;
+  onChanged: () => void;
+}) {
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
+  const rows = queries?.rows ?? [];
+  /* A page left empty by a change (the last thread on it closed elsewhere) falls back to the last page there is. */
+  const lastPage = Math.max(0, Math.ceil(rows.length / pageSize) - 1);
+  const shownPage = Math.min(page, lastPage);
+  const shown = rows.slice(shownPage * pageSize, (shownPage + 1) * pageSize);
+  if (error && !queries) return <ErrorState title="Could not load the queries" message={error} />;
+  if (!queries) return loading ? <SectionSkeleton /> : null;
+  return (
+    <SectionCard
+      icon={<CircleHelp />}
+      title="Queries"
+      description="Questions between Finance and Operations on this work order, with every reply. The other side is told each time; either side closes it."
+      bodyClassName="border-t"
+    >
+      {!queries.ready ? (
+        <p className="text-muted-foreground px-5 py-4 text-sm">Queries can be raised once a database update is applied.</p>
+      ) : rows.length === 0 ? (
+        <EmptyState icon={<CircleHelp className="size-6" />} title="No queries" description="Raise a query from the buttons at the top. It shows here and on the Queries page." />
+      ) : (
+        <>
+          <ul className="divide-y">
+            {shown.map((t) => (
+              <li key={t.id} className="px-5 py-4">
+                <QueryThreadView thread={t} sides={queries.sides} people={queries.tagOptions} preferredSide={preferredSide} lineNames={lineNames} onChanged={onChanged} />
+              </li>
+            ))}
+          </ul>
+          <ListPager
+            page={shownPage}
+            pageSize={pageSize}
+            total={rows.length}
+            onPageChange={setPage}
+            onPageSizeChange={(size) => {
+              setPageSize(size);
+              setPage(0);
+            }}
+            noun="queries"
+            className="border-t"
+          />
+        </>
+      )}
+    </SectionCard>
+  );
+}
+
 function HistoryCard({ events }: { events: WorkOrderEvent[] }) {
   const [order, setOrder] = useState<"desc" | "asc">("desc");
   const [page, setPage] = useState(0);
@@ -1856,21 +2008,15 @@ function HistoryCard({ events }: { events: WorkOrderEvent[] }) {
 
 /* ---------------------------------------------------------------------
    The MAHER invoices: a card each, its total and who recorded it on top,
-   the lines it covers under it, every amount with VAT.
+   the lines it covers under it before VAT; the total includes VAT (2 Nov).
    --------------------------------------------------------------------- */
 
-function InvoicesCard({ workOrderId, invoices, lines }: { workOrderId: string; invoices: WorkOrderInvoice[]; lines: WorkOrderLine[] }) {
-  const lineOf = new Map(lines.map((l) => [l.id, l]));
-  const vatOf = (lineId: string, amount: number) => {
-    const line = lineOf.get(lineId);
-    return line ? withVat(amount, line) : amount;
-  };
-
+function InvoicesCard({ workOrderId, invoices }: { workOrderId: string; invoices: WorkOrderInvoice[]; lines: WorkOrderLine[] }) {
   return (
     <SectionCard
       icon={<ReceiptText />}
       title="MAHER invoices"
-      description="Every invoice recorded against this work order's lines, and what each covers. Amounts incl. VAT."
+      description="Every invoice recorded against this work order's lines, and what each covers. Line amounts are before VAT; each invoice's total includes VAT."
       bodyClassName="border-t"
     >
       {invoices.length === 0 ? (
@@ -1920,7 +2066,7 @@ function InvoicesCard({ workOrderId, invoices, lines }: { workOrderId: string; i
                       <span className="min-w-0 truncate" title={a.lineName ?? a.lineId}>
                         {a.lineName ?? a.lineId}
                       </span>
-                      <span className="shrink-0 font-medium tabular-nums">{aed(vatOf(a.lineId, a.amount))}</span>
+                      <span className="shrink-0 font-medium tabular-nums">{aed(a.amount)}</span>
                     </li>
                   ))}
                 </ul>

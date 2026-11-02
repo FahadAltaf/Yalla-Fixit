@@ -1,11 +1,12 @@
 "use client";
 
-import { ChevronDown, Download, FileText, FileType, Loader2 } from "lucide-react";
+import { ChevronDown, Download, FileText, FileType, Loader2, X } from "lucide-react";
 
 import { PillTabs } from "@/components/dashboard/shared/kaizen";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogHeader,
@@ -59,15 +60,23 @@ export function AmcPreviewDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[92vh] w-[calc(100%-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl">
-        <DialogHeader className="gap-3 border-b px-6 pt-5 pb-4 text-left">
-          <div className="pr-8">
+      <DialogContent
+        // A Close button in the header instead of the corner cross.
+        showCloseButton={false}
+        className="flex max-h-[92vh] w-[calc(100%-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl"
+      >
+        {/*
+          One row: the title on the left, the document switch, the download
+          and Close on the right, centred on each other. Stacked on a phone.
+        */}
+        <DialogHeader className="flex-col gap-3 border-b px-6 py-4 text-left sm:flex-row sm:items-center sm:justify-between">
+          <div className="min-w-0">
             <DialogTitle className="text-lg">{title}</DialogTitle>
             <DialogDescription>
               Exactly what the client receives. Switch between the proposal and the contract.
             </DialogDescription>
           </div>
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex shrink-0 flex-wrap items-center gap-3">
             <PillTabs<AmcDocumentType>
               value={documentType}
               onChange={onDocumentTypeChange}
@@ -101,6 +110,12 @@ export function AmcPreviewDialog({
                 </DropdownMenuContent>
               </DropdownMenu>
             ) : null}
+            <DialogClose asChild>
+              <Button type="button" variant="outline" size="sm">
+                <X className="size-4" />
+                Close
+              </Button>
+            </DialogClose>
           </div>
         </DialogHeader>
 

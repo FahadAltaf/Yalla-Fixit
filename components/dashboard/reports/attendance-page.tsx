@@ -251,14 +251,14 @@ export function AttendancePage() {
           <AlertTitle>Check-ins are not available yet</AlertTitle>
           <AlertDescription>
             <ul className="list-disc space-y-0.5 pl-4">
-              <li>FSM&apos;s shift check-ins and check-outs cannot be read yet (B-01), so nobody is marked late, early or absent: that would only mean the portal cannot see the check-in.</li>
+              <li>FSM&apos;s shift check-ins and check-outs cannot be read yet, so nobody is marked late, early or absent: that would only mean the portal cannot see the check-in.</li>
               <li>
                 Shown meanwhile: the roster for each day (shift, leave with its type, public holidays, rest days) and the work done in FSM, from the
                 first appointment&apos;s actual start to the last one&apos;s end. That is evidence of attendance, not a check-in.
               </li>
               <li>
                 {plural(data.notes.leaveRecords, "leave record")} and {plural(data.notes.holidays, "public holiday")} in the period.
-                {data.notes.noRestDays ? ` ${plural(data.notes.noRestDays, "technician")} with no rest days set: every day counts as a shift day (D-16).` : ""}
+                {data.notes.noRestDays ? ` ${plural(data.notes.noRestDays, "technician")} with no rest days set: every day counts as a working day until their rest day is set in Scheduling.` : ""}
               </li>
             </ul>
           </AlertDescription>
@@ -286,14 +286,14 @@ export function AttendancePage() {
           <StatCard
             label="Late"
             value={data.measured ? overall.lateDays : "—"}
-            headline={data.measured ? "Checked in after the shift start" : "Needs FSM check-ins (B-01)"}
+            headline={data.measured ? "Checked in after the shift start" : "Needs FSM check-ins"}
             caption={data.measured ? `${plural(overall.earlyDays, "day")} left early · ${plural(overall.outsideShiftDays, "day")} outside the shift` : undefined}
             tone={data.measured && overall.lateDays ? "progress" : "neutral"}
           />
           <StatCard
             label="Absent"
             value={data.measured ? overall.absentDays.toLocaleString("en-US") : "—"}
-            headline={data.measured ? "No check-in, no work in FSM, no leave" : "Needs FSM check-ins (B-01)"}
+            headline={data.measured ? "No check-in, no work in FSM, no leave" : "Needs FSM check-ins"}
             caption={
               data.measured && overall.absentRestDayMissingDays
                 ? `${overall.absentRestDayMissingDays.toLocaleString("en-US")} by technicians with no rest day set`
@@ -304,7 +304,7 @@ export function AttendancePage() {
           <StatCard
             label="Worked, no check-in"
             value={data.measured ? overall.workedWithoutCheckInDays.toLocaleString("en-US") : "—"}
-            headline={data.measured ? "FSM shows their work, but no check-in" : "Needs FSM check-ins (B-01)"}
+            headline={data.measured ? "FSM shows their work, but no check-in" : "Needs FSM check-ins"}
             caption={data.measured ? `${plural(overall.noCheckOutDays, "day")} never checked out` : undefined}
             tone={data.measured && overall.workedWithoutCheckInDays ? "progress" : "neutral"}
           />

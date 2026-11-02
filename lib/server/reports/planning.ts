@@ -166,7 +166,8 @@ export async function buildUtilizationReport(
   const availabilityInput = await loadAvailabilityInput(admin, {
     from,
     to,
-    technicians: inScope,
+    /* 2 Nov: utilization does not use fixed rest weekdays; off days a week are counted by the week instead. */
+    technicians: inScope.map((t) => ({ ...t, restWeekdays: [], history: t.history ? { ...t.history, rest_weekdays: undefined } : undefined })),
     unpaidBreakMinutes: settings.attendance.unpaidBreakMinutes,
     standardDailyHours: settings.attendance.standardDailyHours,
     dataCentreDailyHours: settings.attendance.dataCentreDailyHours,
@@ -241,7 +242,8 @@ export async function buildUtilizationReport(
       dataCentreDailyHours: settings.attendance.dataCentreDailyHours,
       ...counts,
       shiftAssumed: result.technicians.filter((t) => t.shiftAssumed).length,
-      noRestDays: result.technicians.filter((t) => (roster.get(t.fsmId)?.restWeekdays.length ?? 0) === 0).length,
+      /* 2 Nov: utilization counts off days a week, not rest weekdays: here, those with none entered (one assumed). */
+      noRestDays: result.technicians.filter((t) => t.restDaysAssumed).length,
       crewsUnknown: loaded.crewsUnknown,
       inactiveWithoutLeavingDate,
     },

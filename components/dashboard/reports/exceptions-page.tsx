@@ -244,8 +244,7 @@ export function ExceptionsPage() {
           )}
           <p className="text-muted-foreground text-xs">
             Listed: work orders Completed or Closed in FSM, on a quotation with a value, whose quotation is not marked To Be
-            Invoiced and that are not in the invoicing queue. What counts as completed and which field is the flag are still to
-            confirm (D-01, D-02).
+            Invoiced and that are not in the invoicing queue.
           </p>
           <Card className="py-0">
             <DataTable

@@ -342,7 +342,8 @@ function InspectionDetailView() {
           */}
           <TabsTrigger value="snags">
             Snags
-            <TabCount value={snags.data?.length} />
+            {/* A snag deleted in the app stays on record as withdrawn; it is not counted (UAT-TH-7). */}
+            <TabCount value={snags.data?.filter((snag) => snag.status !== "withdrawn").length} />
             <TabBusy on={job.refreshing || snags.refreshing} />
           </TabsTrigger>
           <TabsTrigger value="areas">

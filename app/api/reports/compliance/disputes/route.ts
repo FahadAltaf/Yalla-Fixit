@@ -29,7 +29,7 @@ export async function POST(req: NextRequest) {
     const admin = await createAdminServerClient();
     let who: { self: string } | { onBehalf: true };
     if (parsed.data.onBehalf) {
-      if (!hasResourceAction(gate.access.accessUser, ResourceType.COMPLIANCE, ActionType.EDIT)) {
+      if (!hasResourceAction(gate.access.accessUser, ResourceType.REPORTS_COMPLIANCE, ActionType.EDIT)) {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 });
       }
       who = { onBehalf: true };

@@ -11,7 +11,7 @@ const PAGES: Array<[ResourceType, string]> = [
   [ResourceType.REPORTS_CAPACITY, "/reports/capacity"],
   [ResourceType.REPORTS_EXCEPTIONS, "/reports/exceptions"],
   [ResourceType.REPORTS_ATTENDANCE, "/reports/attendance"],
-  [ResourceType.COMPLIANCE, "/reports/compliance"],
+  [ResourceType.REPORTS_COMPLIANCE, "/reports/compliance"],
 ];
 
 /* Reports is a group of pages; /reports (the breadcrumb's link) opens the first one the person may see. */

@@ -26,7 +26,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   if (!gate.ok) return gate.response;
   /* What this person's team may do here (Finance or Operations, route-helpers). */
   const can = workOrderAbilities(gate.access.accessUser);
-  if (!can.view && !can.verify) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (!can.view) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   try {
     const admin = await createAdminServerClient();

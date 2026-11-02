@@ -39,7 +39,7 @@ export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
 
 const ROLE_EMBED = "roles(name, description, role_access(resource, action, enabled, record_access))";
 const FULL_USER =
-  "id, email, role_id, first_name, last_name, full_name, is_active, receives_schedule_approval_email, hidden_from_lists, last_login, profile_image, created_at, updated_at";
+  "id, email, role_id, first_name, last_name, full_name, is_active, receives_schedule_approval_email, hidden_from_lists, is_task_manager, last_login, profile_image, created_at, updated_at";
 /* A colleague in a picker: no role, no permission matrix. hidden_from_lists
    so the picker can leave hidden accounts out of new choices (DEV-458). */
 const DIRECTORY_USER = "id, email, first_name, last_name, full_name, is_active, hidden_from_lists, profile_image";
@@ -171,11 +171,13 @@ export const updateUserSchema = z.object({
   is_active: z.boolean().nullish(),
   receives_schedule_approval_email: z.boolean().nullish(),
   hidden_from_lists: z.boolean().nullish(),
+  /* FR-20 (main): a task this user keeps for themselves alone is private to them. */
+  is_task_manager: z.boolean().nullish(),
 });
 
 /** The fields anyone may change on their own profile. */
 const SELF_FIELDS = ["first_name", "last_name", "full_name", "profile_image"] as const;
-const PRIVILEGED_FIELDS = ["role_id", "is_active", "receives_schedule_approval_email", "hidden_from_lists"] as const;
+const PRIVILEGED_FIELDS = ["role_id", "is_active", "receives_schedule_approval_email", "hidden_from_lists", "is_task_manager"] as const;
 
 /**
  * The decision for an update, separated from the database so it can be
@@ -190,6 +192,7 @@ export function planUserUpdate(
     isActive: boolean | null;
     receivesApprovalEmail: boolean | null;
     hiddenFromLists?: boolean | null;
+    isTaskManager?: boolean | null;
   },
   input: z.infer<typeof updateUserSchema>,
   newRoleName: string | null,
@@ -206,6 +209,7 @@ export function planUserUpdate(
       is_active: target.isActive,
       receives_schedule_approval_email: target.receivesApprovalEmail,
       hidden_from_lists: target.hiddenFromLists ?? false,
+      is_task_manager: target.isTaskManager ?? false,
     }[f];
     return input[f] !== current;
   });
@@ -225,7 +229,7 @@ export function planUserUpdate(
 export async function updateUserProfile(admin: Admin, caller: Caller, input: z.infer<typeof updateUserSchema>): Promise<User> {
   const { data: target, error } = await admin
     .from("user_profile")
-    .select("id, role_id, is_active, receives_schedule_approval_email, hidden_from_lists, roles(name)")
+    .select("id, role_id, is_active, receives_schedule_approval_email, hidden_from_lists, is_task_manager, roles(name)")
     .eq("id", input.id)
     .maybeSingle<Row>();
   if (error) throw new AdminError(error.message, 500);
@@ -242,6 +246,7 @@ export async function updateUserProfile(admin: Admin, caller: Caller, input: z.i
       isActive: (target.is_active as boolean | null) ?? null,
       receivesApprovalEmail: (target.receives_schedule_approval_email as boolean | null) ?? null,
       hiddenFromLists: (target.hidden_from_lists as boolean | null) ?? null,
+      isTaskManager: (target.is_task_manager as boolean | null) ?? null,
     },
     input,
     newRoleName,

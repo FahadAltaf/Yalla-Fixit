@@ -4,7 +4,9 @@ import type { QueueAction, QueueStatus } from "@/lib/server/finance/queue";
 import type { QueueItemDetail, QueueRow } from "@/lib/server/finance/queue-read";
 import type { ScanProposal } from "@/lib/server/finance/invoice-scan";
 import type { LiveAttachment, LiveServiceReport } from "@/lib/server/finance/fsm-live";
-import type { OpenQuery, WorkOrderDetail } from "@/lib/server/finance/work-orders";
+import type { FsmCompletionResult } from "@/lib/server/finance/fsm-completion";
+import type { QueryKind, QueryReplyAction, QuerySide } from "@/lib/server/finance/queries";
+import type { WorkOrderDetail } from "@/lib/server/finance/work-orders";
 
 export type QueueListFilters = {
   statuses: QueueStatus[];
@@ -69,7 +71,11 @@ export const financeService = {
   recordProgress: (
     workOrderId: string,
     input: { entries: Array<{ line: string | null; percent: number; purpose: "invoice" | "revenue_only" }>; note?: string | null },
-  ) => executeRESTBackend<{ data: { recorded: number } }>(`/api/finance/work-orders/${workOrderId}/progress`, { method: "POST", body: input }),
+  ) =>
+    executeRESTBackend<{ data: { recorded: number; fsm: FsmCompletionResult | null } }>(`/api/finance/work-orders/${workOrderId}/progress`, {
+      method: "POST",
+      body: input,
+    }),
 
   /** The files on a work order and its appointments (service reports), from FSM. */
   workOrderFiles: (workOrderId: string, refresh = false) =>
@@ -85,10 +91,6 @@ export const financeService = {
   workOrderFileUrl: (workOrderId: string, fileId: string) =>
     `/api/finance/work-orders/${encodeURIComponent(workOrderId)}/attachments/${encodeURIComponent(fileId)}`,
 
-  /** Work orders waiting on a coordinator's answer. */
-  openQueries: () =>
-    executeRESTBackend<{ data: { rows: OpenQuery[]; ledgerReady: boolean; canAnswer: boolean } }>("/api/finance/queries").then((r) => r.data),
-
   /** A one-time upload URL for a MAHER invoice to be read (503 when scanning is not set up). */
   signInvoiceUpload: (input: { fileName: string; contentType: string; size: number; scan?: boolean }) =>
     executeRESTBackend<{ path: string; signedUrl: string; contentType: string }>("/api/finance/invoices/upload", { method: "POST", body: input }),
@@ -97,18 +99,34 @@ export const financeService = {
   scanInvoice: (input: { path: string; workOrderId?: string | null }) =>
     executeRESTBackend<ScanProposal>("/api/finance/invoices/scan", { method: "POST", body: input }),
 
-  /** Ready to invoice: pick up, release, query, hold, resume, answer a query. */
-  workOrderAction: (
-    id: string,
-    input: { action: "raise_query" | "answer_query" | "put_on_hold" | "resume"; expectedStatus: string; note?: string | null },
-  ) => executeRESTBackend<{ status: string }>(`/api/finance/work-orders/${id}/action`, { method: "POST", body: input }),
+  /** Ready to invoice: put on hold, resume. */
+  workOrderAction: (id: string, input: { action: "put_on_hold" | "resume"; expectedStatus: string; note?: string | null; as?: "finance" | "operations" }) =>
+    executeRESTBackend<{ status: string }>(`/api/finance/work-orders/${id}/action`, { method: "POST", body: input }),
 
-  /** A work order marked not to be invoiced: for verification when Finance asks, verified at once when Operations does. */
-  requestWorkOrderExclusion: (id: string, input: { reason: string; notes?: string | null; evidence?: string[]; as?: "finance" | "operations" }) =>
-    executeRESTBackend<{ exclusionId: string; verified: boolean }>(`/api/finance/work-orders/${id}/exclusion`, { method: "POST", body: input }),
+  /** Finance or Operations marks a work order not invoiceable, at once; the other side is told. */
+  markNotInvoiceable: (id: string, input: { reason: string; notes?: string | null; evidence?: string[]; as?: "finance" | "operations" }) =>
+    executeRESTBackend<{ exclusionId: string }>(`/api/finance/work-orders/${id}/exclusion`, { method: "POST", body: input }),
 
-  decideWorkOrderExclusion: (exclusionId: string, input: { decision: "verified" | "rejected"; note?: string | null }) =>
-    executeRESTBackend<{ status: string }>(`/api/finance/work-orders/exclusions/${exclusionId}/decision`, { method: "POST", body: input }),
+  /** Either side marks it invoiceable again; the other side is told. */
+  markInvoiceable: (id: string, input: { note?: string | null; as?: "finance" | "operations" }) =>
+    executeRESTBackend<{ status: string }>(`/api/finance/work-orders/${id}/exclusion`, { method: "DELETE", body: input }),
+
+  /** Queries (2 Nov): raise one on a work order. */
+  openQuery: (input: {
+    workOrderId: string;
+    kind: QueryKind;
+    body: string;
+    lineIds?: string[];
+    taggedUserId?: string | null;
+    as?: QuerySide;
+  }) => executeRESTBackend<{ id: string }>("/api/finance/queries", { method: "POST", body: input }),
+
+  /** Reply on a query, or close it: either side. */
+  replyQuery: (id: string, input: { action: QueryReplyAction; body?: string | null; taggedUserId?: string | null; as?: QuerySide }) =>
+    executeRESTBackend<{ status: "open" | "resolved" }>(`/api/finance/queries/${id}`, {
+      method: "POST",
+      body: input,
+    }),
 
   signWorkOrderEvidenceUpload: (id: string, input: { fileName: string; contentType: string; size: number }) =>
     executeRESTBackend<{ path: string; signedUrl: string; contentType: string }>(`/api/finance/work-orders/${id}/evidence`, {

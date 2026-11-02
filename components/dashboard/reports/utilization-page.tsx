@@ -208,7 +208,7 @@ export function UtilizationPage() {
       <PageHeading
         eyebrow="Reports"
         title="Utilization"
-        description="How busy each technician was against the hours they were available, and how much of that work could be billed."
+        description="How busy each technician was against the hours expected of them, and how much of that work could be billed."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <HowItWorks content={utilizationHowItWorks(data ? { standardDailyHours: data.notes.standardDailyHours, dataCentreDailyHours: data.notes.dataCentreDailyHours } : undefined)} />
@@ -238,14 +238,14 @@ export function UtilizationPage() {
           <StatCard
             label="Time utilization"
             value={pct(overall.timePercent)}
-            headline={`${hrs(overall.jobMinutes)} of ${hrs(overall.availableMinutes)} available`}
+            headline={`${hrs(overall.jobMinutes)} of ${hrs(overall.availableMinutes)} expected`}
           />
           <StatCard
             label="Commercial utilization"
             value={pct(overall.commercialPercent)}
             headline={`${hrs(overall.chargeableMinutes)} chargeable`}
           />
-          <StatCard label="Overtime" value={hrs(overall.overtimeMinutes)} headline="Beyond the day's hours, not in the ratios" />
+          <StatCard label="Above expected" value={hrs(overall.overtimeMinutes)} headline="Hours beyond each week's expected hours" />
           <StatCard
             label="Data completeness"
             value={pct(overall.completenessPercent)}
@@ -259,7 +259,7 @@ export function UtilizationPage() {
             value={data?.travel.trips ? `${Math.round((data.travel.minutes / 60) * 10) / 10} h` : "—"}
             headline={
               data?.travel.trips
-                ? `${plural(data.travel.trips, "trip")} · ${pct(travelShare({ travelMinutes: data.travel.minutes, availableMinutes: overall.availableMinutes }))} of available hours`
+                ? `${plural(data.travel.trips, "trip")} · ${pct(travelShare({ travelMinutes: data.travel.minutes, availableMinutes: overall.availableMinutes }))} of expected hours`
                 : "No trips logged in FSM in these dates"
             }
           />
@@ -298,7 +298,7 @@ export function UtilizationPage() {
               <EmptyState
                 icon={<Gauge />}
                 title="No technicians in this period"
-                description="Nobody had available hours or worked in these dates with these filters."
+                description="Nobody was expected to work or worked in these dates with these filters."
               />
             }
           />
@@ -330,7 +330,7 @@ export function UtilizationPage() {
 
 function TeamTable({ rows, onSelect }: { rows: TeamUtilization[]; onSelect: (team: TeamUtilization) => void }) {
   if (!rows.length) {
-    return <EmptyState icon={<Users />} title="No teams in this period" description="Nobody had available hours or worked in these dates." className="py-10" />;
+    return <EmptyState icon={<Users />} title="No teams in this period" description="Nobody was expected to work or worked in these dates." className="py-10" />;
   }
   /* The team's figures are its technicians' added up; hover explains each, as on the technicians table. */
   const head = (label: string, key: keyof typeof COLUMN_HELP) => (
@@ -344,12 +344,12 @@ function TeamTable({ rows, onSelect }: { rows: TeamUtilization[]; onSelect: (tea
         <TableRow>
           <TableHead className="pl-5">Team</TableHead>
           <TableHead>Technicians</TableHead>
-          <TableHead>{head("Available", "available")}</TableHead>
+          <TableHead>{head("Expected", "available")}</TableHead>
           <TableHead>{head("Job hours", "job")}</TableHead>
           <TableHead>{head("Time %", "time")}</TableHead>
           <TableHead>{head("Chargeable", "chargeable")}</TableHead>
           <TableHead>{head("Commercial %", "commercial")}</TableHead>
-          <TableHead>{head("Overtime", "outside")}</TableHead>
+          <TableHead>{head("Above expected", "outside")}</TableHead>
           <TableHead>{head("Travel", "travel")}</TableHead>
           <TableHead className="pr-5">{head("Data complete", "completeness")}</TableHead>
         </TableRow>
@@ -362,7 +362,7 @@ function TeamTable({ rows, onSelect }: { rows: TeamUtilization[]; onSelect: (tea
               <TableCell className="pl-5 font-medium">{row.name}</TableCell>
               <TableCell className="tabular-nums">{row.technicians}</TableCell>
               <TableCell className="tabular-nums">
-                <Explained help={{ title: `${hrs(row.availableMinutes)} available`, lines: [`The available hours of the team's ${who}, added up.`] }}>
+                <Explained help={{ title: `${hrs(row.availableMinutes)} expected`, lines: [`The expected hours of the team's ${who}, added up, on the days they were in it.`] }}>
                   {hrs(row.availableMinutes)}
                 </Explained>
               </TableCell>
@@ -373,7 +373,7 @@ function TeamTable({ rows, onSelect }: { rows: TeamUtilization[]; onSelect: (tea
               </TableCell>
               <TableCell className="font-medium tabular-nums">
                 <Explained
-                  help={{ title: `Time utilization ${pct(row.timePercent)}`, lines: [`${hrs(row.jobMinutes)} job ÷ ${hrs(row.availableMinutes)} available = ${pct(row.timePercent)}`] }}
+                  help={{ title: `Time utilization ${pct(row.timePercent)}`, lines: [`${hrs(row.jobMinutes)} job ÷ ${hrs(row.availableMinutes)} expected = ${pct(row.timePercent)}`] }}
                 >
                   {pct(row.timePercent)}
                 </Explained>
@@ -395,7 +395,7 @@ function TeamTable({ rows, onSelect }: { rows: TeamUtilization[]; onSelect: (tea
                 <Explained
                   help={{
                     title: `Commercial utilization ${pct(row.commercialPercent)}`,
-                    lines: [`${hrs(row.chargeableMinutes)} chargeable ÷ ${hrs(row.availableMinutes)} available = ${pct(row.commercialPercent)}`],
+                    lines: [`${hrs(row.chargeableMinutes)} chargeable ÷ ${hrs(row.availableMinutes)} expected = ${pct(row.commercialPercent)}`],
                   }}
                 >
                   {pct(row.commercialPercent)}
@@ -403,7 +403,7 @@ function TeamTable({ rows, onSelect }: { rows: TeamUtilization[]; onSelect: (tea
               </TableCell>
               <TableCell className="tabular-nums">
                 {row.overtimeMinutes ? (
-                  <Explained help={{ title: `${hrs(row.overtimeMinutes)} overtime`, lines: [`The overtime of the team's ${who}, added up, on the days they were in it.`] }}>
+                  <Explained help={{ title: `${hrs(row.overtimeMinutes)} above expected`, lines: [`The hours above expected of the team's ${who}, added up, for the weeks they were in it.`] }}>
                     {hrs(row.overtimeMinutes)}
                   </Explained>
                 ) : (
@@ -415,7 +415,7 @@ function TeamTable({ rows, onSelect }: { rows: TeamUtilization[]; onSelect: (tea
                   <Explained
                     help={{
                       title: `${hrs(row.travelMinutes ?? 0)} travel`,
-                      lines: [`${row.travelTrips} trips by the team's ${who} in FSM.`, `${hrs(row.travelMinutes ?? 0)} ÷ ${hrs(row.availableMinutes)} available = ${pct(travelShare(row))} of the day.`],
+                      lines: [`${row.travelTrips} trips by the team's ${who} in FSM.`, `${hrs(row.travelMinutes ?? 0)} ÷ ${hrs(row.availableMinutes)} expected = ${pct(travelShare(row))} of the day.`],
                     }}
                   >
                     {hrs(row.travelMinutes ?? 0)} · {pct(travelShare(row))}

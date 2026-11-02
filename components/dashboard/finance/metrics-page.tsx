@@ -185,7 +185,7 @@ export function FinanceMetricsPage() {
 
       {data && data.ledgerReady === false ? (
         <p className="text-muted-foreground -mt-3 text-sm">
-          Ready to invoice is not set up yet (migration 20261024100000), so there is nothing to measure.
+          Ready to invoice is not set up yet, so there is nothing to measure.
         </p>
       ) : null}
 
@@ -228,8 +228,8 @@ export function FinanceMetricsPage() {
           <StatCard
             label="Excluded value"
             value={aed(summary.excluded.value)}
-            headline={`${workOrders(summary.excluded.count)} verified`}
-            caption="Marked not invoiceable and verified"
+            headline={`${workOrders(summary.excluded.count)} excluded`}
+            caption="Marked not to be invoiced"
             href="/finance/queue?status=excluded"
           />
         </StatCardGrid>
@@ -535,7 +535,7 @@ export function FinanceMetricsPage() {
       <div className="grid gap-4">
         <SectionShell
           title="Excluded value by reason"
-          description="Verified exclusions, largest value first."
+          description="Work orders marked not to be invoiced, largest value first."
           icon={<Ban />}
           muted
           loading={waiting}
@@ -545,8 +545,8 @@ export function FinanceMetricsPage() {
           empty={
             <EmptyState
               icon={<Ban />}
-              title="No verified exclusions"
-              description="Work marked not invoiceable shows here once it is verified."
+              title="Nothing excluded"
+              description="Work orders marked not to be invoiced show here."
               className="py-10"
             />
           }

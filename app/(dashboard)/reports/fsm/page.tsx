@@ -21,7 +21,7 @@ const REPORT_PAGES = [
   ResourceType.REPORTS_CAPACITY,
   ResourceType.REPORTS_EXCEPTIONS,
   ResourceType.REPORTS_ATTENDANCE,
-  ResourceType.COMPLIANCE,
+  ResourceType.REPORTS_COMPLIANCE,
 ];
 
 /*

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { CalendarDays, PanelLeftClose, PanelLeftOpen, UsersRound } from "lucide-react";
+import { CalendarDays, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import {
   Sidebar,
   SidebarContent,
@@ -34,7 +34,8 @@ import { SCHEDULING_NAV_COOKIE } from "@/lib/scheduling/nav-preference";
 // from the pathname, which keeps deep links and the back button working.
 const NAV = [
   { name: "Daily Schedule", href: "/scheduling", icon: CalendarDays },
-  { name: "Technicians & Leave", href: "/scheduling/technicians", icon: UsersRound },
+  // Technicians & Leave moved to Workforce → People (C6, 31 Oct 2026), and
+  // its link here came off on 2 Nov: Workforce is in the main menu.
 ] as const;
 
 // Collapsing is deliberately NOT wired through SidebarProvider's open state:

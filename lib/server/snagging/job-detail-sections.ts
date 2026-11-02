@@ -14,6 +14,7 @@ import { listReportVersions } from "@/lib/server/snagging/report-versions";
 import { signMediaPaths } from "@/lib/server/snagging/media";
 import { readAllRows } from "@/lib/server/snagging/read-all";
 import { furnishedByJob } from "@/lib/server/snagging/furnished";
+import { jobVoidState } from "@/lib/server/snagging/quotation-void";
 import { loadSignoffRecords } from "@/lib/server/snagging/signoffs";
 
 /*
@@ -371,6 +372,8 @@ export async function loadJobCore(admin: Admin, id: string) {
     property: propertyWithDocs,
     /* Null when the job has no quotation of its own (raised from scratch). */
     quotation_status: (inspectionQuote?.status as string | undefined) ?? null,
+    /* SNG-100: the quotation is void (property not as quoted) and where its revision stands. */
+    quotation_void: await jobVoidState(admin, id),
     /*
       As quoted (SNG-100): furnished or not, and booked out of hours. A
       de-snag round or visit takes its original job's; null when no

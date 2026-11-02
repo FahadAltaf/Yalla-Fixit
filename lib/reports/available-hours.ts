@@ -45,13 +45,17 @@ export type AvailabilityTechnician = {
   dailyHours?: number | null;
   /** The Service Type in Scheduling ("Data Center", "Maintenance"): it sets the day when dailyHours is null. */
   serviceType?: string | null;
+  /** 2 Nov: the contract's weekly hour limit; null = daily hours x working days. */
+  weeklyHours?: number | null;
+  /** 2 Nov: days off a week, not fixed weekdays; null = 1. */
+  offDaysPerWeek?: number | null;
   /** The team: the technician's supervisor, resolved per day like the rest. */
   teamLeaderId?: string | null;
   /** Dated changes, to resolve the values in force on a past day. */
   history?: AttributeHistory;
 };
 
-export type HistoryField = "shift" | "team_leader_fsm_id" | "rest_weekdays" | "daily_hours";
+export type HistoryField = "shift" | "team_leader_fsm_id" | "rest_weekdays" | "daily_hours" | "weekly_hours" | "off_days_per_week";
 /** Per field, each value and the day it took effect, oldest first. */
 export type AttributeHistory = Partial<Record<HistoryField, Array<{ from: string; value: unknown }>>>;
 
@@ -88,6 +92,10 @@ export type DayAvailability = {
   availableMinutes: number;
   windowStart: string | null;
   windowEnd: string | null;
+  /** 2 Nov, for utilization: the weekly hour limit in force that day (minutes); null = none. */
+  weeklyLimitMinutes?: number | null;
+  /** 2 Nov, for utilization: days off a week in force that day; null = not entered (1 is used). */
+  offDaysPerWeek?: number | null;
 };
 
 export type AvailabilityTotals = {
@@ -268,6 +276,10 @@ export function computeAvailability(input: AvailabilityInput): TechnicianAvailab
       const shift = valueOn(tech.history, "shift", date, tech.shift, input.today);
       const restWeekdays = asWeekdays(valueOn(tech.history, "rest_weekdays", date, tech.restWeekdays, input.today));
       const ownHours = asHours(valueOn(tech.history, "daily_hours", date, tech.dailyHours ?? null, input.today));
+      const weeklyHours = asHours(valueOn(tech.history, "weekly_hours", date, tech.weeklyHours ?? null, input.today));
+      const offDaysValue = valueOn<unknown>(tech.history, "off_days_per_week", date, tech.offDaysPerWeek ?? null, input.today);
+      const offDaysPerWeek = offDaysValue === null || offDaysValue === undefined || offDaysValue === "" ? null : Math.min(6, Math.max(0, Math.round(Number(offDaysValue))));
+      const limits = { weeklyLimitMinutes: weeklyHours === null ? null : Math.round(weeklyHours * 60), offDaysPerWeek };
       const teamLeaderId =
         tech.teamLeaderId === undefined && !tech.history?.team_leader_fsm_id
           ? undefined
@@ -294,6 +306,7 @@ export function computeAvailability(input: AvailabilityInput): TechnicianAvailab
         availableMinutes: 0,
         windowStart: null,
         windowEnd: null,
+        ...limits,
       });
       if (tech.leavingDate && date >= tech.leavingDate) {
         totals.leftDays += 1;
@@ -340,6 +353,7 @@ export function computeAvailability(input: AvailabilityInput): TechnicianAvailab
         availableMinutes,
         windowStart: window.start.toISOString(),
         windowEnd: window.end.toISOString(),
+        ...limits,
       };
     });
 

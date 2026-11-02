@@ -654,7 +654,7 @@ export function FinanceQueueItemPage({ id }: { id: string }) {
             )}
             <p className="text-muted-foreground mt-4 flex items-start gap-1.5 text-xs">
               <Info className="mt-0.5 size-3.5 shrink-0" />
-              The client-signed completion report cannot be linked yet: the Zoho token cannot read service reports (B-01).
+              The client-signed completion report cannot be linked yet: the connection to Zoho FSM is not allowed to read service reports.
             </p>
           </SectionCard>
         </TabsContent>

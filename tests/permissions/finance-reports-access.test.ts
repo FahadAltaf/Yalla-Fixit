@@ -18,8 +18,8 @@ const admin = role("admin", []);
 test("admin does not inherit the four named-person acts (BRD §6.7)", () => {
   assert.equal(hasResourceAction(admin, ResourceType.FINANCE_QUEUE, APPROVE), false, "record invoice");
   assert.equal(hasResourceAction(admin, ResourceType.FINANCE_EXCLUSIONS, APPROVE), false, "verify exclusion");
-  assert.equal(hasResourceAction(admin, ResourceType.COMPLIANCE, EDIT), false, "waive");
-  assert.equal(hasResourceAction(admin, ResourceType.COMPLIANCE, APPROVE), false, "decide dispute");
+  assert.equal(hasResourceAction(admin, ResourceType.REPORTS_COMPLIANCE, EDIT), false, "waive");
+  assert.equal(hasResourceAction(admin, ResourceType.REPORTS_COMPLIANCE, APPROVE), false, "decide dispute");
 });
 
 test("admin keeps everything else, including Reporting Settings", () => {
@@ -49,11 +49,11 @@ test("Finance works the queue and has no access to utilization", () => {
 test("HR sees attendance and compliance and has no access to the queue", () => {
   const hr = role("hr", [
     [ResourceType.REPORTS_ATTENDANCE, VIEW],
-    [ResourceType.COMPLIANCE, VIEW],
+    [ResourceType.REPORTS_COMPLIANCE, VIEW],
   ]);
-  assert.equal(hasResourceAction(hr, ResourceType.COMPLIANCE, VIEW), true);
+  assert.equal(hasResourceAction(hr, ResourceType.REPORTS_COMPLIANCE, VIEW), true);
   assert.equal(hasResourceAction(hr, ResourceType.FINANCE_QUEUE, VIEW), false);
-  assert.equal(hasResourceAction(hr, ResourceType.COMPLIANCE, EDIT), false);
+  assert.equal(hasResourceAction(hr, ResourceType.REPORTS_COMPLIANCE, EDIT), false);
 });
 
 test("a coordinator can request an exclusion but not verify it", () => {
@@ -65,7 +65,7 @@ test("a coordinator can request an exclusion but not verify it", () => {
 test("a technician's own-compliance grant gives nothing else", () => {
   const technician = role("technician", [[ResourceType.COMPLIANCE_SELF, VIEW]]);
   assert.equal(hasResourceAction(technician, ResourceType.COMPLIANCE_SELF, VIEW), true);
-  assert.equal(hasResourceAction(technician, ResourceType.COMPLIANCE, VIEW), false);
+  assert.equal(hasResourceAction(technician, ResourceType.REPORTS_COMPLIANCE, VIEW), false);
   assert.equal(hasResourceAction(technician, ResourceType.REPORTS_ATTENDANCE, EXPORT), false);
 });
 

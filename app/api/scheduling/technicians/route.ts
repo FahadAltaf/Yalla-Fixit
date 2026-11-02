@@ -25,6 +25,10 @@ const schema = z.object({
     restWeekdays: z.array(z.number().int().min(1).max(7)).max(7).nullable().optional(),
     // Hours a working day; null = the standard day (8 h). Data centre staff: 12.
     dailyHours: z.number().min(1).max(24).multipleOf(0.25).nullable().optional(),
+    // 2 Nov: the contract's weekly limit (e.g. 48, 60); null = daily hours x working days.
+    weeklyHours: z.number().min(1).max(168).multipleOf(0.25).nullable().optional(),
+    // 2 Nov: days off a week, not fixed weekdays; null = 1.
+    offDaysPerWeek: z.number().int().min(0).max(6).nullable().optional(),
   }),
 });
 
@@ -59,6 +63,8 @@ export async function PUT(req: NextRequest) {
     }
 
     if ("dailyHours" in attributes) patch.daily_hours = attributes.dailyHours ?? null;
+    if ("weeklyHours" in attributes) patch.weekly_hours = attributes.weeklyHours ?? null;
+    if ("offDaysPerWeek" in attributes) patch.off_days_per_week = attributes.offDaysPerWeek ?? null;
 
     if (Object.keys(patch).length === 0) {
       return NextResponse.json({ error: "No attributes to update" }, { status: 400 });
@@ -85,10 +91,10 @@ export async function PUT(req: NextRequest) {
         { status: 400 },
       );
     }
-    // 42703: daily_hours before migration 20261028100000 is applied.
-    if (error?.code === "42703" && "daily_hours" in patch) {
+    // 42703: daily_hours, weekly_hours or off_days_per_week before their database update is applied.
+    if (error?.code === "42703" && ("daily_hours" in patch || "weekly_hours" in patch || "off_days_per_week" in patch)) {
       return NextResponse.json(
-        { error: "Daily hours can be saved once the 28 Oct database update is applied" },
+        { error: "Working hours can be saved once the database update for them is applied" },
         { status: 400 },
       );
     }

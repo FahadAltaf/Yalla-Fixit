@@ -7,6 +7,11 @@ import {
 } from "./amc-brochure-copy";
 import { AMC_PROVIDER, AMC_SERVICES } from "./amc-constants";
 import {
+  AMC_GENERAL_CONDITIONS,
+  AMC_SCOPE_LIBRARY,
+  type AmcLibraryService,
+} from "./amc-scope-library";
+import {
   BANK_DETAILS,
   CLAUSE_2_INTRO,
   CLAUSE_6_2_INTRO,
@@ -68,6 +73,8 @@ export const AMC_CLAUSE_TEXT_ROLES = [
   "materials",
   "servicesExcluded",
   "excludedOffer",
+  /* The conditions that apply to every service (Scope of Works Library). */
+  "generalConditions",
   "priceListIntro",
   "handymanRates",
   "generalTerms",
@@ -151,7 +158,14 @@ export const amcServiceSchema = z.object({
    * What goes in the frequency column: a set number of visits a year
    * (ppm), unlimited, covered, a handyman allowance, or a fixed job.
    */
-  frequencyType: z.enum(["covered", "unlimited", "ppm", "handyman", "fixed"]),
+  frequencyType: z.enum(["covered", "unlimited", "ppm", "handyman", "fixed", "weekly", "manpower"]),
+  /** Scope of Works Library: its reference (A1) and the group it sits in. */
+  ref: z.string().optional(),
+  category: z.string().optional(),
+  /** What one unit is: "Per AC unit per visit". */
+  unitOfMeasure: z.string().optional(),
+  /** Printed after the frequency: " + call-backs", " (quarterly)". */
+  frequencySuffix: z.string().optional(),
   /** Where the table starts it (FR2.3); the proposal can change it. */
   frequencyPerYear: z.number().optional(),
   /**
@@ -232,6 +246,9 @@ export const amcSettingsSchema = z.object({
     /* 5: the other services offered. First block introduces the list, the
        last is the closing note, everything between is a point. */
     excludedOffer: z.string(),
+    /* After the services: one "Title: description" block per condition,
+       numbered by the document. */
+    generalConditions: z.string(),
     /* 6.2: the title line, then the paragraphs above the price list. */
     priceListIntro: z.string(),
     /* 6.3: the title line, then one line per rate ("A. First hour ..."). */
@@ -298,6 +315,13 @@ export const amcSettingsOverridesSchema = z
     approval: amcSettingsSchema.shape.approval.partial().optional(),
     /* The whole list, for the same reason the clauses are. */
     accountManagers: z.array(amcAccountManagerEntrySchema).optional(),
+    /*
+      The clause roles this install knew of when the list was last saved.
+      A standard clause added in a later release (General Conditions, Nov
+      2026) is put into a saved list that has never seen it; one an admin
+      took out after it existed stays out.
+    */
+    knownRoles: z.array(z.string()).optional(),
   })
   .default({});
 
@@ -312,6 +336,29 @@ function joinLines(...parts: (string | string[] | undefined)[]): string {
     .flatMap((part) => (Array.isArray(part) ? part : part ? [part] : []))
     .filter(Boolean)
     .join("\n\n");
+}
+
+/*
+  A library service's scope as AMC Settings stores it: the five parts of
+  every clause, each under a heading line ending in a colon, which is how
+  the editor shows a sub-heading and how the contract knows where one
+  part ends. Several blocks under a heading print as points; one prints
+  as a paragraph.
+*/
+export function libraryScopeText(entry: AmcLibraryService): string {
+  return joinLines(
+    "Objective:",
+    entry.objective,
+    "Scope of Work (Included):",
+    entry.included,
+    "Exclusions:",
+    entry.exclusions,
+    "Unit & Frequency Basis:",
+    `Unit: ${entry.unitOfMeasure}.`,
+    entry.basis,
+    "Deliverables:",
+    entry.deliverables,
+  );
 }
 
 function clause1Section(title: string, key: "paragraphs" | "bullets"): string {
@@ -371,6 +418,7 @@ const STANDARD_CLAUSES: ReadonlyArray<StandardClause> = [
   { id: "workingHours", role: "workingHours", title: "Working Hours", level: 2, enabled: true },
   { id: "scopeIntro", role: "scopeIntro", title: "Scope of Works", level: 1, enabled: true },
   { id: "scopeServices", role: "scopeServices", title: "Services on this contract", level: 2, enabled: true },
+  { id: "generalConditions", role: "generalConditions", title: "General Conditions", level: 2, enabled: true },
   { id: "callOuts", title: "Emergency & Non-Emergency Call-Out", level: 1, enabled: true },
   { id: "emergencyCallOut", role: "emergencyCallOut", title: "Emergency Call-Out", level: 2, enabled: true },
   { id: "nonEmergencyCallOut", role: "nonEmergencyCallOut", title: "Non-Emergency Call-Out", level: 2, enabled: true },
@@ -425,12 +473,18 @@ export function getAmcSettingsDefaults(): AmcSettings {
      line they show in the proposal's coverage column. */
   const serviceScopes: Record<string, string> = {};
   for (const service of AMC_SERVICES) {
+    // The Scope of Works Library's wording first; the call-outs and the
+    // hotline keep the one line the proposal prints, as before.
+    const entry = AMC_SCOPE_LIBRARY.find((item) => item.id === service.id);
     const section = SCOPE_SECTIONS.find(
       (item) => item.serviceId === service.id,
     );
-    serviceScopes[service.id] = section
-      ? joinLines(section.intro, section.bullets)
-      : (SERVICE_SUMMARY[service.id] ?? service.scope);
+    serviceScopes[service.id] =
+      entry && service.hasScopeSection
+        ? libraryScopeText(entry)
+        : section
+          ? joinLines(section.intro, section.bullets)
+          : (SERVICE_SUMMARY[service.id] ?? service.scope);
   }
 
   const defaults: AmcSettings = {
@@ -458,6 +512,9 @@ export function getAmcSettingsDefaults(): AmcSettings {
         CLAUSE_5_EXCLUDED.bullets,
       ),
       excludedOffer: joinLines(CLAUSE_5_EXCLUDED.footerParagraphs),
+      generalConditions: joinLines(
+        AMC_GENERAL_CONDITIONS.map((item) => `${item.title}: ${item.description}`),
+      ),
       priceListIntro: joinLines(
         CLAUSE_6_2_INTRO[0].replace(/\.$/, ""),
         CLAUSE_6_2_INTRO.slice(1),
@@ -485,11 +542,21 @@ export function getAmcSettingsDefaults(): AmcSettings {
       id: service.id,
       label: service.label,
       scope: service.scope,
-      sectionTitle: SCOPE_SECTIONS.find((item) => item.serviceId === service.id)?.title,
+      sectionTitle:
+        service.sectionTitle ??
+        SCOPE_SECTIONS.find((item) => item.serviceId === service.id)?.title,
       frequencyType: service.frequencyType,
       frequencyPerYear: service.frequencyPerYear,
       villaOnly: service.villaOnly,
-      unitTypes: service.villaOnly ? (["villa"] as const).slice() : [...AMC_UNIT_TYPES],
+      unitTypes: service.unitTypes?.length
+        ? [...service.unitTypes]
+        : service.villaOnly
+          ? (["villa"] as const).slice()
+          : [...AMC_UNIT_TYPES],
+      ...(service.ref ? { ref: service.ref } : {}),
+      ...(service.category ? { category: service.category } : {}),
+      ...(service.unitOfMeasure ? { unitOfMeasure: service.unitOfMeasure } : {}),
+      ...(service.frequencySuffix ? { frequencySuffix: service.frequencySuffix } : {}),
       hasScopeSection: service.hasScopeSection,
       reference: service.reference ?? "",
       enabled: true,
@@ -539,9 +606,26 @@ function withoutListMarkers(body: string): string {
     .join("\n");
 }
 
+/*
+  Standard clauses added after clause lists could be saved, each with the
+  clause it follows. A saved list that has never seen one gets it there;
+  see knownRoles.
+*/
+const ADDED_CLAUSES: ReadonlyArray<{ role: AmcClauseRole; after: AmcClauseRole }> = [
+  { role: "generalConditions", after: "scopeServices" },
+];
+
+/* The roles this release knows, saved with a clause list (knownRoles). */
+export const KNOWN_CLAUSE_ROLES: readonly string[] = AMC_CLAUSE_ROLES;
+
 export function mergeAmcSettings(
   defaults: AmcSettings,
   overrides: AmcSettingsOverrides | null | undefined,
+  /*
+    A sent proposal's frozen copy: printed exactly as it was sent, so no
+    clause added since is put into it.
+  */
+  options: { frozen?: boolean } = {},
 ): AmcSettings {
   if (!overrides) return defaults;
 
@@ -573,9 +657,10 @@ export function mergeAmcSettings(
     if (typeof body === "string") mergedClauses[role] = withoutListMarkers(body);
   }
 
-  const clauseList = (
-    overrides.clauseList?.length ? overrides.clauseList : clauseListFrom(mergedClauses)
-  ).map((clause) =>
+  const savedList = overrides.clauseList?.length
+    ? withAddedClauses(overrides.clauseList, overrides.knownRoles, mergedClauses, options.frozen)
+    : null;
+  const clauseList = (savedList ?? clauseListFrom(mergedClauses)).map((clause) =>
     clause.role && (NUMBERED_BODY_ROLES as readonly string[]).includes(clause.role)
       ? { ...clause, body: withoutListMarkers(clause.body ?? "") }
       : clause,
@@ -624,6 +709,36 @@ export function mergeAmcSettings(
     accountManagers:
       overrides.accountManagers ?? defaults.accountManagers,
   };
+}
+
+/*
+  A saved list with the standard clauses it predates put in, each after the
+  clause it belongs with (or at the end when that one was taken out). Only
+  roles the list has never seen: one an admin removed after it existed is
+  in knownRoles and stays out.
+*/
+function withAddedClauses(
+  list: AmcClause[],
+  knownRoles: string[] | undefined,
+  clauses: AmcSettings["clauses"],
+  frozen: boolean | undefined,
+): AmcClause[] {
+  if (frozen) return list;
+  const known = new Set(knownRoles ?? []);
+  let out = list;
+  for (const added of ADDED_CLAUSES) {
+    if (known.has(added.role) || out.some((clause) => clause.role === added.role)) continue;
+    const standard = STANDARD_CLAUSES.find((clause) => clause.role === added.role);
+    if (!standard) continue;
+    const textRoles = new Set<string>(AMC_CLAUSE_TEXT_ROLES);
+    const clause: AmcClause = {
+      ...standard,
+      body: textRoles.has(added.role) ? (clauses[added.role as AmcClauseTextRole] ?? "") : "",
+    };
+    const at = out.findIndex((item) => item.role === added.after);
+    out = at === -1 ? [...out, clause] : [...out.slice(0, at + 1), clause, ...out.slice(at + 1)];
+  }
+  return out;
 }
 
 /**
@@ -698,5 +813,7 @@ export function resolveAmcSettings(
      clause became editable has no copy of it in its snapshot. At send time
      that clause could only have been the shipped text, which is what the
      default still is — so the document prints exactly as it was sent. */
-  return snapshot ? mergeAmcSettings(getAmcSettingsDefaults(), snapshot) : live;
+  return snapshot
+    ? mergeAmcSettings(getAmcSettingsDefaults(), snapshot, { frozen: true })
+    : live;
 }

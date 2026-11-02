@@ -118,8 +118,8 @@ export function QuotationSummaryPage() {
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <HowItWorks content={quotationsHowItWorks(data ? { limits: data.limits, expiryWarningDays: data.expiryWarningDays } : undefined)} />
+            {/* The dates are when the quotations were created (said in the info dialog). */}
             <ReportDateRange
-              label="Created"
               from={filters.from || data?.from || lastThirtyDays().from}
               to={filters.to || data?.to || lastThirtyDays().to}
               onChange={(from, to) => change({ ...filters, from, to })}

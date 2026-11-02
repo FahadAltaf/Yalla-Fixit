@@ -4,11 +4,14 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { emailService } from "@/lib/email-service";
 import {
   canDeleteTodoRecord,
+  canEditTodoContent,
   canEditTodoRecord,
   canViewTodoRecord,
   hasResourceAction,
 } from "@/lib/role-permissions";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
+import { isMissingTable, loadMentions } from "@/lib/server/todos/access";
+import { listTodoObjectPaths, removeObjects } from "@/lib/server/todos/attachments";
 import { ActionType, ResourceType, Todo, TodoRelatedType, TodoStatus, User } from "@/types/types";
 
 const TODO_STATUSES = ["todo", "in_progress", "done", "canceled", "blocked"] as const;
@@ -97,9 +100,13 @@ async function loadTodos(todoIds?: string[]): Promise<Todo[]> {
     { data: owners, error: ownersError },
   ] = await Promise.all([
     admin.from("todo_assignees").select("todo_id,user_profile(id,email,first_name,last_name,full_name,profile_image)").in("todo_id", ids),
-    admin.from("todo_comments").select("id,todo_id,author_id,body,created_at,updated_at,user_profile(id,email,first_name,last_name,full_name,profile_image)").in("todo_id", ids).order("created_at", { ascending: true }),
+    // The author embed names its foreign key: since todo_comment_mentions
+    // (FR-17) also joins comments to user_profile, PostgREST sees two paths
+    // and refuses a bare `user_profile(...)`.
+    admin.from("todo_comments").select("id,todo_id,author_id,body,created_at,updated_at,user_profile!todo_comments_author_id_fkey(id,email,first_name,last_name,full_name,profile_image)").in("todo_id", ids).order("created_at", { ascending: true }),
     admin.from("todo_updates").select("id,todo_id,actor_id,action,field_name,old_value,new_value,created_at,user_profile(id,email,first_name,last_name,full_name,profile_image)").in("todo_id", ids).order("created_at", { ascending: false }),
-    admin.from("user_profile").select("id,email,first_name,last_name,full_name,profile_image").in("id", ownerIds),
+    // is_task_manager feeds the FR-20 privacy rule in lib/role-permissions.ts.
+    admin.from("user_profile").select("id,email,first_name,last_name,full_name,profile_image,is_task_manager").in("id", ownerIds),
   ]);
 
   if (assigneeError) throw new Error(assigneeError.message);
@@ -111,6 +118,34 @@ async function loadTodos(todoIds?: string[]): Promise<Todo[]> {
   const assigneesByTodo = new Map<string, User[]>();
   const commentsByTodo = new Map<string, Todo["comments"]>();
   const updatesByTodo = new Map<string, Todo["updates"]>();
+
+  /*
+    FR-17 mentions and FR-16 attachment counts. Both tables arrive with
+    migrations 20261020140000/150000; until they are applied the reads
+    answer 42P01 (undefined table) and the todos simply carry none, so a
+    deploy that reaches this code first does not take the todos page down.
+  */
+  const commentIds = (commentRows ?? []).map((row: any) => row.id as string);
+  const mentionsByComment = new Map<string, string[]>();
+  (await loadMentions(admin, commentIds)).forEach((row) => {
+    const current = mentionsByComment.get(row.comment_id) ?? [];
+    current.push(row.user_id);
+    mentionsByComment.set(row.comment_id, current);
+  });
+  const attachmentCountByTodo = new Map<string, number>();
+  for (let index = 0; index < ids.length; index += 100) {
+    const { data: attachmentRows, error: attachmentError } = await admin
+      .from("todo_attachments")
+      .select("todo_id")
+      .in("todo_id", ids.slice(index, index + 100));
+    if (attachmentError) {
+      if (isMissingTable(attachmentError.code)) break;
+      throw new Error(attachmentError.message);
+    }
+    (attachmentRows ?? []).forEach((row: { todo_id: string }) => {
+      attachmentCountByTodo.set(row.todo_id, (attachmentCountByTodo.get(row.todo_id) ?? 0) + 1);
+    });
+  }
 
   (assigneeRows ?? []).forEach((row: any) => {
     const user = row.user_profile as User | null;
@@ -130,6 +165,7 @@ async function loadTodos(todoIds?: string[]): Promise<Todo[]> {
       created_at: row.created_at,
       updated_at: row.updated_at,
       author: row.user_profile ?? undefined,
+      mentions: mentionsByComment.get(row.id) ?? [],
     });
     commentsByTodo.set(row.todo_id, current);
   });
@@ -170,6 +206,17 @@ async function loadTodos(todoIds?: string[]): Promise<Todo[]> {
     assignees: assigneesByTodo.get(row.id) ?? [],
     comments: commentsByTodo.get(row.id) ?? [],
     updates: updatesByTodo.get(row.id) ?? [],
+    mentioned_user_ids: Array.from(
+      new Set((commentsByTodo.get(row.id) ?? []).flatMap((comment) => comment.mentions ?? [])),
+    ),
+    owner_mentioned_user_ids: Array.from(
+      new Set(
+        (commentsByTodo.get(row.id) ?? [])
+          .filter((comment) => comment.author_id === row.owner_id)
+          .flatMap((comment) => comment.mentions ?? []),
+      ),
+    ),
+    attachment_count: attachmentCountByTodo.get(row.id) ?? 0,
   }));
 }
 
@@ -250,13 +297,33 @@ function sortTodos(todos: Todo[], req: NextRequest) {
   });
 }
 
-async function sendAssignmentEmails(todo: Todo, assigneeIds: string[]) {
+const ASSIGNMENT_EMAIL_FAILED = "assignment_email_failed";
+const CONTENT_CHANGE_IGNORED = "title_description_owner_only";
+
+/**
+ * FR-18 (Portal FRD, 20 Oct 2026). The assignment email is sent AFTER the
+ * database write has committed, so a Resend or network failure here must
+ * not be reported as a failed save: the screen used to show "Failed to
+ * save todo" for a change that was in fact saved, and a retry created a
+ * duplicate. Failures are logged and returned as a warning instead.
+ */
+async function sendAssignmentEmails(todo: Todo, assigneeIds: string[]): Promise<string[]> {
   const assignees = todo.assignees?.filter((user) => assigneeIds.includes(user.id)) ?? [];
-  await Promise.all(
+  const results = await Promise.allSettled(
     assignees
       .filter((user) => user.email)
       .map((user) => emailService.sendTodoAssignedEmail(user.email!, todo))
   );
+  const failed = results.filter((result) => result.status === "rejected");
+  if (failed.length === 0) return [];
+  failed.forEach((result) =>
+    console.error(`Todo ${todo.todo_key}: assignment email failed:`, (result as PromiseRejectedResult).reason)
+  );
+  return [ASSIGNMENT_EMAIL_FAILED];
+}
+
+function withWarnings(todo: Todo, warnings: string[]) {
+  return warnings.length > 0 ? { ...todo, warnings } : todo;
 }
 
 async function insertTodoUpdates(
@@ -339,7 +406,10 @@ export async function GET(req: NextRequest) {
       200,
     );
 
-    const todos = await loadTodos();
+    // `?id=` fetches one todo (an open dialog refreshing itself) without
+    // loading every todo there is.
+    const singleId = req.nextUrl.searchParams.get("id");
+    const todos = await loadTodos(singleId ? [singleId] : undefined);
     const visibleTodos = todos.filter((todo) =>
       canViewTodoRecord(accessUser, todo, profile.id)
     );
@@ -397,7 +467,9 @@ export async function POST(req: NextRequest) {
 
     if (error || !created) throw new Error(error?.message || "Todo creation failed");
 
-    const assigneeRows = payload.assigneeIds.map((userId) => ({
+    // De-duplicated: (todo_id, user_id) is the primary key, and a repeated
+    // id would leave a freshly created todo with no assignees at all.
+    const assigneeRows = Array.from(new Set(payload.assigneeIds)).map((userId) => ({
       todo_id: created.id,
       user_id: userId,
     }));
@@ -417,10 +489,10 @@ export async function POST(req: NextRequest) {
       },
     ]);
 
-    await sendAssignmentEmails(todo, payload.assigneeIds);
+    const warnings = await sendAssignmentEmails(todo, payload.assigneeIds);
 
     const [todoWithUpdates] = await loadTodos([created.id]);
-    return NextResponse.json({ data: todoWithUpdates });
+    return NextResponse.json({ data: withWarnings(todoWithUpdates, warnings) });
   } catch (error) {
     console.error("Todos POST error:", error);
     return NextResponse.json({ error: "Failed to create todo" }, { status: 500 });
@@ -449,6 +521,26 @@ export async function PUT(req: NextRequest) {
 
     const admin = await createAdminServerClient();
     const payload = parsed.data;
+    const warnings: string[] = [];
+
+    /*
+      FR-19: only the owner changes the title and the description. The
+      screen always sends the full form, and it can hold a title the owner
+      has renamed since the dialog opened, so a non-owner's title and
+      description are dropped here rather than refused: the rest of the
+      save (status, deadline, assignees, ...) still goes through, and a
+      warning says what was ignored when the values actually differed.
+    */
+    if (!canEditTodoContent(existing, profile.id)) {
+      // The schema trims the payload; old rows may still carry stray whitespace.
+      const contentChanged =
+        (payload.title !== undefined && payload.title !== existing.title.trim()) ||
+        (payload.description !== undefined && payload.description !== existing.description.trim());
+      if (contentChanged) warnings.push(CONTENT_CHANGE_IGNORED);
+      delete payload.title;
+      delete payload.description;
+    }
+
     const changeLog = buildTodoChangeLog(existing, payload);
     const updateData: Record<string, unknown> = {
       updated_at: new Date().toISOString(),
@@ -475,15 +567,30 @@ export async function PUT(req: NextRequest) {
     let newAssigneeIds: string[] = [];
     if (payload.assigneeIds) {
       const oldAssigneeIds = existing.assignees?.map((user) => user.id) ?? [];
-      newAssigneeIds = payload.assigneeIds.filter((id) => !oldAssigneeIds.includes(id));
+      const wantedIds = Array.from(new Set(payload.assigneeIds));
+      newAssigneeIds = wantedIds.filter((id) => !oldAssigneeIds.includes(id));
+      const removedIds = oldAssigneeIds.filter((id) => !wantedIds.includes(id));
 
-      const { error: deleteError } = await admin.from("todo_assignees").delete().eq("todo_id", payload.id);
-      if (deleteError) throw new Error(deleteError.message);
-
-      const { error: insertError } = await admin.from("todo_assignees").insert(
-        payload.assigneeIds.map((userId) => ({ todo_id: payload.id, user_id: userId }))
-      );
-      if (insertError) throw new Error(insertError.message);
+      /*
+        A diff, not delete-all-then-insert: the old sequence left the task
+        with no assignees at all when the insert failed half way (there is
+        no transaction across the two calls). Adding first and removing
+        second means the row count never drops below the new list.
+      */
+      if (newAssigneeIds.length > 0) {
+        const { error: insertError } = await admin.from("todo_assignees").insert(
+          newAssigneeIds.map((userId) => ({ todo_id: payload.id, user_id: userId }))
+        );
+        if (insertError) throw new Error(insertError.message);
+      }
+      if (removedIds.length > 0) {
+        const { error: deleteError } = await admin
+          .from("todo_assignees")
+          .delete()
+          .eq("todo_id", payload.id)
+          .in("user_id", removedIds);
+        if (deleteError) throw new Error(deleteError.message);
+      }
     }
 
     const [todo] = await loadTodos([payload.id]);
@@ -502,11 +609,11 @@ export async function PUT(req: NextRequest) {
     await insertTodoUpdates(payload.id, profile.id, changeLog);
 
     if (newAssigneeIds.length > 0) {
-      await sendAssignmentEmails(todo, newAssigneeIds);
+      warnings.push(...(await sendAssignmentEmails(todo, newAssigneeIds)));
     }
 
     const [todoWithUpdates] = await loadTodos([payload.id]);
-    return NextResponse.json({ data: todoWithUpdates });
+    return NextResponse.json({ data: withWarnings(todoWithUpdates, warnings) });
   } catch (error) {
     console.error("Todos PUT error:", error);
     return NextResponse.json({ error: "Failed to update todo" }, { status: 500 });
@@ -532,8 +639,13 @@ export async function DELETE(req: NextRequest) {
     }
 
     const admin = await createAdminServerClient();
+    // FR-16: the attachment rows cascade with the todo, the objects do not.
+    // Paths first, row second, objects last: a failed row delete must not
+    // leave a live task pointing at files that are gone.
+    const objectPaths = await listTodoObjectPaths(admin, id);
     const { error } = await admin.from("todos").delete().eq("id", id);
     if (error) throw new Error(error.message);
+    await removeObjects(admin, objectPaths, id);
 
     return NextResponse.json({ data: { success: true } });
   } catch (error) {

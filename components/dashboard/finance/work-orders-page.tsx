@@ -5,7 +5,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Info, Loader2, ReceiptText } from "lucide-react";
 import { toast } from "sonner";
 
-import { PageHeading, PillTabs, StatCard, StatCardGrid, timeAgo } from "@/components/dashboard/shared/kaizen";
+import { PageHeading, StatCard, StatCardGrid, timeAgo } from "@/components/dashboard/shared/kaizen";
 import { ErrorState, StatGridSkeleton } from "@/components/dashboard/shared/kaizen-states";
 import { refreshAll, useSection } from "@/components/dashboard/snagging/overview/use-section";
 import { DataTable } from "@/components/data-table";
@@ -53,6 +53,9 @@ const STATUS_FILTERS: Array<{ value: string; label: string }> = [
   ...(Object.keys(QUEUE_STATUS_LABELS) as QueueStatus[])
     .filter((status) => status !== "non_billable" && status !== "void")
     .map((status) => ({ value: status, label: QUEUE_STATUS_LABELS[status] })),
+  /* 30 Oct: what Operations has marked (Complete confirmed; lines marked, not yet confirmed). */
+  { value: "ops_partial", label: "Partially complete (Operations)" },
+  { value: "ops_complete", label: "Complete (Operations)" },
 ];
 
 const LIST_STALE_MS = 10 * 60_000;
@@ -82,16 +85,6 @@ export function FinanceWorkOrdersPage() {
     }),
     [params],
   );
-  /*
-    The tab clicked, held here until the URL catches up: Next only commits the
-    new URL once the route has answered, which left the old tab lit meanwhile.
-  */
-  const [pickedView, setPickedView] = useState<"finance" | "operations" | null>(null);
-  const urlView = params.get("view");
-  useEffect(() => {
-    if (pickedView && urlView === pickedView) setPickedView(null);
-  }, [pickedView, urlView]);
-  const askedView = pickedView ?? urlView;
   const attention = params.get("attention") === "1";
   /* The date boxes always show the dates in use: the last 30 days until changed. */
   const today = todayInZone();
@@ -159,7 +152,6 @@ export function FinanceWorkOrdersPage() {
   }, [pendingQuery, currentQuery]);
 
   const query = new URLSearchParams();
-  if (askedView === "finance" || askedView === "operations") query.set("view", askedView);
   if (attention) query.set("attention", "1");
   if (filters.status !== "all") query.set("status", filters.status);
   for (const key of ["fsm", "from", "to"] as const) if (filters[key]) query.set(key, filters[key]);
@@ -184,14 +176,8 @@ export function FinanceWorkOrdersPage() {
     setParams({ page: Math.max(0, Math.ceil(data.total / pageSize) - 1) });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only when an answer arrives
   }, [data, loading]);
-  /*
-    The tab clicked shows at once (the URL), not when its data arrives; one
-    the person may not see falls back to what the server answered.
-  */
-  const askedAllowed =
-    (askedView === "finance" || askedView === "operations") &&
-    (!data?.can || (askedView === "finance" ? data.can.finance : data.can.operations));
-  const view: "finance" | "operations" = askedAllowed ? (askedView as "finance" | "operations") : (data?.view ?? "finance");
+  /* 2 Nov: no Finance / Operations tabs; the person's role decides the view, and the server answers with it. */
+  const view: "finance" | "operations" = data?.view ?? "finance";
   const operations = view === "operations";
   /* The other view is still being read from FSM: its cards and rows are not shown under this tab. */
   const switching = Boolean(data && data.view !== view);
@@ -230,20 +216,6 @@ export function FinanceWorkOrdersPage() {
         }
       />
 
-      {data?.can?.finance && data.can.operations ? (
-        <PillTabs<"finance" | "operations">
-          value={view}
-          onChange={(next) => {
-            setPickedView(next);
-            filterBy({ view: next, attention: false, status: "all", page: 0 });
-          }}
-          tabs={[
-            { value: "finance", label: "Finance" },
-            { value: "operations", label: "Operations", count: data.view === "operations" && !switching ? data.needsCompleting : undefined },
-          ]}
-        />
-      ) : null}
-
       {loading || refreshing ? (
         <p className="text-muted-foreground -mt-3 flex items-center gap-1.5 text-xs">
           <Loader2 className="size-3.5 animate-spin" />
@@ -263,7 +235,7 @@ export function FinanceWorkOrdersPage() {
         <Alert>
           <Info className="size-4" />
           <AlertTitle>Ready marks, workflow and invoices are off</AlertTitle>
-          <AlertDescription>Apply migration 20261024100000 to record MAHER invoices, queries and holds.</AlertDescription>
+          <AlertDescription>Ready to invoice is not set up yet (a database update is still to be applied), so MAHER invoices, queries and holds cannot be recorded.</AlertDescription>
         </Alert>
       ) : null}
       {data?.clamped ? (
@@ -376,7 +348,7 @@ export function FinanceWorkOrdersPage() {
           loading={rowsLoading}
           rowCount={data?.total ?? 0}
           isPagination
-          handleRowClick={(row) => router.push(`/finance/queue/${row.id}?as=${view}`)}
+          handleRowClick={(row) => router.push(`/finance/queue/${row.id}`)}
           emptyState={
             <EmptyState
               icon={<ReceiptText />}

@@ -15,7 +15,7 @@ import { ActionType, ResourceType } from "@/types/types";
  * Body: { month, reason, note?, eventKeys? | outage?: { from, to, kinds } }
  */
 export async function POST(req: NextRequest) {
-  const gate = await requireResourceAccess(ResourceType.COMPLIANCE, ActionType.EDIT);
+  const gate = await requireResourceAccess(ResourceType.REPORTS_COMPLIANCE, ActionType.EDIT);
   if (!gate.ok) return gate.response;
 
   const parsed = waiverRequestSchema.safeParse(await req.json().catch(() => null));

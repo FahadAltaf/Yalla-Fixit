@@ -650,7 +650,7 @@ export async function waiveMisses(
   actor: { id: string; label: string },
 ): Promise<{ waived: number; matched: number }> {
   const work = await workOutMonth(admin, input.month);
-  if (!work.storageReady) throw new ComplianceError("Waivers need migration 20261023100000 to be applied first.", 409);
+  if (!work.storageReady) throw new ComplianceError("Waivers are not set up yet: a database update is still to be applied.", 409);
   if (work.phase.phase === "final") throw new ComplianceError(`Disputes for ${input.month} closed on ${work.phase.cutoffDate}.`, 409);
 
   const misses = [...work.results.values()].flatMap((r) => r.events).filter((e) => e.state === "missed");
@@ -704,7 +704,7 @@ export async function waiveMisses(
  */
 export async function finalizeMonth(admin: SupabaseClient, month: string, actor: { id: string; label: string }): Promise<number> {
   const work = await workOutMonth(admin, month);
-  if (!work.storageReady) throw new ComplianceError("Finalising needs migration 20261023100000 to be applied first.", 409);
+  if (!work.storageReady) throw new ComplianceError("Finalising is not set up yet: a database update is still to be applied.", 409);
   if (work.phase.phase !== "final") {
     throw new ComplianceError(`Disputes for ${month} are open until ${work.phase.cutoffDate}.`, 409);
   }
@@ -715,7 +715,7 @@ export async function finalizeMonth(admin: SupabaseClient, month: string, actor:
   }
   if (!work.sources.shift || !work.sources.appointment) {
     throw new ComplianceError(
-      "A month is finalised only on complete check-in data. Shift check-ins cannot be read from FSM yet (B-01).",
+      "A month is finalised only on complete check-in data, and shift check-ins cannot be read from FSM yet.",
       409,
     );
   }

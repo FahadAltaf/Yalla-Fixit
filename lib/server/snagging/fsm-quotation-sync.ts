@@ -2,7 +2,7 @@ import { after } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { FsmConfigError, fsmFetch, fsmGetRecord, getFsmAccessToken } from "@/lib/server/zoho/fsm-client";
-import { fsmMessage } from "@/lib/server/zoho/fsm-contacts";
+import { fsmMessage, getContact } from "@/lib/server/zoho/fsm-contacts";
 import { hasColumn, hasTable } from "@/lib/server/snagging/columns";
 import { ensurePropertyInFsm, isRealAddressId } from "@/lib/server/snagging/fsm-clients";
 
@@ -212,13 +212,35 @@ export async function ensureContact(
   }
 
   if (contactId) {
+    /*
+      FSM keeps one contact per email and is the client record, so the
+      portal's client takes that contact's details. It kept its own name
+      before, and a quotation read "UAT TEST 0510 Main" while its estimate
+      in FSM was for "Sami UAT Testing", the same email (UAT retest, point 2).
+    */
+    const contact = await getContact(token, contactId).catch(() => null);
+    const renamed = contact && contact.name && contact.name !== client.name ? contact.name : null;
+    if (contact) {
+      await admin
+        .from("snagging_clients")
+        .update({
+          name: contact.name || client.name,
+          phone: contact.mobile ?? contact.phone ?? client.phone ?? null,
+          company: contact.company?.name || client.company || null,
+          fsm_company_id: contact.company?.id ?? null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", client.id);
+    }
     await log(admin, {
       quotationId,
       clientId: client.id,
       action: "contact_link",
       status: "success",
       recordId: contactId,
-      message: "Client found in FSM and linked",
+      message: renamed
+        ? `Client found in FSM by email and linked: FSM has it as ${renamed}, so the portal client "${client.name}" now shows that name`
+        : "Client found in FSM and linked",
       actorId,
     });
   } else {

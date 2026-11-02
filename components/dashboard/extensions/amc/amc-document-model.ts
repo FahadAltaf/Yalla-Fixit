@@ -17,8 +17,13 @@ import {
   formatDesignationLabel,
   formatDisplayDate,
   formatPaymentTermsLabel,
+  withEquipment,
 } from "./amc-pricing";
 import type { AmcComputedData } from "./amc-types";
+import { AMC_SCOPE_LIBRARY } from "./amc-scope-library";
+
+/* A heading line in a library clause: short, and ending in a colon. */
+const isPartHeading = (block: string): boolean => /^[^.\n]{2,60}:$/.test(block.trim());
 
 /**
  * What an AMC document says, separate from how it is drawn.
@@ -134,7 +139,16 @@ export function detailsTable(rows: [string, Run[] | string][]): Block {
 
 /* Blank-line separated settings text, with this proposal's figures in. */
 function fillBlocks(value: string, data: AmcComputedData): string[] {
-  return textBlocks(fillAmcTokens(value ?? "", data.formData.serviceRows));
+  return textBlocks(fillAmcTokens(value ?? "", data.formData.serviceRows, unlimitedServices(data)));
+}
+
+/* The services this document's catalogue counts as unlimited (fillAmcTokens). */
+function unlimitedServices(data: AmcComputedData): Set<string> {
+  return new Set(
+    data.settings.services
+      .filter((service) => service.frequencyType === "unlimited")
+      .map((service) => service.id),
+  );
 }
 
 /* "21,100.00" — the Word design's number style. */
@@ -186,7 +200,13 @@ function opening(data: AmcComputedData): Block[] {
 // Contract
 // ---------------------------------------------------------------------------
 
-function contractBlocks(data: AmcComputedData): Block[] {
+function contractBlocks(
+  data: AmcComputedData,
+  /* Filled with the clause each service's row points at, as the contract prints it. */
+  references?: Map<string, string>,
+  /* Filled with each clause's number, by role, as the contract prints it. */
+  clauseNumbers?: Map<string, string>,
+): Block[] {
   const { formData, totals, frequencyRows, settings } = data;
   const fill = (value: string) => fillBlocks(value, data);
   /*
@@ -312,6 +332,13 @@ function contractBlocks(data: AmcComputedData): Block[] {
     needs the number this decides -- so it reads the same conditions the
     drawing does, and the two are checked against each other below.
   */
+  /* Whether this service prints as a scope section of its own under clause 2. */
+  const asScopeSection = (serviceId: string): boolean =>
+    selectedIds.includes(serviceId) &&
+    servicesForProperty(settings, formData.unitType).some(
+      (service) => service.id === serviceId && service.hasScopeSection !== false,
+    );
+
   const drawsNothing = (clause: { role?: string; body?: string }): boolean => {
     if (clause.role === "priceListIntro") {
       if (!formData.optionalSections?.supplyInstallPriceList) return true;
@@ -332,8 +359,18 @@ function contractBlocks(data: AmcComputedData): Block[] {
       Oct 2026): a contract without call-outs still printed "attended free
       of charge within 120 minutes" under 3.1.
     */
-    if (clause.role === "emergencyCallOut") return !selectedIds.includes("emergency");
-    if (clause.role === "nonEmergencyCallOut") return !selectedIds.includes("non-emergency");
+    if (clause.role === "generalConditions") return fill(clause.body ?? "").length === 0;
+    /*
+      Nor where the call-out has a scope section of its own under clause 2,
+      as the Scope of Works Library gives it (Nov 2026): the clause would
+      say the same thing twice. A contract sent before keeps its clause 3.
+    */
+    if (clause.role === "emergencyCallOut") {
+      return !selectedIds.includes("emergency") || asScopeSection("emergency");
+    }
+    if (clause.role === "nonEmergencyCallOut") {
+      return !selectedIds.includes("non-emergency") || asScopeSection("non-emergency");
+    }
     return false;
   };
 
@@ -377,6 +414,8 @@ function contractBlocks(data: AmcComputedData): Block[] {
         serviceId: service.id,
         sectionNumber: fallback?.sectionNumber ?? "",
         title: service.sectionTitle ?? fallback?.title ?? `${service.label}:`,
+        // Unlimited and covered services are not counted in units.
+        counted: service.frequencyType !== "unlimited" && service.frequencyType !== "covered",
         intro: fallback?.intro,
         bullets: fallback?.bullets ?? [],
       };
@@ -414,11 +453,26 @@ function contractBlocks(data: AmcComputedData): Block[] {
       subFrom = minor;
       minor += Math.max(0, sections.length - 1);
       number = `${major}.${subFrom}`;
+      /*
+        A call-out defined in its own scope section here, rather than in
+        clause 3: "as per definition of emergency on Clause No ..." in 1.1
+        points at that section.
+      */
+      sections.forEach((section, index) => {
+        const role =
+          section.serviceId === "emergency"
+            ? "emergencyCallOut"
+            : section.serviceId === "non-emergency"
+              ? "nonEmergencyCallOut"
+              : null;
+        if (role) numberOf.set(role, `${major}.${subFrom + index}`);
+      });
     }
     numbered.push({ clause, number, subFrom });
     numberOf.set(clause.id, number);
     if (clause.role) numberOf.set(clause.role, number);
   }
+  for (const [key, value] of numberOf) clauseNumbers?.set(key, value);
 
   /* A reference to a clause that has been removed says so, rather than
      printing a number that is now somebody else's. */
@@ -464,22 +518,89 @@ function contractBlocks(data: AmcComputedData): Block[] {
 
   const scopeBlocks = (startAt: number, parent: string): Block[] => {
     const out: Block[] = [];
-    sections.forEach((section, index) => {
-      const number = `${parent}.${startAt + index}`;
-      renumber.set(section.serviceId, number);
+    /* Every service's number first, so a clause can point at one after it. */
+    sections.forEach((section, index) => renumber.set(section.serviceId, `${parent}.${startAt + index}`));
+    sections.forEach((section) => {
+      const number = renumber.get(section.serviceId) ?? "";
       const row = formData.serviceRows.find((r) => r.serviceId === section.serviceId);
       const units = row?.units ?? 1;
-      const title = `${section.title.replace(/:\s*$/, "")}: ${units} ${units === 1 ? "Unit" : "Units"}`;
+      // "A/C Preventive Maintenance (10 FCU): 10 Units" (DEV-261).
+      const name = withEquipment(section.title.replace(/:\s*$/, ""), row?.equipment);
+      const title = section.counted ? `${name}: ${units} ${units === 1 ? "Unit" : "Units"}` : name;
       /* FR6.2 — the scope text comes from AMC Settings. When the built-in
          section has an intro, the first block is that intro. */
       const text = settings.serviceScopes[section.serviceId];
-      const blocks = text === undefined ? null : fill(text);
+      const blocks = text === undefined ? null : fill(serviceFields(text, row)).map(libraryRefs);
+      out.push({ kind: "subheading", number, text: title });
+      /*
+        A Scope of Works Library clause: Objective, Scope of Work, Exclusions,
+        Unit & Frequency Basis and Deliverables, each under its heading.
+      */
+      if (blocks && blocks.some(isPartHeading)) {
+        out.push(...partBlocks(blocks));
+        return;
+      }
       const intro = blocks ? (section.intro ? blocks[0] : undefined) : section.intro;
       const bullets = blocks ? (section.intro ? blocks.slice(1) : blocks) : section.bullets;
-      out.push({ kind: "subheading", number, text: title });
       if (intro) out.push({ kind: "paragraph", runs: [t(refText(intro))] });
       if (bullets.length) out.push({ kind: "bullets", items: bullets.map((b) => [t(refText(b))]) });
     });
+    return out;
+  };
+
+  /*
+    The library's cross-references ("see A4", "see Section G") name the
+    workbook, which the client never sees. Each becomes the clause it is on
+    this contract, or the service's name when it is not on it.
+  */
+  const libraryRefs = (value: string): string =>
+    value.replace(
+      /\bsee (Section ([A-G])\b|[A-G]\d+(?:,\s*[A-G]\d+)*)/g,
+      (match: string, list: string, section?: string) => {
+        if (section) {
+          const category = AMC_SCOPE_LIBRARY.find((entry) => entry.ref.startsWith(section))?.category;
+          return category ? `see ${category}` : match;
+        }
+        const named = list.split(/,\s*/).map((ref) => {
+          const entry = AMC_SCOPE_LIBRARY.find((item) => item.ref === ref);
+          if (!entry) return ref;
+          const at = renumber.get(entry.id);
+          return at ? `Clause ${at}` : entry.label;
+        });
+        return `see ${named.join(", ")}`;
+      },
+    );
+
+  /* The library's fields, from this service's row in the table. */
+  const serviceFields = (
+    value: string,
+    row: { units: number; frequency: number } | undefined,
+  ): string =>
+    value
+      .replace(/\{\{qty\}\}/g, String(row?.units ?? 1))
+      .replace(/\{\{frequency\}\}/g, String(row?.frequency ?? 1));
+
+  /* Each heading in bold, then its points (or its one paragraph). */
+  const partBlocks = (blocks: string[]): Block[] => {
+    const out: Block[] = [];
+    let heading: string | null = null;
+    let items: string[] = [];
+    const flush = () => {
+      if (heading) out.push({ kind: "paragraph", runs: [t(heading.replace(/:\s*$/, ""), { bold: true })] });
+      if (items.length > 1) out.push({ kind: "bullets", items: items.map((b) => [t(refText(b))]) });
+      else if (items.length === 1) out.push({ kind: "paragraph", runs: [t(refText(items[0]))] });
+      heading = null;
+      items = [];
+    };
+    for (const block of blocks) {
+      if (isPartHeading(block)) {
+        flush();
+        heading = block;
+      } else {
+        items.push(block);
+      }
+    }
+    flush();
     return out;
   };
 
@@ -488,6 +609,7 @@ function contractBlocks(data: AmcComputedData): Block[] {
     accountManagers: formData.accountManagers ?? [],
     helpdeskIncluded: selectedIds.includes("helpdesk"),
     serviceRows: formData.serviceRows,
+    unlimited: unlimitedServices(data),
     text: settings.clauses,
   });
   type Section = { paragraphs?: string[]; bullets?: string[]; listItems?: string[] };
@@ -559,6 +681,23 @@ function contractBlocks(data: AmcComputedData): Block[] {
         return fillRef(clause.body).map((line): Block => ({ kind: "paragraph", runs: [t(line)] }));
       case "scopeServices":
         return scopeBlocks(subFrom, String(major === 0 ? 1 : number.split(".")[0]));
+      case "generalConditions":
+        /* One "Title: description" block per condition, numbered under this clause. */
+        return [
+          {
+            kind: "numbered",
+            items: fillRef(clause.body).map((line, index) => {
+              const at = line.indexOf(":");
+              const label = at > 0 && at < 60 ? line.slice(0, at).trim() : "";
+              return {
+                number: `${number}.${index + 1}`,
+                runs: label
+                  ? [t(`${label}: `, { bold: true }), t(line.slice(at + 1).trim())]
+                  : [t(line)],
+              };
+            }),
+          },
+        ];
       case "emergencyCallOut":
       case "nonEmergencyCallOut":
       case "termination":
@@ -623,13 +762,21 @@ function contractBlocks(data: AmcComputedData): Block[] {
               headerCell("REFERENCE", "center"),
             ],
             rows: zebra(
-              frequencyRows.map((row) => [
-                cell(row.scope),
+              frequencyRows.map((row) => {
+                references?.set(row.serviceId, referenceFor(row));
+                return [
+                // With what one unit is, as the Scope of Works Library states it.
+                cell(
+                  row.unitOfMeasure
+                    ? [[t(withEquipment(row.scope, row.equipment))], [t(row.unitOfMeasure, { tone: "muted" })]]
+                    : [[t(withEquipment(row.scope, row.equipment))]],
+                ),
                 // Blank, not "1": see FrequencyRow.hasUnits.
                 cell(row.hasUnits ? String(row.units) : "", { align: "center" }),
                 cell(row.frequency, { align: "center" }),
                 cell([[t(referenceFor(row), { tone: "muted" })]], { align: "center" }),
-              ]),
+              ];
+              }),
             ),
           },
         ];
@@ -821,6 +968,32 @@ function contractBlocks(data: AmcComputedData): Block[] {
     contactTable,
     ...body,
   ];
+}
+
+/**
+ * The clause each service points at in the contract ("Clause 2.2"), by
+ * service. The scopes are numbered by which services are on the contract,
+ * so a fixed reference from AMC Settings is wrong as soon as one before it
+ * is left out (AMC-057: Plumbing showed 2.3 where the contract printed 2.2).
+ */
+export function contractClauseReferences(data: AmcComputedData): Map<string, string> {
+  const references = new Map<string, string>();
+  contractBlocks({ ...data, documentType: "contract" }, references);
+  return references;
+}
+
+/** The number a clause prints with on this contract ("5.3"), or null when it is not on it. */
+export function contractClauseNumber(data: AmcComputedData, role: string): string | null {
+  const numbers = new Map<string, string>();
+  contractBlocks({ ...data, documentType: "contract" }, undefined, numbers);
+  return numbers.get(role) ?? null;
+}
+
+/** Every clause on this contract and the number it prints with, by clause id and by role. */
+export function contractClauseNumbers(data: AmcComputedData): Map<string, string> {
+  const numbers = new Map<string, string>();
+  contractBlocks({ ...data, documentType: "contract" }, undefined, numbers);
+  return numbers;
 }
 
 export function buildAmcDocumentModel(data: AmcComputedData): AmcDocumentModel {

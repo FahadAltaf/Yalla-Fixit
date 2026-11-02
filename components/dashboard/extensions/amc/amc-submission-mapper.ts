@@ -53,6 +53,8 @@ export function formDataToSubmissionPayload(
     priceListRows: data.priceListRows,
     fixedPriceRates: data.fixedPriceRates,
     accountManagers: data.accountManagers,
+    clauseOverrides: data.clauseOverrides,
+    scopeOverrides: data.scopeOverrides,
   };
 
   return {
@@ -76,11 +78,16 @@ export function submissionToFormData(submission: AmcDocumentSource): AmcFormData
     /* FR3.3: basePrice has to come back too, or reopening a submission
        silently blanks every price the team entered. */
     serviceRows: submission.services.map(
-      ({ serviceId, included, units, frequency, basePrice, free }) => ({
+      ({ serviceId, included, units, frequency, basePrice, free, equipment, customName, customScope }) => ({
         serviceId,
         included,
         units,
         frequency,
+        // DEV-261. Absent on anything saved before it existed.
+        equipment: equipment ?? "",
+        // DEV-260: only a custom service carries these.
+        ...(customName !== undefined ? { customName } : {}),
+        ...(customScope !== undefined ? { customScope } : {}),
         /*
           A submission saved before free rows existed has no flag, and a
           priced row must not come back as a giveaway. False is the right
@@ -105,6 +112,9 @@ export function submissionToFormData(submission: AmcDocumentSource): AmcFormData
       ? submission.document_options.priceListRows
       : [emptyPriceListRow(), emptyPriceListRow(), emptyPriceListRow()],
     fixedPriceRates: submission.document_options?.fixedPriceRates ?? [],
+    // DEV-263. None on a proposal saved before wording could be edited.
+    clauseOverrides: submission.document_options?.clauseOverrides ?? {},
+    scopeOverrides: submission.document_options?.scopeOverrides ?? {},
     accountManagers: submission.document_options?.accountManagers ?? [
       { name: "", phone: "" },
       { name: "", phone: "" },

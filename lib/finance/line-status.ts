@@ -40,6 +40,27 @@ export function withoutVat(amount: number, line: VatLine): number {
   return Math.round((amount / vatRate(line)) * 100) / 100;
 }
 
+export type InvoiceTotalsFigures = { net: number; vat: number; total: number; ratePercent: number | null };
+
+/**
+ * An invoice's totals (2 Nov): lines carry their net amount only, and VAT is
+ * worked out once, on the invoice's net total, at the work order's rate
+ * (FSM's, normally 5 %). Lines at different rates (rare) each add their own.
+ */
+export function invoiceTotals(parts: Array<{ amount: number; line: VatLine }>): InvoiceTotalsFigures {
+  const round2 = (n: number) => Math.round(n * 100) / 100;
+  const used = parts.filter((p) => Number.isFinite(p.amount) && p.amount > 0);
+  const net = round2(used.reduce((s, p) => s + p.amount, 0));
+  const rates = [...new Set(used.map((p) => Math.round((vatRate(p.line) - 1) * 10_000) / 100))];
+  if (rates.length <= 1) {
+    const ratePercent = rates[0] ?? 0;
+    const vat = round2((net * ratePercent) / 100);
+    return { net, vat, total: round2(net + vat), ratePercent };
+  }
+  const vat = round2(used.reduce((s, p) => s + p.amount * (vatRate(p.line) - 1), 0));
+  return { net, vat, total: round2(net + vat), ratePercent: null };
+}
+
 export type InvoiceStatus = "not_ready" | "ready" | "partially_invoiced" | "invoiced";
 
 export const INVOICE_STATUS_LABELS: Record<InvoiceStatus, string> = {

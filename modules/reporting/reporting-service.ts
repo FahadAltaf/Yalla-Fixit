@@ -52,6 +52,12 @@ export const notificationsService = {
       },
     }),
 
-  markRead: (which: { all: true } | { ids: string[] }) =>
-    executeRESTBackend<{ ok: true }>("/api/notifications", { method: "POST", body: which }),
+  /* The sidebar's unread count listens for this (30 Oct), so it drops as soon as one is opened. */
+  markRead: async (which: { all: true } | { ids: string[] }) => {
+    const result = await executeRESTBackend<{ ok: true }>("/api/notifications", { method: "POST", body: which });
+    if (typeof window !== "undefined") window.dispatchEvent(new Event(NOTIFICATIONS_CHANGED));
+    return result;
+  },
 };
+
+export const NOTIFICATIONS_CHANGED = "notifications:changed";

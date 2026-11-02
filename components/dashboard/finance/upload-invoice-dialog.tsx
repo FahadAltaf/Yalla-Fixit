@@ -14,7 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import type { CandidateLine, Confidence } from "@/lib/finance/invoice-match";
-import { withoutVat, withVat } from "@/lib/finance/line-status";
+import { invoiceTotals } from "@/lib/finance/line-status";
 import { todayInZone } from "@/lib/scheduling/org-time";
 import type { ScanProposal } from "@/lib/server/finance/invoice-scan";
 import { cn } from "@/lib/utils";
@@ -38,7 +38,7 @@ const round2 = (n: number) => Math.round(n * 100) / 100;
 type Row = {
   key: string;
   candidate: CandidateLine;
-  /** This invoice's amount for the line, incl. VAT, as typed (27 Oct: as in Enter the MAHER details). */
+  /** This invoice's amount for the line, before VAT, as typed (2 Nov: VAT goes on the invoice total, not each line). */
   amount: string;
   /** The % as typed: of the line's whole value; unset when the amount was typed instead. */
   pct?: string;
@@ -48,20 +48,16 @@ type Row = {
   scanned: string | null;
 };
 
-/* A candidate line's VAT, each at its own rate. */
+/* A candidate line's VAT rate, for the invoice total. */
 const vatLine = (c: CandidateLine) => ({ amount: c.amount, lineAmount: c.amountWithVat, taxPercent: null });
-const withVatOf = (c: CandidateLine, beforeVat: number) => withVat(beforeVat, vatLine(c));
-/* What is left of the line, incl. VAT. */
-const leftOf = (r: Row) => withVatOf(r.candidate, r.candidate.remaining);
-/* The amount typed, before VAT; the last cent of a line paid in full is the line's, not rounding's. */
-const beforeVatOf = (r: Row) => {
-  const part = withoutVat(Number(r.amount) || 0, vatLine(r.candidate));
-  return part > r.candidate.remaining && part - r.candidate.remaining <= 0.011 ? r.candidate.remaining : part;
-};
+/* What is left of the line, before VAT. */
+const leftOf = (r: Row) => r.candidate.remaining;
+/* The amount typed, before VAT. */
+const beforeVatOf = (r: Row) => Number(r.amount) || 0;
 /* The % of a line's whole value an amount is, as shown in the % box. */
 const percentOf = (r: Row) => {
   const n = Number(r.amount);
-  const whole = withVatOf(r.candidate, r.candidate.amount);
+  const whole = r.candidate.amount;
   return r.amount.trim() !== "" && Number.isFinite(n) && whole > 0 ? String(round2((n / whole) * 100)) : "";
 };
 
@@ -132,7 +128,7 @@ export function UploadInvoiceDialog({
       const proposed: Row[] = result.proposals.map((p) => ({
         key: p.candidate.lineId,
         candidate: p.candidate,
-        amount: String(withVatOf(p.candidate, p.amount)),
+        amount: String(round2(p.amount)),
         included: p.confidence !== "low",
         confidence: p.confidence,
         reasons: p.reasons,
@@ -148,7 +144,7 @@ export function UploadInvoiceDialog({
                   proposed.find((r) => r.candidate.lineId === c.lineId) ?? {
                     key: c.lineId,
                     candidate: c,
-                    amount: String(withVatOf(c, c.remaining)),
+                    amount: String(c.remaining),
                     included: true,
                     confidence: null,
                     reasons: [],
@@ -172,9 +168,9 @@ export function UploadInvoiceDialog({
   const included = rows.filter((r) => r.included);
   const bad = included.find((r) => !(Number(r.amount) > 0) || beforeVatOf(r) > r.candidate.remaining + 0.005);
   /* The invoice total is the lines with VAT, worked out as the server does; what the AI read is only compared. */
-  const sumWithVat = round2(
-    included.reduce((s, r) => s + withVatOf(r.candidate, beforeVatOf(r)), 0),
-  );
+  /* 2 Nov: the lines' net total, plus VAT worked out once on it. */
+  const totals = invoiceTotals(included.map((r) => ({ amount: beforeVatOf(r), line: vatLine(r.candidate) })));
+  const sumWithVat = totals.total;
   const scannedTotal = proposal?.scanned.total ?? null;
   /* Whether the number and date shown are what was read from the file (27 Oct). */
   const numberRead = Boolean(proposal?.scanned.invoiceNumber) && number.trim() === proposal?.scanned.invoiceNumber;
@@ -343,7 +339,7 @@ export function UploadInvoiceDialog({
                             {r.candidate.workOrderNumber}
                             {r.candidate.quotationNumber ? ` · quotation ${r.candidate.quotationNumber}` : ""}
                             {" · "}
-                            <span className="text-foreground font-medium">{aed(left)}</span> left, incl. VAT
+                            <span className="text-foreground font-medium">{aed(left)}</span> left, before VAT
                           </p>
                           <div className="mt-1 flex min-w-0 items-center gap-2">
                             {r.confidence ? (
@@ -380,7 +376,7 @@ export function UploadInvoiceDialog({
                                   const p = Number(text);
                                   update(r.candidate.lineId, {
                                     pct: text,
-                                    amount: text.trim() !== "" && Number.isFinite(p) ? String(round2((withVatOf(r.candidate, r.candidate.amount) * p) / 100)) : "",
+                                    amount: text.trim() !== "" && Number.isFinite(p) ? String(round2((r.candidate.amount * p) / 100)) : "",
                                   });
                                 }}
                                 aria-label={`Percent of ${r.candidate.name ?? "the line"} on this invoice`}
@@ -401,7 +397,7 @@ export function UploadInvoiceDialog({
                                 )}
                                 value={r.amount}
                                 onChange={(e) => update(r.candidate.lineId, { amount: e.target.value, pct: undefined })}
-                                aria-label={`Amount of ${r.candidate.name ?? "the line"} on this invoice, incl. VAT`}
+                                aria-label={`Amount of ${r.candidate.name ?? "the line"} on this invoice, before VAT`}
                               />
                             </div>
                           </div>
@@ -430,16 +426,36 @@ export function UploadInvoiceDialog({
             )}
 
             {proposal.unmatched.length ? (
-              <div className="grid gap-1.5">
-                <p className="text-sm font-medium">Not matched ({proposal.unmatched.length})</p>
-                <ul className="text-muted-foreground space-y-0.5 text-xs">
+              <div className="grid gap-2">
+                <div>
+                  <p className="text-sm font-medium">
+                    Not matched on the invoice <span className="text-muted-foreground font-normal">({proposal.unmatched.length})</span>
+                  </p>
+                  <p className="text-muted-foreground text-xs">
+                    These invoice lines match no line of this work order, so they are not recorded. If one belongs here, add its line with the box below.
+                  </p>
+                </div>
+                <ul className="grid gap-2">
                   {proposal.unmatched.map((i) => {
                     const l = proposal.scanned.lines[i];
+                    /* "MAINTENANCE Supply and Installation of … 24V IN -LIVING ROOM -rewiring …": the item, then its details. */
+                    const cut = l.description.search(/\s-(?=\S)/);
+                    const title = (cut > 0 ? l.description.slice(0, cut) : l.description).trim();
+                    const details = cut > 0 ? l.description.slice(cut).replace(/\s-(?=\S)/g, " · ").replace(/^ · /, "").trim() : "";
                     return (
-                      <li key={i}>
-                        {l.description}
-                        {l.amount !== null ? ` · ${aed(l.amount)}` : ""}
-                        {l.reference ? ` · ${l.reference}` : ""}
+                      <li key={i} className="bg-muted/30 rounded-lg border px-3 py-2" title={l.description}>
+                        <div className="flex items-start justify-between gap-3">
+                          <p className="line-clamp-2 min-w-0 text-sm font-medium">{title}</p>
+                          <span className="shrink-0 text-sm font-medium tabular-nums">{l.amount !== null ? aed(l.amount) : "—"}</span>
+                        </div>
+                        {details ? <p className="text-muted-foreground mt-0.5 line-clamp-2 text-xs">{details}</p> : null}
+                        {l.quantity !== null || l.reference ? (
+                          <p className="text-muted-foreground mt-1 text-xs tabular-nums">
+                            {[l.quantity !== null ? `Qty ${l.quantity}` : null, l.unitPrice !== null ? `at ${aed(l.unitPrice)}` : null, l.reference ? `Ref ${l.reference}` : null]
+                              .filter(Boolean)
+                              .join(" · ")}
+                          </p>
+                        ) : null}
                       </li>
                     );
                   })}
@@ -454,7 +470,7 @@ export function UploadInvoiceDialog({
                   value=""
                   onValueChange={(lineId) => {
                     const c = unusedCandidates.find((x) => x.lineId === lineId);
-                    if (c) setRows((prev) => [...prev, { key: c.lineId, candidate: c, amount: String(withVatOf(c, c.remaining)), included: true, confidence: null, reasons: [], scanned: null }]);
+                    if (c) setRows((prev) => [...prev, { key: c.lineId, candidate: c, amount: String(c.remaining), included: true, confidence: null, reasons: [], scanned: null }]);
                   }}
                 >
                   <SelectTrigger className="w-full sm:w-96" aria-label="Add a line">
@@ -463,7 +479,7 @@ export function UploadInvoiceDialog({
                   <SelectContent>
                     {unusedCandidates.map((c) => (
                       <SelectItem key={c.lineId} value={c.lineId}>
-                        {c.workOrderNumber} · {c.name ?? "Line"} · {aed(withVatOf(c, c.remaining))} left, incl. VAT
+                        {c.workOrderNumber} · {c.name ?? "Line"} · {aed(c.remaining)} left, before VAT
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -471,13 +487,13 @@ export function UploadInvoiceDialog({
               </div>
             ) : null}
 
-            <InvoiceTotals total={sumWithVat} />
+            <InvoiceTotals totals={totals} />
             {differs ? (
               <Alert>
                 <TriangleAlert className="size-4" />
                 <AlertTitle>The invoice says {aed(scannedTotal!)}</AlertTitle>
                 <AlertDescription>
-                  The lines ticked come to {aed(sumWithVat)} with VAT. Check the lines and amounts: the total recorded is what the lines come to.
+                  The lines ticked come to {aed(sumWithVat)} with VAT on their total. Check the lines and amounts: the total recorded is what the lines come to.
                 </AlertDescription>
               </Alert>
             ) : null}
@@ -505,7 +521,7 @@ export function UploadInvoiceDialog({
             </div>
             {bad ? (
               <p className="text-destructive text-sm">
-                {bad.candidate.name ?? "A line"}: enter an amount above zero and no more than {aed(leftOf(bad))} incl. VAT.
+                {bad.candidate.name ?? "A line"}: enter an amount above zero and no more than {aed(leftOf(bad))}, before VAT.
               </p>
             ) : null}
           </div>

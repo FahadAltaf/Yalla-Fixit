@@ -282,6 +282,37 @@ export interface SnaggingQuotationFsm {
   logTotal?: number;
 }
 
+/** A job whose quotation is void because the property is not as quoted (SNG-100). */
+export interface SnaggingNotAsQuotedJob {
+  jobId: string;
+  code: string;
+  place: string;
+  clientName: string | null;
+  quotation: { id: string; quote_number: string; voided_at: string; void_reason: string | null };
+  /** The revised quotation, once raised; the job is held until it is approved. */
+  revised: { id: string; quote_number: string; status: string } | null;
+}
+
+/** One issue of an inspection's client report (GET .../report/versions). */
+export interface SnaggingReportVersion {
+  id: string;
+  version: number;
+  report_type: string;
+  source_visit_id: string | null;
+  source_round_id: string | null;
+  snag_count: number;
+  /** pending | generating | generated | failed */
+  generation_status: string;
+  generation_error: string | null;
+  generated_at: string;
+  /** Why it was issued, written for a person ("Additional visit 2 approved"). */
+  reason: string | null;
+  /** Short-lived link to its stored PDF; null until the PDF is saved. */
+  pdf_url: string | null;
+  /** The newest version whose PDF exists: the one in force. */
+  is_current: boolean;
+}
+
 export interface SnaggingQuotation {
   /** Null on a preview: nothing has been written for it yet. */
   id: string | null;
@@ -342,6 +373,18 @@ export interface SnaggingQuotation {
    */
   can_approve_rate?: boolean;
 
+  /**
+   * SNG-100: void because the inspector found the property not as quoted,
+   * and the revision either way (the one raised for it, or the void one
+   * this revises). Null when neither applies.
+   */
+  void_info?: {
+    voided_at: string | null;
+    void_reason: string | null;
+    replaced_by: { id: string; quote_number: string; status: string } | null;
+    revises: { id: string; quote_number: string } | null;
+  } | null;
+
   /** Office notes typed on the form; copied to the job (SNG-022). */
   notes?: string | null;
 
@@ -378,6 +421,8 @@ export interface SnaggingQuotation {
 export interface SnaggingClientOption {
   /** Present for persisted clients (from snagging_clients). */
   id?: string;
+  /** Set by Add client when Zoho FSM already had the email: that client was opened instead. */
+  existed?: boolean;
   /** The Zoho FSM contact. A client listed from FSM and not used yet has only this. */
   fsm_contact_id?: string | null;
   /** Maher ID, which Zoho FSM requires on a client (Maher_Id__C). */
@@ -854,7 +899,7 @@ export const snaggingService = {
 
   quotationAction: async (
     taskId: string,
-    action: "generate" | "send" | "share_link" | "approve" | "reject",
+    action: "generate" | "send" | "share_link" | "approve" | "reject" | "revise",
     extra?: Record<string, unknown>,
   ): Promise<SnaggingQuotation> =>
     executeRESTBackend<SnaggingQuotation>(
@@ -1256,11 +1301,15 @@ export const snaggingService = {
       body: input as unknown as Record<string, unknown>,
     }),
 
+  /** Jobs held up by a void quotation (property not as quoted), for the jobs list (SNG-100). */
+  listNotAsQuotedJobs: async () =>
+    executeRESTBackend<SnaggingNotAsQuotedJob[]>("/api/snagging/tasks/not-as-quoted", { method: "GET" }),
+
   /** The job's report versions, with whether each has its PDF yet. */
   listReportVersions: async (id: string) =>
-    executeRESTBackend<
-      Array<{ id: string; version: number; generation_status: string; pdf_url: string | null }>
-    >(`/api/snagging/tasks/${id}/report/versions`, { method: "GET" }),
+    executeRESTBackend<SnaggingReportVersion[]>(`/api/snagging/tasks/${id}/report/versions`, {
+      method: "GET",
+    }),
 
   /** Renders a report version's PDF again, after a failed or stuck render. */
   retryReportVersion: async (id: string, versionId: string) =>
@@ -1384,7 +1433,11 @@ export const snaggingService = {
     input: { decision: "approve" } | { decision: "send_back"; reason: string },
   ): Promise<{
     status: string;
-    generation?: { status: "pending" | "generated" | "failed"; version: number; error?: string } | null;
+    generation?: {
+      status: "pending" | "generated" | "failed" | "unchanged";
+      version: number;
+      error?: string;
+    } | null;
   }> =>
     executeRESTBackend(`/api/snagging/tasks/${id}/visits/${visitId}/review`, {
       method: "POST",

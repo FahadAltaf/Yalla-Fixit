@@ -6,8 +6,8 @@ import { coveredMinutes, isoWeekday, type TechnicianAvailability } from "./avail
  * Technician utilization (BRD 5.2 B2; DEV-444). Two measures, always side
  * by side:
  *
- *   time utilization        job hours ÷ available hours
- *   commercial utilization  chargeable job hours ÷ available hours
+ *   time utilization        job hours ÷ expected hours
+ *   commercial utilization  chargeable job hours ÷ expected hours
  *
  * Rules (reporting-calculation-specification.md, with Sami's answers of
  * 28 Oct):
@@ -19,10 +19,11 @@ import { coveredMinutes, isoWeekday, type TechnicianAvailability } from "./avail
  *    their FSM time sheet on it; else the appointment's actual times
  *    trimmed to their own FSM attendance that day (check-in to check-out);
  *    else the appointment's actual times, counted as unverified.
- *  - Each day counts job time up to the hours available that day (the
- *    daily hours, less leave; 6/7 of them while no rest day is entered).
- *    Time beyond that, and any work on a rest day, holiday or leave, is
- *    overtime: reported beside utilization, not in either ratio.
+ *  - Expected hours (2 Nov): by the week, from each technician's daily
+ *    hour limit, weekly hour limit and off days a week (expectedHours
+ *    below). Every hour worked counts, off days and holidays included, so
+ *    utilization can pass 100 %; hours above expected are shown beside it.
+ *    (The field is still called availableMinutes.)
  *  - Chargeable (D-08): the work order's quotation has a total above zero,
  *    or, with no quotation, the work order itself has a value. A quotation
  *    totalling zero (inspection, internal work) is time only (TC09). Work
@@ -111,14 +112,17 @@ export type TechnicianUtilization = Measures &
   teamName: string;
   /** No shift set on the technician: the day shift was used. */
   shiftAssumed: boolean;
-  /** No rest day entered: 6 of every 7 days were counted. */
+  /** No off days a week entered: the standard 1 was used (2 Nov; the field keeps its old name). */
   restDaysAssumed: boolean;
   /** Hours a working day (the standard day, or their own). */
   dailyMinutes: number;
   shiftDays: number;
   leaveMinutes: number;
-  /** Job time beyond what was available on its day, or on a day off: not in the ratios. */
+  /** Hours worked above expected, week by week (2 Nov: inside the ratios too). */
   overtimeMinutes: number;
+  /** The limits in force on the period's last day, for the hover: weekly limit (minutes, null = none) and off days. */
+  weeklyLimitMinutes: number | null;
+  offDaysPerWeek: number;
   /** Where the counted jobs' hours came from, per appointment. */
   hoursFrom: Record<HoursSource, number>;
   /** Appointments counted in job hours. */
@@ -212,11 +216,84 @@ function bucketOf(date: string, granularity: Granularity): { key: string; label:
   return { key: date.slice(0, 7), label: `${MONTHS[Number(date.slice(5, 7)) - 1]} ${date.slice(0, 4)}` };
 }
 
-const withPercents = <T extends { availableMinutes: number; jobMinutes: number; chargeableMinutes: number }>(m: T) => ({
-  ...m,
-  timePercent: percent(m.jobMinutes, m.availableMinutes),
-  commercialPercent: percent(m.chargeableMinutes, m.availableMinutes),
-});
+/* Expected hours are shares of a week: rounded to the hundredth of a minute so sums read clean. */
+const roundMinutes = (m: number) => Math.round(m * 100) / 100;
+
+const withPercents = <T extends { availableMinutes: number; jobMinutes: number; chargeableMinutes: number }>(m: T) => {
+  const availableMinutes = roundMinutes(m.availableMinutes);
+  return {
+    ...m,
+    availableMinutes,
+    timePercent: percent(m.jobMinutes, availableMinutes),
+    commercialPercent: percent(m.chargeableMinutes, availableMinutes),
+  };
+};
+
+
+/* ---------------------------------------------------------------------
+   Expected hours (2 Nov, the user's direction): each technician's own
+   limits. A week expects the smaller of the weekly hour limit and the
+   daily limit x (7 - off days); a public holiday or leave takes off one
+   working day's share (leave no more than what it covers). Off days are
+   not fixed weekdays, so the week is the measure. A week cut by the dates
+   expects a working day's share for each of its days less the off days
+   (they may have fallen in it), or for each day worked if more, never
+   more than the full week. So one day worked expects one day's share,
+   and the cut weeks of a month add up as the whole weeks do. A day, on
+   the daily trend, expects one working day's share if they worked that
+   day, else nothing (it was one of the off days). Every hour worked
+   counts, off days and holidays included, so utilization can pass 100 %.
+   --------------------------------------------------------------------- */
+
+export const STANDARD_OFF_DAYS = 1;
+
+export type WeekExpectation = { week: string; expected: number; perDay: number; days: string[] };
+
+export function expectedHours(
+  days: TechnicianAvailability["days"],
+  /** The days they did any work. */
+  workedDates: ReadonlySet<string> = new Set(),
+): {
+  /** Each day's even share of its week's expectation (for weeks, months and totals). */
+  even: Map<string, number>;
+  /** One working day's share, for a day they worked (the daily trend). */
+  perDay: Map<string, number>;
+  weeks: WeekExpectation[];
+  /** No off days entered on some day: the standard 1 was used. */
+  offDaysAssumed: boolean;
+} {
+  const even = new Map<string, number>();
+  const perDayOf = new Map<string, number>();
+  const weeks: WeekExpectation[] = [];
+  let offDaysAssumed = false;
+  const inService = days.filter((d) => d.status !== "left");
+  let lastDaily = inService.find((d) => d.status === "working" && d.dailyMinutes > 0)?.dailyMinutes ?? 8 * 60;
+  const byWeek = new Map<string, typeof inService>();
+  for (const d of inService) byWeek.set(weekStart(d.date), [...(byWeek.get(weekStart(d.date)) ?? []), d]);
+  for (const [week, group] of [...byWeek].sort(([a], [b]) => a.localeCompare(b))) {
+    const working = group.filter((d) => d.status === "working");
+    const daily = working.length ? Math.max(...working.map((d) => d.dailyMinutes)) : lastDaily;
+    lastDaily = daily;
+    const first = group[0];
+    if (first.offDaysPerWeek === null || first.offDaysPerWeek === undefined) offDaysAssumed = true;
+    const off = first.offDaysPerWeek ?? STANDARD_OFF_DAYS;
+    const workDays = Math.max(0, 7 - off);
+    const fullWeek = Math.min(first.weeklyLimitMinutes ?? Infinity, daily * workDays);
+    const perDay = workDays > 0 ? fullWeek / workDays : 0;
+    const holidays = group.filter((d) => d.status === "holiday").length;
+    const open = group.length - holidays;
+    const worked = group.filter((d) => d.status !== "holiday" && workedDates.has(d.date)).length;
+    const dueDays = Math.min(open, Math.max(worked, open - off));
+    const leave = working.reduce((sum, d) => sum + Math.min(d.leaveMinutes, perDay), 0);
+    const expected = Math.max(0, Math.min(perDay * dueDays, fullWeek - holidays * perDay) - leave);
+    for (const d of group) {
+      even.set(d.date, expected / group.length);
+      perDayOf.set(d.date, d.status === "working" ? Math.max(0, perDay - Math.min(d.leaveMinutes, perDay)) : 0);
+    }
+    weeks.push({ week, expected, perDay, days: group.map((d) => d.date) });
+  }
+  return { even, perDay: perDayOf, weeks, offDaysAssumed };
+}
 
 export function computeUtilization(input: {
   from: string;
@@ -330,54 +407,46 @@ export function computeUtilization(input: {
     const counts = perTechCounts.get(avail.fsmId);
     let jobMinutes = 0;
     let chargeableMinutes = 0;
-    let overtimeMinutes = 0;
     let workedAny = 0;
     /* The day's team; with none given at all, the roster's. */
     const leaderOn = (day: { teamLeaderId?: string | null } | undefined) =>
       day?.teamLeaderId !== undefined ? day.teamLeaderId : (input.technicians.get(avail.fsmId)?.teamLeaderId ?? null);
-    /* With no rest day entered, a week holds 6/7 of its days' hours, and any day up to a full
-       day's: six full days make 100 %, a seventh is overtime. */
-    const weekLeft = new Map<string, number>();
-    for (const day of avail.days) {
-      if (!day.restDaysAssumed) continue;
-      const week = weekStart(day.date);
-      weekLeft.set(week, (weekLeft.get(week) ?? 0) + day.availableMinutes);
-    }
+    /* Every hour worked counts, off days and holidays included (2 Nov). */
+    const workedOn = new Map<string, number>();
     for (const day of avail.days) {
       const b = boundsOf(day.date);
-      /* The day's own time, up to what was available that day; the rest is overtime. */
-      const worked = jobs ? coveredMinutes(b.start, b.end, jobs.all) : 0;
-      let counted = Math.min(worked, day.availableMinutes);
-      if (day.restDaysAssumed) {
-        const week = weekStart(day.date);
-        counted = Math.min(worked, day.dailyMinutes - day.leaveMinutes, weekLeft.get(week) ?? 0);
-        weekLeft.set(week, (weekLeft.get(week) ?? 0) - counted);
-      }
-      const chargeableWorked = jobs ? coveredMinutes(b.start, b.end, jobs.byKind.chargeable) : 0;
-      const dayChargeable = Math.min(chargeableWorked, counted);
-      /* What is left of the counted time, by kind: AMC, then a quotation of zero, then no value. */
+      workedOn.set(day.date, jobs ? coveredMinutes(b.start, b.end, jobs.all) : 0);
+    }
+    /* 2 Nov: expected hours from the technician's own limits, by the week. */
+    const expectation = expectedHours(avail.days, new Set([...workedOn].filter(([, m]) => m > 0).map(([d]) => d)));
+    let expectedTotal = 0;
+    for (const day of avail.days) {
+      const b = boundsOf(day.date);
+      const worked = workedOn.get(day.date) ?? 0;
+      const expected = expectation.even.get(day.date) ?? 0;
+      expectedTotal += expected;
+      const dayChargeable = jobs ? Math.min(worked, coveredMinutes(b.start, b.end, jobs.byKind.chargeable)) : 0;
+      /* What is left of the time, by kind: AMC, then a quotation of zero, then no value. */
       const contractWorked = jobs ? coveredMinutes(b.start, b.end, jobs.byKind.contract) : 0;
-      const dayContract = Math.min(contractWorked, counted - dayChargeable);
+      const dayContract = Math.min(contractWorked, worked - dayChargeable);
       const zeroWorked = jobs ? coveredMinutes(b.start, b.end, jobs.byKind.zero_value) : 0;
-      const dayZero = Math.min(zeroWorked, counted - dayChargeable - dayContract);
+      const dayZero = Math.min(zeroWorked, worked - dayChargeable - dayContract);
       jobMinutesBy.chargeable += dayChargeable;
       jobMinutesBy.contract += dayContract;
       jobMinutesBy.zero_value += dayZero;
-      jobMinutesBy.no_value += counted - dayChargeable - dayContract - dayZero;
-      jobMinutes += counted;
+      jobMinutesBy.no_value += worked - dayChargeable - dayContract - dayZero;
+      jobMinutes += worked;
       chargeableMinutes += dayChargeable;
-      overtimeMinutes += worked - counted;
       workedAny += worked;
 
       /* The team of that day: a move to another team does not take past days with it. */
-      if (day.availableMinutes > 0 || worked > 0) {
+      if (expected > 0 || worked > 0) {
         const t = teamOfLeader(leaderOn(day));
         const team = teams.get(t.key) ?? blankTeam(t.key, t.name);
         team.members.add(avail.fsmId);
-        team.availableMinutes += day.availableMinutes;
-        team.jobMinutes += counted;
+        team.availableMinutes += expected;
+        team.jobMinutes += worked;
         team.chargeableMinutes += dayChargeable;
-        team.overtimeMinutes += worked - counted;
         teams.set(t.key, team);
       }
 
@@ -393,17 +462,30 @@ export function computeUtilization(input: {
         timePercent: null,
         commercialPercent: null,
       };
-      point.availableMinutes += day.availableMinutes;
-      point.jobMinutes += counted;
+      /* A day expects one working day's share if they worked that day (2 Nov); weeks and months, their weeks' share. */
+      point.availableMinutes += input.granularity === "day" ? (worked > 0 ? (expectation.perDay.get(day.date) ?? 0) : 0) : expected;
+      point.jobMinutes += worked;
       point.chargeableMinutes += dayChargeable;
       if (day.date < point.from) point.from = day.date;
       if (day.date > point.to) point.to = day.date;
       trend.set(bucket.key, point);
     }
+    /* Above expected: each week's hours worked beyond what it expected, under the team of its last day. */
+    let overtimeMinutes = 0;
+    for (const w of expectation.weeks) {
+      const above = Math.max(0, w.days.reduce((sum, d) => sum + (workedOn.get(d) ?? 0), 0) - w.expected);
+      if (above <= 0) continue;
+      overtimeMinutes += above;
+      const lastDay = avail.days.find((d) => d.date === w.days[w.days.length - 1]);
+      const t = teamOfLeader(leaderOn(lastDay));
+      const team = teams.get(t.key) ?? blankTeam(t.key, t.name);
+      team.overtimeMinutes += above;
+      teams.set(t.key, team);
+    }
 
-    const availableMinutes = avail.totals.availableMinutes;
-    /* Someone with nothing available and no work in the period is not in the report. */
-    if (availableMinutes === 0 && workedAny === 0 && !(counts && counts.completed > 0)) continue;
+    const availableMinutes = expectedTotal;
+    /* Someone not in service in the period, with no work in it, is not in the report; a day with nothing expected (an off day) keeps them in. */
+    if (avail.days.every((d) => d.status === "left") && workedAny === 0 && !(counts && counts.completed > 0)) continue;
 
     /* Shown under the team of the period's last day; the team view splits by day. */
     const lastDay = avail.days[avail.days.length - 1];
@@ -425,11 +507,13 @@ export function computeUtilization(input: {
       teamKey: team.key,
       teamName: team.name,
       shiftAssumed: avail.shiftAssumed,
-      restDaysAssumed: avail.restDaysAssumed,
+      restDaysAssumed: expectation.offDaysAssumed,
+      weeklyLimitMinutes: avail.days.filter((d) => d.status !== "left").at(-1)?.weeklyLimitMinutes ?? null,
+      offDaysPerWeek: avail.days.filter((d) => d.status !== "left").at(-1)?.offDaysPerWeek ?? STANDARD_OFF_DAYS,
       dailyMinutes: avail.dailyMinutes,
       shiftDays: avail.totals.shiftDays,
       leaveMinutes: avail.totals.leaveMinutes,
-      overtimeMinutes,
+      overtimeMinutes: roundMinutes(overtimeMinutes),
       hoursFrom: sources,
       appointments: counts?.appointments ?? 0,
       completed: counts?.completed ?? 0,
@@ -449,6 +533,7 @@ export function computeUtilization(input: {
     const { members, ...rest } = m;
     return {
       ...withPercents(rest),
+      overtimeMinutes: roundMinutes(rest.overtimeMinutes),
       technicians: [...members].filter((id) => inReport.has(id)).length,
       completenessPercent: percent(m.withActualTimes, m.completed),
     };
@@ -462,7 +547,7 @@ export function computeUtilization(input: {
   const overall = {
     ...withPercents({ availableMinutes: sum((t) => t.availableMinutes), jobMinutes: sum((t) => t.jobMinutes), chargeableMinutes: sum((t) => t.chargeableMinutes) }),
     technicians: technicians.length,
-    overtimeMinutes: sum((t) => t.overtimeMinutes),
+    overtimeMinutes: roundMinutes(sum((t) => t.overtimeMinutes)),
     completed: completedAppointments.length,
     withActualTimes: completedAppointments.filter((d) => !d.missingActuals).length,
     completenessPercent: percent(completedAppointments.filter((d) => !d.missingActuals).length, completedAppointments.length),

@@ -8,6 +8,7 @@ import {
   Clock,
   ExternalLink,
   History,
+  Info,
   Loader2,
   ReceiptText,
   RotateCcw,
@@ -33,6 +34,7 @@ import { Label } from "@/components/ui/label";
 import MultipleSelector, { type Option } from "@/components/ui/multiselect";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   overridesFrom,
   reportingSettingsSchema,
@@ -56,6 +58,13 @@ import { reportingService } from "@/modules/reporting/reporting-service";
 type View = "finance" | "quotations" | "attendance" | "compliance" | "planning" | "links" | "holidays" | "history" | "fsm";
 type SectionKey = Exclude<View, "holidays" | "history" | "fsm">;
 
+/*
+  Hidden for now (30 Oct, to be worked on later): Capacity and exceptions,
+  and FSM report links. Their saved values stay and are still used; only
+  the tabs are not shown. Remove a key here to show its tab again.
+*/
+const HIDDEN_TABS = new Set<View>(["planning", "links"]);
+
 type NumberField = {
   kind: "number";
   path: string;
@@ -73,10 +82,61 @@ type ToggleField = { kind: "toggle"; path: string; label: string; hint?: string 
 type UrlField = { kind: "url"; path: string; label: string; hint?: string };
 type Field = NumberField | TimeField | PeopleField | ToggleField | UrlField;
 
+/*
+  What each setting is about, in plain words (30 Oct), shown when the info
+  icon beside its name is hovered: what it does and where it is used.
+*/
+const ABOUT: Record<string, string> = {
+  "finance.digestTimeLocal": "When the daily email to Finance goes out: the work newly ready to invoice and what is still waiting. Dubai time.",
+  "finance.digestRecipientUserIds": "Who receives the daily Ready to invoice email, and its notification in the portal.",
+  "finance.agedAfterDays": "On Ready to invoice and in the daily email, a work order waiting in Pending longer than this is marked as aged.",
+  "quotations.ageingDaysByStatus.notSent": "On the Quotation summary, a quotation still not sent after this many days is flagged as too old, and the ageing recipients are told.",
+  "quotations.ageingDaysByStatus.sent": "On the Quotation summary, a quotation sent and still waiting for the client after this many days is flagged as too old.",
+  "quotations.ageingDaysByStatus.approved": "On the Quotation summary, a quotation approved but not yet scheduled after this many days is flagged as too old.",
+  "quotations.expiryWarningDays": "A quotation waiting on the client is highlighted this many days before its validity ends, and its owner is told.",
+  "quotations.alertRecipientUserIds": "Who is told when a quotation has stayed in a status longer than its limit.",
+  "attendance.shiftCheckInAlertDelayMinutes": "How long after a shift starts, with no check-in in the FSM app, the check-in alert recipients are told.",
+  "attendance.appointmentCheckInAlertDelayMinutes": "How long after an appointment's scheduled start, with nobody checked in to it, the check-in alert recipients are told.",
+  "attendance.lateArrivalToleranceMinutes": "Daily attendance marks a technician late only when they check in more than this many minutes after their shift starts.",
+  "attendance.standardDailyHours": "How many hours a technician can work in a day. Utilization and Capacity measure the work against it.",
+  "attendance.dataCentreDailyHours": "The working day of technicians whose Service Type is Data Center, used instead of the standard day. It is not overtime.",
+  "attendance.unpaidBreakMinutes": "Taken off every working day before Utilization and Capacity count the hours available.",
+  "attendance.checkInAlertRecipientUserIds": "Who is told when a technician has not checked in for a shift or an appointment.",
+  "compliance.thresholdPercent": "On App compliance, a technician whose check-ins done, as a share of those needed, fall below this % gets a penalty for each miss.",
+  "compliance.penaltyPerMissAed": "The amount worked out for each missed check-in when a technician is below the threshold. HR decides whether to apply it.",
+  "compliance.monthlyCapAed": "The most a technician's penalty can come to in one month.",
+  "compliance.disputeCutoffDay": "Technicians can dispute a missed check-in until this day of the following month. After it the month can be finalised and nothing changes.",
+  "compliance.hrRecipientUserIds": "Who receives the final monthly compliance report by email when a month is finalised.",
+  "compliance.disputeReviewerUserIds": "Who can accept or reject a technician's dispute of a missed check-in, on App compliance.",
+  "compliance.belowThresholdRecipientUserIds": "Who is told when a technician's compliance falls below the threshold.",
+  "capacity.horizonDays": "How many days ahead the Capacity report opens on, and how far ahead the over-booking alert looks.",
+  "capacity.spareBelowPercent": "On Capacity, a day with less than this share of its available hours booked is shown as spare.",
+  "capacity.alertRecipientUserIds": "Who is told when a team has more hours booked than available on a day in the coming days.",
+  "exceptions.completedWithoutFlagAfterDays": "On Exception reports, a completed work order still not marked To Be Invoiced after this many days is overdue, and its coordinator is told.",
+};
+const aboutOf = (path: string) =>
+  ABOUT[path] ?? (path.startsWith("fsmLinks.") ? "Where Reports → Zoho FSM reports takes you for this report. Paste the report's address from Zoho FSM." : null);
+
+/** The info icon beside a setting's name: what it is about, on hover. */
+function AboutSetting({ label, text }: { label: string; text: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button type="button" className="text-muted-foreground hover:text-foreground inline-flex" aria-label={`About ${label}`}>
+          <Info className="size-3.5" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="top" align="start" className="max-w-72">
+        {text}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 const SECTIONS: Record<SectionKey, { title: string; description: string; icon: React.ReactNode; fields: Field[] }> = {
   finance: {
     title: "Invoicing queue and digest",
-    description: "When Finance hears about new items, and when a waiting item counts as aged (E1, N1, N2).",
+    description: "When Finance hears about new items, and when a waiting item counts as aged.",
     icon: <ReceiptText />,
     fields: [
       { kind: "time", path: "finance.digestTimeLocal", label: "Daily digest time", hint: "Dubai time." },
@@ -86,19 +146,19 @@ const SECTIONS: Record<SectionKey, { title: string; description: string; icon: R
   },
   quotations: {
     title: "Quotation ageing and expiry",
-    description: "When a quotation is flagged for sitting too long in a status, or nearing the end of its validity (N7, N8). The status names are the BRD's; how they map onto FSM's statuses is still to confirm (D-13).",
+    description: "When a quotation is flagged for sitting too long in a status, or nearing the end of its validity.",
     icon: <CalendarClock />,
     fields: [
       { kind: "number", path: "quotations.ageingDaysByStatus.notSent", label: "Not sent", unit: "days", min: 0, max: 365 },
       { kind: "number", path: "quotations.ageingDaysByStatus.sent", label: "Sent, awaiting the client", unit: "days", min: 0, max: 365 },
       { kind: "number", path: "quotations.ageingDaysByStatus.approved", label: "Approved, not yet scheduled", unit: "days", min: 0, max: 365 },
       { kind: "number", path: "quotations.expiryWarningDays", label: "Expiry warning", unit: "days before validity ends", min: 0, max: 365 },
-      { kind: "people", path: "quotations.alertRecipientUserIds", label: "Ageing alert recipients", hint: "Behrouz and the managers (N7). The expiry warning (N8) goes to the quotation's owner. Nobody receives N7 until this is set." },
+      { kind: "people", path: "quotations.alertRecipientUserIds", label: "Ageing alert recipients", hint: "The managers told when a quotation has been in a status too long. The expiry warning goes to the quotation's owner. Nobody is told about ageing until this is set." },
     ],
   },
   attendance: {
     title: "Check-in alerts and working hours",
-    description: "How long after a shift or appointment starts a missing check-in is raised (N5, N6), and what counts as late.",
+    description: "How long after a shift or appointment starts a missing check-in is raised, what counts as late, and how long a working day is.",
     icon: <Clock />,
     fields: [
       { kind: "number", path: "attendance.shiftCheckInAlertDelayMinutes", label: "Shift check-in alert after", unit: "minutes", min: 0, max: 240 },
@@ -109,7 +169,7 @@ const SECTIONS: Record<SectionKey, { title: string; description: string; icon: R
         path: "attendance.standardDailyHours",
         label: "Standard working day",
         unit: "hours",
-        hint: "Available hours for each working day (Sami, 28 Oct: 8 hours, no break). A technician with other hours has them set in Scheduling → Technicians.",
+        hint: "Available hours for each working day, with no break. A technician with other hours has them set in Scheduling → Technicians.",
         min: 1,
         max: 24,
       },
@@ -118,7 +178,7 @@ const SECTIONS: Record<SectionKey, { title: string; description: string; icon: R
         path: "attendance.dataCentreDailyHours",
         label: "Data Center working day",
         unit: "hours",
-        hint: "For technicians whose Service Type is Data Center (29 Oct: 12 hours). These are their available hours, not overtime. Hours set on the technician come first.",
+        hint: "For technicians whose Service Type is Data Center. These are their available hours, not overtime. Hours set on the technician come first.",
         min: 1,
         max: 24,
       },
@@ -127,7 +187,7 @@ const SECTIONS: Record<SectionKey, { title: string; description: string; icon: R
         path: "attendance.unpaidBreakMinutes",
         label: "Unpaid break per day",
         unit: "minutes",
-        hint: "Taken off each working day's hours. 0: the 8-hour day is already without a break (D-22, answered 28 Oct).",
+        hint: "Taken off each working day's hours. 0 when the working day is already counted without a break.",
         min: 0,
         max: 240,
       },
@@ -135,7 +195,7 @@ const SECTIONS: Record<SectionKey, { title: string; description: string; icon: R
         kind: "people",
         path: "attendance.checkInAlertRecipientUserIds",
         label: "Check-in alert recipients",
-        hint: "The coordinators told when a technician misses a shift check-in (N5) or an appointment check-in (N6). Nobody is told until this is set.",
+        hint: "The coordinators told when a technician misses a shift check-in or an appointment check-in. Nobody is told until this is set.",
       },
     ],
   },
@@ -149,7 +209,7 @@ const SECTIONS: Record<SectionKey, { title: string; description: string; icon: R
         path: "compliance.thresholdPercent",
         label: "Compliance threshold",
         unit: "%",
-        hint: "Penalties apply below this (decided 29 Oct: 90 %). Cleared, no penalty is worked out.",
+        hint: "Penalties apply below this. If it is cleared, no penalty is worked out.",
         min: 0,
         max: 100,
         step: 0.1,
@@ -157,24 +217,24 @@ const SECTIONS: Record<SectionKey, { title: string; description: string; icon: R
       { kind: "number", path: "compliance.penaltyPerMissAed", label: "Penalty per missed check-in", unit: "AED", min: 0, max: 100000, step: 0.01 },
       { kind: "number", path: "compliance.monthlyCapAed", label: "Monthly cap per technician", unit: "AED", min: 0, max: 100000, step: 0.01 },
       { kind: "number", path: "compliance.disputeCutoffDay", label: "Disputes close on day", unit: "of the month", min: 1, max: 28 },
-      { kind: "people", path: "compliance.hrRecipientUserIds", label: "Monthly report recipients", hint: "HR and managers (E3). Sent when the month is finalised. Nobody receives it until this is set." },
+      { kind: "people", path: "compliance.hrRecipientUserIds", label: "Monthly report recipients", hint: "HR and managers get the final monthly report when the month is finalised. Nobody receives it until this is set." },
       {
         kind: "people",
         path: "compliance.disputeReviewerUserIds",
         label: "Dispute reviewers",
-        hint: "Who accepts or rejects a technician's dispute, and is told when one is raised (N12). Only they can decide one. Nobody can until this is set.",
+        hint: "Who accepts or rejects a technician's dispute, and is told when one is raised. Only they can decide one. Nobody can until this is set.",
       },
       {
         kind: "people",
         path: "compliance.belowThresholdRecipientUserIds",
         label: "Below-threshold recipients",
-        hint: "Supervisors told when a technician's compliance falls below the threshold (N10), besides the technician and their team leader.",
+        hint: "Supervisors told when a technician's compliance falls below the threshold, besides the technician and their team leader.",
       },
     ],
   },
   planning: {
     title: "Capacity and exceptions",
-    description: "How far ahead capacity looks, what counts as a spare day, who hears about over-booking (N14), and when a completed job without the invoice flag is reported (N13).",
+    description: "How far ahead capacity looks, what counts as a spare day, who hears about over-booking, and when a completed job without the invoice flag is reported.",
     icon: <CalendarClock />,
     fields: [
       { kind: "number", path: "capacity.horizonDays", label: "Capacity horizon", unit: "days", min: 1, max: 90 },
@@ -183,18 +243,18 @@ const SECTIONS: Record<SectionKey, { title: string; description: string; icon: R
         path: "capacity.spareBelowPercent",
         label: "Spare day below",
         unit: "% of available hours booked",
-        hint: "The BRD asks for spare days to be highlighted without giving a figure; 50 % is a suggestion.",
+        hint: "A day with less than this share of its hours booked is shown as spare.",
         min: 0,
         max: 100,
       },
-      { kind: "people", path: "capacity.alertRecipientUserIds", label: "Over-booking alert recipients", hint: "The coordinators (N14, optional in the BRD). Nobody is told until this is set." },
+      { kind: "people", path: "capacity.alertRecipientUserIds", label: "Over-booking alert recipients", hint: "The coordinators told when a team's day is over-booked. Nobody is told until this is set." },
       { kind: "number", path: "exceptions.completedWithoutFlagAfterDays", label: "Completed without invoice flag after", unit: "days", min: 0, max: 365 },
     ],
   },
   links: {
     title: "Zoho FSM report links",
     description:
-      "The reports the BRD keeps in Zoho FSM (B5), opened from Reports → Zoho FSM reports. Open each report in FSM, copy the address from the browser and paste it here. A report without an address shows as not linked yet.",
+      "The reports kept in Zoho FSM, opened from Reports → Zoho FSM reports. Open each report in FSM, copy the address from the browser and paste it here. A report without an address shows as not linked yet.",
     icon: <ExternalLink />,
     fields: [
       { kind: "url", path: "fsmLinks.checkInLog", label: "Check-in and check-out log", hint: "FSM standard report: the raw check-in events from the mobile app." },
@@ -298,7 +358,7 @@ export function ReportingSettingsPage() {
       const tab = (Object.keys(SECTIONS) as SectionKey[]).find((key) =>
         SECTIONS[key].fields.some((field) => field.path === first),
       );
-      if (tab) setView(tab);
+      if (tab && !HIDDEN_TABS.has(tab)) setView(tab);
       toast.error("Some settings need attention before they can be saved.");
       return;
     }
@@ -392,7 +452,8 @@ export function ReportingSettingsPage() {
       <PillTabs<View>
         value={view}
         onChange={setView}
-        tabs={[
+        tabs={(
+          [
           { value: "finance", label: "Invoicing", count: changedIn("finance") || undefined },
           { value: "quotations", label: "Quotations", count: changedIn("quotations") || undefined },
           { value: "attendance", label: "Check-in alerts", count: changedIn("attendance") || undefined },
@@ -402,7 +463,8 @@ export function ReportingSettingsPage() {
           { value: "holidays", label: "Public holidays" },
           { value: "history", label: "Change history", count: history.length },
           { value: "fsm", label: "FSM data" },
-        ]}
+          ] as Array<{ value: View; label: string; count?: number }>
+        ).filter((tab) => !HIDDEN_TABS.has(tab.value))}
       />
 
       {view === "fsm" ? (
@@ -457,7 +519,7 @@ function SettingField({
 }) {
   const id = `reporting-${field.path.replace(/\./g, "-")}`;
   const changed = !same(value, defaultValue);
-  /* Recipients and the threshold have no BRD value; they start empty. */
+  /* Recipients start empty: there is no suggested value for them. */
   const hasSuggestion =
     field.kind !== "toggle" && !(defaultValue === null || (Array.isArray(defaultValue) && defaultValue.length === 0));
 
@@ -466,7 +528,10 @@ function SettingField({
   return (
     <div className={cn("grid content-start gap-1.5", (field.kind === "people" || field.kind === "url") && "md:col-span-2")}>
       <div className="flex items-center justify-between gap-2">
-        <Label htmlFor={id}>{field.label}</Label>
+        <div className="flex items-center gap-1.5">
+          <Label htmlFor={id}>{field.label}</Label>
+          {aboutOf(field.path) ? <AboutSetting label={field.label} text={aboutOf(field.path)!} /> : null}
+        </div>
         {changed && !disabled ? (
           <Button
             type="button"
@@ -550,7 +615,7 @@ function SettingField({
         {changed
           ? `Changed. ${hasSuggestion ? "Suggested" : "Default"}: ${display(defaultValue, field, users)}.`
           : hasSuggestion
-            ? "Suggested value (BRD §6.6), to be confirmed."
+            ? "Suggested value, to be confirmed."
             : null}
       </p>
     </div>

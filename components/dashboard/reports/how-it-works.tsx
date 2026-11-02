@@ -8,13 +8,13 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 /**
  * "How this report works" (29 Oct): an icon beside each report's controls
  * that opens the report's calculation in plain words: where the data comes
- * from, how each figure is worked out, what is left out, and which BRD
+ * from, how each figure is worked out, and what is left out, in plain
  * section it follows. The words live here, next to each other, so the
  * reports read alike; the figures they quote are the live settings.
  */
 
 export type HowItWorksSection = { heading: string; lines: string[] };
-export type HowItWorksContent = { title: string; summary: string; sections: HowItWorksSection[]; brd: string };
+export type HowItWorksContent = { title: string; summary: string; sections: HowItWorksSection[] };
 
 export function HowItWorks({ content }: { content: HowItWorksContent }) {
   return (
@@ -40,7 +40,6 @@ export function HowItWorks({ content }: { content: HowItWorksContent }) {
               </ul>
             </section>
           ))}
-          <p className="text-muted-foreground border-t pt-3 text-xs">Follows the BRD (YFI Invoicing and Reporting, v1.0): {content.brd}.</p>
         </div>
       </DialogContent>
     </Dialog>
@@ -48,14 +47,13 @@ export function HowItWorks({ content }: { content: HowItWorksContent }) {
 }
 
 const SHARED_FILTERS =
-  "Date range, technician, team and client filters, export to a spreadsheet, drill-through and saved filters per person, as for every report (BRD B5).";
+  "Date range, technician, team and client filters, export to a spreadsheet, drill-through and saved filters per person, as on every report.";
 
 export function quotationsHowItWorks(s?: { limits?: { notSent: number; sent: number; approved: number }; expiryWarningDays?: number }): HowItWorksContent {
   const l = s?.limits;
   return {
     title: "the quotation summary",
     summary: "The quotation pipeline from Zoho FSM: what the team is generating and where it gets stuck.",
-    brd: "B1, N7, N8, §6.6",
     sections: [
       {
         heading: "Where the data comes from",
@@ -64,15 +62,15 @@ export function quotationsHowItWorks(s?: { limits?: { notSent: number; sent: num
       {
         heading: "Statuses",
         lines: [
-          "The BRD's seven: Not sent (FSM's New), Sent, Approved, Converted to work order, Rejected, Revised, Expired. An FSM status not in this list keeps its own name, so nothing is hidden.",
+          "Seven statuses: Not sent (FSM's New), Sent, Approved, Converted to work order, Rejected, Revised, Expired. An FSM status not in this list keeps its own name, so nothing is hidden.",
           "Per status: count, total value and average days in the status. Click a status to list it, and a quotation to open it in FSM.",
         ],
       },
       {
         heading: "Ageing and expiry",
         lines: [
-          `Days in the current status. Past its limit it is flagged and the ageing recipients are told (N7): Not sent ${l?.notSent ?? 7} days, Sent ${l?.sent ?? 10}, Approved ${l?.approved ?? 5}.`,
-          `Waiting on the client with its validity ending within ${s?.expiryWarningDays ?? 5} days: highlighted, and its owner told (N8).`,
+          `Days in the current status. Past its limit it is flagged and the ageing recipients are told: Not sent ${l?.notSent ?? 7} days, Sent ${l?.sent ?? 10}, Approved ${l?.approved ?? 5}.`,
+          `Waiting on the client with its validity ending within ${s?.expiryWarningDays ?? 5} days: highlighted, and its owner told.`,
           "Where FSM does not say when the status began, the nearest FSM date stands in and the row says so (estimated).",
         ],
       },
@@ -86,15 +84,15 @@ export function utilizationHowItWorks(s?: { standardDailyHours?: number; dataCen
   return {
     title: "technician utilization",
     summary: "Two measures side by side: how busy each technician was, and how much of that work could be billed.",
-    brd: "B2, §2 (available hours), TC08, TC09, TC15; AMC not chargeable and the 12-hour Data Center day decided 29 Oct",
     sections: [
       {
-        heading: "Available hours",
+        heading: "Expected hours",
         lines: [
-          `Each working day × the technician's hours a day: ${day} h; ${s?.dataCentreDailyHours ?? 12} h for a technician whose Service Type is Data Center (their day, not overtime); or their own hours set in Scheduling. From the shift, rest days and leaving date in Scheduling.`,
-          "Less leave of any type (Annual, Sick, Public Holiday, Offset; portal leave and FSM Time Off), public holidays, rest days and every day from a leaving date.",
-          "A technician with no rest day set: 6 of every 7 days count, until it is entered, and the row is flagged.",
-          "Shift, team, rest day and hours are those in force on each day, so a later change does not rewrite past periods.",
+          `The week is the measure. A week expects the smaller of the technician's weekly hour limit and their hours a day × the days they work a week (7 less their off days). Hours a day: ${day} h; ${s?.dataCentreDailyHours ?? 12} h for a technician whose Service Type is Data Center; or their own. All set on the employee's record in Scheduling.`,
+          "Less a working day's share for each public holiday, the leave taken (any type; portal leave and FSM Time Off), and every day from a leaving date.",
+          "Off days are not fixed weekdays. A week cut by the dates expects its days less the off days, or the days worked if more; so a single day expects a day's hours only if it was worked.",
+          "A technician with no off days entered: one a week, and the row is flagged.",
+          "Team, hours and limits are those in force on each day, so a later change does not rewrite past periods.",
         ],
       },
       {
@@ -102,26 +100,26 @@ export function utilizationHowItWorks(s?: { standardDailyHours?: number; dataCen
         lines: [
           "From Completed appointments, and Cannot Complete ones with both actual times, in Zoho FSM.",
           "Each technician's own time: their FSM time sheet; else the appointment's actual times trimmed to their own check-in and check-out (FSM Attendance); else the appointment's actual times, counted as unverified.",
-          "Overlapping jobs count once. Each day counts up to what was available that day; the rest is overtime, shown beside and never in either ratio.",
+          "Overlapping jobs count once. Every hour counts, on off days and public holidays too, so utilization can pass 100 %. Each week's hours beyond what it expected are shown beside as Above expected.",
         ],
       },
       {
         heading: "The two measures",
         lines: [
-          "Time utilization = job hours ÷ available hours.",
-          "Commercial utilization = chargeable job hours ÷ available hours. Chargeable: the quotation's total is above zero or, with no quotation, the work order has a value. A total of zero (inspection, internal work) counts for time only.",
-          "AMC and in-contract work is never chargeable, whatever its value (decided 29 Oct): FSM marks it with Work Type AMC PPM or an AMC contract reference on the work order. It counts for time utilization only.",
+          "Time utilization = job hours ÷ expected hours.",
+          "Commercial utilization = chargeable job hours ÷ expected hours. Chargeable: the quotation's total is above zero or, with no quotation, the work order has a value. A total of zero (inspection, internal work) counts for time only.",
+          "AMC and in-contract work is never chargeable, whatever its value: FSM marks it with Work Type AMC PPM or an AMC contract reference on the work order. It counts for time utilization only.",
         ],
       },
       {
         heading: "Beside utilization",
         lines: [
-          "Travel: FSM trips, as hours and as a share of the day (travel ÷ available hours). Never inside utilization.",
+          "Travel: FSM trips, as hours and as a share of the day (travel ÷ expected hours). Never inside utilization.",
           "Data completeness: completed appointments with both actual times ÷ all completed; one without them is left out, not counted as zero.",
           "Actual against scheduled: the gap between actual and booked time, which points to estimating problems.",
         ],
       },
-      { heading: "Views and filters", lines: ["Daily, weekly or monthly trend; by technician, by team, and the appointments behind any figure.", SHARED_FILTERS, "A client filter counts only that client's work; available hours stay the technicians' whole days."] },
+      { heading: "Views and filters", lines: ["Daily, weekly or monthly trend; by technician, by team, and the appointments behind any figure.", SHARED_FILTERS, "A client filter counts only that client's work; expected hours stay the technicians' whole weeks."] },
     ],
   };
 }
@@ -130,7 +128,6 @@ export function capacityHowItWorks(s?: { horizonDays?: number; spareBelowPercent
   return {
     title: "capacity",
     summary: "Forward capacity: hours booked against hours available, by day and team, so over-booked and spare days show before they arrive.",
-    brd: "B5 (booked vs available), N14, §6.6",
     sections: [
       {
         heading: "Booked hours",
@@ -144,7 +141,7 @@ export function capacityHowItWorks(s?: { horizonDays?: number; spareBelowPercent
         lines: [
           "Each working day in full: 8 h, 12 h for a Data Center technician, or their own hours set in Scheduling; less any leave that day.",
           "Rest days, public holidays and days after leaving count nothing.",
-          "Unlike Utilization, no 6/7 is taken off when a technician has no rest day entered: on a calendar a day is worked or not. So until rest days are entered, every day shows as a working day.",
+          "Capacity uses the fixed rest weekdays set in Scheduling: on a calendar a day is worked or not. Until rest weekdays are entered, every day shows as a working day.",
         ],
       },
       {
@@ -159,7 +156,7 @@ export function capacityHowItWorks(s?: { horizonDays?: number; spareBelowPercent
       {
         heading: "Dates and filters",
         lines: [
-          `Opens on the capacity horizon from Reporting Settings (${s?.horizonDays ?? 14} days from today), the same days the over-booking alert (N14) watches.`,
+          `Opens on the capacity horizon from Reporting Settings (${s?.horizonDays ?? 14} days from today), the same days the over-booking alert watches.`,
           "Team and client narrow the board; a client counts only its own bookings against everyone's availability.",
         ],
       },
@@ -171,13 +168,12 @@ export function exceptionsHowItWorks(s?: { afterDays?: number }): HowItWorksCont
   return {
     title: "the exception reports",
     summary: "Two lists that protect the invoicing queue and utilization from gaps in the data.",
-    brd: "B5, N13, §6.6",
     sections: [
       {
         heading: "Completed without the invoice flag",
         lines: [
           "Work orders completed in FSM, on a quotation with a value, that nobody has marked ready to invoice and that are not already in the queue.",
-          `Past ${s?.afterDays ?? 3} days (Reporting Settings) a row is overdue and its coordinator is told (N13).`,
+          `Past ${s?.afterDays ?? 3} days (Reporting Settings) a row is overdue and its coordinator is told.`,
         ],
       },
       {
@@ -196,7 +192,6 @@ export function attendanceHowItWorks(s?: { lateToleranceMinutes?: number }): How
   return {
     title: "daily attendance",
     summary: "Per technician per day: shift, check-in and check-out, hours present, the flags and leave, with the monthly summary for HR.",
-    brd: "B5 (daily attendance), §6.6 late tolerance, TC10, TC15",
     sections: [
       {
         heading: "Where the data comes from",
@@ -231,7 +226,6 @@ export function complianceHowItWorks(s?: { thresholdPercent?: number | null; pen
   return {
     title: "app compliance",
     summary: "Whether technicians check in and out in the FSM app, month by month, and the penalty the policy works out. The portal calculates; HR decides and applies.",
-    brd: "B4, §6.8, E2, E3, N9–N12, TC11–TC15",
     sections: [
       {
         heading: "Required events",
@@ -261,17 +255,17 @@ export function complianceHowItWorks(s?: { thresholdPercent?: number | null; pen
       {
         heading: "Disputes",
         lines: [
-          `A technician disputes a missed check-in, with the reason, until day ${s?.cutoffDay ?? 25} of the next month, that day included (TC14: the day after is refused). Most use FSM, not the portal, so a supervisor or coordinator can raise it for them.`,
-          "The dispute reviewers named in Reporting Settings decide it: accepted, the miss is waived with a reason; rejected, the reason is recorded. They are told when one is raised (N12).",
-          "The month can be finalised only after the cut-off and once every dispute is decided; then its figures are frozen and the report goes to HR (E3).",
+          `A technician disputes a missed check-in, with the reason, until day ${s?.cutoffDay ?? 25} of the next month, that day included; a dispute the day after is refused. Most use FSM, not the portal, so a supervisor or coordinator can raise it for them.`,
+          "The dispute reviewers named in Reporting Settings decide it: accepted, the miss is waived with a reason; rejected, the reason is recorded. They are told when one is raised.",
+          "The month can be finalised only after the cut-off and once every dispute is decided; then its figures are frozen and the final report goes to HR by email.",
         ],
       },
       {
         heading: "Messages",
         lines: [
-          "N9: the technician, for each missed check-in, the morning after. N10: the technician, their team leader and the named supervisors, once a month, when compliance falls below the threshold. Both count only days before today: a late check-in still counts.",
-          "At month close, N11 in the portal and the statement by email (E2) to each technician: the figures, each miss, and how to dispute by the cut-off.",
-          "In-app messages reach a technician only with a portal account linked to them (same email as in FSM); E2 uses the email FSM holds.",
+          "Missed check-in: the technician is told the morning after. Below the threshold: the technician, their team leader and the named supervisors are told, once a month. Both count only days before today: a late check-in still counts.",
+          "At month close, each technician gets their statement, in the portal and by email: the figures, each miss, and how to dispute it by the cut-off.",
+          "In-app messages reach a technician only with a portal account linked to them (same email as in FSM); the statement email goes to the address FSM holds.",
         ],
       },
       { heading: "Filters", lines: ["Month, technician, team and client (those booked on its appointments)."] },

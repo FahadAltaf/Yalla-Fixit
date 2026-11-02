@@ -23,7 +23,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   const gate = await requireResourceAccess(null, null);
   if (!gate.ok) return gate.response;
   const can = workOrderAbilities(gate.access.accessUser);
-  if (!can.view && !can.verify) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (!can.view) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   try {
     const admin = await createAdminServerClient();

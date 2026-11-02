@@ -602,6 +602,47 @@ export default function QuotationDetail({ id }: { id: string }) {
               and property already agreed, so the team adds the floor plans,
               areas and contacts and nothing else.
             */}
+            {/*
+              SNG-100: void because the inspector found the property not as
+              quoted. It stays what the client approved, but nothing is
+              billed on it: the revised quotation takes its place.
+            */}
+            {quote.void_info?.voided_at ? (
+              <Alert variant="destructive">
+                <TriangleAlert />
+                <AlertTitle>Void: the property is not as quoted</AlertTitle>
+                <AlertDescription className="flex flex-wrap items-center gap-3">
+                  <span>
+                    {quote.void_info.void_reason ?? "The inspector found the unit not as this quotation describes."}{" "}
+                    {quote.void_info.replaced_by
+                      ? `Revised quotation ${quote.void_info.replaced_by.quote_number} (${quote.void_info.replaced_by.status}) takes its place.`
+                      : "Raise the revised quotation from the job."}
+                  </span>
+                  {quote.void_info.replaced_by ? (
+                    <Button size="sm" variant="outline" asChild>
+                      <Link href={`/snagging/quotations/${quote.void_info.replaced_by.id}`}>
+                        <FileText className="size-4" />
+                        Open revised quotation
+                      </Link>
+                    </Button>
+                  ) : quote.job_id ? (
+                    <Button size="sm" variant="outline" asChild>
+                      <Link href={`/snagging/${quote.job_id}`}>Open the job</Link>
+                    </Button>
+                  ) : null}
+                </AlertDescription>
+              </Alert>
+            ) : quote.void_info?.revises && quote.status !== "approved" ? (
+              <Alert>
+                <FileText />
+                <AlertTitle>Revised quotation</AlertTitle>
+                <AlertDescription>
+                  It replaces quotation {quote.void_info.revises.quote_number}, which is void because the property was
+                  not as quoted. Send it to the client: the inspection can be approved once they approve it.
+                </AlertDescription>
+              </Alert>
+            ) : null}
+
             {needsJob ? (
               <Alert>
                 <Plus />

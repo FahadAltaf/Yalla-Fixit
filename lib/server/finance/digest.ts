@@ -91,7 +91,7 @@ export async function runDigest(
   if (recipientIds.length === 0) return { sent: false, reason: "no digest recipients set (Reporting Settings)" };
 
   const ledger = await readLedgerForMetrics(admin);
-  if (!ledger.ready) return { sent: false, reason: "Ready to invoice is not set up (migration 20261024100000)" };
+  if (!ledger.ready) return { sent: false, reason: "Ready to invoice is not set up yet (a database update is still to be applied)" };
   const plan = planDigest({
     items: digestItemsOf(ledger.workOrders),
     now,

@@ -7,6 +7,7 @@ import {
   cacheHeaders,
   countJobs,
   myJobs,
+  readerScope,
   resolvePeriod,
   startOfToday,
   trendPercent,
@@ -35,7 +36,8 @@ export async function GET(req: NextRequest) {
     const period = resolvePeriod(req.nextUrl.searchParams.get("days"));
     const admin = await createAdminServerClient();
     // FR-10.01: these tiles count the reader's own work, not the org's.
-    const me = profile.id;
+    // An admin's tiles count everyone's.
+    const me = readerScope(accessUser, profile.id);
     const today = startOfToday();
 
     const [
@@ -68,7 +70,7 @@ export async function GET(req: NextRequest) {
       // in-progress jobs only, so this stays small however big the table
       // gets, and it is the one place a row set is genuinely needed —
       // Postgres has no DISTINCT COUNT through PostgREST.
-      distinctInspectors(admin),
+      distinctInspectors(admin, me),
       countJobs(admin, (q) =>
         myJobs(q, me).in("status", ["submitted", "in_review"]),
       ),
@@ -78,7 +80,7 @@ export async function GET(req: NextRequest) {
           .gte("approved_at", period.fromTs),
       ),
       countJobs(admin, (q) =>
-        q
+        myJobs(q, me)
           .in("status", ["approved", "delivered"])
           .gte("approved_at", period.previousFromTs)
           .lt("approved_at", period.previousToTs),
@@ -115,10 +117,9 @@ export async function GET(req: NextRequest) {
 
 async function distinctInspectors(
   admin: Awaited<ReturnType<typeof createAdminServerClient>>,
+  me: string | null,
 ): Promise<number> {
-  const { data, error } = await admin
-    .from("snagging_jobs")
-    .select("inspector_id")
+  const { data, error } = await myJobs(admin.from("snagging_jobs").select("inspector_id"), me)
     .eq("status", "in_progress")
     .not("inspector_id", "is", null);
   if (error) throw new Error(error.message);

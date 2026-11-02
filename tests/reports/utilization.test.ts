@@ -186,20 +186,22 @@ test("Cannot Complete counts only with both actual times (Sami, 28 Oct), and not
   assert.equal(t.completenessPercent, null);
 });
 
-test("any time of day counts; beyond the day's hours, and on a rest day, it is overtime", () => {
+test("2 Nov: every hour counts, any time of day and on an off day; above the week's expected hours is overtime", () => {
   const result = run({
     from: "2026-10-03",
     to: "2026-10-05",
     appointments: [
-      appt(["T1"], "2026-10-05", "05:00", "19:00"), // Monday: a 14-hour crew day, 8 counted, 6 overtime
-      appt(["T1"], "2026-10-04", "09:00", "12:00"), // Sunday, a rest day: all overtime
+      appt(["T1"], "2026-10-05", "05:00", "19:00"), // Monday: a 14-hour crew day, all counted
+      appt(["T1"], "2026-10-04", "09:00", "12:00"), // Sunday: counted too; off days are not fixed weekdays
     ],
   });
   const t = result.technicians[0];
-  assert.equal(t.jobMinutes, 8 * 60, "a 05:00 start is not outside anything");
-  assert.equal(t.overtimeMinutes, 9 * 60);
-  assert.equal(t.availableMinutes, 2 * 8 * 60, "Saturday and Monday; the rest day adds nothing");
-  assert.equal(result.overall.overtimeMinutes, 9 * 60);
+  assert.equal(t.jobMinutes, 17 * 60, "a 05:00 start is not outside anything, and nothing is capped");
+  /* Sat-Sun of one week (one off day a week: one day due, 8 h) and Monday of the next (worked: 8 h). */
+  assert.equal(t.availableMinutes, 2 * 8 * 60);
+  assert.equal(t.overtimeMinutes, 6 * 60, "Sunday's 3 h are within that week's 8 h; Monday is 14 h against 8 h");
+  assert.equal(t.timePercent, 106.3, "utilization can pass 100 %");
+  assert.equal(result.overall.overtimeMinutes, 6 * 60);
 });
 
 test("without their own records, each crew member gets the appointment's time (unverified)", () => {
@@ -246,7 +248,7 @@ test("Sami, 28 Oct: individual hours from each one's time sheet or check-in and 
   assert.equal(result.overall.completed, 1, "one appointment, not three technician-appointments");
 });
 
-test("no rest day entered: six full days make 100 %, a seventh day is overtime", () => {
+test("one off day a week: six 8-hour days make 100 %, a seventh day is overtime", () => {
   const week = ["2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08", "2026-10-09", "2026-10-10", "2026-10-11"];
   const six = run({
     from: "2026-10-05",
@@ -255,9 +257,9 @@ test("no rest day entered: six full days make 100 %, a seventh day is overtime",
     appointments: week.slice(0, 6).map((d) => appt(["T1"], d, "05:00", "17:00")),
   }).technicians[0];
   assert.equal(six.availableMinutes, 48 * 60);
-  assert.equal(six.jobMinutes, 48 * 60);
-  assert.equal(six.timePercent, 100);
-  assert.equal(six.overtimeMinutes, 6 * 4 * 60, "12-hour days: 4 h over each");
+  assert.equal(six.jobMinutes, 72 * 60, "12-hour days count in full");
+  assert.equal(six.timePercent, 150);
+  assert.equal(six.overtimeMinutes, 24 * 60, "72 h worked against 48 h expected");
 
   const seven = run({
     from: "2026-10-05",
@@ -265,8 +267,43 @@ test("no rest day entered: six full days make 100 %, a seventh day is overtime",
     techs: [tech("T1", { restWeekdays: [] })],
     appointments: week.map((d) => appt(["T1"], d, "08:00", "16:00")),
   }).technicians[0];
-  assert.equal(seven.jobMinutes, 48 * 60);
+  assert.equal(seven.jobMinutes, 56 * 60);
   assert.equal(seven.overtimeMinutes, 8 * 60, "the seventh day");
+});
+
+test("2 Nov: the technician's own daily and weekly limits and off days set the week's expected hours", () => {
+  const week = ["2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08", "2026-10-09", "2026-10-10", "2026-10-11"];
+  const appointments = week.slice(0, 5).map((d) => appt(["T1"], d, "06:00", "18:00"));
+  const capped = run({
+    from: "2026-10-05",
+    to: "2026-10-11",
+    techs: [tech("T1", { restWeekdays: [], dailyHours: 12, weeklyHours: 48, offDaysPerWeek: 2 })],
+    appointments,
+  }).technicians[0];
+  assert.equal(capped.availableMinutes, 48 * 60, "12 h x 5 days is 60 h, the weekly limit of 48 h is less");
+  assert.equal(capped.jobMinutes, 60 * 60);
+  assert.equal(capped.overtimeMinutes, 12 * 60);
+  assert.equal(capped.restDaysAssumed, false);
+
+  const daily = run({
+    from: "2026-10-05",
+    to: "2026-10-11",
+    techs: [tech("T1", { restWeekdays: [], dailyHours: 9, offDaysPerWeek: 2 })],
+    holidays: ["2026-10-07"],
+    leave: [{ technicianFsmId: "T1", startAt: dubai("2026-10-08", "00:00"), endAt: dubai("2026-10-09", "00:00") }],
+    appointments: [],
+  }).technicians[0];
+  assert.equal(daily.availableMinutes, 3 * 9 * 60, "9 h x 5 days, less a holiday and a day of leave");
+  assert.equal(daily.timePercent, 0, "still in the report with no work");
+});
+
+test("2 Nov: a week cut by the dates expects its days less the off days, or the days worked", () => {
+  const one = run({ from: "2026-10-06", to: "2026-10-06", appointments: [] }).technicians[0];
+  assert.equal(one.availableMinutes, 0, "a day not worked may be their off day");
+  const worked = run({ from: "2026-10-06", to: "2026-10-06", appointments: [appt(["T1"], "2026-10-06", "09:00", "17:00")] }).technicians[0];
+  assert.equal(worked.availableMinutes, 8 * 60);
+  const three = run({ from: "2026-10-06", to: "2026-10-08", appointments: [] }).technicians[0];
+  assert.equal(three.availableMinutes, 2 * 8 * 60, "three days, one may be the off day");
 });
 
 test("a past day counts for the team the technician was in that day", () => {
@@ -297,9 +334,10 @@ test("a past day counts for the team the technician was in that day", () => {
     timeZone: TZ,
   });
   const team = Object.fromEntries(result.teams.map((t) => [t.key, t]));
-  assert.equal(team.L1.availableMinutes, 2 * 480, "5 and 6 Oct in Lead One's team");
+  /* Four days of a week, one may be the off day: 3 x 8 h, shared evenly over the four days. */
+  assert.equal(team.L1.availableMinutes, 2 * 360, "5 and 6 Oct in Lead One's team");
   assert.equal(team.L1.jobMinutes, 120);
-  assert.equal(team.L2.availableMinutes, 2 * 480, "7 and 8 Oct in Lead Two's team");
+  assert.equal(team.L2.availableMinutes, 2 * 360, "7 and 8 Oct in Lead Two's team");
   assert.equal(team.L2.jobMinutes, 60);
   assert.equal(result.technicians[0].teamName, "Lead Two's team", "the row shows the team of the last day");
 });

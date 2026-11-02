@@ -768,7 +768,7 @@ export const ATTENDANCE_DAY_COLUMNS: ColumnDef<AttendanceRow>[] = [
           ) : null}
         </div>
       ) : (
-        <span className="text-muted-foreground text-sm" title="FSM's shift check-ins cannot be read yet (B-01)">
+        <span className="text-muted-foreground text-sm" title="FSM's shift check-ins cannot be read yet">
           Not available
         </span>
       ),
@@ -858,7 +858,7 @@ export function attendanceDayExportRow(r: AttendanceRow) {
     leave: r.leaveCategory,
     shiftStart: at(r.shiftStart),
     shiftEnd: at(r.shiftEnd),
-    checkIn: r.measured ? at(r.checkIn) : "Not available (B-01)",
+    checkIn: r.measured ? at(r.checkIn) : "Not available",
     checkOut: r.measured ? at(r.checkOut) : null,
     present: r.presentMinutes === null ? null : Math.round((r.presentMinutes / 60) * 100) / 100,
     late: r.measured ? (r.late ? `${r.lateMinutes} min` : "") : null,

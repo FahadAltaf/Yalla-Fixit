@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (/line_states|work_order_states|line_invoices|PGRST205|42P01|schema cache/i.test(message)) {
-      return NextResponse.json({ error: "Revenue at month end needs migration 20261024100000 to be applied first." }, { status: 409 });
+      return NextResponse.json({ error: "Revenue at month end is not set up yet: a database update is still to be applied." }, { status: 409 });
     }
     console.error("Month-end revenue error:", error);
     return NextResponse.json({ error: "Could not work out the revenue" }, { status: 500 });

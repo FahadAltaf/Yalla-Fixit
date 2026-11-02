@@ -378,7 +378,10 @@ function TokenHint() {
       and{" "}
       <code className="bg-muted rounded px-1">{"{{nonEmergencyCallOuts}}"}</code>{" "}
       each become a whole line, and are left out when that service is not on
-      the proposal.
+      the proposal. In a service&apos;s scope,{" "}
+      <code className="bg-muted rounded px-1">{"{{qty}}"}</code> becomes the units entered for it
+      and <code className="bg-muted rounded px-1">{"{{frequency}}"}</code> its frequency. A line
+      ending in a colon (&quot;Exclusions:&quot;) is a heading for the lines under it.
     </p>
   );
 }
@@ -1487,21 +1490,20 @@ function TextLibrary({
                           aria-hidden
                         />
                       ) : null}
-                      <Hint label={item.label}>
-                        <button
-                          type="button"
-                          onClick={() => setSelectedId(item.id)}
-                          className={cn(
-                            "focus-visible:ring-ring min-w-0 flex-1 rounded-md py-2.5 pe-2 ps-3 text-left text-sm transition-colors focus-visible:ring-2 focus-visible:outline-none",
-                            active && "font-medium",
-                          )}
-                        >
-                          {/* Two lines before it gives up, rather than cutting
-                              "Materials, Spare Parts, Consumables & Labor" off
-                              at the comma with half the row still empty. */}
-                          <span className="line-clamp-2 break-words">{item.label}</span>
-                        </button>
-                      </Hint>
+                      {/* No tooltip: it only repeated the name the row already shows. */}
+                      <button
+                        type="button"
+                        onClick={() => setSelectedId(item.id)}
+                        className={cn(
+                          "focus-visible:ring-ring min-w-0 flex-1 rounded-md py-2.5 pe-2 ps-3 text-left text-sm transition-colors focus-visible:ring-2 focus-visible:outline-none",
+                          active && "font-medium",
+                        )}
+                      >
+                        {/* Two lines before it gives up, rather than cutting
+                            "Materials, Spare Parts, Consumables & Labor" off
+                            at the comma with half the row still empty. */}
+                        <span className="line-clamp-2 break-words">{item.label}</span>
+                      </button>
                       {changed ? (
                         <Hint label="Customised">
                           <span

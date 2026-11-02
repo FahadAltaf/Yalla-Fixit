@@ -32,10 +32,10 @@ export async function GET(req: NextRequest) {
   const user = request.gate.access.accessUser;
   const can = {
     ...request.can,
-    waive: hasResourceAction(user, ResourceType.COMPLIANCE, ActionType.EDIT),
-    finalize: hasResourceAction(user, ResourceType.COMPLIANCE, ActionType.APPROVE),
+    waive: hasResourceAction(user, ResourceType.REPORTS_COMPLIANCE, ActionType.EDIT),
+    finalize: hasResourceAction(user, ResourceType.REPORTS_COMPLIANCE, ActionType.APPROVE),
     /* Raise a dispute for a technician: the supervisors and coordinators who waive. */
-    raise: hasResourceAction(user, ResourceType.COMPLIANCE, ActionType.EDIT),
+    raise: hasResourceAction(user, ResourceType.REPORTS_COMPLIANCE, ActionType.EDIT),
     /* Decide one: only the reviewers named in Reporting Settings (D-10). */
     review: (await readReportingSettings(request.admin)).compliance.disputeReviewerUserIds.includes(request.gate.access.profile.id),
   };

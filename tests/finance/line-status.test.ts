@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { isFsmCompleted, lineCanBeInvoiced, lineRemaining, lineStatus, withoutVat, withVat, workOrderInvoicing } from "@/lib/finance/line-status";
+import { invoiceTotals, isFsmCompleted, lineCanBeInvoiced, lineRemaining, lineStatus, withoutVat, withVat, workOrderInvoicing } from "@/lib/finance/line-status";
 
 const line = (amount: number, ready = false, invoicedAmount = 0) => ({ amount, ready, invoicedAmount });
 
@@ -56,4 +56,18 @@ test("with VAT, at the line's own rate", () => {
   assert.equal(withVat(200, { amount: 0, lineAmount: 0, taxPercent: null }), 200, "nothing to go by: no VAT");
   assert.equal(withoutVat(1176, { amount: 1120, lineAmount: 1176, taxPercent: 5 }), 1120, "back from the amount with VAT");
   assert.equal(withoutVat(117.6, { amount: 1120, lineAmount: 1176, taxPercent: 5 }), 112);
+});
+
+test("2 Nov: lines carry their net amount; VAT is worked out once on the invoice total", () => {
+  const five = { amount: 100, lineAmount: 105, taxPercent: null };
+  /* 3 × 33.33 net: VAT on the total is 5 % of 99.99 = 5.00, not 3 × 1.67 = 5.01. */
+  assert.deepEqual(invoiceTotals([33.33, 33.33, 33.33].map((amount) => ({ amount, line: five }))), { net: 99.99, vat: 5, total: 104.99, ratePercent: 5 });
+  assert.deepEqual(invoiceTotals([{ amount: 6400, line: { amount: 6400, lineAmount: 6720, taxPercent: null } }]), { net: 6400, vat: 320, total: 6720, ratePercent: 5 });
+  /* Lines at different rates each add their own. */
+  const mixed = invoiceTotals([
+    { amount: 100, line: five },
+    { amount: 100, line: { amount: 100, lineAmount: 100, taxPercent: null } },
+  ]);
+  assert.deepEqual(mixed, { net: 200, vat: 5, total: 205, ratePercent: null });
+  assert.deepEqual(invoiceTotals([]), { net: 0, vat: 0, total: 0, ratePercent: 0 });
 });

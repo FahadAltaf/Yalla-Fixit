@@ -6,6 +6,7 @@ import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import {
   cacheHeaders,
   myJobs,
+  readerScope,
   resolvePeriod,
 } from "@/lib/server/snagging/overview-queries";
 import { ActionType, ResourceType } from "@/types/types";
@@ -38,7 +39,7 @@ export async function GET(req: NextRequest) {
     const admin = await createAdminServerClient();
 
     // FR-10.01 — the reader's own work over the window, not the org's.
-    const me = profile.id;
+    const me = readerScope(accessUser, profile.id);
 
     const [created, completed] = await Promise.all([
       myJobs(admin.from("snagging_jobs").select("created_at"), me)

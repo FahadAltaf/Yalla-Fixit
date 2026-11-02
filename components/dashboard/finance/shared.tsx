@@ -144,13 +144,22 @@ export function WorkOrderQueueBadge({ status }: { status: WorkOrderQueueStatus }
 }
 
 /** The invoice total: what the lines on it come to, VAT included (worked out, never typed). */
-export function InvoiceTotals({ total }: { total: number }) {
+/** The invoice's totals (2 Nov): the lines before VAT, VAT on that total, and the invoice total. */
+export function InvoiceTotals({ totals }: { totals: { net: number; vat: number; total: number; ratePercent: number | null } }) {
   return (
-    <div className="bg-muted/40 flex items-center justify-between gap-3 rounded-lg border p-3 text-sm">
-      <span className="font-medium">
-        Invoice total <span className="text-muted-foreground font-normal">incl. VAT</span>
-      </span>
-      <span className="font-semibold tabular-nums">{aed(total)}</span>
+    <div className="bg-muted/40 grid gap-1 rounded-lg border p-3 text-sm">
+      <div className="text-muted-foreground flex items-center justify-between gap-3">
+        <span>Lines, before VAT</span>
+        <span className="tabular-nums">{aed(totals.net)}</span>
+      </div>
+      <div className="text-muted-foreground flex items-center justify-between gap-3">
+        <span>VAT{totals.ratePercent !== null ? ` (${totals.ratePercent}% of the total)` : ", at each line's rate"}</span>
+        <span className="tabular-nums">{aed(totals.vat)}</span>
+      </div>
+      <div className="flex items-center justify-between gap-3 border-t pt-1">
+        <span className="font-medium">Invoice total</span>
+        <span className="font-semibold tabular-nums">{aed(totals.total)}</span>
+      </div>
     </div>
   );
 }

@@ -64,6 +64,12 @@ export function viewerTime(iso: string | null | undefined, day?: string, timeZon
   return `${date} ${time}`;
 }
 
+/** "28 Oct 2026", in the viewer's zone. */
+export function viewerDate(iso: string | null | undefined, timeZone = viewerTimeZone()): string {
+  if (!valid(iso)) return "—";
+  return new Intl.DateTimeFormat("en-GB", { timeZone, day: "numeric", month: "short", year: "numeric" }).format(new Date(iso));
+}
+
 /** "28 Oct 2026, 06:03". */
 export function viewerDateTime(iso: string | null | undefined, timeZone = viewerTimeZone()): string {
   if (!valid(iso)) return "—";

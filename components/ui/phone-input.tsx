@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { PhoneInput as IntlPhoneInput } from "react-international-phone";
 import "react-international-phone/style.css";
 
@@ -32,7 +32,34 @@ export function PhoneInput({
   id?: string;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
+  /* The country picked in the box, for a pasted local number. */
+  const dialRef = useRef("971");
   const [dropdownStyle, setDropdownStyle] = useState<CSSProperties>({ maxHeight: LIST_MAX });
+
+  /*
+    The trunk 0 of a local number (050...) is not part of the international
+    number. Kept, it took one of the mask's places, so the last digit was
+    dropped (0555550101 came out as +971 05 555 5010). The control keeps
+    its own text, so the 0 is refused as it goes in rather than taken off
+    the value afterwards. On "beforeinput", which every way of typing fires
+    (a phone's keyboard often sends no usable key code), not on keydown.
+  */
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    if (!wrap) return;
+    const refuseTrunkZero = (event: InputEvent) => {
+      const input = event.target as HTMLInputElement;
+      if (input.tagName !== "INPUT" || !event.data || !/^0/.test(event.data)) return;
+      const atEnd = input.selectionStart === input.value.length;
+      if (!atEnd || input.value.replace(/\D/g, "") !== dialRef.current) return;
+      event.preventDefault();
+      /* "0501234567" put in as one piece: the rest of it still goes in. */
+      const rest = event.data.replace(/\D/g, "").replace(/^0+/, "");
+      if (rest) onChange(`+${dialRef.current}${rest}`);
+    };
+    wrap.addEventListener("beforeinput", refuseTrunkZero, true);
+    return () => wrap.removeEventListener("beforeinput", refuseTrunkZero, true);
+  }, [onChange]);
 
   /*
     The country list is drawn inside the field, so a card or dialog that
@@ -68,7 +95,26 @@ export function PhoneInput({
   }
 
   return (
-    <div ref={wrapRef} className="w-full" onPointerDownCapture={fitDropdown} onKeyDownCapture={fitDropdown}>
+    <div
+      ref={wrapRef}
+      className="w-full"
+      onPointerDownCapture={fitDropdown}
+      onKeyDownCapture={fitDropdown}
+      onPasteCapture={(e) => {
+        /* A pasted local number (050 123 4567) or one starting 00: the control would cut it at the mask. */
+        const text = e.clipboardData.getData("text").trim();
+        const digits = text.replace(/\D/g, "");
+        if (!digits || text.startsWith("+")) return;
+        const international = digits.startsWith("00")
+          ? digits.slice(2)
+          : digits.startsWith("0")
+            ? `${dialRef.current}${digits.replace(/^0+/, "")}`
+            : null;
+        if (!international) return;
+        e.preventDefault();
+        onChange(`+${international}`);
+      }}
+    >
       <IntlPhoneInput
         defaultCountry="ae"
         value={value}
@@ -77,8 +123,15 @@ export function PhoneInput({
         onChange={(phone, meta) => {
           const digits = phone.replace(/\D/g, "");
           const dial = meta.country.dialCode;
-          const national = digits.startsWith(dial) ? digits.slice(dial.length) : digits;
-          onChange(national ? phone : "");
+          dialRef.current = dial;
+          /*
+            A local number is often typed with its trunk 0 (050...). The 0 is
+            not part of the international number, and kept, it filled one of
+            the mask's places so the last digit was dropped (0555550101 came
+            out as +971 05 555 5010). It is taken off as it is typed.
+          */
+          const national = (digits.startsWith(dial) ? digits.slice(dial.length) : digits).replace(/^0+/, "");
+          onChange(national ? `+${dial}${national}` : "");
         }}
         className="w-full"
         inputClassName={cn(

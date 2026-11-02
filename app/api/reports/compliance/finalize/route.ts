@@ -24,7 +24,7 @@ import { ActionType, ResourceType } from "@/types/types";
 const bodySchema = z.object({ month: z.string().regex(/^\d{4}-(0[1-9]|1[0-2])$/) }).strict();
 
 export async function POST(req: NextRequest) {
-  const gate = await requireResourceAccess(ResourceType.COMPLIANCE, ActionType.APPROVE);
+  const gate = await requireResourceAccess(ResourceType.REPORTS_COMPLIANCE, ActionType.APPROVE);
   if (!gate.ok) return gate.response;
 
   const parsed = bodySchema.safeParse(await req.json().catch(() => null));

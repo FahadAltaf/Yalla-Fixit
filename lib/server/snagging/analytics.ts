@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { hasJobInspectors } from "./columns";
+import { myJobs } from "./overview-queries";
 
 import { APPROVAL_SLA_HOURS } from "@/lib/server/snagging/workflow";
 import type { SnaggingAnalyticsGranularity } from "@/types/types";
@@ -240,6 +241,8 @@ export async function loadJobsTouchingRange(
   admin: SupabaseClient,
   range: DateRange,
   dates: readonly JobDateAnchor[] = ALL_DATE_ANCHORS,
+  /* readerScope: a non-admin reads only the jobs they have a hand in. */
+  scope: string | null = null,
 ): Promise<AnalyticsJob[]> {
   const anchors = dates
     .map((column) => `and(${column}.gte.${range.fromTs},${column}.lte.${range.toTs})`)
@@ -249,9 +252,7 @@ export async function loadJobsTouchingRange(
 
   // Ordered on a unique tiebreak too, so pages never overlap or skip.
   return readAll<AnalyticsJob>((from, to) =>
-    admin
-      .from("snagging_jobs")
-      .select(columns)
+    myJobs(admin.from("snagging_jobs").select(columns), scope)
       .or(anchors)
       .order("created_at", { ascending: false })
       .order("id")
@@ -266,12 +267,14 @@ export async function loadJobsTouchingRange(
  * live worklist, and a reviewer who narrows the dates to last week
  * should not be told there is less waiting than there is.
  */
-export async function loadReviewQueue(admin: SupabaseClient): Promise<AnalyticsJob[]> {
+export async function loadReviewQueue(
+  admin: SupabaseClient,
+  /* readerScope, as for loadJobsTouchingRange. */
+  scope: string | null = null,
+): Promise<AnalyticsJob[]> {
   const columns = await jobColumns(admin);
   return readAll<AnalyticsJob>((from, to) =>
-    admin
-      .from("snagging_jobs")
-      .select(columns)
+    myJobs(admin.from("snagging_jobs").select(columns), scope)
       .in("status", REVIEW_QUEUE_STATUSES)
       .order("submitted_at", { ascending: true, nullsFirst: false })
       .order("id")

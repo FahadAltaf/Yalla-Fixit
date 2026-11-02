@@ -34,6 +34,8 @@ import {
   SidebarProvider,
 } from "@/components/ui/sidebar";
 
+import { useUnreadNotifications } from "@/components/dashboard/notifications/use-unread-notifications";
+
 import DashboardHeader from "./dashboatd-header";
 import CompanyLogo from "@/public/site-logo.webp";
 
@@ -136,11 +138,11 @@ const SidebarGroupedMenuItems = ({ section }: { section: MenuSection }) => {
                           >
                             <Link href={subItem.url}>
                               {subItem.title}
-                              {subItem.unreadCount && (
+                              {subItem.unreadCount ? (
                                 <span className="bg-primary/10 flex h-5 min-w-5 items-center justify-center rounded-full text-xs">
                                   {subItem.unreadCount}
                                 </span>
-                              )}
+                              ) : null}
                             </Link>
                           </SidebarMenuSubButton>
                         </SidebarMenuSubItem>
@@ -162,11 +164,11 @@ const SidebarGroupedMenuItems = ({ section }: { section: MenuSection }) => {
                     <span>{item.title}</span>
                   </Link>
                 </SidebarMenuButton>
-                {item.unreadCount && (
-                  <SidebarMenuBadge className="bg-primary/10 rounded-full">
-                    {item.unreadCount}
+                {item.unreadCount ? (
+                  <SidebarMenuBadge className="bg-primary text-primary-foreground rounded-full px-1.5 tabular-nums" aria-label={`${item.unreadCount} unread`}>
+                    {item.unreadCount > 99 ? "99+" : item.unreadCount}
                   </SidebarMenuBadge>
-                )}
+                ) : null}
               </SidebarMenuItem>
             );
           })}
@@ -180,7 +182,13 @@ const CHROMELESS_ROUTES = ["/scheduling/display"];
 
 const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
   const { userProfile } = useAuth();
-  const { navMain } = getNavData(userProfile || ({} as User));
+  const unread = useUnreadNotifications(Boolean(userProfile));
+  const nav = getNavData(userProfile || ({} as User)).navMain;
+  /* 30 Oct: the inbox's unread count beside Notifications. */
+  const navMain = nav.map((section) => ({
+    ...section,
+    items: section.items.map((item) => (item.url === "/notifications" ? { ...item, unreadCount: unread || undefined } : item)),
+  }));
   const layoutPathname = usePathname();
 
   // Full-bleed routes (the scheduling wall display) still need the auth gate

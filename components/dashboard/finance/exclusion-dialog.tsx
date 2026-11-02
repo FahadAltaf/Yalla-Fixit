@@ -56,12 +56,11 @@ export function ExclusionDialog({
     <Dialog open={open} onOpenChange={(next) => !next && onClose()}>
       <ActionDialogContent busy={busy}>
         <DialogHeader>
-          <DialogTitle>Mark not to be invoiced</DialogTitle>
+          <DialogTitle>{verifiedAtOnce ? "Mark not invoiceable" : "Mark not to be invoiced"}</DialogTitle>
           <DialogDescription>
-            For example an AMC PPM visit or an in-contract call-out already paid for.{" "}
             {verifiedAtOnce
-              ? "It is excluded at once, and stays visible in Ready to invoice and the reports."
-              : "It is excluded only after verification, and stays visible in Ready to invoice and the reports."}
+              ? "Give the reason this work order should not be invoiced."
+              : "For example an AMC PPM visit or an in-contract call-out already paid for. It is excluded only after verification, and stays visible in Ready to invoice and the reports."}
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4">
@@ -118,7 +117,7 @@ export function ExclusionDialog({
             Cancel
           </Button>
           <SubmitButton pending={busy} disabled={!reason.trim()} onClick={() => onSubmit({ reason: reason.trim(), notes: notes.trim() || null, files })}>
-            Send for verification
+            {verifiedAtOnce ? "Mark not invoiceable" : "Send for verification"}
           </SubmitButton>
         </DialogFooter>
       </ActionDialogContent>

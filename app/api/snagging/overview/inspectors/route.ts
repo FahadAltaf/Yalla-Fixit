@@ -6,6 +6,7 @@ import { getRequestUserAccess } from "@/lib/server/request-user-access";
 import {
   cacheHeaders,
   myJobs,
+  readerScope,
   resolvePeriod,
 } from "@/lib/server/snagging/overview-queries";
 import { readAllRows } from "@/lib/server/snagging/read-all";
@@ -56,6 +57,8 @@ export async function GET(req: NextRequest) {
       is what they were before several inspectors were possible.
     */
     const roster = await hasJobInspectors(admin);
+    // The reader's own jobs; an admin's table is everyone's.
+    const me = readerScope(accessUser, profile.id);
 
     const [assignedRows, periodJobs, rosterRows] = await Promise.all([
       readAllRows<{ inspector_id: string; inspector: Named | Named[] | null }>(
@@ -75,7 +78,7 @@ export async function GET(req: NextRequest) {
               .from("snagging_jobs")
               .select("id, inspector_id, status")
               .gte("created_at", period.fromTs),
-            profile.id,
+            me,
           )
             .order("id")
             .range(from, to) as never,
@@ -133,6 +136,8 @@ export async function GET(req: NextRequest) {
     */
     const tally = new Map<string, { assigned: number; inProgress: number; completed: number }>();
     for (const id of nameById.keys()) tally.set(id, { assigned: 0, inProgress: 0, completed: 0 });
+    // Everyone on the reader's jobs in the window, whatever stage the job is at.
+    const onTheseJobs = new Set<string>();
     for (const job of periodJobs) {
       /*
         Counted once for EACH inspector on the job.
@@ -145,6 +150,7 @@ export async function GET(req: NextRequest) {
       */
       const ids = byJob.get(job.id) ?? (job.inspector_id ? [job.inspector_id] : []);
       for (const id of ids) {
+        onTheseJobs.add(id);
         const counts = tally.get(id);
         if (!counts) continue;
         if (job.status === "assigned") counts.assigned += 1;
@@ -157,6 +163,8 @@ export async function GET(req: NextRequest) {
     // Sorted across everyone BEFORE paging, so page two really does carry
     // on from page one. It used to page first and sort each page.
     const everyone = [...tally.entries()]
+      // Scoped, only the people on the reader's own jobs, not every inspector on file.
+      .filter(([id]) => !me || onTheseJobs.has(id))
       .map(([id, counts]) => ({ id, name: nameById.get(id) ?? "Unknown", ...counts }))
       .sort((a, b) => b.completed - a.completed || a.name.localeCompare(b.name));
     const rowCount = everyone.length;

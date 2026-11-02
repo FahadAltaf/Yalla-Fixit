@@ -1,17 +1,19 @@
 "use client";
 
 import type { ColumnDef } from "@tanstack/react-table";
-import { Building2, Clock } from "lucide-react";
+import { Building2, CalendarDays, Clock } from "lucide-react";
 
 import { WorkOrderQueueBadge, aed, daysSince } from "@/components/dashboard/finance/shared";
 import { IconText } from "@/components/data-table/columns/icon-text";
 import { IdentityCell } from "@/components/ui/entity-avatar";
+import { viewerDate, viewerDateTime } from "@/lib/reports/viewer-time";
 import type { WorkOrderListRow } from "@/lib/server/finance/work-orders";
 
 /**
  * Columns for Ready to invoice, one row per FSM work order (read live):
  * quotation and work order, client (the contact first, then the company),
- * value before and with VAT, how much is invoiced, status and days in it,
+ * value before and with VAT, when it was created in FSM (30 Oct), how much
+ * is invoiced, status and days in it,
  * built like every other table here (column-user.tsx). Sorting is fixed
  * (newest first).
  */
@@ -45,6 +47,22 @@ export function getWorkOrderQueueColumns(agedAfterDays: number, operations = fal
             <p className="text-sm font-medium">{name ?? "—"}</p>
             {r.contactName && r.clientName ? <p className="text-muted-foreground text-xs">{r.clientName}</p> : null}
           </div>
+        );
+      },
+      enableSorting: false,
+    },
+    {
+      id: "created",
+      header: "Created",
+      cell: ({ row }) => {
+        const at = row.original.createdAt;
+        if (!at) return <span className="text-muted-foreground text-sm">—</span>;
+        return (
+          <span title={`Created in Zoho FSM ${viewerDateTime(at)}`}>
+            <IconText icon={CalendarDays} muted>
+              <span className="whitespace-nowrap tabular-nums">{viewerDate(at)}</span>
+            </IconText>
+          </span>
         );
       },
       enableSorting: false,
@@ -86,10 +104,11 @@ export function getWorkOrderQueueColumns(agedAfterDays: number, operations = fal
           <div className="flex flex-col items-start gap-1">
             <WorkOrderQueueBadge status={r.queueStatus} />
             {r.needsCompleting ? <span className="text-warning text-xs">Appointments done · mark Completed in FSM</span> : null}
-            {r.progressPercent !== null ? (
-              <span className="text-muted-foreground text-xs tabular-nums">
-                {r.progressPercent}% done · {r.progressPurpose === "revenue_only" ? "revenue only" : "to invoice"}
-              </span>
+            {/* 30 Oct: Operations' completion (Complete once confirmed; Partially complete while lines have a % and it is not). */}
+            {r.operationsCompletion === "complete" ? (
+              <span className="text-success text-xs">Complete (Operations)</span>
+            ) : r.operationsCompletion === "partial" ? (
+              <span className="text-warning text-xs" title="Operations has marked lines done, and has not yet confirmed the work order complete">Partially complete (Operations)</span>
             ) : null}
             {operations && r.fsmStatus === "Completed" && r.flagged === false ? (
               <span className="text-muted-foreground text-xs">Quotation not flagged To Be Invoiced</span>

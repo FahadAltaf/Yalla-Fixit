@@ -293,6 +293,22 @@ export type ReportTechnician = ExceptionTechnician &
 /* Until migration 20261028100000 is applied there is no daily_hours column: everyone has the standard day.
    service_type: the Service Type in Scheduling; a Data Center technician's day is 12 hours (29 Oct). */
 async function technicianRows(admin: SupabaseClient): Promise<Record<string, unknown>[]> {
+  /* 2 Nov: weekly_hours and off_days_per_week arrive with 20261102100000. */
+  try {
+    return await readAllRows<Record<string, unknown>>(
+      (from, to) =>
+        admin
+          .from("technician_reference")
+          .select(
+            "fsm_resource_id, display_name, is_active, shift, team_leader_fsm_id, rest_weekdays, leaving_date, employment_status, email, user_profile_id, hidden_from_lists, daily_hours, weekly_hours, off_days_per_week, service_type:lookup_options!technician_reference_service_type_id_fkey(name)",
+          )
+          .order("fsm_resource_id")
+          .range(from, to),
+      "technicians",
+    );
+  } catch (error) {
+    if (!/weekly_hours|off_days_per_week/i.test(error instanceof Error ? error.message : String(error))) throw error;
+  }
   try {
     return await readAllRows<Record<string, unknown>>(
       (from, to) =>
@@ -374,6 +390,8 @@ export async function loadTechnicians(admin: SupabaseClient): Promise<Map<string
   const portalOf = new Map(rows.map((r) => [String(r.fsm_resource_id), r]));
   const extras = (r: Record<string, unknown> | undefined) => ({
     dailyHours: r?.daily_hours === null || r?.daily_hours === undefined ? null : Number(r.daily_hours),
+    weeklyHours: r?.weekly_hours === null || r?.weekly_hours === undefined ? null : Number(r.weekly_hours),
+    offDaysPerWeek: r?.off_days_per_week === null || r?.off_days_per_week === undefined ? null : Number(r.off_days_per_week),
     serviceType: serviceTypeOf(r),
     history: r ? history.get(String(r.fsm_resource_id)) : undefined,
     teamLeaderId: str(r?.team_leader_fsm_id),

@@ -23,6 +23,7 @@ import {
 import { PRICING_CONFIG_COLUMNS } from "@/lib/server/snagging/quotation-build";
 import { mintReportToken } from "@/lib/server/snagging/report-token";
 import { ActionType, ResourceType } from "@/types/types";
+import { jobVoidState } from "@/lib/server/snagging/quotation-void";
 
 type Admin = Awaited<ReturnType<typeof createAdminServerClient>>;
 
@@ -105,6 +106,7 @@ export async function POST(
       if (res.ok) await syncJobQuotationNow(admin, id, profile.id);
       return res;
     }
+    if (action === "revise") return revise(admin, id, profile.id);
     if (action === "send") return thenSync(send(admin, id, profile.id, body));
     if (action === "share_link") return thenSync(shareLink(admin, id, profile.id));
     if (action === "approve")
@@ -127,6 +129,62 @@ export async function POST(
       { status: 500 },
     );
   }
+}
+
+/**
+ * The revised quotation for a job whose quotation is void (SNG-100): a new
+ * draft, priced on the furnishing the inspector found, for the same client
+ * and property. The void one is linked to it, and it goes to Zoho FSM as a
+ * new estimate. From here it is sent and approved like any quotation; once
+ * the client approves it the job can be approved again.
+ */
+async function revise(admin: Admin, jobId: string, userId: string) {
+  const state = await jobVoidState(admin, jobId);
+  if (!state) {
+    return NextResponse.json({ error: "This job's quotation is not void, so there is nothing to revise." }, { status: 409 });
+  }
+  if (state.revised) {
+    return NextResponse.json(
+      { error: `Revised quotation ${state.revised.quote_number} has already been raised.`, data: { id: state.revised.id } },
+      { status: 409 },
+    );
+  }
+  const [{ data: voided }, { data: job }] = await Promise.all([
+    admin.from("snagging_quotations").select("id, furnished").eq("id", state.quotation.id).maybeSingle(),
+    admin.from("snagging_jobs").select("client_id, property_id").eq("id", jobId).maybeSingle(),
+  ]);
+  // Void only ever means "not as quoted", so what was found is the other one.
+  const found = !(voided as { furnished?: boolean } | null)?.furnished;
+
+  const res = await generate(admin, jobId, userId, found);
+  if (!res.ok) return res;
+  const created = ((await res.json()) as { data?: { id?: string } }).data;
+  if (!created?.id) throw new Error("The revised quotation was not created");
+
+  const jobRow = job as { client_id?: string | null; property_id?: string | null } | null;
+  await Promise.all([
+    admin
+      .from("snagging_quotations")
+      .update({
+        quote_kind: "inspection",
+        ...(jobRow?.client_id ? { client_id: jobRow.client_id } : {}),
+        ...(jobRow?.property_id ? { property_id: jobRow.property_id } : {}),
+      })
+      .eq("id", created.id),
+    admin.from("snagging_quotations").update({ replaced_by_quotation_id: created.id }).eq("id", state.quotation.id),
+  ]);
+  await recordAudit(admin, {
+    entityType: "task",
+    entityId: jobId,
+    taskId: jobId,
+    eventType: "quotation_revised",
+    actorId: userId,
+    payload: { void_quotation: state.quotation.quote_number, furnished: found },
+  });
+  // To Zoho FSM before answering, so the page opens it with FSM's number.
+  await syncJobQuotationNow(admin, jobId, userId);
+  const { data: fresh } = await admin.from("snagging_quotations").select(QUOTATION_DOCUMENT_COLUMNS).eq("id", created.id).maybeSingle();
+  return NextResponse.json({ data: fresh ?? created }, { status: 201 });
 }
 
 async function latestQuote(admin: Admin, jobId: string) {

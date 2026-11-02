@@ -119,7 +119,7 @@ export function RevenueSection() {
           <p className="text-muted-foreground border-t px-5 py-3 text-xs">
             For booking, before VAT: recognised in {monthLabel(month)} {aed(revenue.totals.beforeVat.recognisedInMonth)}, to date{" "}
             {aed(revenue.totals.beforeVat.recognised)}; invoiced {aed(revenue.totals.beforeVat.invoiced)}.
-            {revenue.progressReady ? "" : " Operations' % done is not counted until migration 20261026100000 is applied."}
+            {revenue.progressReady ? "" : " Operations' % done is not counted yet: a database update is still to be applied."}
           </p>
         </>
       )}

@@ -152,15 +152,36 @@ export function ClientAddressesDialog({
         className="flex max-h-[90vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl"
         showCloseButton
       >
-        <DialogHeader className="px-6 pt-6 pb-4 text-left">
-          <DialogTitle className="pr-10 text-lg">
-            {client?.client_name ?? "Client"} · addresses
-          </DialogTitle>
-          <DialogDescription>
-            The units this client has on file, here and in Zoho FSM. Picking the
-            client on a quotation or a job fills in the newest one, so it is not
-            typed again. A new address is added in Zoho FSM too.
-          </DialogDescription>
+        {/*
+          Add address sits at the end of the title, as an icon, where it is
+          seen before the list (it was a button under the list, below the
+          fold on a client with a few units). Left of the close button.
+        */}
+        <DialogHeader className="flex-row items-center gap-3 px-6 pt-6 pb-4 pr-14 text-left">
+          <div className="min-w-0 flex-1 space-y-1.5">
+            <DialogTitle className="text-lg">
+              {client?.client_name ?? "Client"} · addresses
+            </DialogTitle>
+            <DialogDescription>
+              The units this client has on file, here and in Zoho FSM. Picking the
+              client on a quotation or a job fills in the newest one, so it is not
+              typed again. A new address is added in Zoho FSM too.
+            </DialogDescription>
+          </div>
+          {canEdit && !editing ? (
+            <Hint label="Add address">
+              <Button
+                variant="outline"
+                size="icon"
+                className="shrink-0"
+                onClick={() => setEditing("new")}
+                disabled={loading}
+                aria-label="Add address"
+              >
+                <Plus className="size-4" />
+              </Button>
+            </Hint>
+          ) : null}
         </DialogHeader>
 
         {/*
@@ -213,7 +234,7 @@ export function ClientAddressesDialog({
                 <EmptyState
                   icon={<MapPin />}
                   title="No address on file"
-                  description="Add one now, or it will be saved with this client's first quotation."
+                  description="Add one with + above, or it will be saved with this client's first quotation."
                 />
               ) : (
                 <div className="divide-y overflow-hidden rounded-lg border">
@@ -248,13 +269,6 @@ export function ClientAddressesDialog({
                   ))}
                 </div>
               )}
-
-              {canEdit ? (
-                <Button variant="outline" onClick={() => setEditing("new")}>
-                  <Plus className="size-4" />
-                  Add address
-                </Button>
-              ) : null}
             </div>
           )}
         </div>

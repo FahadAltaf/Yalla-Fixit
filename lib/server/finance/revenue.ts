@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { isFsmCompleted } from "@/lib/finance/line-status";
-import { effectiveEntry, isNonBillable, isVoid, type ProgressEntry } from "@/lib/finance/progress";
+import { effectiveEntry, isEnded, isNonBillable, type ProgressEntry } from "@/lib/finance/progress";
 import { addDaysToDateString, zonedTimeToUtc } from "@/lib/scheduling/org-time";
 import { readAllRows } from "@/lib/server/snagging/read-all";
 
@@ -126,7 +126,7 @@ export async function monthEndRevenue(admin: SupabaseClient, month: string): Pro
     const status = str(flow?.fsm_status);
     const completedAt = str(flow?.fsm_completed_at);
     const completed = isFsmCompleted(status) && (completedAt === null || completedAt < untilIso);
-    const ended = isVoid(status) || isNonBillable(status);
+    const ended = isEnded(status) || isNonBillable(status);
     const known = linesOf.get(id) ?? [];
     const recorded = (entriesOf.get(id) ?? []).filter((e) => e.recordedAt < untilIso);
     const paid = (invoicedOf.get(id) ?? []).filter((i) => i.date <= untilDate);
