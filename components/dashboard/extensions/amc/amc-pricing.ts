@@ -1,6 +1,7 @@
 import { format } from "date-fns";
 
 import {
+  AMC_SERVICES,
   getDefaultFrequencyForService,
   getServicesForUnitType,
 } from "./amc-constants";
@@ -65,7 +66,24 @@ export function computeServiceRowPrice(row: AmcServiceRow): number {
   // nothing to multiply. Kept here rather than at each call site so the
   // table, the totals and the documents cannot disagree about it.
   if (row.free) return 0;
-  return (row.basePrice ?? 0) * row.units * row.frequency;
+  return (row.basePrice ?? 0) * row.units * chargeableTimesPerYear(row);
+}
+
+/*
+  How many times a year the base price is charged (Scope of Works Library).
+
+  For most services the frequency is visits a year, so it is the
+  multiplier. A pool is serviced so many times a WEEK, so its base price
+  (per pool per visit) is charged that many times, 52 weeks a year. A
+  deployed cleaner or office boy is priced per person per MONTH; the
+  frequency there says how many days a week they work, and the charge is
+  twelve months of the base price.
+*/
+function chargeableTimesPerYear(row: AmcServiceRow): number {
+  const type = AMC_SERVICES.find((service) => service.id === row.serviceId)?.frequencyType;
+  if (type === "weekly") return row.frequency * 52;
+  if (type === "manpower") return 12;
+  return row.frequency;
 }
 
 export function calculateAmcTotals(data: AmcFormData): AmcTotals {
@@ -114,7 +132,12 @@ function formatPropertyTypeLabel(data: AmcFormData): string {
   return `${category} - ${unit}`;
 }
 
-function formatFrequencyForPdf(service: AmcService, frequency: number): string {
+function formatFrequencyForPdf(
+  service: Pick<AmcService, "frequencyType" | "frequencySuffix">,
+  frequency: number,
+): string {
+  // As the Scope of Works Library writes them: "4 times per year + call-backs".
+  const suffix = service.frequencySuffix ?? "";
   switch (service.frequencyType) {
     case "covered":
       return "Covered";
@@ -122,10 +145,18 @@ function formatFrequencyForPdf(service: AmcService, frequency: number): string {
       return "Unlimited";
     case "handyman":
       return `${frequency} hours per year`;
+    case "weekly":
+      return `${frequency} ${frequency === 1 ? "visit" : "visits"} per week${suffix}`;
+    case "manpower":
+      return `Daily (${frequency} days per week)${suffix}`;
     case "ppm":
     case "fixed":
     default:
-      return `${frequency} per year`;
+      // In the Service Summary's own words: once, twice, monthly.
+      if (frequency === 1) return `Once per year${suffix}`;
+      if (frequency === 2) return `Twice per year${suffix}`;
+      if (frequency === 12) return `Monthly (12 times per year)${suffix}`;
+      return `${frequency} times per year${suffix}`;
   }
 }
 
@@ -158,11 +189,16 @@ function buildFrequencyRows(data: AmcFormData, settings: AmcSettings): Frequency
           work of their own: the AC, the pumps, the tanks, the ducts.
         */
         hasUnits:
-          service.hasScopeSection === true && service.frequencyType !== "handyman",
+          service.hasScopeSection === true &&
+          service.frequencyType !== "handyman" &&
+          // A call-out is not counted in units, even with a scope section of its own.
+          service.frequencyType !== "unlimited" &&
+          service.frequencyType !== "covered",
         frequency: formatFrequencyForPdf(service, row.frequency),
         price: computeServiceRowPrice(row),
         reference: service.reference,
         equipment: row.equipment?.trim() ?? "",
+        unitOfMeasure: service.unitOfMeasure ?? "",
       };
     })
     .filter((row): row is FrequencyRow => Boolean(row));

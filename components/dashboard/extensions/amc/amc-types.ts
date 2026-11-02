@@ -317,8 +317,14 @@ export type AmcPriceListRow = z.infer<typeof amcPriceListRowSchema>;
 export type AmcAccountManager = z.infer<typeof amcAccountManagerSchema>;
 export type AmcFormData = z.infer<typeof amcFormSchema>;
 
+/*
+  weekly and manpower came with the Scope of Works Library (Oct 2026): a
+  pool is serviced so many times a WEEK, and a deployed cleaner or office
+  boy is priced per person per month, with the frequency saying how many
+  days a week they work.
+*/
 export type AmcServiceFrequencyType =
-  "covered" | "unlimited" | "ppm" | "handyman" | "fixed";
+  "covered" | "unlimited" | "ppm" | "handyman" | "fixed" | "weekly" | "manpower";
 
 export type AmcDocumentType = "proposal" | "contract";
 
@@ -339,9 +345,18 @@ export interface AmcService {
      comes from the base price entered per proposal (FR2.4). */
   frequencyPerYear?: number;
   villaOnly: boolean;
+  /** Where it is offered, when not on every kind of property. Wins over villaOnly. */
+  unitTypes?: UnitType[];
   sectionNumber?: string;
   sectionTitle?: string;
   hasScopeSection: boolean;
+  /** Scope of Works Library: its reference (A1) and the group it sits in. */
+  ref?: string;
+  category?: string;
+  /** What one unit is: "Per AC unit per visit". */
+  unitOfMeasure?: string;
+  /** Printed after the frequency: " + call-backs", " (quarterly)". */
+  frequencySuffix?: string;
 }
 
 export interface FrequencyRow {
@@ -365,6 +380,8 @@ export interface FrequencyRow {
   reference: string;
   /** The equipment entered for the service, trimmed; empty when none (DEV-261). */
   equipment: string;
+  /** What one unit is, from the Scope of Works Library; empty when not stated. */
+  unitOfMeasure: string;
 }
 
 export interface AmcTotals {

@@ -224,7 +224,14 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
       try {
         const submission =
           await amcSubmissionsService.getSubmission(submissionId);
-        form.reset(submissionToFormData(submission));
+        const restored = submissionToFormData(submission);
+        /*
+          Rows for every service now in the catalogue, unticked, so a draft
+          saved before a service existed (the Scope of Works Library added
+          22) can still take it. Ticked rows and their figures are kept.
+        */
+        restored.serviceRows = syncServiceRowsForUnitType(restored.serviceRows, restored.unitType);
+        form.reset(restored);
         setSubmissionMeta({
           status: submission.status,
           sentBackReason: submission.sent_back_reason ?? null,

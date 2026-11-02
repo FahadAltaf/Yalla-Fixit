@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import type { UseFormReturn } from "react-hook-form";
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import { Pencil, Plus, Trash2, Wrench } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -16,6 +16,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Separator } from "@/components/ui/separator";
 import {
   Table,
@@ -42,6 +43,13 @@ import {
 } from "../amc-types";
 import { CustomServiceDialog, type CustomServiceDraft } from "./custom-service-dialog";
 
+/* What the frequency counts, where it is not visits a year (Scope of Works Library). */
+const FREQUENCY_UNIT: Partial<Record<AmcService["frequencyType"], string>> = {
+  handyman: "hours a year",
+  weekly: "visits a week",
+  manpower: "days a week",
+};
+
 /* "A", "A and B", "A, B and C". */
 function listNames(names: string[]): string {
   if (names.length <= 1) return names[0] ?? "";
@@ -64,12 +72,16 @@ export function ServiceTable({ form }: ServiceTableProps) {
     then any added to this proposal alone (DEV-260), which are a number of
     visits a year like a PPM service.
   */
-  const listed: (Pick<AmcService, "id" | "label" | "frequencyType"> & { custom: boolean })[] = [
+  const listed: (Pick<AmcService, "id" | "label" | "frequencyType" | "category" | "unitOfMeasure"> & {
+    custom: boolean;
+  })[] = [
     ...availableServices.map((service) => ({ ...service, custom: false })),
     ...serviceRows.filter(isCustomServiceRow).map((row) => ({
       id: row.serviceId,
       label: row.customName?.trim() || "Custom service",
       frequencyType: "fixed" as const,
+      category: "Custom services",
+      unitOfMeasure: undefined,
       custom: true,
     })),
   ];
@@ -149,7 +161,7 @@ export function ServiceTable({ form }: ServiceTableProps) {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {listed.map((service) => {
+                  {listed.map((service, index) => {
                     const rowIndex = serviceRows.findIndex(
                       (row) => row.serviceId === service.id,
                     );
@@ -160,9 +172,27 @@ export function ServiceTable({ form }: ServiceTableProps) {
                     const frequencyEditable = isFrequencyEditable(
                       service.frequencyType,
                     );
+                    /*
+                      The Scope of Works Library's groups (HVAC, MEP,
+                      cleaning, ...), each opened by a row of its own so
+                      thirty-odd services can be scanned.
+                    */
+                    const groupStarts =
+                      Boolean(service.category) && service.category !== listed[index - 1]?.category;
 
                     return (
-                      <TableRow key={service.id}>
+                      <Fragment key={service.id}>
+                      {groupStarts ? (
+                        <TableRow className="bg-muted/40 hover:bg-muted/40">
+                          <TableCell
+                            colSpan={7}
+                            className="text-muted-foreground py-2 text-[11px] font-semibold tracking-wide uppercase"
+                          >
+                            {service.category}
+                          </TableCell>
+                        </TableRow>
+                      ) : null}
+                      <TableRow>
                         <TableCell>
                           <Checkbox
                             checked={row.included}
@@ -205,22 +235,39 @@ export function ServiceTable({ form }: ServiceTableProps) {
                           ) : (
                             <span className="block">{service.label}</span>
                           )}
+                          {/* What one unit is, so the units entered mean the same thing every time. */}
+                          {service.unitOfMeasure ? (
+                            <span className="text-muted-foreground mt-0.5 block text-[11px]">
+                              {service.unitOfMeasure}
+                            </span>
+                          ) : null}
                           {/*
                             DEV-261: what the service covers here, as the
                             signed contracts name it. Only on a ticked row,
                             since only those print.
                           */}
                           {row.included ? (
-                            <Input
-                              className="mt-2 block h-8 w-full max-w-[240px] text-xs md:text-xs"
-                              placeholder="Equipment, e.g. 10 FCU"
-                              maxLength={80}
-                              aria-label={`Equipment for ${service.label}`}
-                              value={row.equipment ?? ""}
-                              onChange={(event) =>
-                                updateRow(service.id, { equipment: event.target.value })
-                              }
-                            />
+                            /*
+                              Labelled inside the field, so a value such as
+                              "98" still reads as the equipment and not as
+                              a stray number beside the service name.
+                            */
+                            <InputGroup className="mt-2 h-8 w-full max-w-[260px] rounded-[12px]">
+                              <InputGroupAddon className="text-muted-foreground gap-1.5 pr-0 text-[11px] font-medium">
+                                <Wrench className="size-3.5" aria-hidden />
+                                Equipment
+                              </InputGroupAddon>
+                              <InputGroupInput
+                                className="h-8 text-xs md:text-xs"
+                                placeholder="e.g. 10 FCU"
+                                maxLength={80}
+                                aria-label={`Equipment for ${service.label}`}
+                                value={row.equipment ?? ""}
+                                onChange={(event) =>
+                                  updateRow(service.id, { equipment: event.target.value })
+                                }
+                              />
+                            </InputGroup>
                           ) : null}
                         </TableCell>
                         <TableCell>
@@ -228,7 +275,7 @@ export function ServiceTable({ form }: ServiceTableProps) {
                             type="number"
                             min={1}
                             step={1}
-                            className="h-8 text-xs"
+                            className="h-8 min-w-16 text-xs"
                             placeholder="1"
                             disabled={!row.included}
                             value={row.units}
@@ -259,7 +306,7 @@ export function ServiceTable({ form }: ServiceTableProps) {
                               type="number"
                               min={1}
                               step={1}
-                              className="h-8 text-xs"
+                              className="h-8 min-w-16 text-xs"
                               placeholder="e.g. 2"
                               disabled={!row.included}
                               aria-label={`Frequency for ${service.label}`}
@@ -273,7 +320,14 @@ export function ServiceTable({ form }: ServiceTableProps) {
                                 })
                               }
                             />
-                          ) : (
+                          ) : null}
+                          {/* What the number counts, where it is not visits a year. */}
+                          {frequencyEditable && FREQUENCY_UNIT[service.frequencyType] ? (
+                            <span className="text-muted-foreground mt-0.5 block text-[11px]">
+                              {FREQUENCY_UNIT[service.frequencyType]}
+                            </span>
+                          ) : null}
+                          {frequencyEditable ? null : (
                             <span className="text-muted-foreground text-xs">
                               {service.frequencyType === "unlimited"
                                 ? "Unlimited"
@@ -339,7 +393,7 @@ export function ServiceTable({ form }: ServiceTableProps) {
                               type="number"
                               min={0}
                               step="0.01"
-                              className="h-8 text-xs"
+                              className="h-8 min-w-20 text-xs"
                               placeholder="0.00"
                               disabled={!row.included}
                               aria-label={`Base price for ${service.label}`}
@@ -368,6 +422,7 @@ export function ServiceTable({ form }: ServiceTableProps) {
                           )}
                         </TableCell>
                       </TableRow>
+                      </Fragment>
                     );
                   })}
                 </TableBody>
@@ -466,7 +521,7 @@ export function ServiceTable({ form }: ServiceTableProps) {
 
       {availableServices.length !== AMC_SERVICES.length && (
         <p className="text-xs text-muted-foreground">
-          Villa-only services are hidden for apartments and offices.
+          Services not offered on this kind of property are hidden.
         </p>
       )}
     </div>
