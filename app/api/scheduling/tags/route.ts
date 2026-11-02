@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
-import { hasResourceAction } from "@/lib/role-permissions";
+import { hasSharedListAction } from "@/lib/role-permissions";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
 import { LOOKUP_KEYS } from "@/lib/server/attribute-list-route";
 import { ActionType, ResourceType, TechnicianTag } from "@/types/types";
@@ -33,7 +33,7 @@ export async function GET() {
     if (!profile || !accessUser) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    if (!hasResourceAction(accessUser, ResourceType.SCHEDULING, ActionType.VIEW)) {
+    if (!hasSharedListAction(accessUser, ResourceType.SCHEDULING, ActionType.VIEW)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
@@ -78,7 +78,7 @@ export async function POST(req: NextRequest) {
     if (!profile || !accessUser) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    if (!hasResourceAction(accessUser, ResourceType.SCHEDULING, ActionType.CREATE)) {
+    if (!hasSharedListAction(accessUser, ResourceType.SCHEDULING, ActionType.CREATE)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
@@ -129,7 +129,7 @@ export async function PUT(req: NextRequest) {
     if (!profile || !accessUser) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    if (!hasResourceAction(accessUser, ResourceType.SCHEDULING, ActionType.EDIT)) {
+    if (!hasSharedListAction(accessUser, ResourceType.SCHEDULING, ActionType.EDIT)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
@@ -190,7 +190,7 @@ export async function DELETE(req: NextRequest) {
     if (!profile || !accessUser) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    if (!hasResourceAction(accessUser, ResourceType.SCHEDULING, ActionType.DELETE)) {
+    if (!hasSharedListAction(accessUser, ResourceType.SCHEDULING, ActionType.DELETE)) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 

@@ -49,7 +49,15 @@ export function getResourceAccessEntries(
 const NOT_INHERITED_BY_ADMIN: ReadonlyArray<{
   resource: ResourceType;
   action: ActionType;
-}> = [{ resource: ResourceType.SNAGGING, action: ActionType.APPROVE }];
+}> = [
+  { resource: ResourceType.SNAGGING, action: ActionType.APPROVE },
+  /*
+    Compliance identity numbers used to be listed here (D2: named people
+    only). Sharon, 28 Oct 2026 (action point C1): admins and managers see
+    full numbers, users stay masked. Admins therefore inherit it again;
+    managers get it by grant on the Permissions screen.
+  */
+];
 
 function adminInherits(resource: ResourceType, action: ActionType): boolean {
   return !NOT_INHERITED_BY_ADMIN.some(
@@ -66,6 +74,22 @@ export function hasResourceAction(
 
   return getResourceAccessEntries(user, resource).some(
     (entry) => entry.action === action && entry.enabled !== false
+  );
+}
+
+/**
+ * The lists Scheduling and Compliance share (Settings → Workforce, 31 Oct
+ * 2026): the module's own key still works, and Workforce settings works too.
+ */
+export function hasSharedListAction(
+  user: User | null | undefined,
+  moduleResource: ResourceType,
+  action: ActionType,
+  workforceAction: ActionType = action
+): boolean {
+  return (
+    hasResourceAction(user, moduleResource, action) ||
+    hasResourceAction(user, ResourceType.WORKFORCE_SETTINGS, workforceAction)
   );
 }
 

@@ -158,3 +158,57 @@ are no longer mapped by Sequence: the appointment takes every line on it.
 order id on the entry before the appointment, and the retry reusing it)
 needs migration `20261009120000_schedule_entry_work_order_copy.sql` on
 production first; it was not applied during this session.
+
+
+---
+
+# Live change plan: Manpower Compliance core migration (production Supabase)
+
+Status: APPLIED by Sami on 27 Oct 2026 (observed by the import dry run: the six tables exist and certificate types were entered). Written 27 Oct 2026.
+
+## 1. Authorization
+
+- Requested by: Sami, who on 27 Oct 2026 said YFI modules may be developed and verified against production, with migrations still approved one at a time.
+- Needs at action time: an explicit "apply it" from Sami for this one file.
+
+## 2. Exact target
+
+| Item | Value |
+|---|---|
+| System | Production Supabase project (the one `.env.local` points at) |
+| Change | `supabase/migrations/20261026120000_compliance_core.sql` |
+| Type | Additive, schema-only, no data. Six new tables, indexes, two append-only rules, RLS on with no policies, REVOKE from anon and authenticated. Two guarded foreign keys to snagging_clients / snagging_properties, added only if those tables exist. |
+| Prerequisite | `20261020130000_technician_reference_deactivated_at.sql` applied (the user applied the four 20 Oct migrations on 20 Oct 2026). |
+| Touches existing tables | None. It references technician_reference, lookup_options, user_profile, snagging_clients and snagging_properties by foreign key only. |
+
+## 3. Side effects
+
+- None on existing data or behaviour. The FK from compliance_employees.fsm_resource_id (ON DELETE RESTRICT) changes the FSM technician sync only once an employee is linked: that technician is then kept as an inactive row instead of being deleted (agreed 27 Oct 2026).
+- Tables are invisible to the anon and authenticated roles. Only the service-role client used by the portal's route handlers can read them.
+
+## 4. Rollback
+
+```sql
+DROP TABLE IF EXISTS public.compliance_audit_events, public.compliance_settings,
+  public.compliance_employee_certificates, public.compliance_identity_documents,
+  public.compliance_employees, public.compliance_certificate_types CASCADE;
+```
+Safe while the tables hold only TEST- records.
+
+## 5. Verification after apply
+
+- The SELECT at the end of the migration returns all six regclass names and `site_fk_present = true`.
+- `curl` the REST endpoint for compliance_employees with the anon key: 401/permission denied or `[]`, never rows (AC-36).
+- The portal (admin) opens /compliance, /compliance/employees, /compliance/reminders, /compliance/settings without a 500.
+
+---
+
+# Live change: remove the compliance TEST- data (31 Oct 2026)
+
+- Authorization: Sami Farah, 31 Oct 2026, in session: "Then only remove the test data from compliance, keep the imported records for now and double check the linking."
+- Target: production Supabase. compliance_employees with maher_id LIKE 'TEST-%' (8: TEST-1001, TEST-1999, TEST-2000, TEST-2001, TEST-2030, TEST-2060, TEST-2090, TEST-2091), none linked to FSM, none in an import batch (script refuses otherwise).
+- Also removed: their employee_leave_records (2), their compliance_documents rows (1) and storage objects in bucket "compliance" (1), and by cascade their identity rows (8) and certificate rows (2).
+- Kept: the 124 imported records (batch 0198a2c3), all FSM links, all compliance_audit_events rows (append-only by design).
+- Side effects: none outside compliance. Scheduling tables untouched.
+- Rollback: re-create from the JSON backup in the session scratchpad (employees, leave, document rows; identity numbers were synthetic test values and are not in the backup). The uploaded sample image is not kept.
+- Verification: TEST- count 0; register 132 -> 124.

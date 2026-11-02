@@ -76,6 +76,28 @@ RESOURCE_ACTIONS[ResourceType.SNAGGING_CATALOGUE] = [
   ActionType.CREATE,
   ActionType.EDIT,
 ];
+// Manpower Compliance (FRD FR-9): full CRUD plus Export. Delete means
+// archive; nothing is hard-deleted. Seeing a full Emirates ID or passport
+// number is not an action here at all -- it is a per-user allowlist.
+RESOURCE_ACTIONS[ResourceType.COMPLIANCE] = [
+  ...CRUD_MODULE_ACTIONS,
+  ActionType.EXPORT,
+];
+// Compliance settings are master data: certificate types and lists are
+// retired, never deleted, so no Delete.
+RESOURCE_ACTIONS[ResourceType.COMPLIANCE_SETTINGS] = [
+  ActionType.VIEW,
+  ActionType.CREATE,
+  ActionType.EDIT,
+];
+// Full Emirates ID and passport numbers (D2). View only, no menu entry, not
+// inherited by admins (lib/role-permissions.ts). Grant it to the managers'
+// role only.
+RESOURCE_ACTIONS[ResourceType.COMPLIANCE_IDENTITY] = [ActionType.VIEW];
+// Workforce settings (31 Oct 2026): the shared lists. Delete removes a role,
+// service type, tag or leave type; designations and nationalities are only
+// ever retired.
+RESOURCE_ACTIONS[ResourceType.WORKFORCE_SETTINGS] = CRUD_MODULE_ACTIONS;
 
 // Helper to get display name for resource based on menu item titles
 const resourceDisplayNameMap: Partial<Record<ResourceType, string>> =
@@ -98,8 +120,23 @@ const EXTRA_RESOURCE_NAMES: Partial<Record<ResourceType, string>> = {
   [ResourceType.MOBILE_APP]: "Mobile application",
 };
 
+/*
+  Names that must win over the menu title. The Compliance module and its
+  settings page are both titled "Compliance" in the sidebar (the settings
+  entry sits under a group already called Settings), which on this screen
+  produced a parent row and a child row with the same name, and View on
+  the child looked like View on the module.
+*/
+const OVERRIDE_RESOURCE_NAMES: Partial<Record<ResourceType, string>> = {
+  [ResourceType.COMPLIANCE]: "Compliance (employees, reminders, overview)",
+  [ResourceType.COMPLIANCE_SETTINGS]: "Compliance settings (lists, recipients)",
+  [ResourceType.COMPLIANCE_IDENTITY]: "Compliance identity numbers (full Emirates ID and passport)",
+  [ResourceType.WORKFORCE_SETTINGS]: "Workforce settings (roles, service types, tags, leave types, designations, nationalities)",
+};
+
 export const getResourceDisplayName = (resource: ResourceType): string => {
   return (
+    OVERRIDE_RESOURCE_NAMES[resource] ||
     resourceDisplayNameMap[resource] ||
     EXTRA_RESOURCE_NAMES[resource] ||
     resource
@@ -138,6 +175,12 @@ export const RESOURCE_PARENT: Partial<Record<ResourceType, ResourceType>> = {
   [ResourceType.MOBILE_APP]: ResourceType.SNAGGING,
   [ResourceType.EXTENSIONS_BULK_DOWNLOAD]: ResourceType.EXTENSIONS,
   [ResourceType.EXTENSIONS_QUOTATION_TEMPLATES]: ResourceType.EXTENSIONS,
+  /*
+    COMPLIANCE_SETTINGS is deliberately NOT a child of COMPLIANCE. A module
+    row with children renders no switch and no actions here (its pages
+    decide), and the compliance pages all share the COMPLIANCE key, so
+    nesting the settings under it left the module itself ungrantable.
+  */
 };
 
 /** Modules with pages of their own, which is what makes a row expandable. */

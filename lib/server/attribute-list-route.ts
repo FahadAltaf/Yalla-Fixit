@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
-import { hasResourceAction } from "@/lib/role-permissions";
+import { hasSharedListAction } from "@/lib/role-permissions";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
 import { ActionType, ResourceType } from "@/types/types";
 
@@ -41,7 +41,7 @@ export function makeAttributeListRoute(opts: {
   async function guard(action: ActionType) {
     const { profile, accessUser } = await getAuthenticatedUserAccess();
     if (!profile || !accessUser) return { error: NextResponse.json({ error: "Unauthorized" }, { status: 401 }) };
-    if (!hasResourceAction(accessUser, ResourceType.SCHEDULING, action)) {
+    if (!hasSharedListAction(accessUser, ResourceType.SCHEDULING, action)) {
       return { error: NextResponse.json({ error: "Forbidden" }, { status: 403 }) };
     }
     return { profile };

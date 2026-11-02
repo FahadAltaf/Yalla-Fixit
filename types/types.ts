@@ -148,6 +148,32 @@ export enum ResourceType {
     They are different jobs, so they are different permissions.
   */
   MOBILE_APP = "mobile_app",
+  // Manpower Compliance (FRD FR-9)
+  /*
+    The module: employees, their Emirates ID, passport and training
+    status, the reminder list. View / Create / Edit / Delete (archive) /
+    Export. Seeing a full identity number is NOT one of these actions; it
+    is a per-user allowlist kept in its own table, so a role grant can
+    never reach it.
+  */
+  COMPLIANCE = "compliance",
+  /* Settings page: certificate types, designation and nationality lists,
+     reminder recipients, role requirements. */
+  COMPLIANCE_SETTINGS = "compliance_settings",
+  /*
+    Seeing a FULL Emirates ID or passport number (FRD FR-9, decision D2:
+    Jesusa, Riyaz and Behrouz). No menu entry; View only; granted per role
+    on the Permissions screen and NOT inherited by admins, because the
+    privacy rule applies to admins too. Every reveal is audited.
+  */
+  COMPLIANCE_IDENTITY = "compliance_identity",
+  /*
+    Workforce (C6, Sami 31 Oct 2026): the lists Scheduling and Compliance
+    share -- roles, service types, tags, leave types, designations,
+    nationalities -- on Settings → Workforce. Granted to admins and
+    managers; the module keys (Scheduling, Compliance settings) still work.
+  */
+  WORKFORCE_SETTINGS = "workforce_settings",
 }
 
 export type TodoStatus =
