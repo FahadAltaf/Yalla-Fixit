@@ -63,8 +63,6 @@ import {
 } from "@/components/ui/popover";
 import {
   Check,
-  ChevronLeft,
-  ChevronRight,
   ListFilter,
   Loader2,
   MoreVertical,
@@ -88,6 +86,8 @@ import {
   Unset,
 } from "@/components/dashboard/scheduling/technician-cells";
 import TimeSelect from "@/components/ui/time-select";
+import { Card } from "@/components/ui/card";
+import { TablePager } from "@/components/data-table/table-pager";
 import { ManageTechnicianDialog, type TechnicianDialogView } from "./manage-technician-dialog";
 import { Hint } from "@/components/ui/hint";
 
@@ -704,17 +704,21 @@ export default function WorkforcePeople({ technicians, access }: Props) {
           }
         />
 
-        {/* Toolbar: search on the left, page size / refresh on the right. */}
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="relative w-full max-w-xs">
-            <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2" />
+        {/* 2 Nov: one card for toolbar, table and footer, as on Users and Quotations. */}
+        <Card className="gap-0 overflow-hidden py-0">
+        {/* Toolbar: search on the left, filters / page size / refresh on the right (the house toolbar shape). */}
+        <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-4 sm:gap-4 sm:py-6">
+          <div className="relative w-full sm:w-80 sm:flex-none">
             <Input
               placeholder="Search name or Maher ID..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="pl-9"
+              className="peer w-full ps-9"
               aria-label="Search people"
             />
+            <div className="text-muted-foreground/80 pointer-events-none absolute inset-y-0 start-0 flex items-center justify-center ps-3 peer-disabled:opacity-50">
+              <Search className="size-4" aria-hidden />
+            </div>
           </div>
           {complianceFilter && (
             <Button asChild variant="outline" size="sm">
@@ -735,7 +739,7 @@ export default function WorkforcePeople({ technicians, access }: Props) {
                 in FSM) stay reachable for their history. */}
             {access.scheduling && access.compliance && (
               <UiSelect value={scope} onValueChange={(v) => setScope(v as Scope)}>
-                <SelectTrigger size="sm" className="h-8 w-max" aria-label="Who to show">
+                <SelectTrigger className="w-max" aria-label="Who to show">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -758,7 +762,7 @@ export default function WorkforcePeople({ technicians, access }: Props) {
                 window.history.replaceState(window.history.state, "", query ? `/workforce?${query}` : "/workforce");
               }}
             >
-              <SelectTrigger size="sm" className="h-8 w-max" aria-label="Who is on leave">
+              <SelectTrigger className="w-max" aria-label="Who is on leave">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -770,7 +774,7 @@ export default function WorkforcePeople({ technicians, access }: Props) {
               </SelectContent>
             </UiSelect>
             <UiSelect value={activeFilter} onValueChange={(v) => setActiveFilter(v as typeof activeFilter)}>
-              <SelectTrigger size="sm" className="h-8 w-max" aria-label="Active or inactive technicians">
+              <SelectTrigger className="w-max" aria-label="Active or inactive technicians">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -783,7 +787,7 @@ export default function WorkforcePeople({ technicians, access }: Props) {
                 not match the rest of the app; this is the same Select used
                 everywhere else. */}
             <UiSelect value={String(pageSize)} onValueChange={(v) => setPageSize(Number(v))}>
-              <SelectTrigger size="sm" className="h-8 w-max" aria-label="Rows per page">
+              <SelectTrigger className="w-max" aria-label="Rows per page">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -794,7 +798,7 @@ export default function WorkforcePeople({ technicians, access }: Props) {
                 ))}
               </SelectContent>
             </UiSelect>
-            <Button size="sm" className="h-8" onClick={handleRefresh} disabled={refreshing || (!access.scheduling && !access.complianceEdit)}>
+            <Button variant="outline" onClick={handleRefresh} disabled={refreshing || (!access.scheduling && !access.complianceEdit)}>
               <RefreshCw className={cn("size-4", refreshing && "animate-spin")} />
               {refreshing ? "Syncing..." : "Refresh"}
             </Button>
@@ -803,7 +807,7 @@ export default function WorkforcePeople({ technicians, access }: Props) {
 
         {/* Bulk edit bar (#15) — appears when technicians are selected. */}
         {selectedPeople.length > 0 && (
-          <div className="border-primary/40 bg-primary/5 flex flex-col gap-2 rounded-md border p-2.5">
+          <div className="border-primary/40 bg-primary/5 mx-4 mb-4 flex flex-col gap-2 rounded-md border p-2.5">
             {/* Who is selected, each removable; Clear is a real button. */}
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-sm font-medium">{selectedPeople.length} selected</span>
@@ -932,10 +936,10 @@ export default function WorkforcePeople({ technicians, access }: Props) {
           </div>
         )}
 
-        <div className="overflow-hidden rounded-md border">
+        <div className="overflow-x-auto [&_td:first-child]:pl-4 [&_td:last-child]:pr-4 [&_th]:text-muted-foreground [&_th:first-child]:pl-4 [&_th:last-child]:pr-4">
           <Table>
             <TableHeader>
-              <TableRow className="hover:bg-transparent">
+              <TableRow className="h-14 border-t hover:bg-transparent">
                 <TableHead className="w-[1%]">
                   <Checkbox
                     checked={allVisibleSelected}
@@ -1154,37 +1158,19 @@ export default function WorkforcePeople({ technicians, access }: Props) {
               )}
             </TableBody>
           </Table>
-
-          {/* Footer: what you are looking at, and how to move through it. */}
-          {!loading && total > 0 && (
-            <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3">
-              <p className="text-muted-foreground text-sm">
-                Showing {pageStart + 1} to {Math.min(pageStart + pageSize, total)} of {total} people
-              </p>
-              <div className="flex items-center gap-1">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  disabled={currentPage === 1}
-                >
-                  <ChevronLeft className="size-4" /> Previous
-                </Button>
-                <span className="text-muted-foreground px-2 text-sm tabular-nums">
-                  Page {currentPage} of {pageCount}
-                </span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
-                  disabled={currentPage === pageCount}
-                >
-                  Next <ChevronRight className="size-4" />
-                </Button>
-              </div>
-            </div>
-          )}
         </div>
+
+        {/* Footer: what you are looking at, and how to move through it (the shared pager). */}
+        <div className="border-t">
+          <TablePager
+            currentPage={currentPage - 1}
+            pageSize={pageSize}
+            rowCount={total}
+            loading={loading}
+            onPageChange={(index) => setPage(index + 1)}
+          />
+        </div>
+        </Card>
 
         {bulkLeaveOpen && (
           <BulkLeaveDialog
