@@ -30,7 +30,6 @@ import { Button } from "@/components/ui/button";
 import { PageHeading } from "@/components/dashboard/shared/kaizen";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import StatusBadge from "@/components/ui/status-badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { ConfirmationAlertDialog } from "@/components/ui/confirmation-alert-dialog";
@@ -64,8 +63,6 @@ import {
 } from "@/components/ui/popover";
 import {
   Check,
-  ChevronLeft,
-  ChevronRight,
   ListFilter,
   Loader2,
   MoreVertical,
@@ -74,6 +71,7 @@ import {
   Search,
   Settings2,
   SlidersHorizontal,
+  Clock,
   Trash2,
   UsersRound,
   X,
@@ -88,6 +86,9 @@ import {
   Unset,
 } from "@/components/dashboard/scheduling/technician-cells";
 import TimeSelect from "@/components/ui/time-select";
+import { Card } from "@/components/ui/card";
+import { TablePager } from "@/components/data-table/table-pager";
+import { ManageTechnicianDialog, type TechnicianDialogView } from "./manage-technician-dialog";
 import { Hint } from "@/components/ui/hint";
 
 /*
@@ -264,7 +265,8 @@ export default function WorkforcePeople({ technicians, access }: Props) {
   const [pageSize, setPageSize] = useState(10);
   const [refreshing, setRefreshing] = useState(false);
 
-  const [activeTechnician, setActiveTechnician] = useState<TechnicianReference | null>(null);
+  /* The row menu's dialog: which technician, and which view (attributes, working hours or leave). */
+  const [activeTechnician, setActiveTechnician] = useState<{ technician: TechnicianReference; view: TechnicianDialogView } | null>(null);
   // FR-21: the managed list behind the Add Leave dropdown.
   const [leaveTypes, setLeaveTypes] = useState<LeaveType[]>([]);
   const [bulkLeaveOpen, setBulkLeaveOpen] = useState(false);
@@ -629,6 +631,13 @@ export default function WorkforcePeople({ technicians, access }: Props) {
           next.team_leader_fsm_id = attrs.teamLeaderFsmId ?? null;
           next.team_leader_name = techs.find((x) => x.fsm_resource_id === attrs.teamLeaderFsmId)?.display_name ?? null;
         }
+        if (attrs.employmentStatus !== undefined) next.employment_status = attrs.employmentStatus;
+        if ("leavingDate" in attrs) next.leaving_date = attrs.leavingDate ?? null;
+        if (attrs.hiddenFromLists !== undefined) next.hidden_from_lists = attrs.hiddenFromLists;
+        if ("restWeekdays" in attrs) next.rest_weekdays = attrs.restWeekdays ?? null;
+        if ("dailyHours" in attrs) next.daily_hours = attrs.dailyHours ?? null;
+        if ("weeklyHours" in attrs) next.weekly_hours = attrs.weeklyHours ?? null;
+        if ("offDaysPerWeek" in attrs) next.off_days_per_week = attrs.offDaysPerWeek ?? null;
         return next;
       }),
     );
@@ -695,17 +704,21 @@ export default function WorkforcePeople({ technicians, access }: Props) {
           }
         />
 
-        {/* Toolbar: search on the left, page size / refresh on the right. */}
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="relative w-full max-w-xs">
-            <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2" />
+        {/* 2 Nov: one card for toolbar, table and footer, as on Users and Quotations. */}
+        <Card className="gap-0 overflow-hidden py-0">
+        {/* Toolbar: search on the left, filters / page size / refresh on the right (the house toolbar shape). */}
+        <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-4 sm:gap-4 sm:py-6">
+          <div className="relative w-full sm:w-80 sm:flex-none">
             <Input
               placeholder="Search name or Maher ID..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="pl-9"
+              className="peer w-full ps-9"
               aria-label="Search people"
             />
+            <div className="text-muted-foreground/80 pointer-events-none absolute inset-y-0 start-0 flex items-center justify-center ps-3 peer-disabled:opacity-50">
+              <Search className="size-4" aria-hidden />
+            </div>
           </div>
           {complianceFilter && (
             <Button asChild variant="outline" size="sm">
@@ -726,7 +739,7 @@ export default function WorkforcePeople({ technicians, access }: Props) {
                 in FSM) stay reachable for their history. */}
             {access.scheduling && access.compliance && (
               <UiSelect value={scope} onValueChange={(v) => setScope(v as Scope)}>
-                <SelectTrigger size="sm" className="h-8 w-max" aria-label="Who to show">
+                <SelectTrigger className="w-max" aria-label="Who to show">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -749,7 +762,7 @@ export default function WorkforcePeople({ technicians, access }: Props) {
                 window.history.replaceState(window.history.state, "", query ? `/workforce?${query}` : "/workforce");
               }}
             >
-              <SelectTrigger size="sm" className="h-8 w-max" aria-label="Who is on leave">
+              <SelectTrigger className="w-max" aria-label="Who is on leave">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -761,7 +774,7 @@ export default function WorkforcePeople({ technicians, access }: Props) {
               </SelectContent>
             </UiSelect>
             <UiSelect value={activeFilter} onValueChange={(v) => setActiveFilter(v as typeof activeFilter)}>
-              <SelectTrigger size="sm" className="h-8 w-max" aria-label="Active or inactive technicians">
+              <SelectTrigger className="w-max" aria-label="Active or inactive technicians">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -774,7 +787,7 @@ export default function WorkforcePeople({ technicians, access }: Props) {
                 not match the rest of the app; this is the same Select used
                 everywhere else. */}
             <UiSelect value={String(pageSize)} onValueChange={(v) => setPageSize(Number(v))}>
-              <SelectTrigger size="sm" className="h-8 w-max" aria-label="Rows per page">
+              <SelectTrigger className="w-max" aria-label="Rows per page">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -785,7 +798,7 @@ export default function WorkforcePeople({ technicians, access }: Props) {
                 ))}
               </SelectContent>
             </UiSelect>
-            <Button size="sm" className="h-8" onClick={handleRefresh} disabled={refreshing || (!access.scheduling && !access.complianceEdit)}>
+            <Button variant="outline" onClick={handleRefresh} disabled={refreshing || (!access.scheduling && !access.complianceEdit)}>
               <RefreshCw className={cn("size-4", refreshing && "animate-spin")} />
               {refreshing ? "Syncing..." : "Refresh"}
             </Button>
@@ -794,7 +807,7 @@ export default function WorkforcePeople({ technicians, access }: Props) {
 
         {/* Bulk edit bar (#15) — appears when technicians are selected. */}
         {selectedPeople.length > 0 && (
-          <div className="border-primary/40 bg-primary/5 flex flex-col gap-2 rounded-md border p-2.5">
+          <div className="border-primary/40 bg-primary/5 mx-4 mb-4 flex flex-col gap-2 rounded-md border p-2.5">
             {/* Who is selected, each removable; Clear is a real button. */}
             <div className="flex flex-wrap items-center gap-1.5">
               <span className="text-sm font-medium">{selectedPeople.length} selected</span>
@@ -923,10 +936,10 @@ export default function WorkforcePeople({ technicians, access }: Props) {
           </div>
         )}
 
-        <div className="overflow-hidden rounded-md border">
+        <div className="overflow-x-auto [&_td:first-child]:pl-4 [&_td:last-child]:pr-4 [&_th]:text-muted-foreground [&_th:first-child]:pl-4 [&_th:last-child]:pr-4">
           <Table>
             <TableHeader>
-              <TableRow className="hover:bg-transparent">
+              <TableRow className="h-14 border-t hover:bg-transparent">
                 <TableHead className="w-[1%]">
                   <Checkbox
                     checked={allVisibleSelected}
@@ -1126,11 +1139,14 @@ export default function WorkforcePeople({ technicians, access }: Props) {
                               </Link>
                             </DropdownMenuItem>
                             <DropdownMenuSeparator />
-                            <DropdownMenuItem onSelect={() => setActiveTechnician(technician)}>
+                            <DropdownMenuItem onSelect={() => setActiveTechnician({ technician, view: "attributes" })}>
                               <SlidersHorizontal className="size-4" /> Edit attributes
                             </DropdownMenuItem>
+                            <DropdownMenuItem onSelect={() => setActiveTechnician({ technician, view: "hours" })}>
+                              <Clock className="size-4" /> Working hours
+                            </DropdownMenuItem>
                             <DropdownMenuSeparator />
-                            <DropdownMenuItem onSelect={() => setActiveTechnician(technician)}>
+                            <DropdownMenuItem onSelect={() => setActiveTechnician({ technician, view: "leave" })}>
                               <Plus className="size-4" /> Add leave
                             </DropdownMenuItem>
                           </DropdownMenuContent>
@@ -1142,37 +1158,19 @@ export default function WorkforcePeople({ technicians, access }: Props) {
               )}
             </TableBody>
           </Table>
-
-          {/* Footer: what you are looking at, and how to move through it. */}
-          {!loading && total > 0 && (
-            <div className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-3">
-              <p className="text-muted-foreground text-sm">
-                Showing {pageStart + 1} to {Math.min(pageStart + pageSize, total)} of {total} people
-              </p>
-              <div className="flex items-center gap-1">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  disabled={currentPage === 1}
-                >
-                  <ChevronLeft className="size-4" /> Previous
-                </Button>
-                <span className="text-muted-foreground px-2 text-sm tabular-nums">
-                  Page {currentPage} of {pageCount}
-                </span>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setPage((p) => Math.min(pageCount, p + 1))}
-                  disabled={currentPage === pageCount}
-                >
-                  Next <ChevronRight className="size-4" />
-                </Button>
-              </div>
-            </div>
-          )}
         </div>
+
+        {/* Footer: what you are looking at, and how to move through it (the shared pager). */}
+        <div className="border-t">
+          <TablePager
+            currentPage={currentPage - 1}
+            pageSize={pageSize}
+            rowCount={total}
+            loading={loading}
+            onPageChange={(index) => setPage(index + 1)}
+          />
+        </div>
+        </Card>
 
         {bulkLeaveOpen && (
           <BulkLeaveDialog
@@ -1185,15 +1183,17 @@ export default function WorkforcePeople({ technicians, access }: Props) {
 
         {activeTechnician && (
           <ManageTechnicianDialog
-            technician={techs.find((t) => t.fsm_resource_id === activeTechnician.fsm_resource_id) ?? activeTechnician}
+            key={`${activeTechnician.technician.fsm_resource_id}-${activeTechnician.view}`}
+            view={activeTechnician.view}
+            technician={techs.find((t) => t.fsm_resource_id === activeTechnician.technician.fsm_resource_id) ?? activeTechnician.technician}
             tags={tags}
             leaveTypes={leaveTypes.map((t) => t.name)}
             roleOptions={roleOptions}
             serviceOptions={serviceOptions}
-            supervisorOptions={supervisorOptions.filter((o) => o.value !== activeTechnician.fsm_resource_id)}
-            assignedTags={assignments[activeTechnician.fsm_resource_id] ?? []}
-            leaveRecords={leaveRecords.filter((r) => r.technician_fsm_id === activeTechnician.fsm_resource_id)}
-            onApplyAttributes={(attrs) => applyAttributes([activeTechnician.fsm_resource_id], attrs)}
+            supervisorOptions={supervisorOptions.filter((o) => o.value !== activeTechnician.technician.fsm_resource_id)}
+            assignedTags={assignments[activeTechnician.technician.fsm_resource_id] ?? []}
+            leaveRecords={leaveRecords.filter((r) => r.technician_fsm_id === activeTechnician.technician.fsm_resource_id)}
+            onApplyAttributes={(attrs) => applyAttributes([activeTechnician.technician.fsm_resource_id], attrs)}
             onOpenChange={(open) => !open && setActiveTechnician(null)}
             onChanged={loadAll}
           />
@@ -1657,242 +1657,6 @@ export function ManageListDialog({
         onConfirm={remove}
       />
     </>
-  );
-}
-
-export function ManageTechnicianDialog({
-  technician,
-  tags,
-  leaveTypes,
-  roleOptions,
-  serviceOptions,
-  supervisorOptions,
-  assignedTags,
-  leaveRecords,
-  onApplyAttributes,
-  onOpenChange,
-  onChanged,
-}: {
-  technician: TechnicianReference;
-  tags: TechnicianTag[];
-  // FR-21: names from the managed leave-type list.
-  leaveTypes: string[];
-  roleOptions: { value: string; label: string }[];
-  serviceOptions: { value: string; label: string }[];
-  supervisorOptions: { value: string; label: string }[];
-  assignedTags: TechnicianTag[];
-  leaveRecords: LeaveRecord[];
-  onApplyAttributes: (attrs: TechnicianAttributeUpdate) => void;
-  onOpenChange: (open: boolean) => void;
-  onChanged: () => void;
-}) {
-  const [assignedIds, setAssignedIds] = useState<Set<string>>(new Set(assignedTags.map((t) => t.id)));
-  const [busyTagId, setBusyTagId] = useState<string | null>(null);
-
-  const [leaveType, setLeaveType] = useState("");
-  const [startDate, setStartDate] = useState("");
-  const [startTime, setStartTime] = useState("00:00");
-  const [endDate, setEndDate] = useState("");
-  const [endTime, setEndTime] = useState("23:30");
-  const [notes, setNotes] = useState("");
-  const [savingLeave, setSavingLeave] = useState(false);
-  const [cancellingId, setCancellingId] = useState<string | null>(null);
-
-  const toggleTag = async (tagId: string) => {
-    if (busyTagId) return;
-    const currentlyAssigned = assignedIds.has(tagId);
-    setBusyTagId(tagId);
-    setAssignedIds((prev) => {
-      const next = new Set(prev);
-      if (currentlyAssigned) next.delete(tagId);
-      else next.add(tagId);
-      return next;
-    });
-    try {
-      if (currentlyAssigned) await tagsService.removeTag(technician.fsm_resource_id, tagId);
-      else await tagsService.assignTag(technician.fsm_resource_id, tagId);
-      onChanged();
-    } catch (error) {
-      setAssignedIds((prev) => {
-        const next = new Set(prev);
-        if (currentlyAssigned) next.add(tagId);
-        else next.delete(tagId);
-        return next;
-      });
-      toast.error(error instanceof Error ? error.message : "Failed to update tag");
-    } finally {
-      setBusyTagId(null);
-    }
-  };
-
-  const handleAddLeave = async () => {
-    if (!leaveType || !startDate || !endDate) {
-      toast.error("Leave type, start date, and end date are required");
-      return;
-    }
-    setSavingLeave(true);
-    try {
-      const { conflicts, conflictsError } = await leaveService.createLeave({
-        technicianFsmId: technician.fsm_resource_id,
-        leaveType,
-        startAt: zonedTimeToUtc(startDate, startTime).toISOString(),
-        endAt: zonedTimeToUtc(endDate, endTime).toISOString(),
-        notes: notes.trim() || null,
-      });
-      toast.success(
-        conflicts.length > 0
-          ? `Leave saved — ${conflicts.length} existing assignment(s) now conflict on the schedule`
-          : conflictsError
-            ? "Leave saved — the conflict check failed, so check the board for overlaps"
-            : "Leave saved",
-      );
-      setLeaveType("");
-      setStartDate("");
-      setEndDate("");
-      setNotes("");
-      onChanged();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to save leave");
-    } finally {
-      setSavingLeave(false);
-    }
-  };
-
-  const handleCancelLeave = async (id: string) => {
-    setCancellingId(id);
-    try {
-      await leaveService.cancelLeave(id);
-      toast.success("Leave cancelled");
-      onChanged();
-    } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to cancel leave");
-    } finally {
-      setCancellingId(null);
-    }
-  };
-
-  return (
-    <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent className="max-h-[90vh] w-[calc(100%-2rem)] overflow-y-auto sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>{technician.display_name}</DialogTitle>
-          <DialogDescription>
-            Role, service type, shift and supervisor are portal-only settings — they are never written back to
-            Zoho FSM. Tags and leave are managed here too.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="grid grid-cols-2 gap-3">
-          <label className="flex flex-col gap-1 text-xs font-medium">
-            Role
-            <Select value={technician.role_id ?? ""} options={roleOptions} onChange={(v) => onApplyAttributes({ roleId: v || null })} className="h-9" />
-          </label>
-          <label className="flex flex-col gap-1 text-xs font-medium">
-            Service type
-            <Select value={technician.service_type_id ?? ""} options={serviceOptions} onChange={(v) => onApplyAttributes({ serviceTypeId: v || null })} className="h-9" />
-          </label>
-          <label className="flex flex-col gap-1 text-xs font-medium">
-            Shift
-            <Select value={technician.shift ?? ""} options={SHIFT_OPTIONS} onChange={(v) => onApplyAttributes({ shift: (v || null) as "morning" | "night" | null })} className="h-9" />
-          </label>
-          <label className="flex flex-col gap-1 text-xs font-medium">
-            Supervisor
-            <Select value={technician.team_leader_fsm_id ?? ""} options={supervisorOptions} onChange={(v) => onApplyAttributes({ teamLeaderFsmId: v || null })} className="h-9" />
-          </label>
-        </div>
-
-        <div>
-          <p className="mb-2 text-sm font-medium">Tags</p>
-          <div className="flex max-h-40 flex-col gap-1 overflow-y-auto">
-            {tags.length === 0 && <p className="text-muted-foreground text-sm">No tags created yet.</p>}
-            {tags.map((tag) => {
-              const selected = assignedIds.has(tag.id);
-              return (
-                <button
-                  key={tag.id}
-                  type="button"
-                  onClick={() => toggleTag(tag.id)}
-                  disabled={busyTagId === tag.id}
-                  className={`flex items-center justify-between gap-2 rounded-md border px-2.5 py-1.5 text-left text-sm transition-colors disabled:opacity-60 ${selected ? "border-primary bg-primary/10" : "hover:bg-muted/50"
-                    }`}
-                >
-                  <span>{tag.name}</span>
-                  {busyTagId === tag.id ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : selected ? (
-                    <Check className="text-primary size-4" />
-                  ) : null}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        <div>
-          <p className="mb-2 text-sm font-medium">Leave</p>
-          <div className="mb-3 flex max-h-32 flex-col gap-1 overflow-y-auto">
-            {leaveRecords.length === 0 && <p className="text-muted-foreground text-sm">No leave records.</p>}
-            {leaveRecords.map((record) => (
-              <div key={record.id} className="flex items-center justify-between gap-2 rounded-md border p-2 text-sm">
-                <div>
-                  <span className="font-medium">{record.leave_type}</span>{" "}
-                  <span className="text-muted-foreground text-xs">
-                    {formatZonedDate(record.start_at)} – {formatZonedDate(record.end_at)}
-                  </span>{" "}
-                  <StatusBadge status={record.status} />
-                </div>
-                {record.status === "active" && (
-                  <Hint label="Cancel leave">
-                    <span tabIndex={0} className="inline-flex">
-                      <Button aria-label="Cancel leave" size="icon" variant="ghost" disabled={cancellingId === record.id} onClick={() => handleCancelLeave(record.id)}>
-                        <X className="size-4" />
-                      </Button>
-                    </span>
-                  </Hint>
-                )}
-              </div>
-            ))}
-          </div>
-
-          {!technician.is_active ? (
-            // FR-23: no new leave for a technician FSM has deactivated.
-            <p className="text-muted-foreground rounded-md border border-dashed p-3 text-sm">
-              This technician is inactive in Zoho FSM, so no new leave can be added. Past records stay above.
-            </p>
-          ) : (
-          <div className="flex flex-col gap-2">
-            <LeaveTypeSelect value={leaveType} onChange={setLeaveType} types={leaveTypes} />
-            <div className="grid grid-cols-2 gap-2">
-              <label className="flex flex-col gap-1 text-xs font-medium">
-                Start date
-                <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
-              </label>
-              <label className="flex flex-col gap-1 text-xs font-medium">
-                Start time
-                <TimeSelect value={startTime} onChange={setStartTime} aria-label="Leave start time" />
-              </label>
-              <label className="flex flex-col gap-1 text-xs font-medium">
-                End date
-                <Input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
-              </label>
-              <label className="flex flex-col gap-1 text-xs font-medium">
-                End time
-                <TimeSelect value={endTime} onChange={setEndTime} aria-label="Leave end time" />
-              </label>
-            </div>
-            <Input placeholder="Notes (optional)" value={notes} onChange={(e) => setNotes(e.target.value)} />
-          </div>
-          )}
-        </div>
-
-        <DialogFooter>
-          <Button onClick={handleAddLeave} disabled={savingLeave || !technician.is_active}>
-            {savingLeave && <Loader2 className="size-4 animate-spin" />}
-            Add Leave
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }
 

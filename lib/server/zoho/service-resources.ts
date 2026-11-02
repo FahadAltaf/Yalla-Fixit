@@ -11,6 +11,7 @@
 // action, and refreshTechniciansIfStale() lazily tops it up when the
 // scheduling screen is opened and the cache has aged out.
 
+import { keepWhenGoneFromFsm, linkTechniciansToUsers } from "@/lib/server/people/technician-links";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import {
   fsmFail,
@@ -32,15 +33,15 @@ export const TECHNICIAN_CACHE_MAX_AGE_MS = 6 * 60 * 60 * 1000; // 6 hours
 // Excludes Administrator, Dispatcher, Manager, CallCenter Agent, etc.
 // (per YFI: "we only need to see ones with the user profile Field Agent,
 // Limited Field Agent, and YFI Field Agent V2").
-const TECHNICIAN_PROFILES = new Set(["Field Agent", "Limited Field Agent", "YFI Field Agent V2"]);
+export const TECHNICIAN_PROFILES = new Set(["Field Agent", "Limited Field Agent", "YFI Field Agent V2"]);
 
 // The /users listing includes invited, inactive and deleted accounts. The FSM
 // top-level `status` is "active" even for a user who was only invited and
 // never accepted -- what actually mirrors the "Active Users" tab in Zoho is
 // `client_status`. Per YFI (Q-2): "We only need to consider Active Users."
-const ACTIVE_CLIENT_STATUS = "Active";
+export const ACTIVE_CLIENT_STATUS = "Active";
 
-type ZohoUser = {
+export type ZohoUser = {
   id: string;
   full_name?: string;
   email?: string;
@@ -51,7 +52,7 @@ type ZohoUser = {
   Service_Resources?: { id: string; Name?: string; isActive?: boolean } | null;
 };
 
-type Resource = {
+export type Resource = {
   // The immutable FSM *service resource* ID (Service_Resources.id), NOT the
   // parent user's id -- these are distinct records in FSM and
   // LEAVE-002/TAG-006/BR-019 require the former.
@@ -64,7 +65,7 @@ type Resource = {
 // Some people hold more than one active FSM account under the same full name
 // (different emails). Qualify the duplicates with the email so a scheduler can
 // tell which account they are assigning work to.
-function buildDisplayNamer(resources: Resource[]) {
+export function buildDisplayNamer(resources: Resource[]) {
   const nameCounts = new Map<string, number>();
   for (const r of resources) {
     const key = r.name ?? "";
@@ -172,10 +173,19 @@ export async function syncFsmTechnicians(): Promise<FsmResult> {
           display_name: displayNameFor(r),
           is_active: r.isActive,
           last_synced_at: now,
+          // How the technician is matched to a portal account (DEV-462).
+          email: r.email,
         })),
         { onConflict: "fsm_resource_id" },
       );
       if (upsertError) console.error("[zoho:syncFsmTechnicians] upsert error:", upsertError);
+
+      try {
+        await linkTechniciansToUsers(admin);
+      } catch (linkError) {
+        // The roster is what this sync is for; a failed link waits for the next run.
+        console.error("[zoho:syncFsmTechnicians] link error:", linkError);
+      }
 
       // Anyone who no longer qualifies -- wrong profile, deleted in FSM, or
       // gone from the listing entirely -- is REMOVED, not just deactivated.
@@ -188,14 +198,26 @@ export async function syncFsmTechnicians(): Promise<FsmResult> {
       const seenIds = new Set(resources.map((r) => r.fsmResourceId));
       const { data: allRows, error: listError } = await admin
         .from("technician_reference")
-        .select("fsm_resource_id");
+        .select("fsm_resource_id, employment_status, leaving_date");
 
       if (listError) {
         console.error("[zoho:syncFsmTechnicians] list error:", listError);
       } else {
-        const disqualified = (allRows ?? [])
-          .map((r: { fsm_resource_id: string }) => r.fsm_resource_id)
-          .filter((id: string) => !seenIds.has(id));
+        type Row = { fsm_resource_id: string; employment_status?: string | null; leaving_date?: string | null };
+        const gone = ((allRows ?? []) as Row[]).filter((r) => !seenIds.has(r.fsm_resource_id));
+
+        // A leaver's leaving date is what the reports stop counting them
+        // from, so a leaver is deactivated and kept, never deleted.
+        for (const row of gone.filter(keepWhenGoneFromFsm)) {
+          removed.referenced.push(row.fsm_resource_id);
+          await admin
+            .from("technician_reference")
+            .update({ is_active: false, last_synced_at: now })
+            .eq("fsm_resource_id", row.fsm_resource_id);
+        }
+        const disqualified = gone
+          .filter((r) => !keepWhenGoneFromFsm(r))
+          .map((r) => r.fsm_resource_id);
 
         for (const id of disqualified) {
           const { error: deleteError } = await admin

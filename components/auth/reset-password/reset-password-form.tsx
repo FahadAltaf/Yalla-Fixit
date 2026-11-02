@@ -88,7 +88,6 @@ const ResetPasswordForm = ({
 
         // Method 2: Check for query parameters (token_hash and type)
         const tokenHash = searchParams.get("token_hash");
-        console.log("🚀 ~ checkSession ~ tokenHash:", tokenHash)
         const type = searchParams.get("type");
 
         if (type === "recovery" && tokenHash) {

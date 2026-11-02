@@ -15,6 +15,8 @@ export interface User {
   status?: string;
   // When TRUE, this user receives the "schedule needs approval" email.
   receives_schedule_approval_email?: boolean;
+  // Kept out of people pickers (DEV-458); still listed in Users.
+  hidden_from_lists?: boolean;
   // FR-20: when TRUE, a task this user owns and is the only assignee of is
   // private to them (hidden from everyone else, admins included).
   is_task_manager?: boolean;
@@ -148,6 +150,32 @@ export enum ResourceType {
     They are different jobs, so they are different permissions.
   */
   MOBILE_APP = "mobile_app",
+  // Finance (BRD §5.1, DEV-462). The group, then its pages.
+  FINANCE = "finance",
+  /* View the Ready-to-Invoice queue; Edit works an item (pick up, hold,
+     query); Approve records the MAHER invoice; Export. */
+  FINANCE_QUEUE = "finance_queue",
+  /* The coordinator's side of the queue. Create asks for an item to be
+     excluded as not invoiceable, and answers Finance's queries; Approve
+     verifies an exclusion (Behrouz, BRD §5.1 Step 5). */
+  FINANCE_EXCLUSIONS = "finance_exclusions",
+  // Reports (BRD §5.2). The group, then each report: View and Export.
+  REPORTS = "reports",
+  REPORTS_QUOTATIONS = "reports_quotations",
+  REPORTS_UTILIZATION = "reports_utilization",
+  REPORTS_CAPACITY = "reports_capacity",
+  REPORTS_ATTENDANCE = "reports_attendance",
+  REPORTS_REVENUE = "reports_revenue",
+  REPORTS_EXCEPTIONS = "reports_exceptions",
+  /* Everyone's check-in compliance. Edit waives a miss; Approve decides a
+     dispute; Export. Its own key since the merge with main (2 Nov):
+     "compliance" is main's Manpower Compliance module. */
+  REPORTS_COMPLIANCE = "reports_compliance",
+  /* A technician's own compliance and statement, resolved from the
+     session, never from the request. */
+  COMPLIANCE_SELF = "compliance_self",
+  /* Thresholds, digest time, ageing limits (BRD §6.6). */
+  REPORTING_SETTINGS = "reporting_settings",
   // Manpower Compliance (FRD FR-9)
   /*
     The module: employees, their Emirates ID, passport and training
@@ -329,6 +357,21 @@ export interface TechnicianReference {
   // Team-arranged row order on the schedule board ("Custom" sort). Null =
   // not arranged yet.
   board_position?: number | null;
+  // Finance & Reports (DEV-457, 458). See migration 20261020110000.
+  email?: string | null;
+  user_profile_id?: string | null;
+  employment_status?: TechnicianEmploymentStatus;
+  /** First day no longer working (YYYY-MM-DD). */
+  leaving_date?: string | null;
+  hidden_from_lists?: boolean;
+  /** ISO weekdays off, 1 = Monday .. 7 = Sunday. Null = not recorded. */
+  rest_weekdays?: number[] | null;
+  /** Hours a working day, net of breaks; null = the standard day (8 h). Migration 20261028100000. */
+  daily_hours?: number | null;
+  /** The contract's weekly limit (e.g. 48, 60); null = daily hours x working days. Migration 20261102100000. */
+  weekly_hours?: number | null;
+  /** Days off a week, not fixed weekdays; null = 1. Migration 20261102100000. */
+  off_days_per_week?: number | null;
   // FR-23: first FSM sync that found the technician inactive. Null while active.
   deactivated_at?: string | null;
 }
@@ -344,6 +387,8 @@ export interface LeaveType {
   // Leave records (any status) that carry this name, case-insensitive.
   record_count?: number;
 }
+
+export type TechnicianEmploymentStatus = "active" | "resigned";
 
 export interface TechnicianTag {
   id: string;
@@ -362,6 +407,8 @@ export interface LeaveRecord {
   technician_fsm_id: string;
   technician?: TechnicianReference;
   leave_type: string;
+  /** DEV-456. Null on records made before categories, or by live main. */
+  leave_category?: "annual" | "sick" | "public_holiday" | "offset" | null;
   start_at: string;
   end_at: string;
   status: LeaveStatus;

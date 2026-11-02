@@ -25,15 +25,20 @@ export async function listTechniciansForViewer(): Promise<TechnicianReference[]>
   // relationships to the same table on its own.
   const baseColumns =
     "fsm_resource_id, display_name, is_active, last_synced_at, role_id, service_type_id, shift, team_leader_fsm_id, " +
+    // Finance & Reports (migration 20261020110000, applied before this code runs).
+    "email, user_profile_id, employment_status, leaving_date, hidden_from_lists, rest_weekdays, " +
     "role:lookup_options!technician_reference_role_id_fkey(name), " +
     "service_type:lookup_options!technician_reference_service_type_id_fkey(name)";
   const load = (columns: string) =>
     admin.from("technician_reference").select(columns).order("display_name", { ascending: true });
 
-  let { data, error } = await load(`${baseColumns}, board_position, deactivated_at`);
-  // deactivated_at arrives with migration 20261020130000 and board_position
-  // with 20260917090000. Until each is applied, load without it so the board
-  // still opens (Custom order and "inactive since" just stay empty).
+  // deactivated_at arrives with migration 20261020130000, daily_hours with
+  // 20261028100000, weekly_hours and off_days_per_week with 20261102100000
+  // and board_position with 20260917090000. Until each is applied, load
+  // without it so the board still opens (the standard day, Custom order and
+  // "inactive since" just stay empty).
+  let { data, error } = await load(`${baseColumns}, board_position, deactivated_at, daily_hours, weekly_hours, off_days_per_week`);
+  if (error?.code === "42703") ({ data, error } = await load(`${baseColumns}, board_position, deactivated_at, daily_hours`));
   if (error?.code === "42703") ({ data, error } = await load(`${baseColumns}, board_position`));
   if (error?.code === "42703") ({ data, error } = await load(baseColumns));
 
@@ -61,7 +66,16 @@ export async function listTechniciansForViewer(): Promise<TechnicianReference[]>
       team_leader_fsm_id: (r.team_leader_fsm_id as string) ?? null,
       team_leader_name: r.team_leader_fsm_id ? (nameByFsmId.get(r.team_leader_fsm_id as string) ?? null) : null,
       board_position: typeof r.board_position === "number" ? r.board_position : null,
+      email: (r.email as string | null) ?? null,
+      user_profile_id: (r.user_profile_id as string | null) ?? null,
+      employment_status: r.employment_status === "resigned" ? "resigned" : "active",
+      leaving_date: (r.leaving_date as string | null) ?? null,
+      hidden_from_lists: r.hidden_from_lists === true,
+      rest_weekdays: Array.isArray(r.rest_weekdays) ? (r.rest_weekdays as number[]) : null,
+      daily_hours: r.daily_hours === null || r.daily_hours === undefined ? null : Number(r.daily_hours),
       deactivated_at: typeof r.deactivated_at === "string" ? r.deactivated_at : null,
+      weekly_hours: r.weekly_hours === null || r.weekly_hours === undefined ? null : Number(r.weekly_hours),
+      off_days_per_week: r.off_days_per_week === null || r.off_days_per_week === undefined ? null : Number(r.off_days_per_week),
     };
   });
 }

@@ -33,6 +33,7 @@ import {
 } from "@/modules/scheduling";
 import type { LeaveRecord, TechnicianTag, TechnicianRole, TechnicianServiceType } from "@/types/types";
 import { orderTechnicians, type SortMode } from "./technician-order";
+import { isListedTechnician } from "@/lib/people/pickable";
 import { exportSchedulePdf, type PdfBar, type PdfRow, type PdfSection } from "@/lib/scheduling/export-pdf";
 import {
   DAY_MINUTES,
@@ -53,8 +54,9 @@ import {
   type ShiftWindows,
 } from "@/lib/scheduling/board-layout";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { PageHeading } from "@/components/dashboard/shared/kaizen";
 import { Input } from "@/components/ui/input";
-import StatusBadge from "@/components/ui/status-badge";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { ConfirmationAlertDialog } from "@/components/ui/confirmation-alert-dialog";
@@ -76,6 +78,7 @@ import {
   Pencil,
   Plus,
   Printer,
+  History as HistoryIcon,
   RefreshCw,
   SlidersHorizontal,
   UserRound,
@@ -229,17 +232,6 @@ function describeSyncFailures(
   const more = failed.length > max ? ` (+${failed.length - max} more)` : "";
   return shown.join("; ") + more;
 }
-
-const STATUS_LABELS: Record<string, string> = {
-  draft: "Draft",
-  draft_revision: "Draft Revision",
-  pending_approval: "Pending Approval",
-  rejected: "Rejected",
-  approved_syncing: "Approving...",
-  published: "Published",
-  sync_failed: "Sync Failed",
-  partially_synced: "Partially Synced",
-};
 
 // Sub-100% steps let a whole shift be seen at once (YFI v1.5); 100% is the
 // default and the neutral reference.
@@ -609,7 +601,7 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
   const anyCategoryFilter = tagFilters.length > 0 || roleFilters.length > 0 || serviceFilters.length > 0;
 
   const visibleTechnicians = useMemo(() => {
-    let list = technicians.filter((t) => t.is_active);
+    let list = technicians.filter(isListedTechnician);
 
     if (search.trim()) {
       const q = search.trim().toLowerCase();
@@ -681,7 +673,7 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
   const sectionTechnicians = useMemo(() => {
     const belongs = (t: TechnicianReference, key: ShiftKey) =>
       t.shift === (key === "night" ? "night" : "morning");
-    const active = technicians.filter((t) => t.is_active);
+    const active = technicians.filter(isListedTechnician);
     return {
       night: visibleTechnicians.filter((t) => belongs(t, "night")),
       day: visibleTechnicians.filter((t) => belongs(t, "day")),
@@ -1248,14 +1240,64 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
 
   return (
     <>
-      <div className="flex flex-col gap-4 print:gap-2">
+      <div className="flex flex-col gap-6 print:gap-2">
         <div className="print:hidden">
-          <p className="eyebrow">Scheduling</p>
-          <h1 className="mt-1.5 text-3xl">Daily schedule</h1>
-          <p className="text-muted-foreground mt-1 text-[0.9375rem]">
-            Day and night shifts, synced with Zoho FSM and versioned through approval.
-          </p>
+          {/* Primary actions sit at the top (YFI v1.5) so Approve / Reject are
+              reachable without scrolling past the whole schedule; on the
+              right of the heading, as on the other pages (2 Nov). */}
+          <PageHeading
+            eyebrow="Scheduling"
+            title="Daily schedule"
+            description="Day and night shifts, synced with Zoho FSM and versioned through approval."
+            actions={
+              <div className="flex flex-wrap items-center gap-2">
+                {isEditable && (
+                  <>
+                    <Button variant="outline" onClick={() => setAddEntryFor({ shift: "day" })}>
+                      <Plus className="size-4" />
+                      Add Entry
+                    </Button>
+                    <Button variant="outline" onClick={() => setClearOpen(true)} disabled={submitting || entries.length === 0}>
+                      <Eraser className="size-4" />
+                      Clear Schedule
+                    </Button>
+                    <Button onClick={() => setSubmitOpen(true)} disabled={submitting || entries.length === 0}>
+                      Submit Whole Day
+                    </Button>
+                  </>
+                )}
+                {version?.status === "pending_approval" && access?.isApprover && (
+                  <>
+                    <Button variant="destructive" onClick={() => setRejectOpen(true)} disabled={submitting}>
+                      Reject
+                    </Button>
+                    <Button onClick={handleApprove} disabled={submitting}>
+                      Approve
+                    </Button>
+                  </>
+                )}
+                {version?.status === "rejected" && (
+                  <Button variant="outline" onClick={handleReopen} disabled={submitting}>
+                    Reopen for Editing
+                  </Button>
+                )}
+                {(version?.status === "sync_failed" || version?.status === "partially_synced") && access?.isApprover && (
+                  <Button variant="outline" onClick={handleRetrySync} disabled={submitting}>
+                    <RefreshCw className="size-4" />
+                    Retry Failed Sync
+                  </Button>
+                )}
+                {(version?.status === "published" || version?.status === "partially_synced") && (
+                  <Button variant="outline" onClick={handleCreateRevision} disabled={submitting}>
+                    Add Work (Create Revision)
+                  </Button>
+                )}
+              </div>
+            }
+          />
         </div>
+        {/* 2 Nov: the day's controls in one card, as the other pages' toolbars are. */}
+        <Card className="gap-3 p-4 print:hidden">
         <div className="flex flex-wrap items-center justify-between gap-3 print:hidden">
           <div className="flex flex-wrap items-center gap-2">
             <DateNav
@@ -1347,9 +1389,8 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
               </Button>
             </Hint>
 
-            {version && <StatusBadge status={STATUS_LABELS[version.status] ?? version.status} />}
-            {version && <span className="text-muted-foreground text-xs">v{version.version_number}</span>}
-            <Button variant="ghost" size="sm" onClick={() => setHistoryOpen(true)}>
+            <Button variant="outline" size="sm" onClick={() => setHistoryOpen(true)}>
+              <HistoryIcon className="size-4" />
               History
             </Button>
           </div>
@@ -1493,73 +1534,26 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
           </div>
         </div>
 
-        {/* Primary actions sit at the top (YFI v1.5) so Approve / Reject are
-            reachable without scrolling past the whole schedule. */}
-        <div className="flex flex-wrap items-center gap-2 border-b pb-3 print:hidden">
-          {isEditable && (
-            <>
-              <Button variant="outline" onClick={() => setAddEntryFor({ shift: "day" })}>
-                <Plus className="size-4" />
-                Add Entry
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => setClearOpen(true)}
-                disabled={submitting || entries.length === 0}
-              >
-                <Eraser className="size-4" />
-                Clear Schedule
-              </Button>
-              <Button onClick={() => setSubmitOpen(true)} disabled={submitting || entries.length === 0}>
-                Submit Whole Day
-              </Button>
-            </>
-          )}
-          {version?.status === "pending_approval" && access?.isApprover && (
-            <>
-              <Button onClick={handleApprove} disabled={submitting}>
-                Approve
-              </Button>
-              <Button variant="destructive" onClick={() => setRejectOpen(true)} disabled={submitting}>
-                Reject
-              </Button>
-            </>
-          )}
-          {version?.status === "pending_approval" && !access?.isApprover && (
-            <span className="text-muted-foreground text-sm">Awaiting approval from the schedule approver.</span>
-          )}
-          {version?.status === "rejected" && (
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-destructive text-sm">
-                Rejected{version.decision_comment ? `: ${version.decision_comment}` : ""}.
-              </span>
-              <Button variant="outline" onClick={handleReopen} disabled={submitting}>
-                Reopen for Editing
-              </Button>
-            </div>
-          )}
-          {(version?.status === "published" || version?.status === "partially_synced") && (
-            <Button variant="outline" onClick={handleCreateRevision} disabled={submitting}>
-              Add Work (Create Revision)
-            </Button>
-          )}
-          {(version?.status === "sync_failed" || version?.status === "partially_synced") && (
-            <div className="flex flex-wrap items-center gap-2">
+        {/* The day's state in words, when there is something to say; its buttons sit by the heading. */}
+        {(version?.status === "pending_approval" && !access?.isApprover) ||
+        version?.status === "rejected" ||
+        version?.status === "sync_failed" ||
+        version?.status === "partially_synced" ? (
+          <div className="flex flex-wrap items-center gap-2 border-t pt-3 print:hidden">
+            {version?.status === "pending_approval" && !access?.isApprover && (
+              <span className="text-muted-foreground text-sm">Awaiting approval from the schedule approver.</span>
+            )}
+            {version?.status === "rejected" && (
+              <span className="text-destructive text-sm">Rejected{version.decision_comment ? `: ${version.decision_comment}` : ""}.</span>
+            )}
+            {(version?.status === "sync_failed" || version?.status === "partially_synced") && (
               <span className={version.status === "sync_failed" ? "text-destructive text-sm" : "text-warning text-sm"}>
-                {version.status === "sync_failed"
-                  ? "Sync failed — no appointments were written."
-                  : "Partially synced — some appointments failed."}{" "}
-                Open a red entry to see why.
+                {version.status === "sync_failed" ? "Sync failed — no appointments were written." : "Partially synced — some appointments failed."} Open a red
+                entry to see why.
               </span>
-              {access?.isApprover && (
-                <Button variant="outline" onClick={handleRetrySync} disabled={submitting}>
-                  <RefreshCw className="size-4" />
-                  Retry Failed Sync
-                </Button>
-              )}
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        ) : null}
 
         {/* FR-3: bar colour = the job's FSM status (row tint = role). */}
         {!loading && windows && (
@@ -1581,6 +1575,7 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
             </span>
           </div>
         )}
+        </Card>
         {!loading && layout && (
           <BoardNotices
             date={date}
@@ -1676,7 +1671,7 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
           defaultStartTime={addEntryFor.startTime}
           defaultEndTime={addEntryFor.endTime}
           defaultTechnicianFsmId={addEntryFor.technicianFsmId}
-          technicians={technicians.filter((t) => t.is_active)}
+          technicians={technicians.filter(isListedTechnician)}
           tags={tags}
           assignmentsByTechnician={assignments}
           leaveRecords={leaveRecords}
@@ -1800,7 +1795,7 @@ function BoardNotices({
             {noShift.length} {plural(noShift.length, "technician has", "technicians have")} no shift and {plural(noShift.length, "is", "are")} not on the board
           </div>
           <p className="text-muted-foreground mt-1">
-            {noShift.map((t) => t.display_name).join(", ")}. Set their shift in Technicians &amp; Leave to give them a row.
+            {noShift.map((t) => t.display_name).join(", ")}. Set their shift in Workforce → People to give them a row.
           </p>
         </div>
       )}
@@ -2842,11 +2837,11 @@ function ShiftSection({
   const selectedCount = selectedRows.size;
 
   return (
-    <div className="rounded-md border">
+    <div className="bg-card overflow-hidden rounded-xl border">
       <div
         className={cn(
           "bg-muted/50 flex items-center justify-between gap-2 px-3 py-1.5",
-          collapsed ? "rounded-md" : "rounded-t-md border-b",
+          !collapsed && "border-b",
         )}
       >
         <Hint label={collapsed ? `Show the ${title}` : `Hide the ${title}`}>
@@ -2857,7 +2852,7 @@ function ShiftSection({
             className="hover:text-primary -ml-1 flex min-w-0 items-center gap-1.5 rounded px-1 py-0.5 text-left"
           >
             <ChevronDown className={cn("size-4 shrink-0 transition-transform", collapsed && "-rotate-90")} />
-            <span className="text-sm font-semibold">{title}</span>
+            <span className="shrink-0 text-sm font-semibold whitespace-nowrap">{title}</span>
             <span className="text-muted-foreground truncate text-xs font-normal">
               {technicians.length} technician{technicians.length === 1 ? "" : "s"} · {shiftEntryCount} appointment
               {shiftEntryCount === 1 ? "" : "s"}
@@ -2943,7 +2938,7 @@ function ShiftSection({
           {technicians.length === 0 ? (
             <div className="text-muted-foreground p-4 text-center text-sm">
               {pickTechnicians.length === 0
-                ? `No technician is on the ${title.toLowerCase()}. A technician's shift is set in Technicians & Leave.`
+                ? `No technician is on the ${title.toLowerCase()}. A technician's shift is set in Workforce → People.`
                 : "No technicians match the current filters."}
             </div>
           ) : (

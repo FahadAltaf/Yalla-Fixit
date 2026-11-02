@@ -10,7 +10,8 @@ import EmployeeRecordView from "@/components/dashboard/compliance/employee-recor
 import EmployeeLeaveCard from "@/components/dashboard/workforce/employee-leave";
 import { AvailabilityCell, RoleCell, ServiceCell, ShiftCell, Unset } from "@/components/dashboard/scheduling/technician-cells";
 import { PageHeading, PillTabs, SectionCard } from "@/components/dashboard/shared/kaizen";
-import { ManageTechnicianDialog, type WorkforceAccess } from "@/components/dashboard/workforce/people";
+import { type WorkforceAccess } from "@/components/dashboard/workforce/people";
+import { ManageTechnicianDialog, type TechnicianDialogView } from "@/components/dashboard/workforce/manage-technician-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { EmployeeRecord } from "@/lib/compliance/types";
@@ -79,7 +80,7 @@ export default function WorkforcePerson({
   const [services, setServices] = useState<TechnicianServiceType[]>([]);
   const [leaveTypes, setLeaveTypes] = useState<LeaveType[]>([]);
   const [leave, setLeave] = useState<LeaveRecord[]>([]);
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState<TechnicianDialogView | null>(null);
   // "Now" for the availability line, taken when the leave arrives.
   const [now, setNow] = useState(0);
 
@@ -129,8 +130,8 @@ export default function WorkforcePerson({
   ];
 
   // Same optimistic update the People page makes, through Scheduling's route.
-  const applyAttributes = async (attrs: TechnicianAttributeUpdate) => {
-    if (!tech) return;
+  const applyAttributes = async (attrs: TechnicianAttributeUpdate): Promise<boolean> => {
+    if (!tech) return false;
     const before = tech;
     setTechs((prev) =>
       prev.map((t) => {
@@ -154,9 +155,11 @@ export default function WorkforcePerson({
     );
     try {
       await techniciansService.updateAttributes([tech.fsm_resource_id], attrs);
+      return true;
     } catch (error) {
       setTechs((prev) => prev.map((t) => (t.fsm_resource_id === before.fsm_resource_id ? before : t)));
       toast.error(error instanceof Error ? error.message : "Failed to update technician");
+      return false;
     }
   };
 
@@ -198,9 +201,14 @@ export default function WorkforcePerson({
               bodyClassName="px-5 pb-5"
               action={
                 tech ? (
-                  <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
-                    <SlidersHorizontal className="size-4" /> Edit
-                  </Button>
+                  <div className="flex gap-2">
+                    <Button size="sm" variant="outline" onClick={() => setEditing("hours")}>
+                      Working hours
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setEditing("attributes")}>
+                      <SlidersHorizontal className="size-4" /> Edit
+                    </Button>
+                  </div>
                 ) : undefined
               }
             >
@@ -285,7 +293,7 @@ export default function WorkforcePerson({
           bodyClassName="px-5 pb-5"
           className="max-w-4xl"
           action={
-            <Button size="sm" variant="outline" onClick={() => setEditing(true)} disabled={!tech.is_active}>
+            <Button size="sm" variant="outline" onClick={() => setEditing("leave")} disabled={!tech.is_active}>
               Add or cancel leave
             </Button>
           }
@@ -331,6 +339,8 @@ export default function WorkforcePerson({
 
       {editing && tech && (
         <ManageTechnicianDialog
+          key={editing}
+          view={editing}
           technician={tech}
           tags={tags}
           leaveTypes={leaveTypes.map((t) => t.name)}
@@ -339,8 +349,8 @@ export default function WorkforcePerson({
           supervisorOptions={supervisorOptions}
           assignedTags={assigned}
           leaveRecords={activeLeave}
-          onApplyAttributes={(attrs) => void applyAttributes(attrs)}
-          onOpenChange={(open) => !open && setEditing(false)}
+          onApplyAttributes={applyAttributes}
+          onOpenChange={(open) => !open && setEditing(null)}
           onChanged={loadScheduling}
         />
       )}

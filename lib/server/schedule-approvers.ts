@@ -6,13 +6,15 @@ type Admin = Awaited<ReturnType<typeof createAdminServerClient>>;
 // Who receives the "a day needs approval" email — NOT everyone who can
 // approve, but the active users explicitly flagged with
 // receives_schedule_approval_email. Turn the flag on for the account(s) that
-// should be notified.
+// should be notified. An account hidden from lists (DEV-458) is left out:
+// it is not someone the business means to reach.
 export async function getApproverRecipients(admin: Admin): Promise<Array<{ email: string; name: string }>> {
   const { data: users } = await admin
     .from("user_profile")
     .select("email, full_name")
     .eq("receives_schedule_approval_email", true)
-    .eq("is_active", true);
+    .eq("is_active", true)
+    .eq("hidden_from_lists", false);
 
   return (users ?? [])
     .filter((u: { email: string | null }) => Boolean(u.email))
@@ -27,7 +29,10 @@ export async function notifyApproversOfSubmission(
   opts: { date: string; submitterName: string; approverId?: string | null },
 ): Promise<{ sent: number }> {
   try {
-    const apiKey = process.env.NEXT_PUBLIC_RESEND_API_KEY;
+    /* RESEND_API_KEY (server-only). The NEXT_PUBLIC_ name is still read so a
+       deployment that has not renamed it keeps working; a NEXT_PUBLIC_
+       variable is inlined into any browser bundle that references it. */
+    const apiKey = process.env.RESEND_API_KEY || process.env.NEXT_PUBLIC_RESEND_API_KEY;
     const from = process.env.NEXT_PUBLIC_EMAIL_FROM;
     const appUrl = process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || "";
     if (!apiKey || !from) return { sent: 0 };

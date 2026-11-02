@@ -8,7 +8,10 @@ import {
 } from "@/types/types";
 import {
   BadgeCheck,
+  Bell,
   CalendarClock,
+  ReceiptText,
+  ChartColumn,
   ClipboardCheck,
   LayoutDashboard,
   ListTodo,
@@ -21,7 +24,26 @@ import {
 } from "lucide-react";
 
 import { canUseAmc } from "@/components/dashboard/extensions/amc/amc-constants";
+import { REPORTS_ENABLED } from "@/lib/reports/enabled";
 import { hasResourceAction, hasSharedListAction } from "@/lib/role-permissions";
+
+/* Who reaches the Ready-to-Invoice queue: Finance and managers (queue
+   View), and the coordinators and verifier who answer its queries and
+   exclusions (BRD §6.7). The API applies the same rule. */
+const canUseFinanceQueue = (user: User) =>
+  hasResourceAction(user, ResourceType.FINANCE_QUEUE, ActionType.VIEW) ||
+  hasResourceAction(user, ResourceType.FINANCE_EXCLUSIONS, ActionType.CREATE) ||
+  hasResourceAction(user, ResourceType.FINANCE_EXCLUSIONS, ActionType.APPROVE);
+
+/* Reports (BRD 5.2 B): the group shows when any report it holds may be opened. */
+const canUseReports = (user: User) =>
+  hasResourceAction(user, ResourceType.REPORTS_QUOTATIONS, ActionType.VIEW) ||
+  hasResourceAction(user, ResourceType.REPORTS_UTILIZATION, ActionType.VIEW) ||
+  hasResourceAction(user, ResourceType.REPORTS_CAPACITY, ActionType.VIEW) ||
+  hasResourceAction(user, ResourceType.REPORTS_EXCEPTIONS, ActionType.VIEW) ||
+  hasResourceAction(user, ResourceType.REPORTS_ATTENDANCE, ActionType.VIEW) ||
+  hasResourceAction(user, ResourceType.REPORTS_COMPLIANCE, ActionType.VIEW);
+
 
 // Workforce People (C6): one list for Scheduling's technicians and
 // Compliance's employees, so either module's View opens it.
@@ -120,6 +142,22 @@ export const baseSectionsItems: MenuItem[] = [
     isActive: false,
     resource: ResourceType.DASHBOARD,
   },
+  /* Everyone's own inbox (BRD §6.2); no resource, so always shown. */
+  {
+    title: "Notifications",
+    url: "/notifications",
+    icon: <Bell className="size-4 text-primary" />,
+    isActive: false,
+  },
+  /* A technician's own compliance (BRD §6.7); those who can open the full report use that instead. */
+  {
+    title: "My compliance",
+    url: "/my-compliance",
+    icon: <BadgeCheck className="size-4 text-primary" />,
+    isActive: false,
+    /* Part of the Reports module: hidden while it is switched off (lib/reports/enabled.ts). */
+    canSee: (user: User) => REPORTS_ENABLED && !hasResourceAction(user, ResourceType.REPORTS_COMPLIANCE, ActionType.VIEW),
+  },
   {
     title: "Todos",
     url: "/todos",
@@ -154,6 +192,76 @@ export const baseSectionsItems: MenuItem[] = [
         url: "/extensions/amc",
         // AMC view or approve, which the resource filter cannot say.
         canSee: canUseAmc,
+      },
+    ],
+  },
+  {
+    title: "Finance",
+    url: "/finance/queue",
+    icon: <ReceiptText className="size-4 text-primary" />,
+    isActive: false,
+    canSee: canUseFinanceQueue,
+    items: [
+      {
+        title: "Ready to invoice",
+        url: "/finance/queue",
+        canSee: canUseFinanceQueue,
+      },
+      {
+        title: "Queries",
+        url: "/finance/queries",
+        canSee: canUseFinanceQueue,
+      },
+      {
+        title: "Invoicing metrics",
+        url: "/finance/metrics",
+        resource: ResourceType.FINANCE_QUEUE,
+      },
+    ],
+  },
+  {
+    title: "Reports",
+    url: "/reports",
+    icon: <ChartColumn className="size-4 text-primary" />,
+    isActive: false,
+    /* Hidden while the Reports module is switched off (lib/reports/enabled.ts). */
+    canSee: (user: User) => REPORTS_ENABLED && canUseReports(user),
+    items: [
+      {
+        title: "Quotation summary",
+        url: "/reports/quotations",
+        resource: ResourceType.REPORTS_QUOTATIONS,
+      },
+      {
+        title: "Utilization",
+        url: "/reports/utilization",
+        resource: ResourceType.REPORTS_UTILIZATION,
+      },
+      {
+        title: "Capacity",
+        url: "/reports/capacity",
+        resource: ResourceType.REPORTS_CAPACITY,
+      },
+      {
+        title: "Exception reports",
+        url: "/reports/exceptions",
+        resource: ResourceType.REPORTS_EXCEPTIONS,
+      },
+      {
+        title: "Daily attendance",
+        url: "/reports/attendance",
+        resource: ResourceType.REPORTS_ATTENDANCE,
+      },
+      {
+        title: "App compliance",
+        url: "/reports/compliance",
+        resource: ResourceType.REPORTS_COMPLIANCE,
+      },
+      /* BRD B5: the reports kept in Zoho FSM, linked from here. Hidden for now (30 Oct, to be worked on later). */
+      {
+        title: "Zoho FSM reports",
+        url: "/reports/fsm",
+        canSee: () => false,
       },
     ],
   },
@@ -335,6 +443,16 @@ export const getNavData = (user: User) => {
           title: "Snagging",
           url: "/settings/snagging",
           resource: ResourceType.SNAGGING_CATALOGUE,
+        },
+        /* Thresholds, recipients and penalties for invoicing and reports
+           (BRD §6.6). */
+        {
+          title: "Reporting",
+          url: "/settings/reporting",
+          resource: ResourceType.REPORTING_SETTINGS,
+          /* Hidden while the Reports module is switched off (lib/reports/enabled.ts). */
+          canSee: (user: User) =>
+            REPORTS_ENABLED && hasResourceAction(user, ResourceType.REPORTING_SETTINGS, ActionType.VIEW),
         },
         /*
           Manpower Compliance: certificate types, designation and

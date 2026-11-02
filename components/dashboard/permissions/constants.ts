@@ -99,6 +99,41 @@ RESOURCE_ACTIONS[ResourceType.COMPLIANCE_IDENTITY] = [ActionType.VIEW];
 // ever retired.
 RESOURCE_ACTIONS[ResourceType.WORKFORCE_SETTINGS] = CRUD_MODULE_ACTIONS;
 
+/*
+  Finance and Reports (BRD §6.7, DEV-462). Their pages arrive phase by
+  phase, so they are listed here rather than read from the menu: a role
+  can be prepared before the page it opens exists.
+
+  Turning a module on in the Permissions screen grants every action
+  listed, so the named-person acts (record invoice, verify exclusion,
+  waive, decide dispute) need unticking for roles that should not hold
+  them. Admins do not get those four by default (lib/role-permissions.ts).
+*/
+const REPORT_ACTIONS = [ActionType.VIEW, ActionType.EXPORT];
+RESOURCE_ACTIONS[ResourceType.FINANCE] = [ActionType.VIEW];
+RESOURCE_ACTIONS[ResourceType.FINANCE_QUEUE] = [
+  ActionType.VIEW,
+  ActionType.EDIT,
+  ActionType.APPROVE,
+  ActionType.EXPORT,
+];
+RESOURCE_ACTIONS[ResourceType.FINANCE_EXCLUSIONS] = [ActionType.CREATE, ActionType.APPROVE];
+RESOURCE_ACTIONS[ResourceType.REPORTS] = [ActionType.VIEW];
+RESOURCE_ACTIONS[ResourceType.REPORTS_QUOTATIONS] = REPORT_ACTIONS;
+RESOURCE_ACTIONS[ResourceType.REPORTS_UTILIZATION] = REPORT_ACTIONS;
+RESOURCE_ACTIONS[ResourceType.REPORTS_CAPACITY] = REPORT_ACTIONS;
+RESOURCE_ACTIONS[ResourceType.REPORTS_ATTENDANCE] = REPORT_ACTIONS;
+RESOURCE_ACTIONS[ResourceType.REPORTS_REVENUE] = REPORT_ACTIONS;
+RESOURCE_ACTIONS[ResourceType.REPORTS_EXCEPTIONS] = REPORT_ACTIONS;
+RESOURCE_ACTIONS[ResourceType.REPORTS_COMPLIANCE] = [
+  ActionType.VIEW,
+  ActionType.EDIT,
+  ActionType.APPROVE,
+  ActionType.EXPORT,
+];
+RESOURCE_ACTIONS[ResourceType.COMPLIANCE_SELF] = [ActionType.VIEW];
+RESOURCE_ACTIONS[ResourceType.REPORTING_SETTINGS] = [ActionType.VIEW, ActionType.EDIT];
+
 // Helper to get display name for resource based on menu item titles
 const resourceDisplayNameMap: Partial<Record<ResourceType, string>> =
   allMenuItems.reduce((acc, item) => {
@@ -118,6 +153,19 @@ const EXTRA_RESOURCE_NAMES: Partial<Record<ResourceType, string>> = {
   [ResourceType.SNAGGING]: "Snagging (whole module)",
   [ResourceType.EXTENSIONS]: "Extensions (whole module)",
   [ResourceType.MOBILE_APP]: "Mobile application",
+  [ResourceType.FINANCE]: "Finance (whole module)",
+  [ResourceType.FINANCE_QUEUE]: "Ready-to-invoice queue (Approve = record invoice)",
+  [ResourceType.FINANCE_EXCLUSIONS]: "Coordinator: not-invoiceable requests and Finance queries (Approve = verify)",
+  [ResourceType.REPORTS]: "Reports (whole module)",
+  [ResourceType.REPORTS_QUOTATIONS]: "Quotation summary",
+  [ResourceType.REPORTS_UTILIZATION]: "Utilization",
+  [ResourceType.REPORTS_CAPACITY]: "Capacity",
+  [ResourceType.REPORTS_ATTENDANCE]: "Attendance",
+  [ResourceType.REPORTS_REVENUE]: "Revenue",
+  [ResourceType.REPORTS_EXCEPTIONS]: "Exception reports",
+  [ResourceType.REPORTS_COMPLIANCE]: "Check-in compliance (Edit = waive, Approve = decide disputes and finalise the month)",
+  [ResourceType.COMPLIANCE_SELF]: "My compliance (technicians)",
+  [ResourceType.REPORTING_SETTINGS]: "Reporting settings",
 };
 
 /*
@@ -175,6 +223,17 @@ export const RESOURCE_PARENT: Partial<Record<ResourceType, ResourceType>> = {
   [ResourceType.MOBILE_APP]: ResourceType.SNAGGING,
   [ResourceType.EXTENSIONS_BULK_DOWNLOAD]: ResourceType.EXTENSIONS,
   [ResourceType.EXTENSIONS_QUOTATION_TEMPLATES]: ResourceType.EXTENSIONS,
+  [ResourceType.FINANCE_QUEUE]: ResourceType.FINANCE,
+  [ResourceType.FINANCE_EXCLUSIONS]: ResourceType.FINANCE,
+  [ResourceType.REPORTS_QUOTATIONS]: ResourceType.REPORTS,
+  [ResourceType.REPORTS_UTILIZATION]: ResourceType.REPORTS,
+  [ResourceType.REPORTS_CAPACITY]: ResourceType.REPORTS,
+  [ResourceType.REPORTS_ATTENDANCE]: ResourceType.REPORTS,
+  [ResourceType.REPORTS_REVENUE]: ResourceType.REPORTS,
+  [ResourceType.REPORTS_EXCEPTIONS]: ResourceType.REPORTS,
+  [ResourceType.REPORTS_COMPLIANCE]: ResourceType.REPORTS,
+  [ResourceType.COMPLIANCE_SELF]: ResourceType.REPORTS,
+  [ResourceType.REPORTING_SETTINGS]: ResourceType.REPORTS,
   /*
     COMPLIANCE_SETTINGS is deliberately NOT a child of COMPLIANCE. A module
     row with children renders no switch and no actions here (its pages

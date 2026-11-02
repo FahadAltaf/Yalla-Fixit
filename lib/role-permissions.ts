@@ -45,12 +45,23 @@ export function getResourceAccessEntries(
  * that a check added here later cannot quietly reopen the bypass.
  * Everything else in snagging -- View especially, which is what the
  * inspector app's sign-in is gated on -- is untouched.
+ *
+ * Finance and compliance add four more of the same kind (BRD §6.7):
+ * recording an invoice against MAHER, verifying that an item is not
+ * invoiceable, waiving a technician's missed check-in, and deciding a
+ * technician's dispute. Each is a named person's act with money or a
+ * penalty behind it. An administrator who should do one is granted it
+ * like anyone else.
  */
 const NOT_INHERITED_BY_ADMIN: ReadonlyArray<{
   resource: ResourceType;
   action: ActionType;
 }> = [
   { resource: ResourceType.SNAGGING, action: ActionType.APPROVE },
+  { resource: ResourceType.FINANCE_QUEUE, action: ActionType.APPROVE },
+  { resource: ResourceType.FINANCE_EXCLUSIONS, action: ActionType.APPROVE },
+  { resource: ResourceType.REPORTS_COMPLIANCE, action: ActionType.EDIT },
+  { resource: ResourceType.REPORTS_COMPLIANCE, action: ActionType.APPROVE },
   /*
     Compliance identity numbers used to be listed here (D2: named people
     only). Sharon, 28 Oct 2026 (action point C1): admins and managers see

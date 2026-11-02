@@ -70,6 +70,7 @@ import {
   isAdminUser,
 } from "@/lib/role-permissions";
 import { usersService } from "@/modules/users/services/users-service";
+import { pickableOptions } from "@/lib/people/pickable";
 import { MentionableUser, TodosFilters, todosService } from "@/modules/todos";
 import { TodoDialog } from "./todo-dialog";
 import { RELATED_TYPES, TODO_STATUSES, formatDateTime, tagBadgeStyle, userLabel } from "./todo-helpers";
@@ -791,7 +792,7 @@ export default function TodosPage() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All assignees</SelectItem>
-              {users.map((user) => (
+              {pickableOptions(users, filters.assigneeId ? [filters.assigneeId] : []).map((user) => (
                 <SelectItem key={user.id} value={user.id}>
                   {userLabel(user)}
                 </SelectItem>
@@ -811,7 +812,7 @@ export default function TodosPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All owners</SelectItem>
-                {users.map((user) => (
+                {pickableOptions(users, filters.ownerId ? [filters.ownerId] : []).map((user) => (
                   <SelectItem key={user.id} value={user.id}>
                     {userLabel(user)}
                   </SelectItem>

@@ -26,6 +26,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import StatusBadge from "@/components/ui/status-badge";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/actions/utils";
+import { pickableOptions } from "@/lib/people/pickable";
 import {
   canCommentTodoRecord,
   canDeleteTodoRecord,
@@ -233,9 +234,11 @@ export function TodoDialog({
 
   const dirty = useMemo(() => JSON.stringify(form) !== JSON.stringify(initial), [form, initial]);
 
+  /* Hidden accounts are not offered (DEV-458); an assignee already on the
+     to-do stays, so saving it does not drop them. */
   const userOptions: Option[] = useMemo(
-    () => users.map((user) => ({ value: user.id, label: userLabel(user) })),
-    [users],
+    () => pickableOptions(users, form.assigneeIds).map((user) => ({ value: user.id, label: userLabel(user) })),
+    [users, form.assigneeIds],
   );
   const selectedAssignees = userOptions.filter((option) => form.assigneeIds.includes(option.value));
   const mentionNameById = useMemo(
