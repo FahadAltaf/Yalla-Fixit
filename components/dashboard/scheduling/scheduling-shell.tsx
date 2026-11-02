@@ -34,7 +34,8 @@ import { SCHEDULING_NAV_COOKIE } from "@/lib/scheduling/nav-preference";
 // from the pathname, which keeps deep links and the back button working.
 const NAV = [
   { name: "Daily Schedule", href: "/scheduling", icon: CalendarDays },
-  { name: "Technicians & Leave", href: "/scheduling/technicians", icon: UsersRound },
+  // Moved to Workforce → People (C6, 31 Oct 2026); "In FSM" is the same list.
+  { name: "Technicians & Leave", href: "/workforce?scope=fsm", icon: UsersRound },
 ] as const;
 
 // Collapsing is deliberately NOT wired through SidebarProvider's open state:

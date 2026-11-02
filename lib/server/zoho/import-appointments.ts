@@ -39,7 +39,7 @@ const FSM_READ_CONCURRENCY = 8;
 const SEARCH_PAD_HOURS = 36;
 const HOUR_MS = 60 * 60 * 1000;
 
-type FsmAppointment = {
+export type FsmAppointment = {
   id: string;
   Name?: string | null;
   Status?: string | null;
@@ -150,7 +150,7 @@ function shiftFor(
   return homeShift(entryRange({ start_at: startIso, end_at: endIso }, date, timeZone), configuredWindows(config));
 }
 
-function addressText(addr?: Record<string, unknown> | null): string {
+export function addressText(addr?: Record<string, unknown> | null): string {
   if (!addr) return "";
   return Object.entries(addr)
     .filter(([k]) => /street|city|state|country|zip/i.test(k))
@@ -179,7 +179,7 @@ function offsetStamp(at: Date, offsetMinutes: number) {
 // Every appointment whose scheduled start falls inside the window. FSM's list
 // endpoint can't filter by date (it only pages, newest-created first), so this
 // uses the search endpoint's `between` comparator on Scheduled_Start_Date_Time.
-async function fetchAppointmentsBetween(token: string, from: Date, to: Date, offsetMinutes: number) {
+export async function fetchAppointmentsBetween(token: string, from: Date, to: Date, offsetMinutes: number) {
   // Zoho's accepted spelling differs between tenants, so try UTC first and
   // fall back to the explicit offset rather than failing the whole import.
   const formats = [

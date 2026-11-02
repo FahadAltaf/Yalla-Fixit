@@ -7,6 +7,7 @@ import {
   UserRoles,
 } from "@/types/types";
 import {
+  BadgeCheck,
   CalendarClock,
   ClipboardCheck,
   LayoutDashboard,
@@ -16,9 +17,28 @@ import {
   Shield,
   User as UserIcon,
   UserCog,
+  UsersRound,
 } from "lucide-react";
 
 import { canUseAmc } from "@/components/dashboard/extensions/amc/amc-constants";
+import { hasResourceAction, hasSharedListAction } from "@/lib/role-permissions";
+
+// Workforce People (C6): one list for Scheduling's technicians and
+// Compliance's employees, so either module's View opens it.
+const canSeeWorkforce = (user: User): boolean =>
+  hasResourceAction(user, ResourceType.SCHEDULING, ActionType.VIEW) ||
+  hasResourceAction(user, ResourceType.COMPLIANCE, ActionType.VIEW);
+
+// Settings → Workforce: Workforce settings, or the old key of any list on it.
+const canSeeWorkforceLists = (user: User): boolean =>
+  hasSharedListAction(user, ResourceType.SCHEDULING, ActionType.VIEW) ||
+  hasSharedListAction(user, ResourceType.COMPLIANCE_SETTINGS, ActionType.VIEW);
+
+const workforceSettingsItem: MenuItem = {
+  title: "Workforce",
+  url: "/settings/workforce",
+  canSee: canSeeWorkforceLists,
+};
 
 // hasViewPermission and filter functions unchanged
 const hasViewPermission = (
@@ -144,6 +164,19 @@ export const baseSectionsItems: MenuItem[] = [
     isActive: false,
     resource: ResourceType.SCHEDULING,
   },
+  /*
+    Workforce (C6, Sami 31 Oct 2026): everyone in one list, the compliance
+    employees and the FSM technicians joined by the FSM link, with bulk
+    editing. Replaces Scheduling's Technicians & leave page and Compliance's
+    Employees list; each field is still stored where its module reads it.
+  */
+  {
+    title: "Workforce",
+    url: "/workforce",
+    icon: <UsersRound className="size-4 text-primary" />,
+    isActive: false,
+    canSee: canSeeWorkforce,
+  },
   {
     title: "Snagging",
     url: "/snagging",
@@ -216,6 +249,27 @@ export const baseSectionsItems: MenuItem[] = [
       },
     ],
   },
+  {
+    // Manpower Compliance (FRD FR-1 to FR-14): Emirates ID, passport and
+    // training expiry tracking for YFI staff.
+    title: "Compliance",
+    url: "/compliance",
+    icon: <BadgeCheck className="size-4 text-primary" />,
+    resource: ResourceType.COMPLIANCE,
+    items: [
+      {
+        title: "Overview",
+        url: "/compliance",
+        exact: true,
+        resource: ResourceType.COMPLIANCE,
+      },
+      {
+        title: "Expiry reminders",
+        url: "/compliance/reminders",
+        resource: ResourceType.COMPLIANCE,
+      },
+    ],
+  },
 ] as MenuItem[];
 
 export const baseAdminItems: MenuItem[] = [
@@ -282,7 +336,33 @@ export const getNavData = (user: User) => {
           url: "/settings/snagging",
           resource: ResourceType.SNAGGING_CATALOGUE,
         },
+        /*
+          Manpower Compliance: certificate types, designation and
+          nationality lists, deactivation-request recipients. Configures
+          the module rather than operates it, so it sits here too.
+        */
+        {
+          title: "Compliance",
+          url: "/settings/compliance",
+          resource: ResourceType.COMPLIANCE_SETTINGS,
+        },
+        // The lists Scheduling and Compliance share (13-5).
+        workforceSettingsItem,
       ],
+    });
+  } else if (canSeeWorkforceLists(user)) {
+    /*
+      Managers hold Workforce settings without being admins (13-5). The
+      route guard follows this menu, so they get a Settings group with that
+      one page in it and none of the admin configuration.
+    */
+    adminItems.unshift({
+      title: "Settings",
+      url: "/settings/workforce",
+      icon: <Settings className="size-4 text-primary" />,
+      isActive: false,
+      canSee: () => true,
+      items: [workforceSettingsItem],
     });
   }
 
