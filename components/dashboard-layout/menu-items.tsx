@@ -449,10 +449,8 @@ export const getNavData = (user: User) => {
         {
           title: "Reporting",
           url: "/settings/reporting",
+          /* Shown even while the Reports module is switched off: it holds the Finance digest's recipients and time (3 Nov). */
           resource: ResourceType.REPORTING_SETTINGS,
-          /* Hidden while the Reports module is switched off (lib/reports/enabled.ts). */
-          canSee: (user: User) =>
-            REPORTS_ENABLED && hasResourceAction(user, ResourceType.REPORTING_SETTINGS, ActionType.VIEW),
         },
         /*
           Manpower Compliance: certificate types, designation and

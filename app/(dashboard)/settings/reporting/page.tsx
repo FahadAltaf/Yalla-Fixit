@@ -1,8 +1,6 @@
 import type { Metadata } from "next";
-import { notFound } from "next/navigation";
 
 import { ReportingSettingsPage } from "@/components/dashboard/reporting/reporting-settings-page";
-import { REPORTS_ENABLED } from "@/lib/reports/enabled";
 
 export const metadata: Metadata = {
   title: "Reporting | Settings",
@@ -15,7 +13,5 @@ export const metadata: Metadata = {
   is given.
 */
 export default function ReportingSettingsRoute() {
-  /* Part of the Reports module: hidden while it is switched off (lib/reports/enabled.ts). */
-  if (!REPORTS_ENABLED) notFound();
   return <ReportingSettingsPage />;
 }
