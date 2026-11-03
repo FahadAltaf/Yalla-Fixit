@@ -100,6 +100,18 @@ CREATE TABLE public.leave_records (
 ALTER TABLE public.leave_records ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.leave_records FROM anon, authenticated;
 
+-- Tables 20261105100000 closes, in production's open shape (3 Nov 2026: the
+-- anon key read and could write all five; default grants, open policies).
+CREATE TABLE public.schedule_audit_events (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), event_type text, created_at timestamptz NOT NULL DEFAULT now());
+ALTER TABLE public.schedule_audit_events ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow All on schedule_audit_events" ON public.schedule_audit_events FOR ALL TO public USING (true) WITH CHECK (true);
+CREATE TABLE public.todos (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), title text, created_at timestamptz NOT NULL DEFAULT now());
+ALTER TABLE public.todos ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow All on todos" ON public.todos FOR ALL TO public USING (true) WITH CHECK (true);
+CREATE TABLE public.todo_attachments (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), todo_id uuid REFERENCES public.todos(id), storage_path text);
+CREATE TABLE public.todo_comment_mentions (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid);
+CREATE TABLE public.password_resets (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), user_id uuid, token text, expires_at timestamptz, used_at timestamptz);
+
 -- Rows that exist before the migrations, so defaults on live data are checked.
 INSERT INTO public.roles (id, name) VALUES ('00000000-0000-0000-0000-0000000000a1', 'admin');
 INSERT INTO public.user_profile (id, email, role_id, full_name) VALUES
