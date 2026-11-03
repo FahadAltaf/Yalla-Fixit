@@ -8,6 +8,7 @@ import { FlagBadge, NamesCell, QuotationStatusBadge, plural } from "@/components
 import { Explained, helpHeader } from "@/components/data-table/columns/column-utilization";
 import { IconText } from "@/components/data-table/columns/icon-text";
 import { IdentityCell } from "@/components/ui/entity-avatar";
+import { TruncatedText } from "@/components/ui/truncated-text";
 import type { CompletenessRow, MissingActualsRow, UnflaggedRow } from "@/lib/reports/exceptions";
 import type { QuotationRow } from "@/lib/reports/quotations";
 import { viewerDateTime } from "@/lib/reports/viewer-time";
@@ -164,7 +165,7 @@ export function getUnflaggedColumns(afterDays: number): ColumnDef<UnflaggedRow>[
     {
       id: "client",
       header: "Client",
-      cell: ({ row }) => <span className="text-sm">{row.original.clientName ?? "—"}</span>,
+      cell: ({ row }) => <TruncatedText text={row.original.clientName ?? "—"} className="max-w-56 text-sm" />,
       enableSorting: false,
     },
     {

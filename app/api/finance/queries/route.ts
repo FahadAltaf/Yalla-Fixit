@@ -4,8 +4,10 @@ import { notifyQueryOpened, resolveAgedNotices } from "@/lib/server/finance/queu
 import { listQueryThreads, openQuerySchema, openQueryThread, queryFiltersSchema, sideOf, tagOptions } from "@/lib/server/finance/queries";
 import { actorOf, querySides, workOrderAbilities } from "@/lib/server/finance/route-helpers";
 import { InvoicingError } from "@/lib/server/finance/work-orders";
+import { hasResourceAction } from "@/lib/role-permissions";
 import { requireResourceAccess } from "@/lib/server/require-access";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
+import { ActionType, ResourceType } from "@/types/types";
 
 /**
  * Queries (2 Nov): comment threads between Finance and Operations on work
@@ -26,10 +28,14 @@ export const dynamic = "force-dynamic";
 export async function GET(req: NextRequest) {
   const gate = await requireResourceAccess(null, null);
   if (!gate.ok) return gate.response;
-  if (!workOrderAbilities(gate.access.accessUser).view) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   const sides = querySides(gate.access.accessUser);
   const filters = queryFiltersSchema.safeParse(Object.fromEntries(req.nextUrl.searchParams));
   if (!filters.success) return NextResponse.json({ error: "Invalid filters" }, { status: 400 });
+  /* One work order's queries: whoever may open it. Every query (the Queries page): the Queries permission (3 Nov). */
+  const allowed = filters.data.workOrder
+    ? workOrderAbilities(gate.access.accessUser).view
+    : hasResourceAction(gate.access.accessUser, ResourceType.FINANCE_QUERIES, ActionType.VIEW);
+  if (!allowed) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   try {
     const admin = await createAdminServerClient();
     const [result, finance, operations] = await Promise.all([

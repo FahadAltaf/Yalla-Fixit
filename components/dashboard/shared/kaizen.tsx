@@ -56,9 +56,12 @@ export function PageHeading({
       with the last line of its description: aligned to the bottom, a
       button beside a two-line description hung well below the title and
       read as though it belonged to the description rather than the page.
+      The text takes the room the actions leave (3 Nov), so the actions stay
+      beside the title and a long description wraps rather than pushing them
+      onto a line of their own; on a narrow screen they still drop below.
     */
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <div className="space-y-1.5">
+      <div className="min-w-64 flex-1 basis-0 space-y-1.5">
         <p className="eyebrow">{eyebrow}</p>
         <h1 className="text-3xl">{title}</h1>
         {description ? (

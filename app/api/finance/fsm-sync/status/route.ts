@@ -14,6 +14,7 @@ import { ActionType, ResourceType } from "@/types/types";
 
 const READERS = [
   ResourceType.FINANCE_QUEUE,
+  ResourceType.FINANCE_METRICS,
   ResourceType.REPORTS_QUOTATIONS,
   ResourceType.REPORTS_UTILIZATION,
   ResourceType.REPORTS_CAPACITY,

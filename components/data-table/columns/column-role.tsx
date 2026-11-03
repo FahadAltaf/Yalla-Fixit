@@ -4,6 +4,7 @@ import type { ColumnDef } from "@tanstack/react-table";
 import { CalendarDays, ShieldCheck } from "lucide-react";
 
 import { IconText } from "@/components/data-table/columns/icon-text";
+import { TruncatedText } from "@/components/ui/truncated-text";
 import type { Role } from "@/types/types";
 import { RoleRowActions } from "@/components/data-table/actions/role-actions";
 
@@ -39,10 +40,8 @@ export function getRoleColumns(onChanged: () => void): ColumnDef<Role>[] {
           );
         }
         return (
-          <div className="hidden sm:flex items-center whitespace-pre-wrap pr-4">
-            <div className="grid flex-1 text-left text-sm leading-tight pr-4">
-              <span>{row.original.description || "-"}</span>
-            </div>
+          <div className="hidden max-w-96 pr-4 sm:block">
+            <TruncatedText text={row.original.description || "-"} className="text-sm" />
           </div>
         );
       },

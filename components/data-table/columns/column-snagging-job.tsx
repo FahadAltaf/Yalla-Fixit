@@ -10,6 +10,7 @@ import { AlertTriangle, Clock, UserRound } from "lucide-react";
 
 import { IconText } from "@/components/data-table/columns/icon-text";
 import { IdentityCell } from "@/components/ui/entity-avatar";
+import { TruncatedText } from "@/components/ui/truncated-text";
 import { Hint } from "@/components/ui/hint";
 import {
   SeverityCounts,
@@ -100,7 +101,8 @@ export function getSnaggingJobColumns(
         const extra = names.length - 1;
         const cell = (
           <IconText icon={UserRound}>
-            <span className="truncate">{names[0]}</span>
+            {/* With others, the tooltip below lists everyone; alone, a cut name shows whole on hover. */}
+            {extra > 0 ? <span className="truncate">{names[0]}</span> : <TruncatedText text={names[0]} className="max-w-40" />}
             {extra > 0 ? (
               <span className="text-muted-foreground shrink-0"> +{extra}</span>
             ) : null}

@@ -28,6 +28,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
+import { TruncatedText } from "@/components/ui/truncated-text";
 import { IdentityCell } from "@/components/ui/entity-avatar";
 import { PhoneInput } from "@/components/ui/phone-input";
 import { Input } from "@/components/ui/input";
@@ -494,9 +495,9 @@ function Contact({
     return <span className="text-muted-foreground text-sm">—</span>;
   }
   return (
-    <span className="flex items-center gap-2 text-sm">
+    <span className="flex max-w-64 min-w-0 items-center gap-2 text-sm">
       <Icon className="text-muted-foreground size-3.5 shrink-0" />
-      <span className="truncate">{value}</span>
+      <TruncatedText text={value} />
     </span>
   );
 }

@@ -11,7 +11,7 @@ import { rolesService } from "@/modules/roles/services/roles-service";
 import { ResourceType, ActionType, Role, RoleAccess } from "@/types/types";
 import { Card } from "@/components/ui/card";
 import { DataTable } from "@/components/data-table";
-import { RESOURCE_ACTIONS, RESOURCE_PARENT, orderResources } from "./constants";
+import { HIDDEN_RESOURCES, RESOURCE_ACTIONS, RESOURCE_PARENT, orderResources } from "./constants";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/ui/empty-state";
 import { RouteIcon } from "lucide-react";
@@ -93,6 +93,7 @@ export default function PermissionManagementPage() {
     ResourceType.ROLES,
     ResourceType.PERMISSIONS,
     ResourceType.USERS,
+    ...HIDDEN_RESOURCES,
   ];
 
   /*

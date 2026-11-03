@@ -16,7 +16,7 @@ import {
   attendanceSummaryExportRow,
 } from "@/components/data-table/columns/column-compliance";
 import { DatePicker } from "@/components/data-table/toolbars/date-range-picker";
-import { ReportFiltersButton, ReportToolbar, type ReportSelect } from "@/components/data-table/toolbars/report-toolbar";
+import { ReportToolbar, type ReportSelect } from "@/components/data-table/toolbars/report-toolbar";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -183,7 +183,6 @@ export function AttendancePage() {
       onFiltersChange={change}
       selects={selects}
       clearable={["technician", "team", "client", "status"]}
-      filtersInToolbar={false}
       canExport={Boolean(data?.can.export)}
       exporting={exporting}
       onExport={(format) => void doExport(format)}
@@ -211,7 +210,7 @@ export function AttendancePage() {
       <PageHeading
         eyebrow="Reports"
         title="Daily attendance"
-        description="Per technician per day: the expected hours (their shift, widened to the day's jobs as on the Scheduling board), check-in and check-out from FSM Attendance, the flags and leave. The monthly summary is the one HR asked for."
+        description="Expected hours, check-in and check-out, flags and leave, per technician per day."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <HowItWorks content={attendanceHowItWorks(data ? { lateToleranceMinutes: data.lateToleranceMinutes } : undefined)} />
@@ -220,7 +219,6 @@ export function AttendancePage() {
             ) : (
               <ReportDateRange from={range.from} to={range.to} max={today} onChange={(from, to) => change({ ...filters, from, to })} />
             )}
-            <ReportFiltersButton filters={filters} onFiltersChange={change} selects={selects} clearable={["technician", "team", "client", "status"]} />
             <SavedFiltersMenu
               saved={saved}
               current={filters}
@@ -318,8 +316,8 @@ export function AttendancePage() {
           <Info className="size-4" />
           <AlertTitle>Rest days are not set for {plural(data.notes.noRestDays, "technician")}</AlertTitle>
           <AlertDescription>
-            Every day is a working day for them, so an absence may be their day off. Set each technician&apos;s rest day in Scheduling →
-            Technicians.
+            Every day is a working day for them, so an absence may be their day off. Set each technician&apos;s rest days in Workforce →
+            People → ⋮ → Working hours.
           </AlertDescription>
         </Alert>
       ) : null}

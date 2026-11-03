@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Explained, helpHeader, type Help } from "@/components/data-table/columns/column-utilization";
 import { IdentityCell } from "@/components/ui/entity-avatar";
+import { TruncatedText } from "@/components/ui/truncated-text";
 import { EVENT_KIND_LABELS, type ComplianceEventKind } from "@/lib/reports/compliance";
 import { DISPUTE_STATUS_LABELS, dayName, type DisputeStatus } from "@/lib/reports/compliance-disputes";
 import type {
@@ -628,7 +629,7 @@ export function complianceDisputeColumns(onDecide?: (row: ComplianceDisputeRow) 
       header: helpHeader("Reason", DISPUTE_HELP.reason),
       cell: ({ row }) => (
         <div className="max-w-80 min-w-48">
-          <p className="text-sm whitespace-pre-line">{row.original.reason}</p>
+          <TruncatedText text={row.original.reason} className="text-sm" />
           <p className="text-muted-foreground text-xs">
             {row.original.onBehalf ? `Raised for them by ${row.original.raisedBy}` : `Raised by ${row.original.raisedBy}`}, {viewerDateTime(row.original.raisedAt)}
           </p>
@@ -650,8 +651,8 @@ export function complianceDisputeColumns(onDecide?: (row: ComplianceDisputeRow) 
         if (d) {
           return (
             <div className="max-w-72 min-w-40">
-              <p className="text-sm">{d.outcome === "accepted" ? `Waived: ${d.waiverReason}` : (d.note ?? "Rejected")}</p>
-              {d.outcome === "accepted" && d.note ? <p className="text-sm">{d.note}</p> : null}
+              <TruncatedText text={d.outcome === "accepted" ? `Waived: ${d.waiverReason}` : (d.note ?? "Rejected")} className="text-sm" />
+              {d.outcome === "accepted" && d.note ? <TruncatedText text={d.note} className="text-sm" /> : null}
               <p className="text-muted-foreground text-xs">
                 {d.decidedBy}, {viewerDateTime(d.decidedAt)}
               </p>

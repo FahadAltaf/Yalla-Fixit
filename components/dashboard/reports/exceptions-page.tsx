@@ -48,9 +48,11 @@ type By = "team" | "technician" | "appointments";
 type Can = { can: { view: boolean; export: boolean } };
 
 const DEFAULTS = { view: "unflagged", by: "team", from: "", to: "", client: "", coordinator: "", technician: "", team: "", overdue: "", q: "" };
+/* The page always opens on Completed, not flagged (and By team), whatever tab was used last (3 Nov). */
+const NOT_RESTORED = ["view", "by"] as const;
 
 export function ExceptionsPage() {
-  const { filters, setFilters, ready, saved, saveAs, remove, apply } = useReportFilters("exceptions", DEFAULTS);
+  const { filters, setFilters, ready, saved, saveAs, remove, apply } = useReportFilters("exceptions", DEFAULTS, { notRestored: NOT_RESTORED });
   const view: View = filters.view === "actual_times" ? "actual_times" : "unflagged";
   const by: By = filters.by === "technician" || filters.by === "appointments" ? filters.by : "team";
   const debouncedQ = useDebounce(filters.q, 400);
@@ -229,7 +231,7 @@ export function ExceptionsPage() {
       <PageHeading
         eyebrow="Reports"
         title="Exception reports"
-        description="Lists that protect the invoicing queue and the utilization figures from gaps in the FSM data."
+        description="Gaps in the FSM data that would leak from invoicing or skew utilization."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <HowItWorks content={exceptionsHowItWorks(data && "afterDays" in data ? { afterDays: data.afterDays } : undefined)} />

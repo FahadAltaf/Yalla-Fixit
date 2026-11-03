@@ -35,6 +35,17 @@ const canUseFinanceQueue = (user: User) =>
   hasResourceAction(user, ResourceType.FINANCE_EXCLUSIONS, ActionType.CREATE) ||
   hasResourceAction(user, ResourceType.FINANCE_EXCLUSIONS, ActionType.APPROVE);
 
+/* Holding both views of Ready to invoice (admins do): each gets its own entry (3 Nov). */
+const hasBothFinanceViews = (user: User) =>
+  hasResourceAction(user, ResourceType.FINANCE_QUEUE, ActionType.VIEW) &&
+  hasResourceAction(user, ResourceType.FINANCE_EXCLUSIONS, ActionType.CREATE);
+
+/* The Finance group: any of its pages. */
+const canUseFinance = (user: User) =>
+  canUseFinanceQueue(user) ||
+  hasResourceAction(user, ResourceType.FINANCE_QUERIES, ActionType.VIEW) ||
+  hasResourceAction(user, ResourceType.FINANCE_METRICS, ActionType.VIEW);
+
 /* Reports (BRD 5.2 B): the group shows when any report it holds may be opened. */
 const canUseReports = (user: User) =>
   hasResourceAction(user, ResourceType.REPORTS_QUOTATIONS, ActionType.VIEW) ||
@@ -200,22 +211,33 @@ export const baseSectionsItems: MenuItem[] = [
     url: "/finance/queue",
     icon: <ReceiptText className="size-4 text-primary" />,
     isActive: false,
-    canSee: canUseFinanceQueue,
+    canSee: canUseFinance,
     items: [
       {
         title: "Ready to invoice",
         url: "/finance/queue",
-        canSee: canUseFinanceQueue,
+        canSee: (user: User) => canUseFinanceQueue(user) && !hasBothFinanceViews(user),
+      },
+      {
+        /* Short enough for one line in the menu (3 Nov); the page title says "Ready to invoice (Finance)". */
+        title: "Invoices (Finance)",
+        url: "/finance/queue",
+        canSee: hasBothFinanceViews,
+      },
+      {
+        title: "Invoices (Operations)",
+        url: "/finance/operations",
+        canSee: hasBothFinanceViews,
       },
       {
         title: "Queries",
         url: "/finance/queries",
-        canSee: canUseFinanceQueue,
+        resource: ResourceType.FINANCE_QUERIES,
       },
       {
         title: "Invoicing metrics",
         url: "/finance/metrics",
-        resource: ResourceType.FINANCE_QUEUE,
+        resource: ResourceType.FINANCE_METRICS,
       },
     ],
   },

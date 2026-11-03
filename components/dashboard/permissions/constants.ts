@@ -1,5 +1,6 @@
 import { ActionType, MenuItem, ResourceType } from "@/types/types";
 import { baseAdminItems, baseSectionsItems } from "@/components/dashboard-layout/menu-items";
+import { REPORTS_ENABLED } from "@/lib/reports/enabled";
 
 // Flatten nested menu items
 const flattenMenuItems = (items: MenuItem[]): MenuItem[] => {
@@ -108,6 +109,11 @@ RESOURCE_ACTIONS[ResourceType.WORKFORCE_SETTINGS] = CRUD_MODULE_ACTIONS;
   listed, so the named-person acts (record invoice, verify exclusion,
   waive, decide dispute) need unticking for roles that should not hold
   them. Admins do not get those four by default (lib/role-permissions.ts).
+
+  Ready to invoice has two views (3 Nov): the Finance view is the queue
+  key, the Operations view the not-invoiceable key (lib/server/finance/
+  route-helpers.ts says what each action opens). The queue's Export was
+  never read by any page or route, and nobody held it, so it is not offered.
 */
 const REPORT_ACTIONS = [ActionType.VIEW, ActionType.EXPORT];
 RESOURCE_ACTIONS[ResourceType.FINANCE] = [ActionType.VIEW];
@@ -115,9 +121,10 @@ RESOURCE_ACTIONS[ResourceType.FINANCE_QUEUE] = [
   ActionType.VIEW,
   ActionType.EDIT,
   ActionType.APPROVE,
-  ActionType.EXPORT,
 ];
 RESOURCE_ACTIONS[ResourceType.FINANCE_EXCLUSIONS] = [ActionType.CREATE, ActionType.APPROVE];
+RESOURCE_ACTIONS[ResourceType.FINANCE_QUERIES] = [ActionType.VIEW];
+RESOURCE_ACTIONS[ResourceType.FINANCE_METRICS] = [ActionType.VIEW];
 RESOURCE_ACTIONS[ResourceType.REPORTS] = [ActionType.VIEW];
 RESOURCE_ACTIONS[ResourceType.REPORTS_QUOTATIONS] = REPORT_ACTIONS;
 RESOURCE_ACTIONS[ResourceType.REPORTS_UTILIZATION] = REPORT_ACTIONS;
@@ -154,8 +161,8 @@ const EXTRA_RESOURCE_NAMES: Partial<Record<ResourceType, string>> = {
   [ResourceType.EXTENSIONS]: "Extensions (whole module)",
   [ResourceType.MOBILE_APP]: "Mobile application",
   [ResourceType.FINANCE]: "Finance (whole module)",
-  [ResourceType.FINANCE_QUEUE]: "Ready-to-invoice queue (Approve = record invoice)",
-  [ResourceType.FINANCE_EXCLUSIONS]: "Coordinator: not-invoiceable requests and Finance queries (Approve = verify)",
+  [ResourceType.FINANCE_QUEUE]: "Ready to invoice: Finance view",
+  [ResourceType.FINANCE_EXCLUSIONS]: "Ready to invoice: Operations view",
   [ResourceType.REPORTS]: "Reports (whole module)",
   [ResourceType.REPORTS_QUOTATIONS]: "Quotation summary",
   [ResourceType.REPORTS_UTILIZATION]: "Utilization",
@@ -180,7 +187,34 @@ const OVERRIDE_RESOURCE_NAMES: Partial<Record<ResourceType, string>> = {
   [ResourceType.COMPLIANCE_SETTINGS]: "Compliance settings (lists, recipients)",
   [ResourceType.COMPLIANCE_IDENTITY]: "Compliance identity numbers (full Emirates ID and passport)",
   [ResourceType.WORKFORCE_SETTINGS]: "Workforce settings (roles, service types, tags, leave types, designations, nationalities)",
+  /*
+    The queue key also opens Invoicing metrics, whose menu entry gave this
+    row its name; the row is the Finance side of Ready to invoice (3 Nov).
+  */
+  [ResourceType.FINANCE_QUEUE]: "Ready to invoice: Finance view",
+  [ResourceType.FINANCE_EXCLUSIONS]: "Ready to invoice: Operations view",
 };
+
+/*
+  Rows for pages nobody can open yet (3 Nov). Revenue's page is not in the
+  menu; while the Reports module is switched off (lib/reports/enabled.ts)
+  its pages are hidden too, all but Reporting settings, which the Finance
+  digest uses. Grants already held stay as they are.
+*/
+const REPORT_PAGE_RESOURCES = [
+  ResourceType.REPORTS,
+  ResourceType.REPORTS_QUOTATIONS,
+  ResourceType.REPORTS_UTILIZATION,
+  ResourceType.REPORTS_CAPACITY,
+  ResourceType.REPORTS_ATTENDANCE,
+  ResourceType.REPORTS_EXCEPTIONS,
+  ResourceType.REPORTS_COMPLIANCE,
+  ResourceType.COMPLIANCE_SELF,
+];
+export const HIDDEN_RESOURCES: ResourceType[] = [
+  ResourceType.REPORTS_REVENUE,
+  ...(REPORTS_ENABLED ? [] : REPORT_PAGE_RESOURCES),
+];
 
 export const getResourceDisplayName = (resource: ResourceType): string => {
   return (
@@ -191,8 +225,26 @@ export const getResourceDisplayName = (resource: ResourceType): string => {
   );
 };
 
+/*
+  What an action does on the rows where View, Edit and the rest say too
+  little (3 Nov): the two Ready-to-invoice views.
+*/
+const RESOURCE_ACTION_NAMES: Partial<Record<ResourceType, Partial<Record<ActionType, string>>>> = {
+  [ResourceType.FINANCE_QUEUE]: {
+    [ActionType.VIEW]: "View (queue, metrics)",
+    [ActionType.EDIT]: "Edit (queries, holds)",
+    [ActionType.APPROVE]: "Approve (record invoices)",
+  },
+  [ResourceType.FINANCE_EXCLUSIONS]: {
+    [ActionType.CREATE]: "Create (progress, ready, queries)",
+    [ActionType.APPROVE]: "Approve (verify older items)",
+  },
+};
+
 // Helper to get display name for action
-export const getActionDisplayName = (action: ActionType): string => {
+export const getActionDisplayName = (action: ActionType, resource?: ResourceType): string => {
+  const own = resource ? RESOURCE_ACTION_NAMES[resource]?.[action] : undefined;
+  if (own) return own;
   const names: Record<ActionType, string> = {
     [ActionType.VIEW]: "View",
     [ActionType.CREATE]: "Create",
@@ -225,6 +277,8 @@ export const RESOURCE_PARENT: Partial<Record<ResourceType, ResourceType>> = {
   [ResourceType.EXTENSIONS_QUOTATION_TEMPLATES]: ResourceType.EXTENSIONS,
   [ResourceType.FINANCE_QUEUE]: ResourceType.FINANCE,
   [ResourceType.FINANCE_EXCLUSIONS]: ResourceType.FINANCE,
+  [ResourceType.FINANCE_QUERIES]: ResourceType.FINANCE,
+  [ResourceType.FINANCE_METRICS]: ResourceType.FINANCE,
   [ResourceType.REPORTS_QUOTATIONS]: ResourceType.REPORTS,
   [ResourceType.REPORTS_UTILIZATION]: ResourceType.REPORTS,
   [ResourceType.REPORTS_CAPACITY]: ResourceType.REPORTS,
@@ -233,7 +287,8 @@ export const RESOURCE_PARENT: Partial<Record<ResourceType, ResourceType>> = {
   [ResourceType.REPORTS_EXCEPTIONS]: ResourceType.REPORTS,
   [ResourceType.REPORTS_COMPLIANCE]: ResourceType.REPORTS,
   [ResourceType.COMPLIANCE_SELF]: ResourceType.REPORTS,
-  [ResourceType.REPORTING_SETTINGS]: ResourceType.REPORTS,
+  /* On its own row while the Reports module is switched off, as in the menu (Settings → Reporting). */
+  ...(REPORTS_ENABLED ? { [ResourceType.REPORTING_SETTINGS]: ResourceType.REPORTS } : {}),
   /*
     COMPLIANCE_SETTINGS is deliberately NOT a child of COMPLIANCE. A module
     row with children renders no switch and no actions here (its pages

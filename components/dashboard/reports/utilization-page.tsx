@@ -207,7 +207,7 @@ export function UtilizationPage() {
       <PageHeading
         eyebrow="Reports"
         title="Utilization"
-        description="How busy each technician was against the hours expected of them, and how much of that work could be billed."
+        description="How busy each technician was against their expected hours, and how much was billable."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <HowItWorks content={utilizationHowItWorks(data ? { standardDailyHours: data.notes.standardDailyHours, dataCentreDailyHours: data.notes.dataCentreDailyHours } : undefined)} />

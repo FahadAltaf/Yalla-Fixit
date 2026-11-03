@@ -23,6 +23,7 @@ import { DataTable } from "@/components/data-table";
 import { SnaggingPricingToolbar } from "@/components/data-table/toolbars/snagging-pricing-toolbar";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
+import { TruncatedText } from "@/components/ui/truncated-text";
 import { QuoteRichText } from "./quote-rich-text";
 import {
   htmlToScope,
@@ -387,11 +388,9 @@ export default function PricingSettings() {
               <span className="bg-muted text-muted-foreground flex size-8 shrink-0 items-center justify-center rounded-md">
                 <Icon className="size-4" />
               </span>
-              <div className="flex min-w-0 flex-col">
-                <span className="truncate font-medium">{row.original.label}</span>
-                <span className="text-muted-foreground truncate text-xs">
-                  {row.original.note}
-                </span>
+              <div className="flex max-w-72 min-w-0 flex-col">
+                <TruncatedText text={row.original.label} className="font-medium" />
+                {row.original.note ? <TruncatedText text={row.original.note} className="text-muted-foreground text-xs" /> : null}
               </div>
             </div>
           );

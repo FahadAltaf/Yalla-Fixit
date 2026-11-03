@@ -8,11 +8,10 @@ import { ListPager, PageHeading, PillTabs, SectionCard, StatCard, StatCardGrid }
 import { ErrorState, StatGridSkeleton } from "@/components/dashboard/shared/kaizen-states";
 import { DataTable } from "@/components/data-table";
 import { BOOKING_COLUMNS, CAPACITY_EXPORT_COLUMNS, capacityExportRows, Explained, hrs, type Help } from "@/components/data-table/columns/column-utilization";
-import { ReportToolbar } from "@/components/data-table/toolbars/report-toolbar";
+import { ReportFiltersButton, ReportToolbar } from "@/components/data-table/toolbars/report-toolbar";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { addDaysToDateString, todayInZone } from "@/lib/scheduling/org-time";
 import { useDebounce } from "@/hooks/use-debounce";
@@ -42,7 +41,6 @@ type Can = { can: { view: boolean; export: boolean } };
 /** The board cell picked: a team's or technician's day, or the whole day ("all"). */
 type Slot = { day: string; kind: "all" | "team" | "technician"; key: string; name: string };
 
-const ALL = "__all__";
 const DEFAULTS = { from: "", days: "", team: "", client: "", technician: "", q: "" };
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -231,7 +229,7 @@ export function CapacityPage() {
       <PageHeading
         eyebrow="Reports"
         title="Capacity"
-        description="Booked against available hours for the days ahead, by team and technician, so over-booked and spare days show before they arrive."
+        description="Booked against available hours for the days ahead, by team and technician."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <HowItWorks content={capacityHowItWorks(data ? { horizonDays: data.horizonDays, spareBelowPercent: data.spareBelowPercent } : undefined)} />
@@ -244,33 +242,6 @@ export function CapacityPage() {
                 change({ ...filters, from, days: String(days) });
               }}
             />
-            <Select value={filters.team || ALL} onValueChange={(v) => change({ ...filters, team: v === ALL ? "" : v })}>
-              <SelectTrigger className="w-52" aria-label="Team">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={ALL}>All teams</SelectItem>
-                {(data?.options.teams ?? []).map((t) => (
-                  <SelectItem key={t.id} value={t.id}>
-                    {t.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {/* BRD B5: a client narrows the booked hours and bookings to its appointments; availability stays everyone's. */}
-            <Select value={filters.client || ALL} onValueChange={(v) => change({ ...filters, client: v === ALL ? "" : v })}>
-              <SelectTrigger className="w-52" aria-label="Client">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={ALL}>All clients</SelectItem>
-                {(data?.options.clients ?? []).map((c) => (
-                  <SelectItem key={c} value={c}>
-                    {c}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
             <SavedFiltersMenu
               saved={saved}
               current={filters}
@@ -319,17 +290,32 @@ export function CapacityPage() {
         title={data ? rangeLabel(data.from, data.to) : "Board"}
         description="Booked / available hours a day. Click a cell to see its bookings below."
         action={
-          <PillTabs<Board>
-            value={board}
-            onChange={(next) => {
-              setBoard(next);
-              setBoardPage(0);
-            }}
-            tabs={[
-              { value: "teams", label: "Teams" },
-              { value: "technicians", label: "Technicians" },
-            ]}
-          />
+          <div className="flex flex-wrap items-center gap-2">
+            {/*
+              Team and client in a Filters button on the board they narrow (3 Nov); the cards above follow the dates only.
+              BRD B5: a client narrows the booked hours and bookings to its appointments; availability stays everyone's.
+            */}
+            <ReportFiltersButton
+              filters={filters}
+              onFiltersChange={change}
+              selects={[
+                { key: "team", allLabel: "All teams", options: (data?.options.teams ?? []).map((t) => ({ value: t.id, label: t.name })) },
+                { key: "client", allLabel: "All clients", options: (data?.options.clients ?? []).map((c) => ({ value: c, label: c })) },
+              ]}
+              clearable={["team", "client"]}
+            />
+            <PillTabs<Board>
+              value={board}
+              onChange={(next) => {
+                setBoard(next);
+                setBoardPage(0);
+              }}
+              tabs={[
+                { value: "teams", label: "Teams" },
+                { value: "technicians", label: "Technicians" },
+              ]}
+            />
+          </div>
         }
         bodyClassName="border-t"
       >

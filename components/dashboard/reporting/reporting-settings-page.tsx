@@ -384,7 +384,7 @@ export function ReportingSettingsPage() {
     <PageHeading
       eyebrow="Settings"
       title="Reporting"
-      description="Thresholds, alert timings, recipients and penalty settings for invoicing, reports and check-in compliance."
+      description="Thresholds, alerts, recipients and penalties for invoicing, reports and compliance."
       actions={
         canEdit && draft ? (
           <div className="flex items-center gap-3">
