@@ -12,6 +12,7 @@ import {
   MISSING_ACTUALS_COLUMNS,
   MISSING_ACTUALS_EXPORT_COLUMNS,
   UNFLAGGED_EXPORT_COLUMNS,
+  getCompletenessColumns,
   getUnflaggedColumns,
   missingActualsExportRow,
   unflaggedExportRow,
@@ -19,9 +20,7 @@ import {
 import { ReportToolbar, type ReportSelect } from "@/components/data-table/toolbars/report-toolbar";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useDebounce } from "@/hooks/use-debounce";
-import { fsmRecordLink } from "@/lib/fsm-links";
 import type { CompletenessRow } from "@/lib/reports/exceptions";
 import type { ActualTimesReport, UnflaggedReport } from "@/lib/server/reports/reports";
 import { exportFilename, exportTable, type ExportFormat } from "@/lib/snagging/export-table";
@@ -204,7 +203,6 @@ export function ExceptionsPage() {
           <div className="flex flex-wrap items-center gap-2">
             <HowItWorks content={exceptionsHowItWorks(data && "afterDays" in data ? { afterDays: data.afterDays } : undefined)} />
             <ReportDateRange
-              label={view === "unflagged" ? "Completed" : "Scheduled"}
               from={filters.from || (data && "from" in data ? data.from : "") || lastThirtyDays().from}
               to={filters.to || (data && "to" in data ? data.to : "") || lastThirtyDays().to}
               onChange={(from, to) => change({ ...filters, from, to })}
@@ -252,10 +250,6 @@ export function ExceptionsPage() {
               columns={unflaggedColumns}
               toolbar={toolbar}
               {...tablePaging}
-              handleRowClick={(row) => {
-                const link = fsmRecordLink("Work_Orders", row.workOrderId);
-                if (link) window.open(link, "_blank", "noopener,noreferrer");
-              }}
               emptyState={
                 <EmptyState
                   icon={<ClipboardCheck />}
@@ -275,11 +269,11 @@ export function ExceptionsPage() {
                 value={actual.overall.completenessPercent === null ? "—" : `${actual.overall.completenessPercent}%`}
                 headline={`${actual.overall.withActualTimes} of ${plural(actual.overall.completed, "completed appointment")} have actual times`}
               />
-              <StatCard label="Missing actual times" value={actual.total} headline={`${actual.from} to ${actual.to}`} />
+              <StatCard label="Missing actual times" value={actual.cards.missing} headline={`${actual.from} to ${actual.to}`} />
               <StatCard
                 label="Least complete technician"
-                value={actual.byTechnician[0]?.completenessPercent === undefined ? "—" : `${actual.byTechnician[0].completenessPercent}%`}
-                headline={actual.byTechnician[0]?.name ?? "No completed appointments"}
+                value={actual.cards.leastComplete?.completenessPercent === undefined ? "—" : `${actual.cards.leastComplete.completenessPercent}%`}
+                headline={actual.cards.leastComplete?.name ?? "No completed appointments"}
               />
             </StatCardGrid>
           ) : (
@@ -288,8 +282,8 @@ export function ExceptionsPage() {
 
           {actual && actual.overall.completed > 0 ? (
             <div className="grid gap-6 lg:grid-cols-2">
-              <CompletenessTable icon={<Users />} title="By team" rows={actual.byTeam} />
-              <CompletenessTable icon={<Gauge />} title="By technician (most missing first)" rows={actual.byTechnician.slice(0, 12)} />
+              <CompletenessTable kind="team" icon={<Users />} title="By team" rows={actual.byTeam} />
+              <CompletenessTable kind="technician" icon={<Gauge />} title="By technician" rows={actual.byTechnician} />
             </div>
           ) : null}
 
@@ -299,10 +293,6 @@ export function ExceptionsPage() {
               columns={MISSING_ACTUALS_COLUMNS}
               toolbar={toolbar}
               {...tablePaging}
-              handleRowClick={(row) => {
-                const link = fsmRecordLink("Service_Appointments", row.id);
-                if (link) window.open(link, "_blank", "noopener,noreferrer");
-              }}
               emptyState={
                 <EmptyState
                   icon={<Wrench />}
@@ -318,31 +308,35 @@ export function ExceptionsPage() {
   );
 }
 
-function CompletenessTable({ icon, title, rows }: { icon: React.ReactNode; title: string; rows: CompletenessRow[] }) {
+/* By team or technician, most missing first (sorted on the server); paged here, as the rows are few. */
+function CompletenessTable({ kind, icon, title, rows }: { kind: "team" | "technician"; icon: React.ReactNode; title: string; rows: CompletenessRow[] }) {
+  const columns = useMemo(() => getCompletenessColumns(kind), [kind]);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(10);
+  /* New data (dates or filters changed) starts on the first page. */
+  const [shown, setShown] = useState(rows);
+  if (shown !== rows) {
+    setShown(rows);
+    setPage(0);
+  }
   return (
-    <SectionCard icon={icon} title={title} bodyClassName="border-t">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead className="pl-5">Name</TableHead>
-            <TableHead>Completed</TableHead>
-            <TableHead>With times</TableHead>
-            <TableHead className="pr-5">Completeness</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((row) => (
-            <TableRow key={row.key}>
-              <TableCell className="pl-5">{row.name}</TableCell>
-              <TableCell className="tabular-nums">{row.completed}</TableCell>
-              <TableCell className="tabular-nums">{row.withActualTimes}</TableCell>
-              <TableCell className="pr-5 font-medium tabular-nums">
-                {row.completenessPercent === null ? "—" : `${row.completenessPercent}%`}
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+    <SectionCard icon={icon} title={title} description="Most missing first">
+      <DataTable
+        data={rows.slice(page * pageSize, (page + 1) * pageSize)}
+        columns={columns}
+        onGlobalFilterChange={() => undefined}
+        onPageChange={setPage}
+        onPageSizeChange={(size) => {
+          setPageSize(size);
+          setPage(0);
+        }}
+        pageSize={pageSize}
+        currentPage={page}
+        loading={false}
+        rowCount={rows.length}
+        isPagination
+        pageSizeOptions={[10, 25, 50]}
+      />
     </SectionCard>
   );
 }

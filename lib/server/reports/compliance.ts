@@ -526,22 +526,63 @@ export async function buildComplianceReport(
       a.name.localeCompare(b.name),
   );
 
-  const sum = (pick: (r: ComplianceRow) => number) => rows.reduce((acc, r) => acc + pick(r), 0);
+  /*
+    The cards follow the month only (3 Nov): with a technician, team or
+    client chosen, they come from the whole month's figures.
+  */
+  const filtered = Boolean(filters.technician || filters.team || filters.client);
+  let cardRows = rows;
+  let cardDisputes = monthDisputes;
+  if (filtered && monthRow) {
+    const statements = await readAllRows<Record<string, unknown>>(
+      (from, to) => admin.schema("hr").from("compliance_statements").select("*").eq("month", month).order("technician_fsm_id").range(from, to),
+      "compliance statements",
+    );
+    cardRows = statements.map((s) => ({
+      required: Number(s.required),
+      performed: Number(s.performed),
+      missed: Number(s.missed),
+      waived: Number(s.waived),
+      belowThreshold: (s.below_threshold as boolean | null) ?? null,
+      penaltyPayableAed: s.penalty_payable === null ? null : Number(s.penalty_payable),
+      owedShift: 0,
+      owedAppointment: 0,
+    })) as ComplianceRow[];
+    cardDisputes = stored.disputes;
+  } else if (filtered) {
+    const whole = await workOutMonth(admin, month, {});
+    cardRows = whole.technicians.map((t) => {
+      const r = whole.results.get(t.fsmId);
+      const owed = whole.owed.get(t.fsmId) ?? { shift: 0, appointment: 0 };
+      return {
+        required: r?.required ?? 0,
+        performed: r?.performed ?? 0,
+        missed: r?.missed ?? 0,
+        waived: r?.waived ?? 0,
+        belowThreshold: r?.belowThreshold ?? (whole.settings.thresholdPercent === null ? null : false),
+        penaltyPayableAed: r?.penaltyPayableAed ?? (whole.settings.thresholdPercent === null ? null : 0),
+        owedShift: owed.shift,
+        owedAppointment: owed.appointment,
+      };
+    }) as ComplianceRow[];
+    cardDisputes = stored.disputes;
+  }
+  const sum = (pick: (r: ComplianceRow) => number) => cardRows.reduce((acc, r) => acc + pick(r), 0);
   const required = sum((r) => r.required);
   const performed = sum((r) => r.performed);
   const overall = {
-    technicians: rows.length,
+    technicians: cardRows.length,
     required,
     performed,
     missed: sum((r) => r.missed),
     waived: sum((r) => r.waived),
     compliancePercent: required ? (performed / required) * 100 : null,
     penaltyPayableAed: settingsUsed.thresholdPercent === null ? null : sum((r) => r.penaltyPayableAed ?? 0),
-    belowThreshold: settingsUsed.thresholdPercent === null ? null : rows.filter((r) => r.belowThreshold).length,
+    belowThreshold: settingsUsed.thresholdPercent === null ? null : cardRows.filter((r) => r.belowThreshold).length,
     owedShift: sum((r) => r.owedShift),
     owedAppointment: sum((r) => r.owedAppointment),
-    disputesOpen: monthDisputes.filter((d) => !d.decision).length,
-    disputes: monthDisputes.length,
+    disputesOpen: cardDisputes.filter((d) => !d.decision).length,
+    disputes: cardDisputes.length,
   };
 
   let technicians: ComplianceRow[] = [];
@@ -835,11 +876,14 @@ export async function buildAttendanceReport(
     loadComplianceAppointments(admin, { from, to }),
     loadShiftCheckIns(admin, { from, to }),
   ]);
+  /* Worked out for everyone in the dates: the cards follow these; the filters narrow the tables (3 Nov). */
+  const everyone = inScope(roster, workedIn(loaded.appointments), {}, loaded.appointments);
   const technicians = inScope(roster, workedIn(loaded.appointments), filters, loaded.appointments);
+  const inFilter = new Set(technicians.map((t) => t.fsmId));
   const input = await loadAvailabilityInput(admin, {
     from,
     to,
-    technicians,
+    technicians: everyone,
     unpaidBreakMinutes: settings.attendance.unpaidBreakMinutes,
     standardDailyHours: settings.attendance.standardDailyHours,
     dataCentreDailyHours: settings.attendance.dataCentreDailyHours,
@@ -887,7 +931,7 @@ export async function buildAttendanceReport(
     }
   }
 
-  const rows: AttendanceRow[] = days.map((d) => {
+  const allRows: AttendanceRow[] = days.map((d) => {
     const tech = roster.get(d.technicianFsmId)!;
     const job = jobs.get(`${d.technicianFsmId}|${d.date}`);
     return {
@@ -902,14 +946,16 @@ export async function buildAttendanceReport(
     };
   });
 
+  const rows = allRows.filter((r) => inFilter.has(r.technicianFsmId));
   const jobDays = new Map<string, number>();
-  for (const r of rows) if (r.jobs > 0) jobDays.set(r.technicianFsmId, (jobDays.get(r.technicianFsmId) ?? 0) + 1);
-  const summary: AttendanceSummaryRow[] = summariseAttendance(days)
+  for (const r of allRows) if (r.jobs > 0) jobDays.set(r.technicianFsmId, (jobDays.get(r.technicianFsmId) ?? 0) + 1);
+  const everyoneSummary: AttendanceSummaryRow[] = summariseAttendance(days)
     .map((s) => {
       const tech = roster.get(s.technicianFsmId)!;
       return { ...s, name: tech.name, teamName: teamNameOf(roster, tech), jobDays: jobDays.get(s.technicianFsmId) ?? 0 };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
+  const summary = everyoneSummary.filter((s) => inFilter.has(s.technicianFsmId));
 
   const needle = (filters.q ?? "").toLowerCase();
   const matches = (r: { name: string; teamName: string }) => !needle || `${r.name} ${r.teamName}`.toLowerCase().includes(needle);
@@ -936,18 +982,18 @@ export async function buildAttendanceReport(
     measured,
     lateToleranceMinutes: settings.attendance.lateArrivalToleranceMinutes,
     overall: {
-      technicians: summary.length,
-      shiftDays: summary.reduce((a, s) => a + s.shiftDays, 0),
-      leaveDays: summary.reduce((a, s) => a + s.leaveDays, 0),
-      jobDays: summary.reduce((a, s) => a + s.jobDays, 0),
-      presentDays: summary.reduce((a, s) => a + s.presentDays, 0),
-      lateDays: summary.reduce((a, s) => a + s.lateDays, 0),
-      earlyDays: summary.reduce((a, s) => a + s.earlyDays, 0),
-      outsideShiftDays: summary.reduce((a, s) => a + s.outsideShiftDays, 0),
-      absentDays: summary.reduce((a, s) => a + s.absentDays, 0),
-      absentRestDayMissingDays: summary.reduce((a, s) => a + (s.restDayMissing ? s.absentDays : 0), 0),
-      workedWithoutCheckInDays: summary.reduce((a, s) => a + s.workedWithoutCheckInDays, 0),
-      noCheckOutDays: summary.reduce((a, s) => a + s.noCheckOutDays, 0),
+      technicians: everyoneSummary.length,
+      shiftDays: everyoneSummary.reduce((a, s) => a + s.shiftDays, 0),
+      leaveDays: everyoneSummary.reduce((a, s) => a + s.leaveDays, 0),
+      jobDays: everyoneSummary.reduce((a, s) => a + s.jobDays, 0),
+      presentDays: everyoneSummary.reduce((a, s) => a + s.presentDays, 0),
+      lateDays: everyoneSummary.reduce((a, s) => a + s.lateDays, 0),
+      earlyDays: everyoneSummary.reduce((a, s) => a + s.earlyDays, 0),
+      outsideShiftDays: everyoneSummary.reduce((a, s) => a + s.outsideShiftDays, 0),
+      absentDays: everyoneSummary.reduce((a, s) => a + s.absentDays, 0),
+      absentRestDayMissingDays: everyoneSummary.reduce((a, s) => a + (s.restDayMissing ? s.absentDays : 0), 0),
+      workedWithoutCheckInDays: everyoneSummary.reduce((a, s) => a + s.workedWithoutCheckInDays, 0),
+      noCheckOutDays: everyoneSummary.reduce((a, s) => a + s.noCheckOutDays, 0),
     },
     days: pageDays,
     summary: pageSummary,

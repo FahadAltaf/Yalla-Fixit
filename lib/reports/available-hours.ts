@@ -63,6 +63,8 @@ export type AttributeHistory = Partial<Record<HistoryField, Array<{ from: string
 export const ASSUMED_WORKING_SHARE = 6 / 7;
 
 /** 29 Oct: a Data Center technician works 12-hour days, and the four hours past 8 are not overtime. */
+export type DailySource = "own" | "data_centre" | "standard";
+
 export const isDataCentre = (serviceType: string | null | undefined) => /^data\s*cent(er|re)$/i.test((serviceType ?? "").trim());
 
 export type LeaveInterval = {
@@ -119,6 +121,8 @@ export type TechnicianAvailability = {
   restDaysAssumed: boolean;
   /** Hours a working day in force on the last day, for display. */
   dailyMinutes: number;
+  /** Where that day came from: the technician's own hours, the Data Center day, or the standard day. */
+  dailySource: DailySource;
   days: DayAvailability[];
   totals: AvailabilityTotals;
 };
@@ -270,6 +274,7 @@ export function computeAvailability(input: AvailabilityInput): TechnicianAvailab
     let shiftAssumed = false;
     let restDaysAssumed = false;
     let dailyMinutesShown = standardDaily;
+    let dailySourceShown: DailySource = "standard";
 
     const days = dates.map<DayAvailability>((date) => {
       /* What was in force that day (rule 7). */
@@ -286,6 +291,7 @@ export function computeAvailability(input: AvailabilityInput): TechnicianAvailab
           : ((valueOn(tech.history, "team_leader_fsm_id", date, tech.teamLeaderId ?? null, input.today) as string | null) ?? null);
       const daily = ownHours !== null ? Math.round(ownHours * 60) : isDataCentre(tech.serviceType) ? dataCentreDaily : standardDaily;
       dailyMinutesShown = daily;
+      dailySourceShown = ownHours !== null ? "own" : isDataCentre(tech.serviceType) ? "data_centre" : "standard";
       if (asShift(shift) === null) shiftAssumed = true;
       const night = asShift(shift) === "night";
       const [start, end] = night
@@ -357,7 +363,7 @@ export function computeAvailability(input: AvailabilityInput): TechnicianAvailab
       };
     });
 
-    return { fsmId: tech.fsmId, shiftAssumed, restDaysAssumed, dailyMinutes: dailyMinutesShown, days, totals };
+    return { fsmId: tech.fsmId, shiftAssumed, restDaysAssumed, dailyMinutes: dailyMinutesShown, dailySource: dailySourceShown, days, totals };
   });
 }
 

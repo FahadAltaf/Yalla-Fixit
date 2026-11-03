@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 
 import { canUseAmc } from "@/components/dashboard/extensions/amc/amc-constants";
+import { REPORTS_ENABLED } from "@/lib/reports/enabled";
 import { hasResourceAction, hasSharedListAction } from "@/lib/role-permissions";
 
 /* Who reaches the Ready-to-Invoice queue: Finance and managers (queue
@@ -154,7 +155,8 @@ export const baseSectionsItems: MenuItem[] = [
     url: "/my-compliance",
     icon: <BadgeCheck className="size-4 text-primary" />,
     isActive: false,
-    canSee: (user: User) => !hasResourceAction(user, ResourceType.REPORTS_COMPLIANCE, ActionType.VIEW),
+    /* Part of the Reports module: hidden while it is switched off (lib/reports/enabled.ts). */
+    canSee: (user: User) => REPORTS_ENABLED && !hasResourceAction(user, ResourceType.REPORTS_COMPLIANCE, ActionType.VIEW),
   },
   {
     title: "Todos",
@@ -222,7 +224,8 @@ export const baseSectionsItems: MenuItem[] = [
     url: "/reports",
     icon: <ChartColumn className="size-4 text-primary" />,
     isActive: false,
-    canSee: canUseReports,
+    /* Hidden while the Reports module is switched off (lib/reports/enabled.ts). */
+    canSee: (user: User) => REPORTS_ENABLED && canUseReports(user),
     items: [
       {
         title: "Quotation summary",
@@ -446,6 +449,7 @@ export const getNavData = (user: User) => {
         {
           title: "Reporting",
           url: "/settings/reporting",
+          /* Shown even while the Reports module is switched off: it holds the Finance digest's recipients and time (3 Nov). */
           resource: ResourceType.REPORTING_SETTINGS,
         },
         /*

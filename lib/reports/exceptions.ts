@@ -162,12 +162,14 @@ export function analyseActualTimes(input: {
   for (const a of input.appointments) {
     const missing = missingOf(a);
     if (!missing) withTimes += 1;
+    const teams = new Set<string | null>();
     for (const id of a.technicianIds) {
       bump(tech, id, nameOf(id), !missing);
       /* D-20: a team is a team leader and the technicians who report to them. */
-      const leader = input.technicians.get(id)?.teamLeaderId ?? null;
-      bump(team, leader ?? "none", leader ? `${nameOf(leader)}'s team` : "No team", !missing);
+      teams.add(input.technicians.get(id)?.teamLeaderId ?? null);
     }
+    /* A team counts an appointment once, however many of its technicians were on it (3 Nov). */
+    for (const leader of teams) bump(team, leader ?? "none", leader ? `${nameOf(leader)}'s team` : "No team", !missing);
     if (missing) {
       rows.push({
         ...a,

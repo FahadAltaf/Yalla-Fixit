@@ -262,7 +262,8 @@ export async function loadQuotationRecords(admin: SupabaseClient): Promise<Quota
       id,
       number: q.number,
       status: q.status,
-      value: q.subTotal ?? 0,
+      /* With VAT (3 Nov): FSM's grand total; the before-VAT total only when FSM gives none. */
+      value: q.grandTotal ?? q.subTotal ?? 0,
       ownerName: q.ownerName,
       ownerEmail: q.ownerEmail,
       clientName: q.companyName ?? q.contactName,

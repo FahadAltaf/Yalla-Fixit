@@ -124,6 +124,6 @@ test("missing actual times, and data completeness per technician and team", () =
   );
   assert.deepEqual(
     result.byTeam.map((r) => [r.name, r.completed, r.completenessPercent]),
-    [["Lead's team", 5, 60]],
+    [["Lead's team", 4, 50]],
   );
 });

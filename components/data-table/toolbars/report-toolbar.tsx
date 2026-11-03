@@ -24,6 +24,8 @@ export type ReportSelect = {
   options: ReadonlyArray<{ value: string; label: string }>;
   /** Without an "everything" entry (a filter that always has a value). */
   required?: boolean;
+  /** A required filter's own default (its first option unless said): set to anything else, it counts as in use. */
+  defaultValue?: string;
   width?: string;
 };
 
@@ -173,7 +175,11 @@ export function ReportFiltersButton({
   clearable: string[];
 }) {
   const set = (patch: Record<string, string>) => onFiltersChange({ ...filters, ...patch });
-  const inUse = clearable.filter((key) => Boolean(filters[key])).length;
+  /* What the Filters button counts (3 Nov): the clearable filters set, and a required one moved off its default. */
+  const requiredInUse = selects.filter(
+    (s) => s.required && !clearable.includes(s.key) && filters[s.key] && filters[s.key] !== (s.defaultValue ?? s.options[0]?.value),
+  ).length;
+  const inUse = clearable.filter((key) => Boolean(filters[key])).length + requiredInUse;
   const anyFilter = inUse > 0;
   const [fromKey, toKey] = dateKeys;
   /* "All owners" reads as "Owner" above its dropdown in the Filters box. */
@@ -246,7 +252,15 @@ export function ReportFiltersButton({
             variant="ghost"
             size="sm"
             className="justify-self-start"
-            onClick={() => set(Object.fromEntries(clearable.map((key) => [key, ""])))}
+            onClick={() =>
+              set({
+                ...Object.fromEntries(clearable.map((key) => [key, ""])),
+                /* A required filter goes back to its default. */
+                ...Object.fromEntries(
+                  selects.filter((s) => s.required && !clearable.includes(s.key)).map((s) => [s.key, s.defaultValue ?? s.options[0]?.value ?? ""]),
+                ),
+              })
+            }
           >
             <XIcon className="size-4" />
             Clear filters

@@ -25,7 +25,6 @@ import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useDebounce } from "@/hooks/use-debounce";
-import { fsmRecordLink } from "@/lib/fsm-links";
 import { CHARGEABILITY_LABELS, type TeamUtilization } from "@/lib/reports/utilization";
 import type { UtilizationReport } from "@/lib/server/reports/planning";
 import { exportFilename, exportTable, type ExportFormat } from "@/lib/snagging/export-table";
@@ -310,10 +309,6 @@ export function UtilizationPage() {
             columns={UTILIZATION_APPOINTMENT_COLUMNS}
             toolbar={toolbar}
             {...tablePaging}
-            handleRowClick={(row) => {
-              const link = fsmRecordLink("Service_Appointments", row.id);
-              if (link) window.open(link, "_blank", "noopener,noreferrer");
-            }}
             emptyState={
               <EmptyState
                 icon={<Wrench />}

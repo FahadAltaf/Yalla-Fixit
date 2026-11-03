@@ -19,8 +19,12 @@ const toText = (date: Date) => format(date, "yyyy-MM-dd");
 
 /**
  * shadcn's date range picker (27 Oct): one button with the dates, opening a
- * two-month calendar. The range is applied once both ends are picked; a click
- * after a whole range starts a new one.
+ * two-month calendar. The range is applied once both ends are picked.
+ *
+ * A click on a whole range adjusts it rather than discarding both dates
+ * (3 Nov): before the start, it is the new start; after the end, or inside
+ * the range, it is the new end. Each adjustment applies at once and the
+ * calendar stays open for the next.
  */
 export function DateRangePicker({
   from,
@@ -72,15 +76,29 @@ export function DateRangePicker({
           defaultMonth={shown?.from ?? (max ? toDate(max) : undefined)}
           selected={shown}
           onSelect={(range, day) => {
-            /* A click after a whole range starts a new one, rather than stretching the old. */
-            const next: DateRange = draft?.from && !draft.to ? (range ?? { from: day }) : { from: day, to: undefined };
-            if (next.from && next.to) {
-              setDraft(undefined);
-              setOpen(false);
-              onChange(toText(next.from), toText(next.to));
-            } else {
-              setDraft(next);
+            /* Picking the second end of a new range: apply it and close. */
+            if (draft?.from && !draft.to) {
+              const next: DateRange = range ?? { from: day };
+              if (next.from && next.to) {
+                setDraft(undefined);
+                setOpen(false);
+                onChange(toText(next.from), toText(next.to));
+              } else {
+                setDraft(next);
+              }
+              return;
             }
+            /* A whole range on show: the click moves one of its ends, and applies at once. */
+            if (shown?.from && shown.to) {
+              const start = shown.from;
+              const end = shown.to;
+              const [nextFrom, nextTo] = day < start ? [day, end] : [start, day];
+              setDraft({ from: nextFrom, to: nextTo });
+              onChange(toText(nextFrom), toText(nextTo));
+              return;
+            }
+            /* Nothing chosen yet: this is the start. */
+            setDraft({ from: day, to: undefined });
           }}
           disabled={[...(min ? [{ before: toDate(min) }] : []), ...(max ? [{ after: toDate(max) }] : [])]}
         />

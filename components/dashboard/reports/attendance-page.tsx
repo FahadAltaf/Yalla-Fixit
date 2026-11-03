@@ -258,7 +258,7 @@ export function AttendancePage() {
               </li>
               <li>
                 {plural(data.notes.leaveRecords, "leave record")} and {plural(data.notes.holidays, "public holiday")} in the period.
-                {data.notes.noRestDays ? ` ${plural(data.notes.noRestDays, "technician")} with no rest days set: every day counts as a working day until their rest day is set in Scheduling.` : ""}
+                {data.notes.noRestDays ? ` ${plural(data.notes.noRestDays, "technician")} with no fixed rest days set: every day counts as a working day until they are set in Workforce → People → ⋮ → Working hours.` : ""}
               </li>
             </ul>
           </AlertDescription>

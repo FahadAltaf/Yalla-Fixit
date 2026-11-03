@@ -80,8 +80,14 @@ export function ReportDateRange({
   );
 }
 
-export function useReportFilters<F extends ReportFilters>(report: ReportKey, defaults: F, options: { restoreLastUsed?: boolean } = {}) {
+export function useReportFilters<F extends ReportFilters>(
+  report: ReportKey,
+  defaults: F,
+  /** notRestored: keys that open on their default, whatever was used last (3 Nov). Keep the array stable. */
+  options: { restoreLastUsed?: boolean; notRestored?: readonly string[] } = {},
+) {
   const restoreLastUsed = options.restoreLastUsed ?? true;
+  const notRestored = options.notRestored;
   const searchParams = useSearchParams();
   const fromLink = useMemo(() => {
     const picked: Partial<F> = {};
@@ -118,7 +124,7 @@ export function useReportFilters<F extends ReportFilters>(report: ReportKey, def
         /* The person's last selection, except its dates: a report opens on the last 30 days (26 Oct). */
         if (restoreLastUsed && !fromLink && response.lastUsed) {
           const last = known(response.lastUsed) as Record<string, string>;
-          for (const key of DATE_KEYS) delete last[key];
+          for (const key of [...DATE_KEYS, ...(notRestored ?? [])]) delete last[key];
           setFiltersState({ ...defaults, ...(last as Partial<F>) });
         }
       } catch {
@@ -130,7 +136,7 @@ export function useReportFilters<F extends ReportFilters>(report: ReportKey, def
     return () => {
       cancelled = true;
     };
-  }, [report, defaults, fromLink, known, restoreLastUsed]);
+  }, [report, defaults, fromLink, known, restoreLastUsed, notRestored]);
 
   /* Remember the selection, a moment after the last change. */
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
