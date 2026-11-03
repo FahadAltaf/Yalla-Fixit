@@ -27,6 +27,15 @@
         "cd /d ..\\_wt\\finance-reporting && set NEXT_DIST_DIR=.next-p6dev&& npm run dev -- -p 3034"
       ],
       "port": 3034
+    },
+    {
+      "name": "portal-amc",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "set NEXT_DIST_DIR=.next-amcdev&& npm run dev -- -p 3035"
+      ],
+      "port": 3035
     }
   ]
 }

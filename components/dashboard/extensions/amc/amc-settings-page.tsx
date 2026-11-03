@@ -398,6 +398,8 @@ export function AmcSettingsPage() {
   const [loadFailed, setLoadFailed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [history, setHistory] = useState<AmcSettingsHistoryItem[]>([]);
+  // Every change there is, for the tab count and the version numbers (AMC-097).
+  const [historyTotal, setHistoryTotal] = useState(0);
   const [amcUsers, setAmcUsers] = useState<AmcUser[]>([]);
   // The view is kept in the address (?view=clauses), so a reload stays on it.
   const pathname = usePathname();
@@ -425,6 +427,7 @@ export function AmcSettingsPage() {
       setSettings(response.settings);
       setSaved(response.settings);
       setHistory(response.history ?? []);
+      setHistoryTotal(response.historyTotal ?? response.history?.length ?? 0);
       setAmcUsers(response.amcUsers ?? []);
     } catch (error) {
       console.error(error);
@@ -667,9 +670,11 @@ export function AmcSettingsPage() {
       setSettings(response.settings);
       setSaved(response.settings);
       if (response.history) setHistory(response.history);
+      if (response.historyTotal !== undefined) setHistoryTotal(response.historyTotal);
+      const changed = response.changes?.length || response.changedKeys?.length || 0;
       toast.success(
-        response.changedKeys?.length
-          ? `Saved. ${response.changedKeys.length} field${response.changedKeys.length === 1 ? "" : "s"} updated. New proposals will use this text.`
+        changed
+          ? `Saved. ${changed} change${changed === 1 ? "" : "s"} recorded in the change history. New proposals will use this text.`
           : "Saved. There was nothing to change.",
       );
       return true;
@@ -788,7 +793,7 @@ export function AmcSettingsPage() {
           },
           { value: "scopes", label: "Scope of work", count: settings.services.length },
           { value: "approvers", label: "Approvers", count: settings.approval.approvers.length },
-          { value: "history", label: "Change history", count: history.length },
+          { value: "history", label: "Change history", count: historyTotal },
         ]}
       />
 
@@ -1056,7 +1061,7 @@ export function AmcSettingsPage() {
         />
       ) : null}
 
-      {view === "history" ? <SettingsHistory history={history} /> : null}
+      {view === "history" ? <SettingsHistory firstPage={history} total={historyTotal} /> : null}
     </div>
   );
 }
@@ -1688,6 +1693,10 @@ function TextLibrary({
 */
 function describeKey(path: string): string {
   const [group, key] = path.split(".");
+  // The parts of the settings that are saved whole (UAT AMC-097 showed these raw).
+  if (group === "clauseList") return "Contract clauses";
+  if (group === "services") return "Services";
+  if (group === "accountManagers") return "Account managers";
   if (group === "clauses") {
     if (!key) return "Contract clauses";
     return CLAUSE_FIELDS.find((field) => field.key === key)?.label ?? `Clause: ${key}`;
@@ -1713,7 +1722,18 @@ function describeKey(path: string): string {
   return path;
 }
 
-const HISTORY_COLUMNS: ColumnDef<AmcSettingsHistoryItem>[] = [
+/* A version's row: its number (oldest is 1) and the change itself. */
+type HistoryRow = AmcSettingsHistoryItem & { version: number };
+
+const HISTORY_COLUMNS: ColumnDef<HistoryRow>[] = [
+  {
+    id: "version",
+    header: "Version",
+    cell: ({ row }) => (
+      <span className="font-medium tabular-nums">v{row.original.version}</span>
+    ),
+    enableSorting: false,
+  },
   {
     id: "actor",
     header: "Changed by",
@@ -1724,13 +1744,17 @@ const HISTORY_COLUMNS: ColumnDef<AmcSettingsHistoryItem>[] = [
   },
   {
     id: "when",
-    header: "When",
+    header: "Date and time",
     cell: ({ row }) => (
       <IconText icon={Clock} muted>
-        <time dateTime={row.original.createdAt}>
+        <time dateTime={row.original.createdAt} className="whitespace-nowrap">
           {new Date(row.original.createdAt).toLocaleString("en-GB", {
-            dateStyle: "medium",
-            timeStyle: "short",
+            day: "numeric",
+            month: "short",
+            year: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+            timeZone: "Asia/Dubai",
           })}
         </time>
       </IconText>
@@ -1740,39 +1764,98 @@ const HISTORY_COLUMNS: ColumnDef<AmcSettingsHistoryItem>[] = [
   {
     id: "changed",
     header: "What changed",
-    cell: ({ row }) => (
-      <div className="flex max-w-xl flex-wrap gap-1">
-        {row.original.changedKeys.map((key) => (
-          <Badge key={key} variant="secondary" className="border-0 font-normal">
-            {describeKey(key)}
-          </Badge>
-        ))}
-      </div>
-    ),
+    cell: ({ row }) =>
+      /*
+        In words (UAT AMC-097): "Clause wording edited: Materials". A change
+        saved before these were recorded has only the part of the settings
+        it touched, which is named the way the page names it.
+      */
+      row.original.changes.length ? (
+        <ul className="max-w-xl list-disc space-y-0.5 ps-4 text-sm">
+          {row.original.changes.map((change, index) => (
+            <li key={`${index}-${change}`}>{change}</li>
+          ))}
+        </ul>
+      ) : (
+        <div className="flex max-w-xl flex-wrap gap-1">
+          {/* Once each: "clauses" and "clauseList" are both the contract clauses. */}
+          {[...new Set(row.original.changedKeys.map(describeKey))].map((label) => (
+            <Badge key={label} variant="secondary" className="border-0 font-normal">
+              {label}
+            </Badge>
+          ))}
+        </div>
+      ),
     enableSorting: false,
   },
 ];
 
+const HISTORY_PAGE_SIZE = 20;
+
 /*
-  FR6.5 — who changed what, and when, in the house table. The newest ten;
-  the full trail is in amc_audit_events, which is append-only.
+  FR6.5 — every change to AMC Settings, newest first, like a document's
+  version history (UAT AMC-097): who made it, the date and time, and what
+  changed. It used to stop at the last ten. The first page comes with the
+  settings; the rest is read a page at a time.
 */
-function SettingsHistory({ history }: { history: AmcSettingsHistoryItem[] }) {
+function SettingsHistory({
+  firstPage,
+  total,
+}: {
+  firstPage: AmcSettingsHistoryItem[];
+  total: number;
+}) {
+  const [page, setPage] = useState(0);
+  const [rows, setRows] = useState<AmcSettingsHistoryItem[]>(firstPage);
+  const [count, setCount] = useState(total);
+  const [loadingPage, setLoadingPage] = useState(false);
+
+  // A save refreshes the first page and the count.
+  useEffect(() => {
+    setCount(total);
+    if (page === 0) setRows(firstPage);
+  }, [firstPage, total, page]);
+
+  const goTo = async (next: number) => {
+    setPage(next);
+    if (next === 0) {
+      setRows(firstPage);
+      return;
+    }
+    setLoadingPage(true);
+    try {
+      const response = await amcSettingsService.getHistory(next, HISTORY_PAGE_SIZE);
+      setRows(response.items);
+      setCount(response.total);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Could not load the change history");
+    } finally {
+      setLoadingPage(false);
+    }
+  };
+
+  // Newest first, numbered from the oldest, which is version 1.
+  const numbered: HistoryRow[] = rows.map((row, index) => ({
+    ...row,
+    version: count - (page * HISTORY_PAGE_SIZE + index),
+  }));
+
   return (
     <SectionCard
       icon={<History />}
       title="Change history"
-      description="The last ten changes: who made them, what they changed, and when."
+      description={`Every change to these settings, newest first: who made it, when, and what changed. ${count} ${count === 1 ? "version" : "versions"} in all.`}
       bodyClassName="border-t"
     >
       <DataTable
         columns={HISTORY_COLUMNS}
-        data={history}
-        loading={false}
-        rowCount={history.length}
-        pageSize={Math.max(history.length, 1)}
-        currentPage={0}
-        onPageChange={() => undefined}
+        data={numbered}
+        loading={loadingPage}
+        rowCount={count}
+        pageSize={HISTORY_PAGE_SIZE}
+        currentPage={page}
+        isPagination={count > HISTORY_PAGE_SIZE}
+        onPageChange={(next) => void goTo(next)}
         onPageSizeChange={() => undefined}
         onGlobalFilterChange={() => undefined}
         emptyState={

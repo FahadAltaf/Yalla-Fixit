@@ -95,39 +95,51 @@ export type AmcSettingsHistoryEntry = {
   id: number;
   actorLabel: string | null;
   changedKeys: string[];
+  /* What changed, in words (AMC-097). Empty on changes saved before it was recorded. */
+  changes: string[];
   createdAt: string;
 };
 
 /**
- * FR6.5 — the latest settings changes, for the AMC Settings page. Recording
- * who changed what is only half of it; an admin also has to be able to see
- * it without going to the database.
+ * FR6.5 — the settings changes, newest first, a page at a time, for the AMC
+ * Settings page.
+ *
+ * Every change, like a document's version history: it used to stop at the
+ * last ten (UAT AMC-097). `total` is how many there are in all, so the
+ * page can number each version and page through them.
  */
 export async function listAmcSettingsHistory(
   admin: SupabaseClient,
-  limit = 10,
-): Promise<AmcSettingsHistoryEntry[]> {
-  const { data, error } = await admin
+  options: { page?: number; pageSize?: number } = {},
+): Promise<{ items: AmcSettingsHistoryEntry[]; total: number }> {
+  const pageSize = Math.min(100, Math.max(1, options.pageSize ?? 20));
+  const page = Math.max(0, options.page ?? 0);
+  const { data, error, count } = await admin
     .from(AUDIT_TABLE)
-    .select("id, actor_label, payload, created_at")
+    .select("id, actor_label, payload, created_at", { count: "exact" })
     .eq("entity_type", "settings")
     .order("created_at", { ascending: false })
-    .limit(limit);
+    .order("id", { ascending: false })
+    .range(page * pageSize, page * pageSize + pageSize - 1);
 
   /* History is supporting detail. If it cannot be read, the settings
      themselves still load. */
   if (error) {
     console.error("[amc:audit] history read failed:", error.message);
-    return [];
+    return { items: [], total: 0 };
   }
 
-  return (data ?? []).map((row) => {
-    const keys = (row.payload as { changedKeys?: unknown } | null)?.changedKeys;
+  const items = (data ?? []).map((row) => {
+    const payload = row.payload as { changedKeys?: unknown; changes?: unknown } | null;
+    const list = (value: unknown) => (Array.isArray(value) ? value.map(String) : []);
     return {
       id: row.id as number,
       actorLabel: (row.actor_label as string | null) ?? null,
-      changedKeys: Array.isArray(keys) ? keys.map(String) : [],
+      // knownRoles is bookkeeping for new standard clauses, never an edit.
+      changedKeys: list(payload?.changedKeys).filter((key) => key !== "knownRoles"),
+      changes: list(payload?.changes),
       createdAt: row.created_at as string,
     };
   });
+  return { items, total: count ?? items.length };
 }

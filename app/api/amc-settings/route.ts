@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 import { amcSettingsOverridesSchema } from "@/components/dashboard/extensions/amc/amc-settings";
+import { describeSettingsChanges } from "@/components/dashboard/extensions/amc/amc-settings-changes";
 import { isAdminUser } from "@/lib/role-permissions";
 import {
   diffSettingsKeys,
@@ -121,7 +122,7 @@ export async function GET() {
       readAmcSettings(admin),
       readAmcSettingsOverrides(admin),
       /* FR6.5 — who changed what, and when. Admins only, like the page. */
-      gate.isAdmin ? listAmcSettingsHistory(admin) : Promise.resolve([]),
+      gate.isAdmin ? listAmcSettingsHistory(admin) : Promise.resolve({ items: [], total: 0 }),
     ]);
     /* FR5.3 — the people an admin can choose as approvers. */
     const amcUsers = gate.isAdmin
@@ -131,8 +132,8 @@ export async function GET() {
        have been customised. The team only needs the resolved text. */
     return NextResponse.json(
       gate.isAdmin
-        ? { settings, overrides, history, amcUsers }
-        : { settings, overrides: {}, history: [], amcUsers: [] },
+        ? { settings, overrides, history: history.items, historyTotal: history.total, amcUsers }
+        : { settings, overrides: {}, history: [], historyTotal: 0, amcUsers: [] },
     );
   } catch (error) {
     console.error("AMC settings GET error:", error);
@@ -155,30 +156,42 @@ export async function PUT(req: NextRequest) {
 
   try {
     const admin = await createAdminServerClient();
-    const before = await readAmcSettingsOverrides(admin);
+    const [before, beforeSettings] = await Promise.all([
+      readAmcSettingsOverrides(admin),
+      readAmcSettings(admin),
+    ]);
     const saved = await writeAmcSettingsOverrides(admin, parsed.data, profile.id);
+    const settings = await readAmcSettings(admin);
 
-    /* FR6.5 — record who changed what, and when. Key paths rather than
-       the text itself; see diffSettingsKeys. */
+    /*
+      FR6.5 — record who changed what, and when: the key paths, and (UAT
+      AMC-097) what changed in words, read from the settings before and
+      after. knownRoles is bookkeeping for new standard clauses, not an edit.
+    */
     const changedKeys = diffSettingsKeys(
       before as Record<string, unknown>,
       saved as Record<string, unknown>,
-    );
-    if (changedKeys.length > 0) {
+    ).filter((key) => key !== "knownRoles");
+    const changes = describeSettingsChanges(beforeSettings, settings);
+    if (changedKeys.length > 0 || changes.length > 0) {
       await recordAmcAudit(admin, {
         entityType: "settings",
         eventType: "settings_updated",
         actorId: profile.id,
         actorLabel: profile.full_name ?? profile.email ?? null,
-        payload: { changedKeys },
+        payload: { changedKeys, changes },
       });
     }
 
-    const [settings, history] = await Promise.all([
-      readAmcSettings(admin),
-      listAmcSettingsHistory(admin),
-    ]);
-    return NextResponse.json({ settings, overrides: saved, changedKeys, history });
+    const history = await listAmcSettingsHistory(admin);
+    return NextResponse.json({
+      settings,
+      overrides: saved,
+      changedKeys,
+      changes,
+      history: history.items,
+      historyTotal: history.total,
+    });
   } catch (error) {
     console.error("AMC settings PUT error:", error);
     return NextResponse.json(

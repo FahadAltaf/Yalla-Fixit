@@ -1,12 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
-import { ArrowLeft, Check, FileText, Loader2, ScrollText, SendHorizonal } from "lucide-react";
+import { Check, FileText, Loader2, ScrollText, SendHorizonal } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { PageHeading } from "@/components/dashboard/shared/kaizen";
@@ -22,7 +21,7 @@ import {
   submissionToFormData,
 } from "./amc-submission-mapper";
 import { buildAmcPdf } from "./amc-document-utils";
-import { SubmissionStatusBanner } from "./submission-status-banner";
+import { EditingStatus, SubmissionStatusBanner } from "./submission-status-banner";
 import { AmcPreviewDialog } from "./amc-preview-dialog";
 import { computeAmcData, syncServiceRowsForUnitType } from "./amc-pricing";
 import {
@@ -643,12 +642,16 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
                 Saving draft…
               </span>
             ) : null}
-            <Button variant="outline" asChild>
-              <Link href="/extensions/amc">
-                <ArrowLeft className="size-4" />
-                All proposals
-              </Link>
-            </Button>
+            {/*
+              Which proposal is open, and its status, where the All proposals
+              button was. The breadcrumb above already leads back to the list.
+            */}
+            {submissionMeta ? (
+              <EditingStatus
+                status={submissionMeta.status}
+                proposalNumber={watchedValues.proposalNumber}
+              />
+            ) : null}
           </div>
         }
       />
