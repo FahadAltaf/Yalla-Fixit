@@ -26,9 +26,13 @@ database (decision of 20 Oct), with the pre-check first and the post-check after
 | 18 | 20261103110000 | finance_fsm_completion_log.sql (`line_events` + `fsm_completed` / `fsm_not_completed`; `finance.record_fsm_completion`: FSM's answer to a completion kept on the work order's history) | After row 13 | [20261103110000.md](migrations/20261103110000.md) | 2 Nov 2026 | User | | ✓ (`record_fsm_completion` exposed to the service role; no FSM events yet) |
 | 19 | 20261104100000 | finance_not_invoiceable_both_sides.sql (`finance.mark_not_invoiceable`, `finance.mark_invoiceable`: either side marks a work order not invoiceable at once, or invoiceable again, the other side told; `wo_exclusions` + who marked / undid it; `line_events` + `exclusion_reverted`; `reply_query_thread` replaced: reply or close, either side) | After row 17 | [20261104100000.md](migrations/20261104100000.md) | 2 Nov 2026 | User | | ✓ (both functions exposed; new `wo_exclusions` columns read; reply refuses `resolved` ("reply or close"); mark refuses without a reason; nothing written; anon refused) — refusals on a stale page hung 125 s: fixed by row 20 |
 | 20 | 20261104110000 | finance_refusals_no_retry.sql (`wo_apply_action`, `reply_query_thread`, `mark_not_invoiceable`, `mark_invoiceable`: a refusal returns at once, SQLSTATE 23514 not 40001, which the API retried until the gateway timed out) | After row 19 | [20261104110000.md](migrations/20261104110000.md) | | | | |
+| 21 | 20261105100000 | close_anon_table_access.sql (the anon key loses `roles`, `role_access`, `user_profile`: signed-in users read only; and `schedule_audit_events`, `todos`, `todo_attachments`, `todo_comment_mentions`, `password_resets` entirely. Sami's report of 2 Nov: permissions readable and writable without signing in) | **After the live portal runs main at 07a3e12 or later** | [20261105100000.md](migrations/20261105100000.md) | 3 Nov 2026 | User | | ✓ (anon key refused, 42501, on all eight tables; none left in its GraphQL schema; service role still reads profiles with roles, the audit log and to-dos) |
 
 Ported from `amc-hardening` in P0 (already in production per the 6 Oct log, nothing to apply):
-`20261005150000`, `20261006161000`, `20261006163000`.
+`20261005150000`, `20261006161000`, `20261006163000`. **Corrected 3 Nov:** the anon key still read
+`schedule_audit_events` and `todos` on production, so the first two are not in effect there; row 21 applies their
+table parts again.
 
-**Held until this branch deploys (B-02):** `20261006160000_role_tables_server_only`. Applied earlier, the live
+**Held until this branch deploys (B-02):** `20261006160000_role_tables_server_only`. Superseded by row 21, which
+includes it: apply row 21, not this file. Applied earlier, the live
 Users, Roles and Permissions screens on `main` stop saving.
