@@ -5,13 +5,16 @@ import { ClipboardCheck, Gauge, Users, Wrench } from "lucide-react";
 import { toast } from "sonner";
 
 import { aed } from "@/components/dashboard/finance/shared";
-import { PageHeading, PillTabs, SectionCard, StatCard, StatCardGrid } from "@/components/dashboard/shared/kaizen";
+import { PageHeading, PillTabs, StatCard, StatCardGrid } from "@/components/dashboard/shared/kaizen";
 import { ErrorState, StatGridSkeleton } from "@/components/dashboard/shared/kaizen-states";
 import { DataTable } from "@/components/data-table";
 import {
+  COMPLETENESS_EXPORT_COLUMNS,
   MISSING_ACTUALS_COLUMNS,
   MISSING_ACTUALS_EXPORT_COLUMNS,
   UNFLAGGED_EXPORT_COLUMNS,
+  completenessExportRow,
+  getCompletenessColumns,
   getUnflaggedColumns,
   missingActualsExportRow,
   unflaggedExportRow,
@@ -19,10 +22,7 @@ import {
 import { ReportToolbar, type ReportSelect } from "@/components/data-table/toolbars/report-toolbar";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useDebounce } from "@/hooks/use-debounce";
-import { fsmRecordLink } from "@/lib/fsm-links";
-import type { CompletenessRow } from "@/lib/reports/exceptions";
 import type { ActualTimesReport, UnflaggedReport } from "@/lib/server/reports/reports";
 import { exportFilename, exportTable, type ExportFormat } from "@/lib/snagging/export-table";
 import { todayInZone } from "@/lib/scheduling/org-time";
@@ -43,16 +43,21 @@ import { ReportDateRange, SavedFiltersMenu, lastThirtyDays, plural, useReportFil
  */
 
 type View = "unflagged" | "actual_times";
+/* Missing actual times, by team, by technician or the appointments themselves (3 Nov, as on Utilization). */
+type By = "team" | "technician" | "appointments";
 type Can = { can: { view: boolean; export: boolean } };
 
-const DEFAULTS = { view: "unflagged", from: "", to: "", client: "", coordinator: "", technician: "", team: "", overdue: "", q: "" };
+const DEFAULTS = { view: "unflagged", by: "team", from: "", to: "", client: "", coordinator: "", technician: "", team: "", overdue: "", q: "" };
 
 export function ExceptionsPage() {
   const { filters, setFilters, ready, saved, saveAs, remove, apply } = useReportFilters("exceptions", DEFAULTS);
   const view: View = filters.view === "actual_times" ? "actual_times" : "unflagged";
+  const by: By = filters.by === "technician" || filters.by === "appointments" ? filters.by : "team";
   const debouncedQ = useDebounce(filters.q, 400);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(25);
+  /* The team and technician tables arrive whole, so they page here without asking the server again. */
+  const [listPage, setListPage] = useState(0);
   const [data, setData] = useState<((UnflaggedReport | ActualTimesReport) & Can) | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -92,6 +97,7 @@ export function ExceptionsPage() {
   const change = (next: Record<string, string>) => {
     setFilters({ ...DEFAULTS, ...next });
     setPage(0);
+    setListPage(0);
   };
   const switchView = (next: View) => {
     /* Each tab has its own date meaning, so the range starts fresh. */
@@ -103,6 +109,18 @@ export function ExceptionsPage() {
     setExporting(true);
     try {
       const all = await reportsService.exceptions(query, { exportFormat: format });
+      if (all.view === "actual_times" && by !== "appointments") {
+        const list = by === "team" ? all.byTeam : all.byTechnician;
+        await exportTable({
+          columns: COMPLETENESS_EXPORT_COLUMNS,
+          rows: list.map(completenessExportRow),
+          filename: exportFilename([by === "team" ? "actual-times-by-team" : "actual-times-by-technician", all.from, all.to]),
+          format,
+          sheetName: by === "team" ? "By team" : "By technician",
+        });
+        toast.success(`Exported ${plural(list.length, "row")}`);
+        return;
+      }
       if (all.view === "unflagged") {
         await exportTable({
           columns: UNFLAGGED_EXPORT_COLUMNS,
@@ -131,6 +149,8 @@ export function ExceptionsPage() {
   const unflagged = data?.view === "unflagged" ? data : null;
   const actual = data?.view === "actual_times" ? data : null;
   const unflaggedColumns = useMemo(() => getUnflaggedColumns(unflagged?.afterDays ?? 3), [unflagged?.afterDays]);
+  const completenessColumns = useMemo(() => getCompletenessColumns(by === "technician" ? "technician" : "team"), [by]);
+  const completenessRows = actual ? (by === "team" ? actual.byTeam : actual.byTechnician) : [];
 
   const selects: ReportSelect[] =
     view === "unflagged"
@@ -150,19 +170,29 @@ export function ExceptionsPage() {
 
   const toolbar = (
     <ReportToolbar
-      key={view}
+      key={view === "unflagged" ? view : `${view}-${by}`}
       idPrefix={`exceptions-${view}`}
-      searchPlaceholder={view === "unflagged" ? "Search by work order, quotation or client…" : "Search by appointment, work order, client or technician…"}
+      searchPlaceholder={
+        view === "unflagged"
+          ? "Search by work order, quotation or client…"
+          : by === "appointments"
+            ? "Search by appointment, work order, client or technician…"
+            : by === "team"
+              ? "Search by team…"
+              : "Search by technician…"
+      }
       initialSearch={filters.q}
       onSearchChange={(q) => {
         setFilters({ ...filters, q });
         setPage(0);
+        setListPage(0);
       }}
       loading={loading}
       pageSize={pageSize}
       onPageSizeChange={(size) => {
         setPageSize(size);
         setPage(0);
+        setListPage(0);
       }}
       onRefresh={() => void load()}
       filters={filters}
@@ -204,7 +234,6 @@ export function ExceptionsPage() {
           <div className="flex flex-wrap items-center gap-2">
             <HowItWorks content={exceptionsHowItWorks(data && "afterDays" in data ? { afterDays: data.afterDays } : undefined)} />
             <ReportDateRange
-              label={view === "unflagged" ? "Completed" : "Scheduled"}
               from={filters.from || (data && "from" in data ? data.from : "") || lastThirtyDays().from}
               to={filters.to || (data && "to" in data ? data.to : "") || lastThirtyDays().to}
               onChange={(from, to) => change({ ...filters, from, to })}
@@ -252,10 +281,6 @@ export function ExceptionsPage() {
               columns={unflaggedColumns}
               toolbar={toolbar}
               {...tablePaging}
-              handleRowClick={(row) => {
-                const link = fsmRecordLink("Work_Orders", row.workOrderId);
-                if (link) window.open(link, "_blank", "noopener,noreferrer");
-              }}
               emptyState={
                 <EmptyState
                   icon={<ClipboardCheck />}
@@ -275,74 +300,69 @@ export function ExceptionsPage() {
                 value={actual.overall.completenessPercent === null ? "—" : `${actual.overall.completenessPercent}%`}
                 headline={`${actual.overall.withActualTimes} of ${plural(actual.overall.completed, "completed appointment")} have actual times`}
               />
-              <StatCard label="Missing actual times" value={actual.total} headline={`${actual.from} to ${actual.to}`} />
+              <StatCard label="Missing actual times" value={actual.cards.missing} headline={`${actual.from} to ${actual.to}`} />
               <StatCard
                 label="Least complete technician"
-                value={actual.byTechnician[0]?.completenessPercent === undefined ? "—" : `${actual.byTechnician[0].completenessPercent}%`}
-                headline={actual.byTechnician[0]?.name ?? "No completed appointments"}
+                value={actual.cards.leastComplete?.completenessPercent === undefined ? "—" : `${actual.cards.leastComplete.completenessPercent}%`}
+                headline={actual.cards.leastComplete?.name ?? "No completed appointments"}
               />
             </StatCardGrid>
           ) : (
             <StatGridSkeleton count={3} columns={3} />
           )}
 
-          {actual && actual.overall.completed > 0 ? (
-            <div className="grid gap-6 lg:grid-cols-2">
-              <CompletenessTable icon={<Users />} title="By team" rows={actual.byTeam} />
-              <CompletenessTable icon={<Gauge />} title="By technician (most missing first)" rows={actual.byTechnician.slice(0, 12)} />
-            </div>
-          ) : null}
+          {/* The views sit right above the table they switch, as on Utilization. */}
+          <PillTabs<By>
+            value={by}
+            onChange={(next) => change({ ...filters, by: next, q: "" })}
+            tabs={[
+              { value: "team", label: "By team" },
+              { value: "technician", label: "By technician" },
+              { value: "appointments", label: "Appointments" },
+            ]}
+          />
 
-          <Card className="py-0">
-            <DataTable
-              data={actual?.rows ?? []}
-              columns={MISSING_ACTUALS_COLUMNS}
-              toolbar={toolbar}
-              {...tablePaging}
-              handleRowClick={(row) => {
-                const link = fsmRecordLink("Service_Appointments", row.id);
-                if (link) window.open(link, "_blank", "noopener,noreferrer");
-              }}
-              emptyState={
-                <EmptyState
-                  icon={<Wrench />}
-                  title="No appointments missing actual times"
-                  description="Every completed appointment in this period has an actual start and end."
-                />
-              }
-            />
-          </Card>
+          {by === "appointments" ? (
+            <Card className="py-0">
+              <DataTable
+                data={actual?.rows ?? []}
+                columns={MISSING_ACTUALS_COLUMNS}
+                toolbar={toolbar}
+                {...tablePaging}
+                emptyState={
+                  <EmptyState
+                    icon={<Wrench />}
+                    title="No appointments missing actual times"
+                    description="Every completed appointment in this period has an actual start and end."
+                  />
+                }
+              />
+            </Card>
+          ) : (
+            /* Most missing first, as the server sorts them. A team opens its technicians. */
+            <Card className="py-0">
+              <DataTable
+                data={completenessRows.slice(listPage * pageSize, (listPage + 1) * pageSize)}
+                columns={completenessColumns}
+                toolbar={toolbar}
+                {...tablePaging}
+                currentPage={listPage}
+                onPageChange={setListPage}
+                rowCount={completenessRows.length}
+                handleRowClick={by === "team" ? (row) => change({ ...filters, by: "technician", team: row.key, q: "" }) : undefined}
+                emptyState={
+                  <EmptyState
+                    icon={by === "team" ? <Users /> : <Gauge />}
+                    title={by === "team" ? "No teams in this period" : "No technicians in this period"}
+                    description="No completed appointments in these dates match these filters."
+                  />
+                }
+              />
+            </Card>
+          )}
         </>
       )}
     </div>
   );
 }
 
-function CompletenessTable({ icon, title, rows }: { icon: React.ReactNode; title: string; rows: CompletenessRow[] }) {
-  return (
-    <SectionCard icon={icon} title={title} bodyClassName="border-t">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead className="pl-5">Name</TableHead>
-            <TableHead>Completed</TableHead>
-            <TableHead>With times</TableHead>
-            <TableHead className="pr-5">Completeness</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((row) => (
-            <TableRow key={row.key}>
-              <TableCell className="pl-5">{row.name}</TableCell>
-              <TableCell className="tabular-nums">{row.completed}</TableCell>
-              <TableCell className="tabular-nums">{row.withActualTimes}</TableCell>
-              <TableCell className="pr-5 font-medium tabular-nums">
-                {row.completenessPercent === null ? "—" : `${row.completenessPercent}%`}
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </SectionCard>
-  );
-}

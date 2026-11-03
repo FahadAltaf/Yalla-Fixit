@@ -1,13 +1,14 @@
 "use client";
 
 import type { ColumnDef } from "@tanstack/react-table";
-import { CalendarClock, CalendarDays, ClipboardList, Clock, FileText, UserRound, Wrench } from "lucide-react";
+import { CalendarClock, CalendarDays, ClipboardList, Clock, FileText, UserRound, Users, Wrench } from "lucide-react";
 
 import { aed } from "@/components/dashboard/finance/shared";
 import { FlagBadge, NamesCell, QuotationStatusBadge, plural } from "@/components/dashboard/reports/shared";
+import { Explained, helpHeader } from "@/components/data-table/columns/column-utilization";
 import { IconText } from "@/components/data-table/columns/icon-text";
 import { IdentityCell } from "@/components/ui/entity-avatar";
-import type { MissingActualsRow, UnflaggedRow } from "@/lib/reports/exceptions";
+import type { CompletenessRow, MissingActualsRow, UnflaggedRow } from "@/lib/reports/exceptions";
 import type { QuotationRow } from "@/lib/reports/quotations";
 import { viewerDateTime } from "@/lib/reports/viewer-time";
 import { formatZonedDate } from "@/lib/scheduling/org-time";
@@ -54,7 +55,7 @@ export const QUOTATION_COLUMNS: ColumnDef<QuotationRow>[] = [
   },
   {
     id: "value",
-    header: () => <div>Value (before VAT)</div>,
+    header: () => <div>Value (incl. VAT)</div>,
     cell: ({ row }) => <div className="text-sm font-medium tabular-nums">{aed(row.original.value)}</div>,
     enableSorting: false,
   },
@@ -113,7 +114,7 @@ export const QUOTATION_EXPORT_COLUMNS = [
   { key: "client", label: "Client" },
   { key: "owner", label: "Owner" },
   { key: "status", label: "Status" },
-  { key: "value", label: "Value before VAT (AED)" },
+  { key: "value", label: "Value incl. VAT (AED)" },
   { key: "days", label: "Days in status" },
   { key: "daysEstimated", label: "Days estimated" },
   { key: "limit", label: "Limit (days)" },
@@ -275,6 +276,124 @@ export const MISSING_ACTUALS_COLUMNS: ColumnDef<MissingActualsRow>[] = [
     enableSorting: false,
   },
 ];
+
+/* Data completeness by team or technician, beside the list. Hover a header for what it counts, a value for its sum. */
+export function getCompletenessColumns(kind: "team" | "technician"): ColumnDef<CompletenessRow>[] {
+  const appointments = (n: number) => `${n} completed ${n === 1 ? "appointment" : "appointments"}`;
+  return [
+    {
+      id: "name",
+      header: kind === "team" ? "Team" : "Technician",
+      cell: ({ row }) => (
+        <div className="min-w-40">
+          <IdentityCell title={row.original.name} icon={kind === "team" ? Users : UserRound} />
+        </div>
+      ),
+      enableSorting: false,
+    },
+    {
+      id: "completed",
+      header: helpHeader("Completed", {
+        title: "Completed appointments",
+        lines:
+          kind === "team"
+            ? [
+                "Appointments Completed in Zoho FSM in the dates with at least one of the team's technicians on them.",
+                "An appointment counts once for the team, however many of its technicians were on it.",
+                "A team is a supervisor and the technicians who report to them; No team is everyone without a supervisor.",
+              ]
+            : [
+                "Appointments Completed in Zoho FSM in the dates with this technician on them.",
+                "An appointment with several technicians counts once for each of them, so this column adds up to more than the total at the top.",
+              ],
+      }),
+      cell: ({ row }) => <div className="text-sm tabular-nums">{row.original.completed}</div>,
+      enableSorting: false,
+    },
+    {
+      id: "withTimes",
+      header: helpHeader("With times", {
+        title: "With actual times",
+        lines: ["Of the completed appointments, those with both an actual start and an actual end in Zoho FSM."],
+      }),
+      cell: ({ row }) => <div className="text-sm tabular-nums">{row.original.withActualTimes}</div>,
+      enableSorting: false,
+    },
+    {
+      id: "missing",
+      header: helpHeader("Missing", {
+        title: "Missing actual times",
+        lines: [
+          "Completed less With times: appointments without an actual start, an actual end, or both.",
+          "They are left out of job hours, so utilization reads low. The list below shows each one.",
+        ],
+      }),
+      cell: ({ row }) => {
+        const r = row.original;
+        const missing = r.completed - r.withActualTimes;
+        if (!missing) return <span className="text-muted-foreground text-sm">—</span>;
+        return (
+          <Explained
+            help={{
+              title: `${missing} missing actual times`,
+              lines: [`${appointments(r.completed)} less ${r.withActualTimes} with both actual times = ${missing}.`],
+            }}
+          >
+            <FlagBadge tone="danger">{missing}</FlagBadge>
+          </Explained>
+        );
+      },
+      enableSorting: false,
+    },
+    {
+      id: "completeness",
+      header: helpHeader("Completeness", {
+        title: "Data completeness",
+        lines: [
+          "With times ÷ Completed.",
+          "The same figure as Data complete on Utilization: below 100%, job hours there are short by the appointments missing.",
+        ],
+      }),
+      cell: ({ row }) => {
+        const r = row.original;
+        if (r.completenessPercent === null) return <span className="text-muted-foreground text-sm">—</span>;
+        return (
+          <Explained
+            help={{
+              title: `Data completeness ${r.completenessPercent}%`,
+              lines: [`${r.withActualTimes} with actual times ÷ ${appointments(r.completed)} = ${r.completenessPercent}%.`],
+            }}
+          >
+            {r.completenessPercent < 100 ? (
+              <FlagBadge>{r.completenessPercent}%</FlagBadge>
+            ) : (
+              <span className="text-sm font-medium tabular-nums">100%</span>
+            )}
+          </Explained>
+        );
+      },
+      enableSorting: false,
+    },
+  ];
+}
+
+export const COMPLETENESS_EXPORT_COLUMNS = [
+  { key: "name", label: "Name" },
+  { key: "completed", label: "Completed" },
+  { key: "withTimes", label: "With actual times" },
+  { key: "missing", label: "Missing actual times" },
+  { key: "completeness", label: "Completeness %" },
+];
+
+export function completenessExportRow(r: CompletenessRow) {
+  return {
+    name: r.name,
+    completed: r.completed,
+    withTimes: r.withActualTimes,
+    missing: r.completed - r.withActualTimes,
+    completeness: r.completenessPercent,
+  };
+}
 
 export const MISSING_ACTUALS_EXPORT_COLUMNS = [
   { key: "appointment", label: "Appointment" },

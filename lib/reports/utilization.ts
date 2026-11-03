@@ -1,6 +1,6 @@
 import { addDaysToDateString, zonedDateString, zonedTimeToUtc } from "@/lib/scheduling/org-time";
 
-import { coveredMinutes, isoWeekday, type TechnicianAvailability } from "./available-hours";
+import { coveredMinutes, isoWeekday, type DailySource, type TechnicianAvailability } from "./available-hours";
 
 /**
  * Technician utilization (BRD 5.2 B2; DEV-444). Two measures, always side
@@ -116,6 +116,8 @@ export type TechnicianUtilization = Measures &
   restDaysAssumed: boolean;
   /** Hours a working day (the standard day, or their own). */
   dailyMinutes: number;
+  /** Where the hours a day came from (Workforce → People → Working hours, else a default). */
+  dailySource: DailySource;
   shiftDays: number;
   leaveMinutes: number;
   /** Hours worked above expected, week by week (2 Nov: inside the ratios too). */
@@ -508,6 +510,7 @@ export function computeUtilization(input: {
       teamName: team.name,
       shiftAssumed: avail.shiftAssumed,
       restDaysAssumed: expectation.offDaysAssumed,
+      dailySource: avail.dailySource,
       weeklyLimitMinutes: avail.days.filter((d) => d.status !== "left").at(-1)?.weeklyLimitMinutes ?? null,
       offDaysPerWeek: avail.days.filter((d) => d.status !== "left").at(-1)?.offDaysPerWeek ?? STANDARD_OFF_DAYS,
       dailyMinutes: avail.dailyMinutes,

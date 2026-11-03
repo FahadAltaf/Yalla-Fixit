@@ -11,12 +11,15 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
  * from, how each figure is worked out, and what is left out, in plain
  * section it follows. The words live here, next to each other, so the
  * reports read alike; the figures they quote are the live settings.
+ *
+ * Shown in development only (3 Nov): the live site does not show it.
  */
 
 export type HowItWorksSection = { heading: string; lines: string[] };
 export type HowItWorksContent = { title: string; summary: string; sections: HowItWorksSection[] };
 
 export function HowItWorks({ content }: { content: HowItWorksContent }) {
+  if (process.env.NODE_ENV === "production") return null;
   return (
     <Dialog>
       <DialogTrigger asChild>
@@ -47,7 +50,7 @@ export function HowItWorks({ content }: { content: HowItWorksContent }) {
 }
 
 const SHARED_FILTERS =
-  "Date range, technician, team and client filters, export to a spreadsheet, drill-through and saved filters per person, as on every report.";
+  "Date range, technician, team and client filters, export to a spreadsheet, drill-through and saved filters per person, as on every report. The figures at the top follow the dates only: the other filters narrow the tables below.";
 
 export function quotationsHowItWorks(s?: { limits?: { notSent: number; sent: number; approved: number }; expiryWarningDays?: number }): HowItWorksContent {
   const l = s?.limits;
@@ -57,13 +60,13 @@ export function quotationsHowItWorks(s?: { limits?: { notSent: number; sent: num
     sections: [
       {
         heading: "Where the data comes from",
-        lines: ["Quotations read live from Zoho FSM (10-minute copy; Refresh reads again).", "Value is the quotation's total before VAT."],
+        lines: ["Quotations read live from Zoho FSM (10-minute copy; Refresh reads again).", "Value is the quotation's total including VAT."],
       },
       {
         heading: "Statuses",
         lines: [
           "Seven statuses: Not sent (FSM's New), Sent, Approved, Converted to work order, Rejected, Revised, Expired. An FSM status not in this list keeps its own name, so nothing is hidden.",
-          "Per status: count, total value and average days in the status. Click a status to list it, and a quotation to open it in FSM.",
+          "Per status: count, total value and average days in the status. Click a status to list it. A status card turns red when any of its quotations is past its limit.",
         ],
       },
       {
@@ -74,7 +77,13 @@ export function quotationsHowItWorks(s?: { limits?: { notSent: number; sent: num
           "Where FSM does not say when the status began, the nearest FSM date stands in and the row says so (estimated).",
         ],
       },
-      { heading: "Filters", lines: ["Created date, owner, client, value band, status. Your selections are kept for next time."] },
+      {
+        heading: "Filters",
+        lines: [
+          "Created date, owner, client, value band (including VAT), flag and status. The Filters button shows how many are set. Your selections are kept for next time.",
+          "The status cards and the line under them follow the dates only: the other filters narrow the list, not the figures above it.",
+        ],
+      },
     ],
   };
 }
@@ -88,8 +97,8 @@ export function utilizationHowItWorks(s?: { standardDailyHours?: number; dataCen
       {
         heading: "Expected hours",
         lines: [
-          `The week is the measure. A week expects the smaller of the technician's weekly hour limit and their hours a day × the days they work a week (7 less their off days). Hours a day: ${day} h; ${s?.dataCentreDailyHours ?? 12} h for a technician whose Service Type is Data Center; or their own. All set on the employee's record in Scheduling.`,
-          "Less a working day's share for each public holiday, the leave taken (any type; portal leave and FSM Time Off), and every day from a leaving date.",
+          `The week is the measure. A week expects the smaller of the technician's weekly hour limit and their hours a day × the days they work a week (7 less their off days). Hours a day: ${day} h; ${s?.dataCentreDailyHours ?? 12} h for a technician whose Service Type is Data Center; or their own. Hours a day, weekly limit and off days a week are set in Workforce → People → ⋮ → Working hours; not set: the day above, no weekly limit, one off day.`,
+          "Less a working day's share for each public holiday (Settings → Reporting → Holidays), the leave taken (any type; Workforce → People → ⋮ → Add leave, and FSM Time Off), and every day from a leaving date.",
           "Off days are not fixed weekdays. A week cut by the dates expects its days less the off days, or the days worked if more; so a single day expects a day's hours only if it was worked.",
           "A technician with no off days entered: one a week, and the row is flagged.",
           "Team, hours and limits are those in force on each day, so a later change does not rewrite past periods.",
@@ -139,9 +148,9 @@ export function capacityHowItWorks(s?: { horizonDays?: number; spareBelowPercent
       {
         heading: "Available hours",
         lines: [
-          "Each working day in full: 8 h, 12 h for a Data Center technician, or their own hours set in Scheduling; less any leave that day.",
-          "Rest days, public holidays and days after leaving count nothing.",
-          "Capacity uses the fixed rest weekdays set in Scheduling: on a calendar a day is worked or not. Until rest weekdays are entered, every day shows as a working day.",
+          "Each working day in full: the technician's own hours a day, set in Workforce → People → ⋮ → Working hours; not set, 8 h (12 h for a Data Center technician). Less any leave that day.",
+          "Fixed rest days, public holidays (Settings → Reporting → Holidays) and days after leaving count nothing.",
+          "Capacity uses the fixed rest days, also set in Working hours: on a calendar a day is worked or not. Until they are set, every day shows as a working day. (Utilization counts off days a week instead.)",
         ],
       },
       {
@@ -180,7 +189,7 @@ export function exceptionsHowItWorks(s?: { afterDays?: number }): HowItWorksCont
         heading: "Appointments completed without actual times",
         lines: [
           "Completed appointments missing an actual start or end in FSM. They drop out of job hours, so utilization would be wrong.",
-          "Data completeness % per technician and team: the same figure that sits beside utilization.",
+          "Data completeness % per team and technician: the same figure that sits beside utilization. A team counts an appointment once; a technician counts every appointment they were on. Hover a header or value for its sum.",
         ],
       },
       { heading: "Filters", lines: [SHARED_FILTERS] },
@@ -205,7 +214,7 @@ export function attendanceHowItWorks(s?: { lateToleranceMinutes?: number }): How
       {
         heading: "The flags",
         lines: [
-          `Late: checked in more than ${s?.lateToleranceMinutes ?? 15} minutes after the shift start set in Scheduling.`,
+          `Late: checked in more than ${s?.lateToleranceMinutes ?? 15} minutes after the start of the technician's shift (their shift: Workforce → People → ⋮ → Edit attributes).`,
           "Left early: checked out before the shift end.",
           "Outside shift: checked in, but at no time within the shift (widened to the day's scheduled jobs, as on the Scheduling board). Not late or early: the shift set does not fit.",
           "Absent: a working day, not on leave, with no check-in and no work of their own in FSM, once the day's hours are over.",

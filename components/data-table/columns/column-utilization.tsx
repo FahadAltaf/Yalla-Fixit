@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { IdentityCell } from "@/components/ui/entity-avatar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { CapacityRow } from "@/lib/reports/capacity";
+import type { DailySource } from "@/lib/reports/available-hours";
 import { CHARGEABILITY_LABELS, HOURS_SOURCE_LABELS, type AppointmentDetail, type HoursSource, type TechnicianUtilization } from "@/lib/reports/utilization";
 import type { CapacityBooking } from "@/lib/server/reports/planning";
 import { durationLabel, viewerDateString, viewerDateTime, viewerTime } from "@/lib/reports/viewer-time";
@@ -75,10 +76,11 @@ export const COLUMN_HELP: Record<string, Help> = {
   available: {
     title: "Expected hours",
     lines: [
-      "Each week: the smaller of the technician's weekly hour limit and their hours a day (8; 12 for Data Center technicians; or their own) × the days they work a week (7 less their off days).",
-      "Less a working day's share for each public holiday, and the leave taken.",
+      "Each week: the smaller of the technician's weekly hour limit and their hours a day × the days they work a week (7 less their off days).",
+      "Hours a day, weekly limit and off days a week: the technician's own, set in Workforce → People → ⋮ → Working hours. Not set: 8 h a day (12 h for Data Center technicians), no weekly limit, one off day a week.",
+      "Less a working day's share for each public holiday (Settings → Reporting → Holidays) and the leave taken (Workforce → People → ⋮ → Add leave, and Time Off in Zoho FSM).",
       "Off days are not fixed weekdays. A week cut by the dates expects its days less the off days, or the days worked if more.",
-      "No off days entered yet: one a week. Hours a day, weekly limit, off days, holidays and portal leave: the employee's record in the portal. Time off: Zoho FSM.",
+      "Past weeks use the hours set at the time. Hover a row for that technician's figures.",
     ],
   },
   job: {
@@ -127,6 +129,13 @@ export const COLUMN_HELP: Record<string, Help> = {
 
 const h1 = (minutes: number) => Math.round((minutes / 60) * 10) / 10;
 
+/* Where a technician's hours a day came from, in words. */
+const DAILY_SOURCE_WORDS: Record<DailySource, string> = {
+  own: "their own, set in Working hours",
+  data_centre: "the Data Center day; none of their own set",
+  standard: "the standard day; none of their own set",
+};
+
 /** BRD B2: travel as a share of the day, i.e. of available hours; null with none available. */
 export const travelShare = (r: { travelMinutes?: number; availableMinutes: number }) =>
   r.availableMinutes > 0 ? Math.round(((r.travelMinutes ?? 0) / r.availableMinutes) * 1000) / 10 : null;
@@ -166,12 +175,15 @@ export const TECHNICIAN_UTILIZATION_COLUMNS: ColumnDef<TechnicianUtilization>[] 
           help={{
             title: `${hrs(r.availableMinutes)} expected`,
             lines: [
-              `A full week: ${h1(r.dailyMinutes)} h a day × ${workDays} days (${r.offDaysPerWeek} off a week${r.restDaysAssumed ? ", none entered yet" : ""}) = ${hrs(byDays)}` +
-                (r.weeklyLimitMinutes === null ? "; no weekly limit." : `; weekly limit ${hrs(r.weeklyLimitMinutes)}, so ${hrs(week)} a week.`),
+              `Hours a day: ${h1(r.dailyMinutes)} h (${DAILY_SOURCE_WORDS[r.dailySource]}).`,
+              `Off days: ${r.offDaysPerWeek} a week${r.restDaysAssumed ? " (not set yet: one assumed)" : ""}. Weekly limit: ${r.weeklyLimitMinutes === null ? "none set" : hrs(r.weeklyLimitMinutes)}.`,
+              `A full week: ${h1(r.dailyMinutes)} h × ${workDays} days = ${hrs(byDays)}` +
+                (r.weeklyLimitMinutes === null ? "." : `; with the weekly limit, ${hrs(week)} a week.`),
               "Weeks cut by the dates expect their days less the off days, or the days worked if more.",
               r.leaveMinutes ? `Public holidays and ${hrs(r.leaveMinutes)} of leave are taken off.` : "Public holidays are taken off; no leave in the dates.",
               `= ${hrs(r.availableMinutes)} expected in the dates.`,
               r.shiftAssumed ? "No shift set for this technician: the day shift is assumed." : "",
+              r.dailySource !== "own" || r.restDaysAssumed || r.weeklyLimitMinutes === null ? "Set their hours in Workforce → People → ⋮ → Working hours." : "",
             ].filter(Boolean),
           }}
         >

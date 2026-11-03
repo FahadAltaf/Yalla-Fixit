@@ -16,7 +16,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Skeleton } from "@/components/ui/skeleton";
 import { addDaysToDateString, todayInZone } from "@/lib/scheduling/org-time";
 import { useDebounce } from "@/hooks/use-debounce";
-import { fsmRecordLink } from "@/lib/fsm-links";
 import { isoWeekday } from "@/lib/reports/available-hours";
 import type { CapacityCell, CapacityRow, CellStatus } from "@/lib/reports/capacity";
 import type { CapacityReport } from "@/lib/server/reports/planning";
@@ -73,7 +72,7 @@ const share = (part: number, whole: number) => (whole > 0 ? `${Math.round((part 
 */
 const BOOKED_SOURCE = "Booked: the scheduled time of the FSM appointments that day, not cancelled; two bookings at once count once per person.";
 const AVAILABLE_SOURCE =
-  "Available: the technician's whole working day (8 h; 12 h for Data Center technicians; or their own hours set in Scheduling), less leave. Rest days and public holidays count nothing.";
+  "Available: the technician's whole working day, less leave. Hours a day: their own, set in Workforce → People → ⋮ → Working hours; not set, 8 h (12 h for Data Center technicians). Fixed rest days and public holidays count nothing.";
 
 /* A technician's own day, worked out: "12 h working day − 4 h leave = 8 h available". */
 function availableLine(cell: CapacityCell): string | null {
@@ -112,7 +111,7 @@ function cellHelp(input: {
         : BOOKED_SOURCE,
       ...(input.technicians !== undefined ? [] : [availableLine(cell) ?? AVAILABLE_SOURCE]),
       ...(input.technicians === undefined && cell.restDaysAssumed
-        ? ["No rest day is entered for this technician, so every day shows as a working day. Set it in Scheduling → Technicians and their rest day shows 0."]
+        ? ["No fixed rest day is set for this technician, so every day shows as a working day. Set it in Workforce → People → ⋮ → Working hours and their rest day shows 0."]
         : []),
       ...(input.appointments !== undefined ? [`${plural(input.appointments, "appointment")} scheduled that day.`] : []),
       "Click to see the bookings below.",
@@ -427,10 +426,6 @@ export function CapacityPage() {
             loading={loading}
             rowCount={data?.total ?? 0}
             isPagination
-            handleRowClick={(row) => {
-              const link = fsmRecordLink("Service_Appointments", row.id);
-              if (link) window.open(link, "_blank", "noopener,noreferrer");
-            }}
             emptyState={<EmptyState icon={<Wrench />} title="No bookings" description="Nothing is scheduled in FSM for this selection." />}
           />
         </Card>
@@ -497,7 +492,7 @@ function BoardTable({
                     lines: [
                       "Each cell is booked / available hours for that day.",
                       board === "teams"
-                        ? "A team is a supervisor and the technicians who report to them (Scheduling → Technicians)."
+                        ? "A team is a supervisor and the technicians who report to them (Workforce → People → ⋮ → Edit attributes, Supervisor)."
                         : "Each technician's own day: their bookings against their shift hours.",
                     ],
                   }}

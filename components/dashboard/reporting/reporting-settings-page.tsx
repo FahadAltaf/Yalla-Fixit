@@ -169,7 +169,7 @@ const SECTIONS: Record<SectionKey, { title: string; description: string; icon: R
         path: "attendance.standardDailyHours",
         label: "Standard working day",
         unit: "hours",
-        hint: "Available hours for each working day, with no break. A technician with other hours has them set in Scheduling → Technicians.",
+        hint: "Available hours for each working day, with no break. A technician with other hours has them set in Workforce → People → ⋮ → Working hours.",
         min: 1,
         max: 24,
       },

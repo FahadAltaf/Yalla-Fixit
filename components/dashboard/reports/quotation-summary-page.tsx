@@ -13,7 +13,6 @@ import { ReportToolbar } from "@/components/data-table/toolbars/report-toolbar";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { useDebounce } from "@/hooks/use-debounce";
-import { fsmRecordLink } from "@/lib/fsm-links";
 import { VALUE_BANDS } from "@/lib/reports/quotations";
 import type { QuotationReport } from "@/lib/server/reports/reports";
 import { exportFilename, exportTable, type ExportFormat } from "@/lib/snagging/export-table";
@@ -25,12 +24,15 @@ import { ReportDateRange, SavedFiltersMenu, lastThirtyDays, plural, useReportFil
 /**
  * The quotation summary (BRD 5.2 B1; DEV-442). Per status: how many, how
  * much, how long they sit. A status card filters the list to it; a row
- * opens the quotation in FSM when the FSM link is configured. Quotations
+ * does not open FSM (3 Nov: not for now). Quotations
  * past their status's limit (N7) and close to the end of their validity
  * (N8) are flagged.
  */
 
-const DEFAULTS = { status: "open", owner: "", client: "", band: "", flag: "", from: "", to: "", q: "" };
+/* 3 Nov: every status at first; "Awaiting action" is one choice. */
+/* Opens on every status each time, whatever was picked last. */
+const NOT_RESTORED = ["status"] as const;
+const DEFAULTS = { status: "all", owner: "", client: "", band: "", flag: "", from: "", to: "", q: "" };
 
 const FLAG_OPTIONS = [
   { value: "breached", label: "Past their limit" },
@@ -39,7 +41,7 @@ const FLAG_OPTIONS = [
 ];
 
 export function QuotationSummaryPage() {
-  const { filters, setFilters, ready, saved, saveAs, remove, apply } = useReportFilters("quotations", DEFAULTS);
+  const { filters, setFilters, ready, saved, saveAs, remove, apply } = useReportFilters("quotations", DEFAULTS, { notRestored: NOT_RESTORED });
   const debouncedQ = useDebounce(filters.q, 400);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(25);
@@ -100,8 +102,8 @@ export function QuotationSummaryPage() {
 
   const statusOptions = useMemo(
     () => [
-      { value: "open", label: "Awaiting action" },
       { value: "all", label: "All statuses" },
+      { value: "open", label: "Awaiting action" },
       ...(data?.summary ?? []).map((s) => ({ value: s.key, label: s.label })),
     ],
     [data?.summary],
@@ -114,7 +116,7 @@ export function QuotationSummaryPage() {
       <PageHeading
         eyebrow="Reports"
         title="Quotation summary"
-        description="The quotation pipeline from FSM: what is waiting in each status, for how long, and what is about to lapse. Values are before VAT."
+        description="The quotation pipeline from FSM: what is waiting in each status, for how long, and what is about to lapse. Values include VAT."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <HowItWorks content={quotationsHowItWorks(data ? { limits: data.limits, expiryWarningDays: data.expiryWarningDays } : undefined)} />
@@ -141,12 +143,12 @@ export function QuotationSummaryPage() {
                 headline={
                   !s.count
                     ? "None"
-                    : [aed(s.value), s.averageDays === null ? null : `avg ${s.averageDays} days`, s.breached ? `${s.breached} over ${s.ageingLimit}` : null]
+                    : [aed(s.value), s.averageDays === null ? null : `avg ${s.averageDays} days`]
                         .filter(Boolean)
                         .join(" · ")
                 }
                 tone={s.breached ? "bad" : filters.status === s.key ? "review" : "neutral"}
-                onSelect={() => change({ ...filters, status: filters.status === s.key ? "open" : s.key })}
+                onSelect={() => change({ ...filters, status: filters.status === s.key ? "all" : s.key })}
                 selectLabel={`Show ${s.label} quotations`}
               />
             ))}
@@ -196,7 +198,7 @@ export function QuotationSummaryPage() {
                 setPage(0);
               }}
               onRefresh={() => void load()}
-              filters={{ ...filters, status: filters.status || "open" }}
+              filters={{ ...filters, status: filters.status || "all" }}
               onFiltersChange={change}
               selects={[
                 { key: "status", allLabel: "Status", options: statusOptions, required: true },
@@ -222,10 +224,6 @@ export function QuotationSummaryPage() {
           loading={loading}
           rowCount={data?.total ?? 0}
           isPagination
-          handleRowClick={(row) => {
-            const link = fsmRecordLink("Estimates", row.id);
-            if (link) window.open(link, "_blank", "noopener,noreferrer");
-          }}
           emptyState={
             <EmptyState
               icon={<FileText />}

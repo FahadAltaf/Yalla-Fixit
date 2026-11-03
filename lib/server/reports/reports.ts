@@ -106,21 +106,25 @@ export async function buildQuotationReport(
   const limits = settings.quotations.ageingDaysByStatus;
   const all = buildQuotationRows(records, { today, limits, expiryWarningDays: settings.quotations.expiryWarningDays });
 
-  /* The status cards show what the other filters leave, so a card can be clicked to drill in. */
-  const beforeStatus = filterQuotations(all, filters, { ignoreStatus: true });
+  /*
+    The status cards and the line under them follow the dates only (3 Nov):
+    the table's filters (status, owner, client, value, flag, search) narrow
+    the list, never the figures above it. A card still drills the list in.
+  */
+  const inPeriod = filterQuotations(all, { from: period.from, to: period.to });
   const matching = sortQuotationRows(filterQuotations(all, filters));
   return {
     today,
     limits,
     expiryWarningDays: settings.quotations.expiryWarningDays,
-    summary: summariseByStatus(beforeStatus, limits),
+    summary: summariseByStatus(inPeriod, limits),
     totals: {
       count: matching.length,
       value: Math.round(matching.reduce((s, r) => s + r.value, 0) * 100) / 100,
-      breached: matching.filter((r) => r.breached).length,
-      expiring: matching.filter((r) => r.expiring).length,
-      pastValidity: matching.filter((r) => r.pastValidity).length,
-      estimated: matching.filter((r) => !r.statusSinceExact).length,
+      breached: inPeriod.filter((r) => r.breached).length,
+      expiring: inPeriod.filter((r) => r.expiring).length,
+      pastValidity: inPeriod.filter((r) => r.pastValidity).length,
+      estimated: inPeriod.filter((r) => !r.statusSinceExact).length,
     },
     options: { owners: uniqueSorted(all.map((r) => r.ownerName)), clients: uniqueSorted(all.map((r) => r.clientName)) },
     rows: page(matching, paging, Boolean(options.all)),
@@ -166,6 +170,8 @@ export type ActualTimesReport = {
   from: string;
   to: string;
   overall: { completed: number; withActualTimes: number; completenessPercent: number | null };
+  /** For the cards: the dates only, whatever the filters. */
+  cards: { missing: number; leastComplete: CompletenessRow | null };
   byTechnician: CompletenessRow[];
   byTeam: CompletenessRow[];
   options: { clients: string[]; technicians: Array<{ id: string; name: string }>; teams: Array<{ id: string; name: string }> };
@@ -202,13 +208,17 @@ export async function buildExceptionReport(
       return true;
     });
     const sum = (rows: UnflaggedRow[]) => Math.round(rows.reduce((s, r) => s + r.value, 0) * 100) / 100;
-    const overdue = matching.filter((r) => r.overdue);
+    /* The cards follow the dates only (3 Nov): client, coordinator, overdue and search narrow the list. */
+    const inPeriod = all.filter(
+      (r) => (!filters.from || (r.completedDate !== null && r.completedDate >= filters.from)) && (!filters.to || (r.completedDate !== null && r.completedDate <= filters.to)),
+    );
+    const overdue = inPeriod.filter((r) => r.overdue);
     return {
       view: "unflagged",
       from: period.from,
       to: period.to,
       afterDays,
-      totals: { count: matching.length, overdue: overdue.length, value: sum(matching), overdueValue: sum(overdue) },
+      totals: { count: inPeriod.length, overdue: overdue.length, value: sum(inPeriod), overdueValue: sum(overdue) },
       options: { clients: uniqueSorted(all.map((r) => r.clientName)), coordinators: uniqueSorted(all.map((r) => r.coordinatorName)) },
       rows: page(matching, paging, Boolean(options.all)),
       total: matching.length,
@@ -230,20 +240,36 @@ export async function buildExceptionReport(
       return true;
     });
   const result = analyseActualTimes({ appointments: inScope, technicians });
+  /* The cards follow the dates only (3 Nov): every completed appointment in them, whatever the filters. */
+  const filtered = Boolean(filters.client || filters.technician || filters.team);
+  const forCards = filtered
+    ? analyseActualTimes({ appointments: appointments.map((a) => ({ ...a, technicianIds: a.technicianIds.filter((id) => technicians.has(id)) })), technicians })
+    : result;
   const rows = needle
     ? result.rows.filter((r) =>
         `${r.number ?? ""} ${r.workOrderNumber ?? ""} ${r.clientName ?? ""} ${r.technicianNames.join(" ")}`.toLowerCase().includes(needle),
       )
     : result.rows;
 
+  /* The team and technician tables follow the team, technician and search too (3 Nov: they are tabs now). */
+  const teamOf = (id: string) => technicians.get(id)?.teamLeaderId ?? "none";
+  const named = (r: CompletenessRow) => !needle || r.name.toLowerCase().includes(needle);
+  const byTechnician = result.byTechnician.filter(
+    (r) => (!filters.technician || r.key === filters.technician) && (!filters.team || teamOf(r.key) === filters.team) && named(r),
+  );
+  const byTeam = result.byTeam.filter(
+    (r) => (!filters.team || r.key === filters.team) && (!filters.technician || r.key === teamOf(filters.technician)) && named(r),
+  );
+
   const leaders = new Set([...technicians.values()].map((t) => t.teamLeaderId).filter((id): id is string => Boolean(id)));
   return {
     view: "actual_times",
     from,
     to,
-    overall: result.overall,
-    byTechnician: result.byTechnician,
-    byTeam: result.byTeam,
+    overall: forCards.overall,
+    cards: { missing: forCards.rows.length, leastComplete: forCards.byTechnician[0] ?? null },
+    byTechnician,
+    byTeam,
     options: {
       clients: uniqueSorted(appointments.map((a) => a.clientName)),
       technicians: [...technicians.values()]

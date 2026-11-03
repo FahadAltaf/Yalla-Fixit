@@ -152,35 +152,50 @@ export async function buildUtilizationReport(
   const worked = new Set(loaded.appointments.flatMap((a) => a.technicianIds));
   const clientWork = filters.client ? loaded.appointments.filter((a) => a.clientName === filters.client) : null;
   const forClient = clientWork ? new Set(clientWork.flatMap((a) => a.technicianIds)) : null;
-  let inactiveWithoutLeavingDate = 0;
-  const inScope = [...roster.values()].filter((t) => {
+  /* Everyone counted in the dates; the cards follow these, whatever the filters (3 Nov). */
+  const everyone = [...roster.values()].filter((t) => t.isActive || t.leavingDate || worked.has(t.fsmId));
+  const inScope = everyone.filter((t) => {
     if (filters.technician && t.fsmId !== filters.technician) return false;
     if (filters.team && teamKeyOf(t) !== filters.team) return false;
     if (forClient && !forClient.has(t.fsmId)) return false;
-    if (t.isActive || t.leavingDate) return true;
-    if (!worked.has(t.fsmId)) return false;
-    inactiveWithoutLeavingDate += 1;
     return true;
   });
+  const inactiveWithoutLeavingDate = inScope.filter((t) => !t.isActive && !t.leavingDate).length;
+  const filtered = inScope.length !== everyone.length || Boolean(clientWork);
 
   const availabilityInput = await loadAvailabilityInput(admin, {
     from,
     to,
     /* 2 Nov: utilization does not use fixed rest weekdays; off days a week are counted by the week instead. */
-    technicians: inScope.map((t) => ({ ...t, restWeekdays: [], history: t.history ? { ...t.history, rest_weekdays: undefined } : undefined })),
+    technicians: everyone.map((t) => ({ ...t, restWeekdays: [], history: t.history ? { ...t.history, rest_weekdays: undefined } : undefined })),
     unpaidBreakMinutes: settings.attendance.unpaidBreakMinutes,
     standardDailyHours: settings.attendance.standardDailyHours,
     dataCentreDailyHours: settings.attendance.dataCentreDailyHours,
   });
-  const availability = computeAvailability(availabilityInput);
+  const availabilityAll = computeAvailability(availabilityInput);
   /* When each FSM source was read, now that all of them have been (time off with the available hours). */
   const asOf = await dataAsOf(admin);
   const scopeIds = new Set(inScope.map((t) => t.fsmId));
+  const availability = filtered ? availabilityAll.filter((a) => scopeIds.has(a.fsmId)) : availabilityAll;
+  const everyoneIds = new Set(everyone.map((t) => t.fsmId));
   const appointments = (clientWork ?? loaded.appointments)
     .map((a) => ({ ...a, technicianIds: a.technicianIds.filter((t) => scopeIds.has(t)) }))
     .filter((a) => a.technicianIds.length > 0);
 
   const result = computeUtilization({ from, to, availability, technicians: roster, appointments, granularity });
+  /* The cards: everyone in the dates (3 Nov). The same calculation, unfiltered, only when a filter is set. */
+  const forCards = filtered
+    ? computeUtilization({
+        from,
+        to,
+        availability: availabilityAll,
+        technicians: roster,
+        appointments: loaded.appointments
+          .map((a) => ({ ...a, technicianIds: a.technicianIds.filter((t) => everyoneIds.has(t)) }))
+          .filter((a) => a.technicianIds.length > 0),
+        granularity,
+      })
+    : result;
   /* BRD B2: travel as hours and as a share of the day (of available hours), per technician and team. */
   for (const t of result.technicians) {
     const trips = travelBy.get(t.fsmId);
@@ -225,7 +240,7 @@ export async function buildUtilizationReport(
     from,
     to,
     granularity,
-    overall: result.overall,
+    overall: forCards.overall,
     trend: result.trend,
     teams: result.teams,
     technicians,
@@ -233,7 +248,7 @@ export async function buildUtilizationReport(
     total,
     jobMinutesBy: result.jobMinutesBy,
     travel: [...travelBy].reduce(
-      (sum, [who, t]) => (scopeIds.has(who) ? { trips: sum.trips + t.trips, minutes: Math.round(sum.minutes + t.minutes) } : sum),
+      (sum, [who, t]) => (everyoneIds.has(who) ? { trips: sum.trips + t.trips, minutes: Math.round(sum.minutes + t.minutes) } : sum),
       { trips: 0, minutes: 0 },
     ),
     notes: {
@@ -392,9 +407,12 @@ export async function buildCapacityReport(
 
   /* eslint-disable-next-line @typescript-eslint/no-unused-vars -- N14's list is not part of the page */
   const { overbooked, technicians, ...board } = result;
+  /* The cards follow the dates only (3 Nov): with a team or client chosen, their totals come from the whole board. */
+  const cardTotals = filters.team || filters.client ? (await computeCapacityFor(admin, settings, { from, days })).result.totals : board.totals;
   const counts = leaveAndHolidayCounts(availabilityInput);
   return {
     ...board,
+    totals: cardTotals,
     from,
     to,
     horizonDays: days,
