@@ -25,7 +25,7 @@ export function FsmReportsPage({ links, canConfigure }: { links: FsmReportLink[]
       <PageHeading
         eyebrow="Reports"
         title="Zoho FSM reports"
-        description="The reports Zoho FSM already has, or will have as FSM custom reports. They open in Zoho FSM; what you can see there is decided by your FSM account."
+        description="Reports kept in Zoho FSM. They open there, with what your FSM account can see."
         actions={
           canConfigure ? (
             <Button asChild variant="outline" size="sm">

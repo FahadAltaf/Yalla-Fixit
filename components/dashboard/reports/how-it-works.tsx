@@ -206,7 +206,7 @@ export function attendanceHowItWorks(s?: { lateToleranceMinutes?: number }): How
         heading: "Where the data comes from",
         lines: [
           "Check-in and check-out: FSM Attendance, one record per technician per day (first check-in, last check-out), kept together, so a night's morning check-out stays with its evening.",
-          "Shift, rest days, leave, holidays and leaving date: Scheduling and FSM Time Off, as for Utilization.",
+          "Shift, rest days, leave and leaving date: Workforce → People (Edit attributes, Working hours, Add leave) and FSM Time Off; holidays: Settings → Reporting → Holidays.",
           "Work in FSM: the day's appointments with actual times, marked when they were started by someone else on the crew.",
           "Times are shown in your own timezone, named in the column heading; a time on another day shows its date. The shift day is Dubai's, as FSM's Date field: a session that starts on the 28th belongs to the 28th even when it ends the next morning, and its hours present show its full length.",
         ],

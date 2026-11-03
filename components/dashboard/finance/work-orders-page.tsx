@@ -67,7 +67,8 @@ const sortedQuery = (query: URLSearchParams | { toString(): string }) => {
   return copy.toString();
 };
 
-export function FinanceWorkOrdersPage() {
+/* `view`: the Operations entry asks for Operations' view; without it the server picks (Finance's for Finance). */
+export function FinanceWorkOrdersPage({ view: askedView }: { view?: "finance" | "operations" } = {}) {
   const router = useRouter();
   const pathname = usePathname();
   const params = useSearchParams();
@@ -152,6 +153,7 @@ export function FinanceWorkOrdersPage() {
   }, [pendingQuery, currentQuery]);
 
   const query = new URLSearchParams();
+  if (askedView) query.set("view", askedView);
   if (attention) query.set("attention", "1");
   if (filters.status !== "all") query.set("status", filters.status);
   for (const key of ["fsm", "from", "to"] as const) if (filters[key]) query.set(key, filters[key]);
@@ -176,8 +178,9 @@ export function FinanceWorkOrdersPage() {
     setParams({ page: Math.max(0, Math.ceil(data.total / pageSize) - 1) });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only when an answer arrives
   }, [data, loading]);
-  /* 2 Nov: no Finance / Operations tabs; the person's role decides the view, and the server answers with it. */
-  const view: "finance" | "operations" = data?.view ?? "finance";
+  /* 2 Nov: no Finance / Operations tabs; the person's role decides the view, and the server answers with it. 3 Nov: someone with both has a menu entry for each. */
+  const view: "finance" | "operations" = data?.view ?? askedView ?? "finance";
+  const bothViews = Boolean(data?.can?.finance && data.can.operations);
   const operations = view === "operations";
   /* The other view is still being read from FSM: its cards and rows are not shown under this tab. */
   const switching = Boolean(data && data.view !== view);
@@ -208,11 +211,11 @@ export function FinanceWorkOrdersPage() {
     <div className="flex flex-col gap-6">
       <PageHeading
         eyebrow="Finance"
-        title="Ready to invoice"
+        title={bothViews ? `Ready to invoice (${operations ? "Operations" : "Finance"})` : "Ready to invoice"}
         description={
           operations
-            ? "Every FSM work order, read live from Zoho FSM. Mark finished work Completed in FSM, and record how far unfinished work has got so Finance can invoice it or book the revenue."
-            : "Work Completed in FSM with its quotation flagged To Be Invoiced, and work Operations has recorded as partly done to invoice. Record the MAHER invoice in full or in part, or raise a query."
+            ? "Every FSM work order. Mark finished work Completed, or record how far it has got."
+            : "Completed or partly done work to invoice. Record the MAHER invoice or raise a query."
         }
       />
 
@@ -348,7 +351,7 @@ export function FinanceWorkOrdersPage() {
           loading={rowsLoading}
           rowCount={data?.total ?? 0}
           isPagination
-          handleRowClick={(row) => router.push(`/finance/queue/${row.id}`)}
+          handleRowClick={(row) => router.push(`${askedView === "operations" ? "/finance/operations" : "/finance/queue"}/${row.id}`)}
           emptyState={
             <EmptyState
               icon={<ReceiptText />}

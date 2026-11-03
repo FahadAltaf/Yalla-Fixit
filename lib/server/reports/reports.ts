@@ -251,6 +251,16 @@ export async function buildExceptionReport(
       )
     : result.rows;
 
+  /* The team and technician tables follow the team, technician and search too (3 Nov: they are tabs now). */
+  const teamOf = (id: string) => technicians.get(id)?.teamLeaderId ?? "none";
+  const named = (r: CompletenessRow) => !needle || r.name.toLowerCase().includes(needle);
+  const byTechnician = result.byTechnician.filter(
+    (r) => (!filters.technician || r.key === filters.technician) && (!filters.team || teamOf(r.key) === filters.team) && named(r),
+  );
+  const byTeam = result.byTeam.filter(
+    (r) => (!filters.team || r.key === filters.team) && (!filters.technician || r.key === teamOf(filters.technician)) && named(r),
+  );
+
   const leaders = new Set([...technicians.values()].map((t) => t.teamLeaderId).filter((id): id is string => Boolean(id)));
   return {
     view: "actual_times",
@@ -258,8 +268,8 @@ export async function buildExceptionReport(
     to,
     overall: forCards.overall,
     cards: { missing: forCards.rows.length, leastComplete: forCards.byTechnician[0] ?? null },
-    byTechnician: result.byTechnician,
-    byTeam: result.byTeam,
+    byTechnician,
+    byTeam,
     options: {
       clients: uniqueSorted(appointments.map((a) => a.clientName)),
       technicians: [...technicians.values()]

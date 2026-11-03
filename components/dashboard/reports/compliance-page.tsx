@@ -281,7 +281,7 @@ export function CompliancePage() {
       <PageHeading
         eyebrow="Reports"
         title="App compliance"
-        description="Check-ins owed, performed, missed and waived per technician, against the threshold. Penalties are calculated and reported only; nothing is deducted by the portal."
+        description="Check-ins owed, done, missed and waived per technician. Penalties are reported only."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <HowItWorks content={complianceHowItWorks(data ? { ...data.settings, cutoffDay: Number(data.cutoffDate.slice(8, 10)) } : undefined)} />

@@ -19,7 +19,7 @@ import { ActionType, ResourceType } from "@/types/types";
 const WINDOWS = new Set([7, 30, 90, 365]);
 
 export async function GET(req: NextRequest) {
-  const gate = await requireResourceAccess(ResourceType.FINANCE_QUEUE, ActionType.VIEW);
+  const gate = await requireResourceAccess(ResourceType.FINANCE_METRICS, ActionType.VIEW);
   if (!gate.ok) return gate.response;
   const asked = Number(req.nextUrl.searchParams.get("days") ?? 30);
   const days = WINDOWS.has(asked) ? asked : 30;

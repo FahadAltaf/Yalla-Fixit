@@ -160,7 +160,7 @@ export function FinanceMetricsPage() {
       <PageHeading
         eyebrow="Finance"
         title="Invoicing metrics"
-        description="How fast completed work is invoiced, what is waiting and for how long, holds, exclusions and variance."
+        description="How fast completed work is invoiced, what is waiting, holds, exclusions and variance."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <Select value={String(days)} onValueChange={(value) => setDays(Number(value))}>

@@ -152,13 +152,18 @@ export enum ResourceType {
   MOBILE_APP = "mobile_app",
   // Finance (BRD §5.1, DEV-462). The group, then its pages.
   FINANCE = "finance",
-  /* View the Ready-to-Invoice queue; Edit works an item (pick up, hold,
-     query); Approve records the MAHER invoice; Export. */
+  /* Ready to invoice, Finance's view: View it; Edit raises queries, holds
+     and marks not invoiceable; Approve records the MAHER invoice. */
   FINANCE_QUEUE = "finance_queue",
   /* The coordinator's side of the queue. Create asks for an item to be
      excluded as not invoiceable, and answers Finance's queries; Approve
      verifies an exclusion (Behrouz, BRD §5.1 Step 5). */
   FINANCE_EXCLUSIONS = "finance_exclusions",
+  /* The Queries page (3 Nov). Replying and closing follow the person's view
+     above; a work order's own queries show to anyone who may open it. */
+  FINANCE_QUERIES = "finance_queries",
+  /* The Invoicing metrics page and its month-end revenue (3 Nov). */
+  FINANCE_METRICS = "finance_metrics",
   // Reports (BRD §5.2). The group, then each report: View and Export.
   REPORTS = "reports",
   REPORTS_QUOTATIONS = "reports_quotations",

@@ -159,10 +159,10 @@ export function getPermissionColumns(
         const isDashboard = resource === ResourceType.DASHBOARD;
 
         const actionStrings = availableActions.map((action) =>
-          getActionDisplayName(action)
+          getActionDisplayName(action, resource)
         );
         const selectedActionStrings = selectedActions.map((action) =>
-          getActionDisplayName(action)
+          getActionDisplayName(action, resource)
         );
 
         return (
@@ -173,7 +173,7 @@ export function getPermissionColumns(
               onChange={(selected) => {
                 // Convert back to ActionType enum
                 const selectedActions = availableActions.filter((action) =>
-                  selected.includes(getActionDisplayName(action))
+                  selected.includes(getActionDisplayName(action, resource))
                 );
                 onActionsChange(resource, selectedActions);
               }}

@@ -70,7 +70,7 @@ export function MyCompliancePage() {
       <PageHeading
         eyebrow="My compliance"
         title={linked ? `${linked.technician.name}, ${monthName(linked.month)}` : "My app compliance"}
-        description="Your check-ins and check-outs in the Zoho FSM app: every shift and every appointment needs both. A late check-in still counts."
+        description="Your check-ins and check-outs in the Zoho FSM app, for every shift and appointment."
         actions={
           linked ? (
             <Select value={linked.month} onValueChange={(next) => router.replace(`?month=${next}`)}>

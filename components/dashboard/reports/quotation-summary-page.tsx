@@ -116,7 +116,7 @@ export function QuotationSummaryPage() {
       <PageHeading
         eyebrow="Reports"
         title="Quotation summary"
-        description="The quotation pipeline from FSM: what is waiting in each status, for how long, and what is about to lapse. Values include VAT."
+        description="Quotations by status: how long they wait and what is about to lapse. Values include VAT."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <HowItWorks content={quotationsHowItWorks(data ? { limits: data.limits, expiryWarningDays: data.expiryWarningDays } : undefined)} />

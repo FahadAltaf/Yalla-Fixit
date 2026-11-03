@@ -17,7 +17,7 @@ export const dynamic = "force-dynamic";
 const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/;
 
 export async function GET(req: NextRequest) {
-  const gate = await requireResourceAccess(ResourceType.FINANCE_QUEUE, ActionType.VIEW);
+  const gate = await requireResourceAccess(ResourceType.FINANCE_METRICS, ActionType.VIEW);
   if (!gate.ok) return gate.response;
   const month = req.nextUrl.searchParams.get("month") ?? todayInZone().slice(0, 7);
   if (!MONTH.test(month)) return NextResponse.json({ error: "Invalid month" }, { status: 400 });

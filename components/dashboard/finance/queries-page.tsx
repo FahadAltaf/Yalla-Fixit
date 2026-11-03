@@ -54,7 +54,7 @@ export function FinanceQueriesPage() {
       <PageHeading
         eyebrow="Finance"
         title="Queries"
-        description="Questions between Finance and Operations on work orders, as a conversation. Reply here or on the work order; the other side is told each time. Either side closes a query once it is settled."
+        description="Questions between Finance and Operations on work orders. Either side can reply or close."
       />
 
       {data && !data.ready ? (

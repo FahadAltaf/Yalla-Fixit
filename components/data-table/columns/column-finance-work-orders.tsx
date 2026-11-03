@@ -6,6 +6,7 @@ import { Building2, CalendarDays, Clock } from "lucide-react";
 import { WorkOrderQueueBadge, aed, daysSince } from "@/components/dashboard/finance/shared";
 import { IconText } from "@/components/data-table/columns/icon-text";
 import { IdentityCell } from "@/components/ui/entity-avatar";
+import { TruncatedText } from "@/components/ui/truncated-text";
 import { viewerDate, viewerDateTime } from "@/lib/reports/viewer-time";
 import type { WorkOrderListRow } from "@/lib/server/finance/work-orders";
 
@@ -25,7 +26,8 @@ export function getWorkOrderQueueColumns(agedAfterDays: number, operations = fal
       cell: ({ row }) => {
         const r = row.original;
         return (
-          <div className="min-w-48">
+          /* Long text ends in "…", whole on hover (3 Nov). */
+          <div className="max-w-60 min-w-48">
             <IdentityCell
               title={r.quotationNumber ? `Quotation ${r.quotationNumber}` : (r.number ?? r.id)}
               subtitle={[r.quotationNumber ? r.number : null, r.type, r.fsmStatus].filter(Boolean).join(" · ")}
@@ -43,9 +45,9 @@ export function getWorkOrderQueueColumns(agedAfterDays: number, operations = fal
         const r = row.original;
         const name = r.contactName ?? r.clientName;
         return (
-          <div className="min-w-36">
-            <p className="text-sm font-medium">{name ?? "—"}</p>
-            {r.contactName && r.clientName ? <p className="text-muted-foreground text-xs">{r.clientName}</p> : null}
+          <div className="max-w-56 min-w-36">
+            <TruncatedText text={name ?? "—"} className="text-sm font-medium" />
+            {r.contactName && r.clientName ? <TruncatedText text={r.clientName} className="text-muted-foreground text-xs" /> : null}
           </div>
         );
       },
@@ -101,9 +103,9 @@ export function getWorkOrderQueueColumns(agedAfterDays: number, operations = fal
       cell: ({ row }) => {
         const r = row.original;
         return (
-          <div className="flex flex-col items-start gap-1">
+          <div className="flex max-w-52 flex-col items-start gap-1">
             <WorkOrderQueueBadge status={r.queueStatus} />
-            {r.needsCompleting ? <span className="text-warning text-xs">Appointments done · mark Completed in FSM</span> : null}
+            {r.needsCompleting ? <TruncatedText text="Appointments done · mark Completed in FSM" className="text-warning max-w-full text-xs" /> : null}
             {/* 30 Oct: Operations' completion (Complete once confirmed; Partially complete while lines have a % and it is not). */}
             {r.operationsCompletion === "complete" ? (
               <span className="text-success text-xs">Complete (Operations)</span>
@@ -111,7 +113,7 @@ export function getWorkOrderQueueColumns(agedAfterDays: number, operations = fal
               <span className="text-warning text-xs" title="Operations has marked lines done, and has not yet confirmed the work order complete">Partially complete (Operations)</span>
             ) : null}
             {operations && r.fsmStatus === "Completed" && r.flagged === false ? (
-              <span className="text-muted-foreground text-xs">Quotation not flagged To Be Invoiced</span>
+              <TruncatedText text="Quotation not flagged To Be Invoiced" className="text-muted-foreground max-w-full text-xs" />
             ) : null}
           </div>
         );

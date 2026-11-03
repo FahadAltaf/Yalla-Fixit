@@ -28,6 +28,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { TruncatedText } from "@/components/ui/truncated-text";
 import { addDaysToDateString, todayInZone } from "@/lib/scheduling/org-time";
 import type { SavedFilter } from "@/lib/server/reports/access";
 import { cn } from "@/lib/utils";
@@ -367,7 +368,7 @@ export function NamesCell({ names }: { names: string[] }) {
   const [first, ...rest] = names;
   return (
     <div className="flex items-center gap-1.5 text-sm whitespace-nowrap">
-      <span>{first}</span>
+      <TruncatedText text={first} className="max-w-48" />
       {rest.length ? (
         <Tooltip>
           <TooltipTrigger asChild>

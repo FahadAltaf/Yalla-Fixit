@@ -8,6 +8,7 @@ import { SeverityBadge } from "@/components/dashboard/snagging/shared";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import { TruncatedText } from "@/components/ui/truncated-text";
 import type { SnaggingSeverity } from "@/types/types";
 
 /** One defect, with its two parents resolved for display. */
@@ -107,12 +108,10 @@ export function getCatalogueV2Columns({
       header: "Defect",
       accessorKey: "label",
       cell: ({ row }) => (
-        <div className="min-w-56">
-          <div className="text-sm font-medium">{row.original.label}</div>
+        <div className="max-w-96 min-w-56">
+          <TruncatedText text={row.original.label} className="text-sm font-medium" />
           {row.original.guidance ? (
-            <div className="text-muted-foreground line-clamp-1 text-xs">
-              {row.original.guidance}
-            </div>
+            <TruncatedText text={row.original.guidance} className="text-muted-foreground text-xs" />
           ) : null}
         </div>
       ),
