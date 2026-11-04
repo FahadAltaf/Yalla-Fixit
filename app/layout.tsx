@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Geist_Mono, Lexend, Source_Sans_3 } from "next/font/google";
+import localFont from "next/font/local";
 import "./globals.css";
 import { siteConfig } from "@/lib/site-config";
 import {
@@ -38,27 +38,31 @@ async function initialAuth() {
  * and both are exposed as CSS variables that globals.css maps onto
  * --font-display and --font-sans.
  *
- * Only the weights the system actually specifies are requested (600-700
- * display, 400-600 body); pulling the full families would cost several
- * hundred kilobytes for faces nothing renders.
+ * Served from app/fonts, not fetched from Google at build time (4 Nov):
+ * Google Fonts now hands the build server font URLs that next/font/google
+ * in Next 16.1.0 cannot parse, under Turbopack and webpack alike, and the
+ * live deploy failed on it. Each file is Google's Latin subset of the
+ * variable font, so one file covers every weight used (600-700 display,
+ * 400-600 body).
  */
-const lexend = Lexend({
-  subsets: ["latin"],
-  weight: ["600", "700"],
+const lexend = localFont({
+  src: "./fonts/lexend-latin.woff2",
+  weight: "100 900",
   variable: "--font-display",
   display: "swap",
 });
 
-const sourceSans = Source_Sans_3({
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
+const sourceSans = localFont({
+  src: "./fonts/source-sans-3-latin.woff2",
+  weight: "200 900",
   variable: "--font-sans",
   display: "swap",
 });
 
-const geistMono = Geist_Mono({
+const geistMono = localFont({
+  src: "./fonts/geist-mono-latin.woff2",
+  weight: "100 900",
   variable: "--font-geist-mono",
-  subsets: ["latin"],
   display: "swap",
 });
 

@@ -4,7 +4,7 @@ import {
   useContext,
   type CSSProperties,
 } from "react";
-import { Inter } from "next/font/google";
+import localFont from "next/font/local";
 
 import YallaFixit from "@/public/yalla-fixit.png";
 import type { SnaggingQuotation } from "@/modules/snagging";
@@ -68,9 +68,11 @@ function pad(
  * tighter line-height than the rest of the document.
  */
 
-const inter = Inter({
-  subsets: ["latin"],
-  weight: ["400", "600", "700", "800"],
+/* Served from app/fonts, not fetched from Google at build time (4 Nov,
+   see app/layout.tsx): Inter's Latin variable font, every weight in one. */
+const inter = localFont({
+  src: "../../../app/fonts/inter-latin.woff2",
+  weight: "100 900",
   display: "swap",
 });
 

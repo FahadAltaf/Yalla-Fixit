@@ -1,7 +1,7 @@
 /* eslint-disable @next/next/no-img-element -- this page is captured by
    html2canvas for the PDF and the Word file, which needs plain <img>. */
 import type { CSSProperties, ReactNode } from "react";
-import { Lato } from "next/font/google";
+import localFont from "next/font/local";
 
 import iconCallouts from "@/public/amc/brand/brochure/icon-callouts.png";
 import iconCertified from "@/public/amc/brand/brochure/icon-certified.png";
@@ -40,10 +40,17 @@ import { AMC_PAGE } from "./amc-doc-theme";
 
 /* The template's typeface. Its PDF embeds the glyphs as Type 3 outlines
    with no name; the letterforms are Lato's. */
-const lato = Lato({
-  subsets: ["latin"],
-  weight: ["400", "700", "900"],
-  style: ["normal", "italic"],
+/* Served from app/fonts, not fetched from Google at build time (4 Nov,
+   see app/layout.tsx). Lato has no variable font: one file per face. */
+const lato = localFont({
+  src: [
+    { path: "../../../../../../app/fonts/lato-400.woff2", weight: "400", style: "normal" },
+    { path: "../../../../../../app/fonts/lato-700.woff2", weight: "700", style: "normal" },
+    { path: "../../../../../../app/fonts/lato-900.woff2", weight: "900", style: "normal" },
+    { path: "../../../../../../app/fonts/lato-400-italic.woff2", weight: "400", style: "italic" },
+    { path: "../../../../../../app/fonts/lato-700-italic.woff2", weight: "700", style: "italic" },
+    { path: "../../../../../../app/fonts/lato-900-italic.woff2", weight: "900", style: "italic" },
+  ],
   display: "block",
 });
 
