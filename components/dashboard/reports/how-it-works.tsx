@@ -197,6 +197,38 @@ export function exceptionsHowItWorks(s?: { afterDays?: number }): HowItWorksCont
   };
 }
 
+export function revenueHowItWorks(): HowItWorksContent {
+  return {
+    title: "revenue",
+    summary: "What the completed work was worth, by client, technician and month, with the AMC mix, what is invoiced and the customers' ratings.",
+    sections: [
+      {
+        heading: "What counts as revenue",
+        lines: [
+          "Work orders completed in Zoho FSM in the dates, at their value before VAT, on the day FSM completed them (4 Nov).",
+          "A work order with no value of its own counts its quotation's; with neither it is listed at 0. Work still in progress in FSM is not counted until it is marked Completed there.",
+          "AMC: Work Type AMC PPM, or an AMC contract reference on the work order. Everything else is one-time work.",
+        ],
+      },
+      {
+        heading: "Shared jobs (D-17)",
+        lines: [
+          "A work order's revenue is split between its technicians by their hours on it: their own FSM time sheet, else the appointment's actual times. With no hours recorded for anyone, the crew share it equally.",
+          "Technician shares add up to the revenue; work orders with nobody from the technician list on them (none in FSM, or only test and office accounts) sit under Not on the technician list.",
+        ],
+      },
+      {
+        heading: "Invoiced and ratings",
+        lines: [
+          "Invoiced: MAHER invoices recorded in Ready to invoice against those work orders, before VAT. Invoices raised outside the portal are not known.",
+          "Ratings: the customer's stars on FSM service reports made in the dates, 1 to 5; FSM's 0 means no rating and is left out. A rating counts for every technician on its appointment.",
+        ],
+      },
+      { heading: "Filters", lines: [SHARED_FILTERS] },
+    ],
+  };
+}
+
 export function attendanceHowItWorks(s?: { lateToleranceMinutes?: number }): HowItWorksContent {
   return {
     title: "daily attendance",

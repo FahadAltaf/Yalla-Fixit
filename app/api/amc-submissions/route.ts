@@ -3,7 +3,8 @@ import { z } from "zod";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
-import { hasResourceAction } from "@/lib/role-permissions";
+import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
+import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { canApproveAmc } from "@/components/dashboard/extensions/amc/amc-settings";
 import { readAmcSettings } from "@/lib/server/amc/settings";
 import { canUseAmc } from "@/components/dashboard/extensions/amc/amc-constants";
@@ -449,6 +450,7 @@ export async function GET(req: NextRequest) {
     submissions,
     totalCount: count ?? 0,
     canApprove,
+    canDelete: isAdminUser(gate.accessUser),
   });
 }
 
@@ -577,4 +579,62 @@ export async function PUT(req: NextRequest) {
   }
 
   return NextResponse.json(mapRow(data as AmcSubmissionRow));
+}
+
+/*
+  Delete a proposal (4 Nov): administrators only, at any status. The row
+  goes for good, and with it any proposal or contract link already sent
+  to the client, which then opens on "not found". Its history stays in
+  amc_audit_events (append-only, keyed by id, no foreign key), with a
+  "deleted" event saying who removed what.
+*/
+export async function DELETE(req: NextRequest) {
+  const gate = await requireAmcAccess();
+  if (!gate.ok) return gate.error;
+  if (!isAdminUser(gate.accessUser)) {
+    return NextResponse.json(
+      { error: "Only an administrator can delete an AMC proposal." },
+      { status: 403 },
+    );
+  }
+
+  const parsed = z.string().uuid().safeParse(req.nextUrl.searchParams.get("id"));
+  if (!parsed.success) {
+    return NextResponse.json({ error: "A proposal id is required." }, { status: 400 });
+  }
+  const id = parsed.data;
+  const admin = await createAdminServerClient();
+
+  const { data, error } = await admin
+    .from("amc_submissions")
+    .delete()
+    .eq("id", id)
+    .select("id, owner_id, proposal_number, status, customer, property, final_price, created_at")
+    .maybeSingle();
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+  if (!data) {
+    return NextResponse.json({ error: "This proposal no longer exists." }, { status: 404 });
+  }
+
+  const { profile } = gate;
+  await recordAmcAudit(admin, {
+    entityType: "submission",
+    entityId: id,
+    eventType: "deleted",
+    actorId: profile.id,
+    actorLabel: profile.full_name ?? profile.email ?? null,
+    payload: {
+      proposal_number: data.proposal_number,
+      status: data.status,
+      owner_id: data.owner_id,
+      customer_name: (data.customer as { customerName?: string } | null)?.customerName ?? null,
+      property_address: (data.property as { propertyAddress?: string } | null)?.propertyAddress ?? null,
+      final_price: data.final_price,
+      created_at: data.created_at,
+    },
+  });
+
+  return NextResponse.json({ deleted: true, id });
 }

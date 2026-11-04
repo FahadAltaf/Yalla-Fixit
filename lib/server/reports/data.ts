@@ -10,6 +10,7 @@ import type {
   ExceptionWorkOrder,
 } from "@/lib/reports/exceptions";
 import type { QuotationRecord } from "@/lib/reports/quotations";
+import type { RevenueCrew, RevenueRating, RevenueWorkOrder } from "@/lib/reports/revenue";
 import { chargeabilityOf, isContractWork, type TechnicianWork, type UtilizationAppointment } from "@/lib/reports/utilization";
 import { addDaysToDateString, todayInZone, zonedDateString, zonedTimeToUtc } from "@/lib/scheduling/org-time";
 import {
@@ -650,6 +651,150 @@ export async function loadTravel(admin: SupabaseClient, range: { from: string; t
     entry.trips += 1;
     entry.minutes += minutes;
     out.set(who, entry);
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------
+// Revenue (DEV-454)
+// ---------------------------------------------------------------------
+
+/* A work order completed in the dates may have been worked on long before: appointments are read back this far. */
+const REVENUE_LOOKBACK_DAYS = 180;
+
+/**
+ * What the revenue report counts (4 Nov): the work orders FSM completed in
+ * the dates, who worked on each and for how long, the customers' ratings
+ * given in the dates, and what has been invoiced against them (MAHER, as
+ * recorded in Ready to invoice). Read live from Zoho FSM like every
+ * report; the work orders by last change, so one completed in the dates is
+ * always among them.
+ */
+export async function loadRevenueInputs(
+  admin: SupabaseClient,
+  range: { from: string; to: string },
+): Promise<{ workOrders: RevenueWorkOrder[]; crews: Map<string, RevenueCrew>; ratings: RevenueRating[]; invoicedByWorkOrder: Map<string, number> }> {
+  const fromMs = Date.parse(isoFrom(range.from));
+  const endMs = Date.parse(isoFrom(range.to, 1));
+  const inDates = (at: string | null) => {
+    const ms = at ? Date.parse(at) : NaN;
+    return Number.isFinite(ms) && ms >= fromMs && ms < endMs;
+  };
+  const [{ rows: woRows }, quotations, { rows: reportRows }, invoicedByWorkOrder] = await Promise.all([
+    readModuleSince(admin, {
+      module: "Work_Orders",
+      sortField: "Modified_Time",
+      fields: ["Name", "Sub_Total", "Estimate", "Company", "Contact", "Status", "Completed_Time", "Closed_Time", "Created_Time", "Work_Type__C", "AMC_Contract_Ref__C"],
+      fromIso: isoFrom(range.from),
+      resource: "work_orders",
+    }),
+    liveQuotations(admin),
+    readModuleSince(admin, {
+      module: "Service_Reports",
+      sortField: "Created_Time",
+      fields: ["Customer_Rating", "Appointment", "Work_Order", "Company", "Created_Time"],
+      fromIso: isoFrom(range.from),
+      resource: "service_reports",
+    }),
+    invoicedSoFar(admin),
+  ]);
+
+  const workOrders: RevenueWorkOrder[] = [];
+  const created = new Map<string, string>();
+  for (const r of woRows) {
+    const status = str(r.Status);
+    const completedAt = str(r.Completed_Time) ?? str(r.Closed_Time);
+    if ((status !== "Completed" && status !== "Closed") || !completedAt || !inDates(completedAt)) continue;
+    const id = String(r.id);
+    const own = r.Sub_Total === null || r.Sub_Total === undefined ? 0 : Number(r.Sub_Total);
+    const estimateId = lookupId(r.Estimate);
+    const quotation = (estimateId ? quotations.byId.get(estimateId) : undefined) ?? quotations.byWorkOrder.get(id);
+    const fromQuotation = quotation?.subTotal ?? 0;
+    const valueSource = own > 0 ? "work_order" : fromQuotation > 0 ? "quotation" : "none";
+    workOrders.push({
+      id,
+      number: str(r.Name),
+      clientName: lookupName(r.Company) ?? lookupName(r.Contact),
+      completedAt,
+      completedDate: zonedDateString(completedAt),
+      value: valueSource === "work_order" ? own : valueSource === "quotation" ? fromQuotation : 0,
+      valueSource,
+      amc: isContractWork({ workType: str(r.Work_Type__C), amcContractRef: lookupName(r.AMC_Contract_Ref__C) ?? str(r.AMC_Contract_Ref__C) }),
+    });
+    const createdAt = str(r.Created_Time);
+    if (createdAt) created.set(id, createdAt);
+  }
+
+  /* Ratings: FSM writes 0 when the customer gave none (4 Nov: 44 of 60 "rated" reports), so only 1 to 5 count. */
+  const rated = reportRows
+    .map((r) => ({ r, stars: Number(r.Customer_Rating) }))
+    .filter(({ r, stars }) => Number.isInteger(stars) && stars >= 1 && stars <= 5 && inDates(str(r.Created_Time)));
+
+  /* Appointments from the earliest of those work orders' creation (at most half a year back) or the dates' start. */
+  const earliest = [...created.values(), isoFrom(range.from)].reduce((min, at) => (Date.parse(at) < Date.parse(min) ? at : min));
+  const floor = isoFrom(addDaysToDateString(range.from, -REVENUE_LOOKBACK_DAYS));
+  const sinceIso = Date.parse(earliest) < Date.parse(floor) ? floor : new Date(Date.parse(earliest) - 86_400_000).toISOString();
+  const [appointments, sheets] = await Promise.all([liveAppointments(admin, sinceIso), liveTimeSheets(admin, sinceIso)]);
+  const completedIds = new Set(workOrders.map((w) => w.id));
+  const ratedAppointments = new Set(rated.map(({ r }) => lookupId(r.Appointment)).filter((v): v is string => Boolean(v)));
+  const worked = appointments.filter(
+    (a) => a.status !== "Cancelled" && ((a.workOrderId && completedIds.has(a.workOrderId)) || ratedAppointments.has(a.id)),
+  );
+  const { crews: appointmentCrews } = await crewsOf(admin, worked, sheets);
+
+  /* Each technician's minutes on an appointment: their own time sheet, else the appointment's actual times. */
+  const sheetMinutes = new Map<string, number>();
+  for (const t of sheets) {
+    const start = t.start ? Date.parse(t.start) : NaN;
+    const end = t.end ? Date.parse(t.end) : NaN;
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
+    const key = `${t.technicianId}|${t.appointmentId}`;
+    sheetMinutes.set(key, (sheetMinutes.get(key) ?? 0) + (end - start) / 60_000);
+  }
+  const crews = new Map<string, RevenueCrew>();
+  for (const a of worked) {
+    if (!a.workOrderId || !completedIds.has(a.workOrderId)) continue;
+    const crew = crews.get(a.workOrderId) ?? { technicianIds: [], minutes: {} };
+    const start = a.actualStart ? Date.parse(a.actualStart) : NaN;
+    const end = a.actualEnd ? Date.parse(a.actualEnd) : NaN;
+    const appointmentMinutes = Number.isFinite(start) && Number.isFinite(end) && end > start ? (end - start) / 60_000 : 0;
+    for (const id of appointmentCrews.get(a.id) ?? []) {
+      if (!crew.technicianIds.includes(id)) crew.technicianIds.push(id);
+      crew.minutes[id] = (crew.minutes[id] ?? 0) + (sheetMinutes.get(`${id}|${a.id}`) ?? appointmentMinutes);
+    }
+    crews.set(a.workOrderId, crew);
+  }
+
+  const clientOfAppointment = new Map(appointments.map((a) => [a.id, a.clientName]));
+  const ratings: RevenueRating[] = rated.map(({ r, stars }) => {
+    const appointmentId = lookupId(r.Appointment);
+    return {
+      id: String(r.id),
+      workOrderId: lookupId(r.Work_Order),
+      clientName: lookupName(r.Company) ?? (appointmentId ? (clientOfAppointment.get(appointmentId) ?? null) : null),
+      technicianIds: appointmentId ? (appointmentCrews.get(appointmentId) ?? []) : [],
+      stars,
+      date: zonedDateString(str(r.Created_Time)!),
+    };
+  });
+  return { workOrders, crews, ratings, invoicedByWorkOrder };
+}
+
+/** Invoiced so far per work order, before VAT: MAHER invoices recorded in Ready to invoice (schema finance). */
+async function invoicedSoFar(admin: SupabaseClient): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  try {
+    const rows = await readAllRows<Record<string, unknown>>(
+      (from, to) => admin.schema("finance").from("line_invoice_allocations").select("fsm_work_order_id, amount").order("id").range(from, to),
+      "invoice allocations",
+    );
+    for (const r of rows) {
+      const id = str(r.fsm_work_order_id);
+      if (id) out.set(id, (out.get(id) ?? 0) + Number(r.amount ?? 0));
+    }
+  } catch (error) {
+    /* Before the finance ledger exists nothing has been invoiced through the portal. */
+    if (!/line_invoice_allocations|PGRST205|42P01|schema cache/i.test(error instanceof Error ? error.message : String(error))) throw error;
   }
   return out;
 }

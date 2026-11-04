@@ -19,6 +19,7 @@ export const REPORTS = {
   capacity: { resource: ResourceType.REPORTS_CAPACITY, title: "Capacity" },
   compliance: { resource: ResourceType.REPORTS_COMPLIANCE, title: "App compliance" },
   attendance: { resource: ResourceType.REPORTS_ATTENDANCE, title: "Daily attendance" },
+  revenue: { resource: ResourceType.REPORTS_REVENUE, title: "Revenue" },
 } as const;
 
 export type ReportKey = keyof typeof REPORTS;

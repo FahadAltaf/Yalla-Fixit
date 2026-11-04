@@ -3,9 +3,10 @@ import type { SavedFilter } from "@/lib/server/reports/access";
 import type { AttendanceReport, ComplianceReport } from "@/lib/server/reports/compliance";
 import type { MyCompliance } from "@/lib/server/reports/disputes";
 import type { CapacityReport, UtilizationReport } from "@/lib/server/reports/planning";
+import type { RevenueReport } from "@/lib/server/reports/revenue";
 import type { ActualTimesReport, QuotationReport, UnflaggedReport } from "@/lib/server/reports/reports";
 
-export type ReportKey = "quotations" | "exceptions" | "utilization" | "capacity" | "compliance" | "attendance";
+export type ReportKey = "quotations" | "exceptions" | "utilization" | "capacity" | "compliance" | "attendance" | "revenue";
 export type ReportFilters = Record<string, string>;
 export type ReportCan = { can: { view: boolean; export: boolean } };
 
@@ -46,6 +47,12 @@ export const reportsService = {
 
   utilization: (filters: ReportFilters, options: ReportRequestOptions = {}) =>
     executeRESTBackend<UtilizationReport & ReportCan>("/api/reports/utilization", {
+      params: paramsOf(filters, options),
+      signal: options.signal,
+    }),
+
+  revenue: (filters: ReportFilters, options: ReportRequestOptions = {}) =>
+    executeRESTBackend<RevenueReport & ReportCan>("/api/reports/revenue", {
       params: paramsOf(filters, options),
       signal: options.signal,
     }),

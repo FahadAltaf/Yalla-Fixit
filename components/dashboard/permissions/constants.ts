@@ -196,10 +196,10 @@ const OVERRIDE_RESOURCE_NAMES: Partial<Record<ResourceType, string>> = {
 };
 
 /*
-  Rows for pages nobody can open yet (3 Nov). Revenue's page is not in the
-  menu; while the Reports module is switched off (lib/reports/enabled.ts)
-  its pages are hidden too, all but Reporting settings, which the Finance
-  digest uses. Grants already held stay as they are.
+  Rows for pages nobody can open yet (3 Nov): while the Reports module is
+  switched off (lib/reports/enabled.ts) its pages are hidden, all but
+  Reporting settings, which the Finance digest uses. Grants already held
+  stay as they are. Revenue has its page since 4 Nov (DEV-454).
 */
 const REPORT_PAGE_RESOURCES = [
   ResourceType.REPORTS,
@@ -207,14 +207,12 @@ const REPORT_PAGE_RESOURCES = [
   ResourceType.REPORTS_UTILIZATION,
   ResourceType.REPORTS_CAPACITY,
   ResourceType.REPORTS_ATTENDANCE,
+  ResourceType.REPORTS_REVENUE,
   ResourceType.REPORTS_EXCEPTIONS,
   ResourceType.REPORTS_COMPLIANCE,
   ResourceType.COMPLIANCE_SELF,
 ];
-export const HIDDEN_RESOURCES: ResourceType[] = [
-  ResourceType.REPORTS_REVENUE,
-  ...(REPORTS_ENABLED ? [] : REPORT_PAGE_RESOURCES),
-];
+export const HIDDEN_RESOURCES: ResourceType[] = REPORTS_ENABLED ? [] : REPORT_PAGE_RESOURCES;
 
 export const getResourceDisplayName = (resource: ResourceType): string => {
   return (

@@ -80,3 +80,6 @@ debug.log
 # harness has used `.out` and `out` at different times.
 scripts/amc-db-harness/.out/
 scripts/amc-db-harness/out/
+
+# Office lock files (Excel/Word keep one open beside a file in use)
+~$*

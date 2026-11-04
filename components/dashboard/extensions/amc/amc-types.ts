@@ -607,4 +607,6 @@ export interface AmcSubmissionListResponse {
   /* FR3.2 — set when the caller holds amc/approve, so the list can show
      the review queue as well as their own submissions. */
   canApprove?: boolean;
+  /* Administrators may delete a proposal at any status (4 Nov). */
+  canDelete?: boolean;
 }

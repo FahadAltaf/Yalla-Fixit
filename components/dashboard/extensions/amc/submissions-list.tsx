@@ -17,6 +17,7 @@ import {
   Loader2,
   PencilIcon,
   ScrollText,
+  Trash2,
   Undo2,
   UserRound,
 } from "lucide-react";
@@ -26,6 +27,7 @@ import { DataTable } from "@/components/data-table";
 import { IconText } from "@/components/data-table/columns/icon-text";
 import { RecordsToolbar } from "@/components/data-table/toolbars/records-toolbar";
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/dashboard/shared/kaizen-states";
 import { Card } from "@/components/ui/card";
 import { IdentityCell } from "@/components/ui/entity-avatar";
 import { Money } from "@/components/ui/money";
@@ -33,6 +35,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -88,6 +91,9 @@ export function SubmissionsList() {
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [canApprove, setCanApprove] = useState(false);
+  /* Administrators only, as the server decides (DELETE /api/amc-submissions). */
+  const [canDelete, setCanDelete] = useState(false);
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
@@ -146,6 +152,7 @@ export function SubmissionsList() {
       /* FR3.2 — the server decides this from role_access; the list just
          reflects it, so approval rights are never inferred client-side. */
       setCanApprove(Boolean(response.canApprove));
+      setCanDelete(Boolean(response.canDelete));
       /*
         A page that has emptied under the reader -- the last proposal on
         it approved out of an "Awaiting approval" filter, say -- steps
@@ -178,6 +185,23 @@ export function SubmissionsList() {
   }, [loadSubmissions]);
 
   const actions = useAmcActions({ onChanged: loadSubmissions });
+
+  /* The dialog does the deleting and closes once the list is read again. */
+  const deleteSubmission = async (submission: AmcSubmission) => {
+    const customer = submission.customer.customerName || "this customer";
+    const number = submission.customer.proposalNumber ? ` (${submission.customer.proposalNumber})` : "";
+    const done = await confirm({
+      title: "Delete this proposal?",
+      description: `The AMC proposal for ${customer}${number} is removed for good, with any proposal or contract link already sent to the client. This cannot be undone.`,
+      confirmText: "Delete",
+      variant: "destructive",
+      action: async () => {
+        await amcSubmissionsService.deleteSubmission(submission.id);
+        await loadSubmissions();
+      },
+    });
+    if (done) toast.success(`Proposal for ${customer} deleted`);
+  };
 
   const filtered = status !== "all" || scope !== "all" || Boolean(search);
   const clearFilters = () => {
@@ -417,6 +441,18 @@ export function SubmissionsList() {
                 <EyeIcon className="size-4" />
                 View contract
               </DropdownMenuItem>
+              {canDelete ? (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    variant="destructive"
+                    onClick={() => void deleteSubmission(submission)}
+                  >
+                    <Trash2 className="size-4" />
+                    Delete
+                  </DropdownMenuItem>
+                </>
+              ) : null}
             </DropdownMenuContent>
           </DropdownMenu>
           </div>
@@ -428,6 +464,7 @@ export function SubmissionsList() {
   return (
     <div className="flex flex-col gap-4">
       {actions.dialogs}
+      {confirmDialog}
       <Card className="py-0">
         {loadError ? (
           <EmptyState

@@ -53,7 +53,8 @@ const canUseReports = (user: User) =>
   hasResourceAction(user, ResourceType.REPORTS_CAPACITY, ActionType.VIEW) ||
   hasResourceAction(user, ResourceType.REPORTS_EXCEPTIONS, ActionType.VIEW) ||
   hasResourceAction(user, ResourceType.REPORTS_ATTENDANCE, ActionType.VIEW) ||
-  hasResourceAction(user, ResourceType.REPORTS_COMPLIANCE, ActionType.VIEW);
+  hasResourceAction(user, ResourceType.REPORTS_COMPLIANCE, ActionType.VIEW) ||
+  hasResourceAction(user, ResourceType.REPORTS_REVENUE, ActionType.VIEW);
 
 
 // Workforce People (C6): one list for Scheduling's technicians and
@@ -263,6 +264,11 @@ export const baseSectionsItems: MenuItem[] = [
         title: "Capacity",
         url: "/reports/capacity",
         resource: ResourceType.REPORTS_CAPACITY,
+      },
+      {
+        title: "Revenue",
+        url: "/reports/revenue",
+        resource: ResourceType.REPORTS_REVENUE,
       },
       {
         title: "Exception reports",

@@ -9,6 +9,7 @@ const PAGES: Array<[ResourceType, string]> = [
   [ResourceType.REPORTS_QUOTATIONS, "/reports/quotations"],
   [ResourceType.REPORTS_UTILIZATION, "/reports/utilization"],
   [ResourceType.REPORTS_CAPACITY, "/reports/capacity"],
+  [ResourceType.REPORTS_REVENUE, "/reports/revenue"],
   [ResourceType.REPORTS_EXCEPTIONS, "/reports/exceptions"],
   [ResourceType.REPORTS_ATTENDANCE, "/reports/attendance"],
   [ResourceType.REPORTS_COMPLIANCE, "/reports/compliance"],

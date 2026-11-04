@@ -121,6 +121,13 @@ export const amcSubmissionsService = {
     });
   },
 
+  /* Administrators only; the server checks. */
+  deleteSubmission: async (id: string): Promise<{ deleted: true; id: string }> =>
+    executeRESTBackend<{ deleted: true; id: string }>("/api/amc-submissions", {
+      method: "DELETE",
+      params: { id },
+    }),
+
   updateSubmission: async (
     data: AmcSubmissionUpdateInput,
   ): Promise<AmcSubmission> => {

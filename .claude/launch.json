@@ -36,6 +36,15 @@
         "set NEXT_DIST_DIR=.next-amcdev&& npm run dev -- -p 3035"
       ],
       "port": 3035
+    },
+    {
+      "name": "amc-worktree",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "cd /d ..\\_wt\\amc-hardening && set NEXT_DIST_DIR=.next-amcdev&& npm run dev -- -p 3036"
+      ],
+      "port": 3036
     }
   ]
 }
