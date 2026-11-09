@@ -24,11 +24,24 @@ export type LinkSuggestion = {
   kind: "exact" | "likely";
 };
 
+/** One employee and the FSM technician they are (or are not) linked to, for the manage-links table. */
+export type EmployeeLinkRow = {
+  employee_id: string;
+  maher_id: string;
+  employee_name: string;
+  employment_status: string;
+  fsm_resource_id: string | null;
+  technician_name: string | null;
+  technician_active: boolean | null;
+};
+
 export type LinkSuggestions = {
   suggestions: LinkSuggestion[];
   unmatched_employees: { employee_id: string; maher_id: string; employee_name: string }[];
   unmatched_technicians: { fsm_resource_id: string; technician_name: string; technician_active: boolean }[];
   already_linked: number;
+  /** Every non-archived employee with its current link, for the manage-links table. */
+  people: EmployeeLinkRow[];
 };
 
 export function nameTokens(name: string): Set<string> {
@@ -61,8 +74,10 @@ export async function buildLinkSuggestions(admin: SupabaseClient): Promise<LinkS
   type Emp = { id: string; maher_id: string; full_name: string; employment_status: string; fsm_resource_id: string | null };
   type Tech = { fsm_resource_id: string; display_name: string; is_active: boolean };
   const employees = (emps ?? []) as Emp[];
+  const allTechs = (techs ?? []) as Tech[];
+  const techBySR = new Map(allTechs.map((t) => [t.fsm_resource_id, t]));
   const linkedTech = new Set(employees.map((e) => e.fsm_resource_id).filter((v): v is string => Boolean(v)));
-  const freeTechs = ((techs ?? []) as Tech[]).filter((t) => !linkedTech.has(t.fsm_resource_id)).map((t) => ({ ...t, tokens: nameTokens(t.display_name) }));
+  const freeTechs = allTechs.filter((t) => !linkedTech.has(t.fsm_resource_id)).map((t) => ({ ...t, tokens: nameTokens(t.display_name) }));
   const unlinked = employees.filter((e) => !e.fsm_resource_id);
 
   // Every candidate pair worth considering, best first, then greedy one-to-one.
@@ -100,10 +115,24 @@ export async function buildLinkSuggestions(admin: SupabaseClient): Promise<LinkS
   }
   suggestions.sort((a, b) => (a.kind === b.kind ? a.employee_name.localeCompare(b.employee_name) : a.kind === "exact" ? -1 : 1));
 
+  const people: EmployeeLinkRow[] = employees.map((e) => {
+    const t = e.fsm_resource_id ? techBySR.get(e.fsm_resource_id) : undefined;
+    return {
+      employee_id: e.id,
+      maher_id: e.maher_id,
+      employee_name: e.full_name,
+      employment_status: e.employment_status,
+      fsm_resource_id: e.fsm_resource_id ?? null,
+      technician_name: t?.display_name ?? null,
+      technician_active: t ? t.is_active : null,
+    };
+  });
+
   return {
     suggestions,
     unmatched_employees: unlinked.filter((e) => !usedEmp.has(e.id)).map((e) => ({ employee_id: e.id, maher_id: e.maher_id, employee_name: e.full_name })),
     unmatched_technicians: freeTechs.filter((t) => !usedTech.has(t.fsm_resource_id)).map((t) => ({ fsm_resource_id: t.fsm_resource_id, technician_name: t.display_name, technician_active: t.is_active })),
     already_linked: employees.length - unlinked.length,
+    people,
   };
 }

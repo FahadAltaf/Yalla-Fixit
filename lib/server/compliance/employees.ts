@@ -365,10 +365,19 @@ export async function updateEmployee(
   // never re-validated, so a record whose status FSM has overridden can still
   // have its other fields edited.
   const linkChanged = merged.fsm_resource_id !== (current.technician?.fsm_resource_id ?? null);
-  const statusChanged = merged.employment_status !== current.stored_employment_status;
-  if (linkChanged || statusChanged) {
+  if (linkChanged || merged.employment_status !== current.stored_employment_status) {
     const link = await technicianLink(admin, merged.fsm_resource_id);
     if (merged.fsm_resource_id && !link.linked) fieldErrors.fsm_resource_id = "That FSM technician no longer exists";
+    // When ONLY the FSM link is being set (no explicit status in the patch — e.g.
+    // the FSM-links linker, which can link an inactive employee), reconcile the
+    // stored status to the one FSM governs instead of refusing the link: a record
+    // the sheet marked Inactive whose technician is active in FSM becomes Active,
+    // and one marked Active whose technician is inactive in FSM becomes Inactive
+    // (D11 — FSM is the source of truth for linked staff).
+    if (linkChanged && patch.employment_status === undefined && link.linked && !allowedStatuses(link).includes(merged.employment_status)) {
+      merged.employment_status = link.fsmActive ? "active" : "inactive";
+    }
+    const statusChanged = merged.employment_status !== current.stored_employment_status;
     const statusProblem = statusError(merged.employment_status, link);
     if (statusProblem && (statusChanged || linkChanged)) fieldErrors.employment_status = statusProblem;
   }
