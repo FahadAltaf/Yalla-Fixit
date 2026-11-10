@@ -89,6 +89,8 @@ export type FsmContact = {
   company: { id: string; name: string } | null;
   /** Maher_Id__C, which this FSM account requires on a contact. */
   maherId: string | null;
+  /** Customer_Id__C, the org's customer number (YFI…): the Client ID a proposal prints. */
+  customerId?: string | null;
   createdTime: string | null;
 };
 
@@ -127,6 +129,7 @@ export function mapContact(raw: Raw): FsmContact {
     phone: text(raw.Phone),
     company: raw.Company?.id ? { id: String(raw.Company.id), name: String(raw.Company.name ?? "") } : null,
     maherId: text(raw.Maher_Id__C),
+    customerId: text(raw.Customer_Id__C),
     createdTime: text(raw.Created_Time),
   };
 }

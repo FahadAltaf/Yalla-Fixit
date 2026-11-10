@@ -18,6 +18,7 @@ import { PhoneInput } from "@/components/ui/phone-input";
 import type { CustomerRecord } from "@/modules/amc-contracts/amc-contracts-service";
 
 import { Field } from "./enquiry-ui";
+import { formatPhone } from "@/lib/phone/format-phone";
 
 /*
   The enquiry's client: one picked from the list (Zoho FSM, as Snagging's
@@ -31,6 +32,8 @@ export type NewClient = {
   email: string;
   maherId: string;
   company: string;
+  /** The Client ID (YFI…), asked where the caller needs it, as a proposal does. */
+  customerRef?: string;
 };
 export type ChosenClient =
   { kind: "existing"; customer: CustomerRecord } | NewClient;
@@ -68,11 +71,11 @@ export function ChosenClientCard({
       ? [
           client.customer.customerRef,
           client.customer.email,
-          client.customer.phone,
+          formatPhone(client.customer.phone),
         ]
           .filter(Boolean)
           .join(" · ") || "No contact details"
-      : [client.company, client.email, client.phone]
+      : [client.company, client.email, formatPhone(client.phone)]
           .filter(Boolean)
           .join(" · ") || "Saved as a prospect with the enquiry";
   return (
@@ -110,10 +113,16 @@ export function NewClientDialog({
   adding,
   onClose,
   onAdd,
+  intro,
+  askClientId = false,
 }: {
   adding: { typed: string; fromFsm: boolean } | null;
   onClose: () => void;
   onAdd: (client: NewClient) => void;
+  /** The first line under the title; the enquiry's wording when left out. */
+  intro?: string;
+  /** Offers a Client ID field too (optional: the next one is given when blank). */
+  askClientId?: boolean;
 }) {
   return (
     <Dialog open={adding !== null} onOpenChange={(open) => !open && onClose()}>
@@ -124,6 +133,8 @@ export function NewClientDialog({
             requireEmail={adding.fromFsm}
             onClose={onClose}
             onAdd={onAdd}
+            intro={intro}
+            askClientId={askClientId}
           />
         ) : null}
       </DialogContent>
@@ -136,11 +147,15 @@ function NewClientForm({
   requireEmail,
   onClose,
   onAdd,
+  intro = "Saved as a prospect when the enquiry is logged, and they are the enquiry's contact.",
+  askClientId = false,
 }: {
   typed: string;
   requireEmail: boolean;
   onClose: () => void;
   onAdd: (client: NewClient) => void;
+  intro?: string;
+  askClientId?: boolean;
 }) {
   const [value, setValue] = useState<NewClient>({
     kind: "new",
@@ -149,6 +164,7 @@ function NewClientForm({
     email: "",
     maherId: "",
     company: "",
+    customerRef: "",
   });
   const patch = (next: Partial<NewClient>) =>
     setValue((v) => ({ ...v, ...next }));
@@ -165,11 +181,11 @@ function NewClientForm({
       <DialogHeader>
         <DialogTitle>Add a client</DialogTitle>
         <DialogDescription>
-          Saved as a prospect when the enquiry is logged, and they are the
-          enquiry&apos;s contact.
+          {intro}
           {requireEmail
             ? " Zoho FSM needs their email and Maher ID."
             : " Only the name and phone are required."}
+          {askClientId ? " A Client ID is given automatically when it is left blank." : ""}
         </DialogDescription>
       </DialogHeader>
       <div className="grid gap-4 py-2">
@@ -183,6 +199,17 @@ function NewClientForm({
             maxLength={200}
           />
         </Field>
+        {askClientId ? (
+          <Field label="Client ID (optional)" htmlFor="new-client-ref">
+            <Input
+              id="new-client-ref"
+              placeholder="Given automatically, e.g. YFI1806"
+              value={value.customerRef ?? ""}
+              onChange={(e) => patch({ customerRef: e.target.value })}
+              maxLength={60}
+            />
+          </Field>
+        ) : null}
         <Field label="Phone" htmlFor="new-client-phone">
           <PhoneInput
             id="new-client-phone"
@@ -237,6 +264,7 @@ function NewClientForm({
               email: value.email.trim(),
               maherId: value.maherId.trim(),
               company: value.company.trim(),
+              customerRef: value.customerRef?.trim() ?? "",
             })
           }
         >

@@ -40,8 +40,43 @@ export function getPermissionColumns(
   expansion?: {
     isOpen: (resource: ResourceType) => boolean;
     onToggle: (resource: ResourceType) => void;
-  }
+  },
+  /*
+    "All Records" or "Own Records". Only the Todos module reads it (a role
+    on Own Records sees the todos it owns or is assigned to), so the
+    selector shows on that row alone. Left out, the column is not shown.
+  */
+  onRecordAccessChange?: (resource: ResourceType, recordAccess: string) => void
 ): ColumnDef<PermissionRowData>[] {
+  const recordAccessColumn: ColumnDef<PermissionRowData> = {
+    id: "recordAccess",
+    header: "Record access",
+    cell: ({ row }) => {
+      const { resource, recordAccess, availableRecordAccessOptions, enabled } = row.original;
+      if (resource !== ResourceType.TODOS) return null;
+      return (
+        <Select
+          value={recordAccess}
+          onValueChange={(value) => onRecordAccessChange?.(resource, value)}
+          disabled={!enabled}
+        >
+          <SelectTrigger className="w-40" aria-label="Record access for Todos">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {availableRecordAccessOptions.map((option) => (
+              <SelectItem key={option} value={option}>
+                {option}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      );
+    },
+    enableSorting: false,
+    size: 160,
+  };
+
   return [
     {
       id: "resource",
@@ -124,10 +159,10 @@ export function getPermissionColumns(
         const isDashboard = resource === ResourceType.DASHBOARD;
 
         const actionStrings = availableActions.map((action) =>
-          getActionDisplayName(action)
+          getActionDisplayName(action, resource)
         );
         const selectedActionStrings = selectedActions.map((action) =>
-          getActionDisplayName(action)
+          getActionDisplayName(action, resource)
         );
 
         return (
@@ -138,7 +173,7 @@ export function getPermissionColumns(
               onChange={(selected) => {
                 // Convert back to ActionType enum
                 const selectedActions = availableActions.filter((action) =>
-                  selected.includes(getActionDisplayName(action))
+                  selected.includes(getActionDisplayName(action, resource))
                 );
                 onActionsChange(resource, selectedActions);
               }}
@@ -151,5 +186,6 @@ export function getPermissionColumns(
       enableSorting: false,
       size: 200,
     },
+    ...(onRecordAccessChange ? [recordAccessColumn] : []),
   ];
 }

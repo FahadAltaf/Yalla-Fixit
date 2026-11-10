@@ -20,11 +20,12 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { jobSheetsService, type JobReviewItem } from "@/modules/amc-contracts/job-sheets-service";
 
-import { AmcNotificationsBell } from "./amc-notifications-bell";
 import { ReportClockBadge, ReviewReasonBadges } from "./job-sheet-panel";
 import { useAmcData } from "./use-amc-data";
 import { useDialog } from "./profile/use-dialog";
 import { VisitDetailDialog } from "./visit-detail-dialog";
+import { TruncatedText } from "@/components/ui/truncated-text";
+import { ModuleGuide } from "@/components/dashboard/extensions/amc-contracts/module-guide";
 
 const FILTER_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: "any", label: "All job sheets" },
@@ -89,7 +90,7 @@ export function JobReviewsPage() {
         header: "Property",
         cell: ({ row }) =>
           row.original.propertyLabel ? (
-            <span className="line-clamp-2 max-w-[240px] text-sm">{row.original.propertyLabel}</span>
+            <TruncatedText text={row.original.propertyLabel} className="max-w-[240px] text-sm" />
           ) : (
             <span className="text-muted-foreground text-sm">—</span>
           ),
@@ -159,8 +160,8 @@ export function JobReviewsPage() {
       <PageHeading
         eyebrow="Operations"
         title="Job reviews"
+        info={<ModuleGuide module="jobReviews" />}
         description="Submitted job sheets waiting for a supervisor, oldest first. Return one with what needs fixing, or close the visit to send the client the service report within 48 hours."
-        actions={<AmcNotificationsBell />}
       />
 
       {data && !data.migrated ? (

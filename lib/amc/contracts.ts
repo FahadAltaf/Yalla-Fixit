@@ -930,6 +930,8 @@ export function signedCommercials(
     frequency: number;
     basePrice?: number | null;
     price?: number | null;
+    /* How the row is charged (weekly/manpower); see lib/amc/pricing.ts. */
+    frequencyType?: string | null;
   }>,
   stored: { discountPercent?: number | null; discountAmount?: number | null; finalPrice?: number | null },
 ): {

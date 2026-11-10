@@ -7,7 +7,11 @@ import {
   UserRoles,
 } from "@/types/types";
 import {
+  BadgeCheck,
+  Bell,
   CalendarClock,
+  ReceiptText,
+  ChartColumn,
   ClipboardCheck,
   FileSignature,
   LayoutDashboard,
@@ -17,6 +21,7 @@ import {
   Shield,
   User as UserIcon,
   UserCog,
+  UsersRound,
 } from "lucide-react";
 
 import {
@@ -27,6 +32,54 @@ import {
   canViewAmcRateCard,
   canViewAmcVisits,
 } from "@/components/dashboard/extensions/amc/amc-constants";
+import { REPORTS_ENABLED } from "@/lib/reports/enabled";
+import { hasResourceAction, hasSharedListAction } from "@/lib/role-permissions";
+
+/* Who reaches the Ready-to-Invoice queue: Finance and managers (queue
+   View), and the coordinators and verifier who answer its queries and
+   exclusions (BRD §6.7). The API applies the same rule. */
+const canUseFinanceQueue = (user: User) =>
+  hasResourceAction(user, ResourceType.FINANCE_QUEUE, ActionType.VIEW) ||
+  hasResourceAction(user, ResourceType.FINANCE_EXCLUSIONS, ActionType.CREATE) ||
+  hasResourceAction(user, ResourceType.FINANCE_EXCLUSIONS, ActionType.APPROVE);
+
+/* Holding both views of Ready to invoice (admins do): each gets its own entry (3 Nov). */
+const hasBothFinanceViews = (user: User) =>
+  hasResourceAction(user, ResourceType.FINANCE_QUEUE, ActionType.VIEW) &&
+  hasResourceAction(user, ResourceType.FINANCE_EXCLUSIONS, ActionType.CREATE);
+
+/* The Finance group: any of its pages. */
+const canUseFinance = (user: User) =>
+  canUseFinanceQueue(user) ||
+  hasResourceAction(user, ResourceType.FINANCE_QUERIES, ActionType.VIEW) ||
+  hasResourceAction(user, ResourceType.FINANCE_METRICS, ActionType.VIEW);
+
+/* Reports (BRD 5.2 B): the group shows when any report it holds may be opened. */
+const canUseReports = (user: User) =>
+  hasResourceAction(user, ResourceType.REPORTS_QUOTATIONS, ActionType.VIEW) ||
+  hasResourceAction(user, ResourceType.REPORTS_UTILIZATION, ActionType.VIEW) ||
+  hasResourceAction(user, ResourceType.REPORTS_CAPACITY, ActionType.VIEW) ||
+  hasResourceAction(user, ResourceType.REPORTS_EXCEPTIONS, ActionType.VIEW) ||
+  hasResourceAction(user, ResourceType.REPORTS_ATTENDANCE, ActionType.VIEW) ||
+  hasResourceAction(user, ResourceType.REPORTS_COMPLIANCE, ActionType.VIEW);
+
+
+// Workforce People (C6): one list for Scheduling's technicians and
+// Compliance's employees, so either module's View opens it.
+const canSeeWorkforce = (user: User): boolean =>
+  hasResourceAction(user, ResourceType.SCHEDULING, ActionType.VIEW) ||
+  hasResourceAction(user, ResourceType.COMPLIANCE, ActionType.VIEW);
+
+// Settings → Workforce: Workforce settings, or the old key of any list on it.
+const canSeeWorkforceLists = (user: User): boolean =>
+  hasSharedListAction(user, ResourceType.SCHEDULING, ActionType.VIEW) ||
+  hasSharedListAction(user, ResourceType.COMPLIANCE_SETTINGS, ActionType.VIEW);
+
+const workforceSettingsItem: MenuItem = {
+  title: "Workforce",
+  url: "/settings/workforce",
+  canSee: canSeeWorkforceLists,
+};
 
 // hasViewPermission and filter functions unchanged
 const hasViewPermission = (
@@ -108,6 +161,22 @@ export const baseSectionsItems: MenuItem[] = [
     isActive: false,
     resource: ResourceType.DASHBOARD,
   },
+  /* Everyone's own inbox (BRD §6.2); no resource, so always shown. */
+  {
+    title: "Notifications",
+    url: "/notifications",
+    icon: <Bell className="size-4 text-primary" />,
+    isActive: false,
+  },
+  /* A technician's own compliance (BRD §6.7); those who can open the full report use that instead. */
+  {
+    title: "My compliance",
+    url: "/my-compliance",
+    icon: <BadgeCheck className="size-4 text-primary" />,
+    isActive: false,
+    /* Part of the Reports module: hidden while it is switched off (lib/reports/enabled.ts). */
+    canSee: (user: User) => REPORTS_ENABLED && !hasResourceAction(user, ResourceType.REPORTS_COMPLIANCE, ActionType.VIEW),
+  },
   {
     title: "Todos",
     url: "/todos",
@@ -136,6 +205,87 @@ export const baseSectionsItems: MenuItem[] = [
         title: "Quotation templates",
         url: "/extensions/quotation-templates",
         resource: ResourceType.EXTENSIONS_QUOTATION_TEMPLATES,
+      },
+    ],
+  },
+  {
+    title: "Finance",
+    url: "/finance/queue",
+    icon: <ReceiptText className="size-4 text-primary" />,
+    isActive: false,
+    canSee: canUseFinance,
+    items: [
+      {
+        title: "Ready to invoice",
+        url: "/finance/queue",
+        canSee: (user: User) => canUseFinanceQueue(user) && !hasBothFinanceViews(user),
+      },
+      {
+        /* Short enough for one line in the menu (3 Nov); the page title says "Ready to invoice (Finance)". */
+        title: "Invoices (Finance)",
+        url: "/finance/queue",
+        canSee: hasBothFinanceViews,
+      },
+      {
+        title: "Invoices (Operations)",
+        url: "/finance/operations",
+        canSee: hasBothFinanceViews,
+      },
+      {
+        title: "Queries",
+        url: "/finance/queries",
+        resource: ResourceType.FINANCE_QUERIES,
+      },
+      {
+        title: "Invoicing metrics",
+        url: "/finance/metrics",
+        resource: ResourceType.FINANCE_METRICS,
+      },
+    ],
+  },
+  {
+    title: "Reports",
+    url: "/reports",
+    icon: <ChartColumn className="size-4 text-primary" />,
+    isActive: false,
+    /* Hidden while the Reports module is switched off (lib/reports/enabled.ts). */
+    canSee: (user: User) => REPORTS_ENABLED && canUseReports(user),
+    items: [
+      {
+        title: "Quotation summary",
+        url: "/reports/quotations",
+        resource: ResourceType.REPORTS_QUOTATIONS,
+      },
+      {
+        title: "Utilization",
+        url: "/reports/utilization",
+        resource: ResourceType.REPORTS_UTILIZATION,
+      },
+      {
+        title: "Capacity",
+        url: "/reports/capacity",
+        resource: ResourceType.REPORTS_CAPACITY,
+      },
+      {
+        title: "Exception reports",
+        url: "/reports/exceptions",
+        resource: ResourceType.REPORTS_EXCEPTIONS,
+      },
+      {
+        title: "Daily attendance",
+        url: "/reports/attendance",
+        resource: ResourceType.REPORTS_ATTENDANCE,
+      },
+      {
+        title: "App compliance",
+        url: "/reports/compliance",
+        resource: ResourceType.REPORTS_COMPLIANCE,
+      },
+      /* BRD B5: the reports kept in Zoho FSM, linked from here. Hidden for now (30 Oct, to be worked on later). */
+      {
+        title: "Zoho FSM reports",
+        url: "/reports/fsm",
+        canSee: () => false,
       },
     ],
   },
@@ -175,8 +325,8 @@ export const baseSectionsItems: MenuItem[] = [
            sections claim longer prefixes, so this only wins on those. */
         resource: ResourceType.AMC_CONTRACTS,
       },
-      { title: "Renewals", url: "/extensions/amc-contracts/renewals", resource: ResourceType.AMC_RENEWALS },
-      { title: "Payments", url: "/extensions/amc-contracts/payments", canSee: canViewAmcPayments },
+      // { title: "Renewals", url: "/extensions/amc-contracts/renewals", resource: ResourceType.AMC_RENEWALS },
+      // { title: "Payments", url: "/extensions/amc-contracts/payments", canSee: canViewAmcPayments },
       {
         title: "Clients",
         url: "/extensions/amc-contracts/customers",
@@ -185,19 +335,32 @@ export const baseSectionsItems: MenuItem[] = [
         resource: ResourceType.AMC_CLIENTS,
       },
       { title: "Site visits", url: "/extensions/amc-contracts/assessments", resource: ResourceType.AMC_SITE_VISITS },
-      { title: "Visit board", url: "/extensions/amc-contracts/board", canSee: canViewAmcVisits },
-      { title: "Job reviews", url: "/extensions/amc-contracts/job-reviews", canSee: canViewAmcVisits },
-      { title: "Call outs", url: "/extensions/amc-contracts/call-outs", resource: ResourceType.AMC_CALL_OUTS },
-      { title: "Additional work", url: "/extensions/amc-contracts/additional-works", resource: ResourceType.AMC_ADDITIONAL_WORKS },
-      { title: "Technicians", url: "/extensions/amc-contracts/technicians", resource: ResourceType.AMC_TECHNICIANS },
-      { title: "Reports", url: "/extensions/amc-contracts/reports", resource: ResourceType.AMC_REPORTS },
+      // { title: "Visit board", url: "/extensions/amc-contracts/board", canSee: canViewAmcVisits },
+      // { title: "Job reviews", url: "/extensions/amc-contracts/job-reviews", canSee: canViewAmcVisits },
+      // { title: "Call outs", url: "/extensions/amc-contracts/call-outs", resource: ResourceType.AMC_CALL_OUTS },
+      // { title: "Additional work", url: "/extensions/amc-contracts/additional-works", resource: ResourceType.AMC_ADDITIONAL_WORKS },
+      // { title: "Technicians", url: "/extensions/amc-contracts/technicians", resource: ResourceType.AMC_TECHNICIANS },
+      // { title: "Reports", url: "/extensions/amc-contracts/reports", resource: ResourceType.AMC_REPORTS },
       { title: "Rate card", url: "/extensions/amc-contracts/rate-card", canSee: canViewAmcRateCard },
-      { title: "FSM mapping", url: "/extensions/amc-contracts/fsm-services", resource: ResourceType.AMC_FSM_MAPPING },
-      { title: "Operations settings", url: "/extensions/amc-contracts/settings", resource: ResourceType.AMC_OPERATIONS_SETTINGS },
+      // { title: "FSM mapping", url: "/extensions/amc-contracts/fsm-services", resource: ResourceType.AMC_FSM_MAPPING },
+      // { title: "Operations settings", url: "/extensions/amc-contracts/settings", resource: ResourceType.AMC_OPERATIONS_SETTINGS },
       /* Admins also have it under Settings; this is for managers and
          department heads with AMC Configuration who are not admins. */
-      { title: "Configuration", url: "/settings/amc/configuration", canSee: canViewAmcConfig },
+      // { title: "Configuration", url: "/settings/amc/configuration", canSee: canViewAmcConfig },
     ],
+  },
+  /*
+    Workforce (C6, Sami 31 Oct 2026): everyone in one list, the compliance
+    employees and the FSM technicians joined by the FSM link, with bulk
+    editing. Replaces Scheduling's Technicians & leave page and Compliance's
+    Employees list; each field is still stored where its module reads it.
+  */
+  {
+    title: "Workforce",
+    url: "/workforce",
+    icon: <UsersRound className="size-4 text-primary" />,
+    isActive: false,
+    canSee: canSeeWorkforce,
   },
   {
     title: "Snagging",
@@ -271,6 +434,27 @@ export const baseSectionsItems: MenuItem[] = [
       },
     ],
   },
+  {
+    // Manpower Compliance (FRD FR-1 to FR-14): Emirates ID, passport and
+    // training expiry tracking for YFI staff.
+    title: "Compliance",
+    url: "/compliance",
+    icon: <BadgeCheck className="size-4 text-primary" />,
+    resource: ResourceType.COMPLIANCE,
+    items: [
+      {
+        title: "Overview",
+        url: "/compliance",
+        exact: true,
+        resource: ResourceType.COMPLIANCE,
+      },
+      {
+        title: "Expiry reminders",
+        url: "/compliance/reminders",
+        resource: ResourceType.COMPLIANCE,
+      },
+    ],
+  },
 ] as MenuItem[];
 
 export const baseAdminItems: MenuItem[] = [
@@ -338,7 +522,41 @@ export const getNavData = (user: User) => {
           url: "/settings/snagging",
           resource: ResourceType.SNAGGING_CATALOGUE,
         },
+        /* Thresholds, recipients and penalties for invoicing and reports
+           (BRD §6.6). */
+        {
+          title: "Reporting",
+          url: "/settings/reporting",
+          /* Shown even while the Reports module is switched off: it holds the Finance digest's recipients and time (3 Nov). */
+          resource: ResourceType.REPORTING_SETTINGS,
+        },
+        /*
+          Manpower Compliance: certificate types, designation and
+          nationality lists, deactivation-request recipients. Configures
+          the module rather than operates it, so it sits here too.
+        */
+        {
+          title: "Compliance",
+          url: "/settings/compliance",
+          resource: ResourceType.COMPLIANCE_SETTINGS,
+        },
+        // The lists Scheduling and Compliance share (13-5).
+        workforceSettingsItem,
       ],
+    });
+  } else if (canSeeWorkforceLists(user)) {
+    /*
+      Managers hold Workforce settings without being admins (13-5). The
+      route guard follows this menu, so they get a Settings group with that
+      one page in it and none of the admin configuration.
+    */
+    adminItems.unshift({
+      title: "Settings",
+      url: "/settings/workforce",
+      icon: <Settings className="size-4 text-primary" />,
+      isActive: false,
+      canSee: () => true,
+      items: [workforceSettingsItem],
     });
   }
 

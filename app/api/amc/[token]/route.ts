@@ -144,8 +144,15 @@ async function toPublicDocument(
     snapshot ? null : await readAmcSettings(admin),
     includedIds,
   );
+  /* The contract document prints the contract's own number. */
+  let contractNumber: string | null = null;
+  if (kind === "contract") {
+    const { data: contract } = await admin.from("amc_contracts").select("contract_number").eq("submission_id", String(row.id)).maybeSingle<{ contract_number: string | null }>();
+    contractNumber = contract?.contract_number ?? null;
+  }
   return {
     source: {
+      contract_number: contractNumber,
       property: row.property ?? {},
       customer: { ...customer, proposalNumber: row.proposal_number ?? "" },
       document_options: row.document_options ?? {},

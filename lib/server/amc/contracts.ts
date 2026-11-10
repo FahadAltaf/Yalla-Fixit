@@ -14,6 +14,7 @@ import {
   type StoredContractStatus,
 } from "@/lib/amc/contracts";
 import { grandTotalFromFinal, vatOnFinal } from "@/lib/amc/pricing";
+import { chargeFrequencyType } from "@/components/dashboard/extensions/amc/amc-constants";
 import { buildRenewalDraft, renewalBlockedReason } from "@/lib/amc/renewal";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { notifyContractEvent, notifyEntitlementState } from "@/lib/server/amc/notifications";
@@ -304,11 +305,14 @@ export async function prepareActivation(admin: Admin, submissionId: string) {
     price?: number | null;
   }>;
   /* Priced exactly as signed (see signedCommercials). */
-  const signed = signedCommercials(rows, {
+  const signed = signedCommercials(
+    rows.map((row) => ({ ...row, frequencyType: chargeFrequencyType(row.serviceId) })),
+    {
     discountPercent: submission.discount_percent as number | null,
     discountAmount: submission.discount_amount as number | null,
     finalPrice: submission.final_price as number | null,
-  });
+    },
+  );
   const { finalPrice } = signed;
   const commercial = {
     subtotal: signed.subtotal,

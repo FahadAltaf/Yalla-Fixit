@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { toast } from "sonner";
+import { isListedTechnician } from "@/lib/people/pickable";
 import {
   scheduleService,
   fsmLookupService,
@@ -1072,7 +1073,7 @@ function TechnicianChecklist({
   const [open, setOpen] = useState(defaultOpen);
   const [filter, setFilter] = useState("");
   const shown = technicians
-    .filter((t) => t.is_active || selected.includes(t.fsm_resource_id))
+    .filter((t) => isListedTechnician(t) || selected.includes(t.fsm_resource_id))
     .filter((t) => t.display_name.toLowerCase().includes(filter.toLowerCase()));
   return (
     <div>

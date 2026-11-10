@@ -54,14 +54,16 @@ import {
   type RatePackage,
   type RatePromotion,
 } from "@/lib/amc/rate-card";
+import { describeRateCardField } from "@/lib/amc/rate-card-history";
 import { cn } from "@/lib/utils";
 import { proposalRulesService, type RateCardResponse, type RateCardVersion } from "@/modules/amc-submissions";
 import { formatCurrencyAED } from "@/utils/format-currency";
 
-import { AmcNotificationsBell } from "../amc-notifications-bell";
 import { ConfigTableToolbar, LocalDataTable, RowActionsMenu } from "../config-table";
 import { useUrlTab } from "../profile/use-url-tab";
 import { useAmcData } from "../use-amc-data";
+import { TruncatedText } from "@/components/ui/truncated-text";
+import { ModuleGuide } from "@/components/dashboard/extensions/amc-contracts/module-guide";
 
 const TABS = ["rates", "packages", "promotions", "history"] as const;
 const dmy = (iso: string) => iso.split("-").reverse().join("/");
@@ -113,10 +115,10 @@ export function RateCardPage() {
     <PageHeading
       eyebrow="Pricing"
       title="Rate card"
+      info={<ModuleGuide module="rateCard" />}
       description="The rates every proposal is priced from: per service and property model, with a floor, the frequencies allowed, packages and promotions."
       actions={
         <>
-          <AmcNotificationsBell />
           {actions}
         </>
       }
@@ -297,8 +299,8 @@ function RatesTab({ card, editing, services, onChange }: { card: RateCard; editi
       header: "Service",
       cell: ({ row }) => (
         <div className={cn("flex min-w-0 flex-col", row.original.retired && "opacity-60")}>
-          <span className="truncate font-medium">{label(row.original.serviceId)}</span>
-          <span className="text-muted-foreground truncate text-xs">{row.original.unit}</span>
+          <TruncatedText className="font-medium">{label(row.original.serviceId)}</TruncatedText>
+          <TruncatedText className="text-muted-foreground text-xs">{row.original.unit}</TruncatedText>
         </div>
       ),
     },
@@ -314,13 +316,13 @@ function RatesTab({ card, editing, services, onChange }: { card: RateCard; editi
     },
     {
       id: "standard",
-      header: () => <div className="text-right">Standard</div>,
-      cell: ({ row }) => <div className="text-right text-sm tabular-nums">{formatCurrencyAED(row.original.standardRate)}</div>,
+      header: () => <div>Standard</div>,
+      cell: ({ row }) => <div className="text-sm tabular-nums">{formatCurrencyAED(row.original.standardRate)}</div>,
     },
     {
       id: "floor",
-      header: () => <div className="text-right">Floor</div>,
-      cell: ({ row }) => <div className="text-right text-sm tabular-nums">{formatCurrencyAED(row.original.floorRate)}</div>,
+      header: () => <div>Floor</div>,
+      cell: ({ row }) => <div className="text-sm tabular-nums">{formatCurrencyAED(row.original.floorRate)}</div>,
     },
     {
       id: "frequencies",
@@ -816,18 +818,18 @@ function PromotionsTab({
     },
     {
       id: "off",
-      header: () => <div className="text-right">Off</div>,
-      cell: ({ row }) => <div className="text-right text-sm tabular-nums">{row.original.percentOff}%</div>,
+      header: () => <div>Off</div>,
+      cell: ({ row }) => <div className="text-sm tabular-nums">{row.original.percentOff}%</div>,
     },
     {
       id: "applies",
       header: "Applies to",
       cell: ({ row }) => (
         <div className="flex min-w-0 flex-col text-sm">
-          <span className="truncate">{row.original.serviceIds.length ? row.original.serviceIds.map(label).join(", ") : "Every service"}</span>
-          <span className="text-muted-foreground truncate text-xs">
+          <TruncatedText text={row.original.serviceIds.length ? row.original.serviceIds.map(label).join(", ") : "Every service"} />
+          <TruncatedText className="text-muted-foreground text-xs">
             {row.original.models.length ? row.original.models.map((m) => MODEL_LABELS[m]).join(", ") : "Every model"}
-          </span>
+          </TruncatedText>
         </div>
       ),
     },
@@ -1029,7 +1031,6 @@ function PromotionDialog({
 /* History and publishing                                              */
 /* ------------------------------------------------------------------ */
 
-const show = (value: unknown) => (value === null || value === undefined ? "—" : Array.isArray(value) ? value.join(", ") || "—" : String(value));
 
 function HistoryTab({ versions, label }: { versions: RateCardVersion[]; label: (id: string) => string }) {
   /* Newest first; each compared with the one published before it. */
@@ -1068,7 +1069,7 @@ function HistoryTab({ versions, label }: { versions: RateCardVersion[]; label: (
                         <li key={`${c.kind}-${c.id}`} className="text-xs">
                           <span className="font-medium">{c.label}</span>{" "}
                           <span className="text-muted-foreground">
-                            {c.change === "added" ? `${c.kind} added` : c.change === "removed" ? `${c.kind} removed` : c.fields.map((f) => `${f.field}: ${show(f.before)} → ${show(f.after)}`).join("; ")}
+                            {c.change === "added" ? `${c.kind} added` : c.change === "removed" ? `${c.kind} removed` : c.fields.map((f) => describeRateCardField(f, label)).join("; ")}
                           </span>
                         </li>
                       ))}

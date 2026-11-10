@@ -144,7 +144,30 @@ export const amcServiceRowSchema = z.object({
   promotionId: z.string().nullable().optional(),
   promotionPercent: z.number().nullable().optional(),
   belowFloor: z.boolean().optional(),
+  /*
+    What the service covers on this property, as signed contracts name it
+    ("10 FCU", "3 kitchen hoods") (DEV-261). Optional, free text, and
+    printed beside the service name in its clause heading and in the
+    service frequency table.
+  */
+  equipment: z.string().max(80, "Keep the equipment under 80 characters").optional(),
+  /*
+    A service added to this proposal alone (DEV-260): kitchen hood
+    cleaning, grease trap cleaning and the like, which vary by business
+    and are not in AMC Settings. Its id starts with CUSTOM_SERVICE_PREFIX;
+    the name heads its own clause and its frequency table row, and the
+    scope prints under it.
+  */
+  customName: z.string().max(120).optional(),
+  customScope: z.string().max(4000).optional(),
 });
+
+/* A service row's id when the service was added to the proposal itself (DEV-260). */
+export const CUSTOM_SERVICE_PREFIX = "custom-";
+
+export function isCustomServiceRow(row: { serviceId: string }): boolean {
+  return row.serviceId.startsWith(CUSTOM_SERVICE_PREFIX);
+}
 
 export const amcFormSchema = z
   .object({
@@ -165,10 +188,20 @@ export const amcFormSchema = z
       in AMC Settings. Empty means the standard rates.
     */
     fixedPriceRates: z.array(z.string().max(300)).max(20),
+    /*
+      Contract wording edited on this proposal alone (DEV-263), by clause
+      id, and each standard service's scope, by service id. Absent keys
+      print the AMC Settings text; nothing here ever changes the default.
+    */
+    clauseOverrides: z.record(z.string(), z.string().max(20000)),
+    scopeOverrides: z.record(z.string(), z.string().max(20000)),
     accountManagers: z.tuple([
       amcAccountManagerSchema,
       amcAccountManagerSchema,
     ]),
+    /* The client and property picked from the records; their details fill the fields that print. */
+    customerRecordId: z.string().nullable().optional(),
+    propertyRecordId: z.string().nullable().optional(),
     customerName: z.string().min(1, "Client name is required"),
     /* FR4.4 / §8.2: prints in the contract header, where it used to
        fall back to "XXX". Required now. */
@@ -191,6 +224,8 @@ export const amcFormSchema = z
     /* Allocated by the server on first save (step 1.7), so the user is
        never asked for it and cannot collide it. Empty until then. */
     proposalNumber: z.string(),
+    /* The contract's number once the client has approved; only the contract document prints it. */
+    contractNumber: z.string().optional(),
     submissionId: z.string().uuid().optional(),
   })
   .superRefine((data, ctx) => {
@@ -204,6 +239,15 @@ export const amcFormSchema = z
     }
 
     for (const row of includedRows) {
+      // A custom service prints under its name, so it cannot go without one (DEV-260).
+      if (isCustomServiceRow(row) && !row.customName?.trim()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Give every custom service a name",
+          path: ["serviceRows"],
+        });
+        break;
+      }
       /*
         FR2.12: every checked row needs a base price before submission.
         Checked explicitly against undefined -- 0 is a valid price (a
@@ -327,8 +371,14 @@ export type AmcAccountManager = z.infer<typeof amcAccountManagerSchema>;
 export type AmcEntitlementTerm = z.infer<typeof amcEntitlementTermSchema>;
 export type AmcFormData = z.infer<typeof amcFormSchema>;
 
+/*
+  weekly and manpower came with the Scope of Works Library (Oct 2026): a
+  pool is serviced so many times a WEEK, and a deployed cleaner or office
+  boy is priced per person per month, with the frequency saying how many
+  days a week they work.
+*/
 export type AmcServiceFrequencyType =
-  "covered" | "unlimited" | "ppm" | "handyman" | "fixed";
+  "covered" | "unlimited" | "ppm" | "handyman" | "fixed" | "weekly" | "manpower";
 
 export type AmcDocumentType = "proposal" | "contract";
 
@@ -349,9 +399,18 @@ export interface AmcService {
      comes from the base price entered per proposal (FR2.4). */
   frequencyPerYear?: number;
   villaOnly: boolean;
+  /** Where it is offered, when not on every kind of property. Wins over villaOnly. */
+  unitTypes?: UnitType[];
   sectionNumber?: string;
   sectionTitle?: string;
   hasScopeSection: boolean;
+  /** Scope of Works Library: its reference (A1) and the group it sits in. */
+  ref?: string;
+  category?: string;
+  /** What one unit is: "Per AC unit per visit". */
+  unitOfMeasure?: string;
+  /** Printed after the frequency: " + call-backs", " (quarterly)". */
+  frequencySuffix?: string;
 }
 
 export interface FrequencyRow {
@@ -373,6 +432,10 @@ export interface FrequencyRow {
   frequency: string;
   price: number;
   reference: string;
+  /** The equipment entered for the service, trimmed; empty when none (DEV-261). */
+  equipment: string;
+  /** What one unit is, from the Scope of Works Library; empty when not stated. */
+  unitOfMeasure: string;
 }
 
 export interface AmcTotals {
@@ -474,6 +537,9 @@ export interface AmcSubmissionDocumentOptions {
   accountManagers: [AmcAccountManager, AmcAccountManager];
   /* Mirrored from the contract's entitlements (server side) for the contract document. */
   entitlementTerms?: Record<string, AmcEntitlementTerm>;
+  /* Wording edited on this proposal; absent on older ones (DEV-263). */
+  clauseOverrides?: Record<string, string>;
+  scopeOverrides?: Record<string, string>;
 }
 
 export interface AmcSubmissionCustomer {
@@ -561,6 +627,8 @@ export interface AmcSubmission {
      single-proposal read only. null: none yet; absent: not checked or the
      contracts table does not exist yet. */
   contract_id?: string | null;
+  /* That contract's own number (AMC-C-…), printed on the contract document instead of the proposal's. */
+  contract_number?: string | null;
   /* Phase 4 (20261007140000). */
   property_type?: string | null;
   payment_plan?: PaymentPlan | null;
@@ -572,6 +640,9 @@ export interface AmcSubmission {
   version_summary?: string | null;
   version_started_at?: string | null;
   enquiry_id?: string | null;
+  /* The client and property records the proposal is for, when it was linked to them. */
+  customer_id?: string | null;
+  property_id?: string | null;
   below_floor?: boolean;
   rate_card_version_id?: string | null;
   /* Ticked lines the rate card cannot price as they stand (on save replies). */
@@ -608,7 +679,7 @@ export interface AmcPendingApprovalsResponse {
    submission; the client page (FR5.5, FR5.7) has only these fields. */
 export type AmcDocumentSource = Pick<
   AmcSubmission,
-  "property" | "customer" | "document_options" | "services" | "discount_percent" | "payment_plan" | "payment_plan_custom"
+  "property" | "customer" | "document_options" | "services" | "discount_percent" | "payment_plan" | "payment_plan_custom" | "contract_number" | "customer_id" | "property_id"
 > & { id?: string };
 
 export interface AmcSubmissionListResponse {

@@ -32,7 +32,8 @@ import {
 
 import { ActivateContractDialog } from "./activate-contract-dialog";
 import { CONTRACT_STATUS_LABELS, contractStatusTone, formatContractDate } from "./contract-status";
-import { ALL_MANAGERS, ContractsToolbar } from "./contracts-toolbar";
+import { ContractsToolbar } from "./contracts-toolbar";
+import { TruncatedText } from "@/components/ui/truncated-text";
 
 const STATUSES: ReadonlyArray<{ value: ContractListStatus; label: string }> = [
   { value: "all", label: "All" },
@@ -64,13 +65,11 @@ export function ContractsList({ onRefresh }: { onRefresh?: () => void }) {
 
   const [rows, setRows] = useState<ContractListRow[]>([]);
   const [total, setTotal] = useState(0);
-  const [counts, setCounts] = useState<Partial<Record<ContractListStatus, number>>>({});
-  const [managers, setManagers] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [manager, setManager] = useState(ALL_MANAGERS);
-  const [sort, setSort] = useState<{ key: ContractSortKey; dir: "asc" | "desc" }>({ key: "end", dir: "asc" });
+  /* Newest first, as every other AMC list. */
+  const [sort, setSort] = useState<{ key: ContractSortKey; dir: "asc" | "desc" }>({ key: "created", dir: "desc" });
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(10);
   /* Kept after the dialog closes, so it can animate out with its content. */
@@ -97,7 +96,6 @@ export function ContractsList({ onRefresh }: { onRefresh?: () => void }) {
       const response = await amcContractsService.list({
         status,
         search: debouncedSearch || undefined,
-        manager: manager === ALL_MANAGERS ? undefined : manager,
         sort: sort.key,
         dir: sort.dir,
         page,
@@ -106,8 +104,6 @@ export function ContractsList({ onRefresh }: { onRefresh?: () => void }) {
       if (mine !== ticket.current) return;
       setRows(response.rows);
       setTotal(response.totalCount);
-      setCounts(response.counts);
-      setManagers(response.managers ?? []);
     } catch (error) {
       if (mine !== ticket.current) return;
       setRows([]);
@@ -116,7 +112,7 @@ export function ContractsList({ onRefresh }: { onRefresh?: () => void }) {
     } finally {
       if (mine === ticket.current) setIsLoading(false);
     }
-  }, [status, debouncedSearch, manager, sort, page, pageSize]);
+  }, [status, debouncedSearch, sort, page, pageSize]);
 
   useEffect(() => {
     void load();
@@ -167,9 +163,9 @@ export function ContractsList({ onRefresh }: { onRefresh?: () => void }) {
       ...serverSorted,
       cell: ({ row }) =>
         row.original.propertyLabel ? (
-          <span className="flex max-w-[240px] items-start gap-1.5 text-sm">
-            <Building2 className="text-muted-foreground mt-0.5 size-3.5 shrink-0" aria-hidden />
-            <span className="line-clamp-2">{row.original.propertyLabel}</span>
+          <span className="flex max-w-[240px] min-w-0 items-center gap-1.5 text-sm">
+            <Building2 className="text-muted-foreground size-3.5 shrink-0" aria-hidden />
+            <TruncatedText text={row.original.propertyLabel} />
           </span>
         ) : (
           <IconText icon={Building2} muted>
@@ -283,7 +279,7 @@ export function ContractsList({ onRefresh }: { onRefresh?: () => void }) {
     },
   ];
 
-  const filtered = status !== "all" || Boolean(search) || manager !== ALL_MANAGERS;
+  const filtered = status !== "all" || Boolean(search);
 
   return (
     <div className="flex flex-col gap-6">
@@ -313,7 +309,7 @@ export function ContractsList({ onRefresh }: { onRefresh?: () => void }) {
           onSortingChange={(key, dir) => {
             setSort(key && key in { contract: 1, customer: 1, property: 1, start: 1, end: 1, value: 1 }
               ? { key: key as ContractSortKey, dir: dir ?? "asc" }
-              : { key: "end", dir: "asc" });
+              : { key: "created", dir: "desc" });
             setPage(0);
           }}
           onGlobalFilterChange={(value) => {
@@ -329,15 +325,9 @@ export function ContractsList({ onRefresh }: { onRefresh?: () => void }) {
                 setPage(0);
               }}
               isLoading={isLoading}
-              statusOptions={STATUSES.map((entry) => ({ ...entry, count: counts[entry.value] }))}
+              statusOptions={STATUSES}
               status={status}
               onStatusChange={setStatus}
-              managers={managers}
-              manager={manager}
-              onManagerChange={(value) => {
-                setManager(value);
-                setPage(0);
-              }}
               pageSize={pageSize}
               onPageSizeChange={(size) => {
                 setPageSize(size);
@@ -366,7 +356,6 @@ export function ContractsList({ onRefresh }: { onRefresh?: () => void }) {
                           variant: "outline" as const,
                           onClick: () => {
                             setSearch("");
-                            setManager(ALL_MANAGERS);
                             setStatus("all");
                           },
                         }

@@ -3,7 +3,9 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   CLIENT_DIRECTORY,
   CUSTOMER_COLUMNS,
+  ensureClientRef,
   getCustomer,
+  writeClientProfile,
   mapCustomer,
   safeTerm,
   type CustomerRecord,
@@ -14,7 +16,7 @@ import {
   linkFsmContact,
 } from "@/lib/server/snagging/fsm-clients";
 import { getFsmAccessToken } from "@/lib/server/zoho/fsm-client";
-import { listContacts, searchContacts } from "@/lib/server/zoho/fsm-contacts";
+import { getContact, listContacts, searchContacts } from "@/lib/server/zoho/fsm-contacts";
 
 /**
  * AMC's clients the way Snagging's Clients page lists them: from Zoho FSM,
@@ -218,7 +220,8 @@ export async function listClientsPage(
       email: contact.email,
       phone: contact.mobile ?? contact.phone,
       company: contact.company?.name || null,
-      customerRef: local?.customerRef ?? null,
+      /* Zoho FSM's customer number is the Client ID; the portal's copy stands in when FSM has none. */
+      customerRef: contact.customerId ?? local?.customerRef ?? null,
       lifecycle: local?.lifecycle ?? null,
       portalOnly: false,
       customer: local ?? null,
@@ -253,5 +256,23 @@ export async function linkFsmCustomer(
     );
   const linked = await linkFsmContact(admin, fsmContactId, actorId);
   if (!linked.id) throw new ContractError("Could not use this client.", 500);
+  await copyCustomerIdFromFsm(admin, linked.id, fsmContactId, actorId);
+  await ensureClientRef(admin, linked.id, actorId);
   return getCustomer(admin, linked.id);
+}
+
+/**
+ * Zoho FSM's customer number (Customer_Id__C) onto the portal client as its
+ * Client ID, so a proposal prints the number FSM keeps rather than one typed
+ * by hand. FSM wins when it has one; the portal's stays when it has none. A
+ * failure here never stops the client being used: the ID can still be added
+ * with Edit client.
+ */
+async function copyCustomerIdFromFsm(admin: Admin, clientId: string, fsmContactId: string, actorId: string | null): Promise<void> {
+  try {
+    const contact = await getContact(await getFsmAccessToken(admin), fsmContactId);
+    if (contact?.customerId) await writeClientProfile(admin, clientId, { customer_ref: contact.customerId }, actorId, true);
+  } catch {
+    /* Left as it was; the proposal asks for the ID when it is missing. */
+  }
 }

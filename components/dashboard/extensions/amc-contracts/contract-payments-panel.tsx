@@ -19,6 +19,7 @@ import { paymentsService, type ContractPaymentsResponse, type InstalmentRecord }
 import { formatContractDate, formatDateTime } from "./contract-status";
 import { ChequeActions, InstalmentActions, ReceiptActions, type PaymentDialogs } from "./payment-dialogs";
 import { ChequeStatusBadge, DaysOverdue, InstalmentStatusBadge, isSettled } from "./payment-status";
+import { TruncatedText } from "@/components/ui/truncated-text";
 
 /**
  * A contract's payments (Phase 7), loaded by the contract page itself so
@@ -280,9 +281,9 @@ export function ContractPaymentsPanel({
                 <TableHead>Instalment</TableHead>
                 <TableHead>Due</TableHead>
                 <TableHead>Expected mode</TableHead>
-                <TableHead className="text-right">Total</TableHead>
-                <TableHead className="text-right">Received</TableHead>
-                <TableHead className="text-right">Outstanding</TableHead>
+                <TableHead>Total</TableHead>
+                <TableHead>Received</TableHead>
+                <TableHead>Outstanding</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Overdue</TableHead>
                 <TableHead className="pr-5 text-right">
@@ -297,7 +298,7 @@ export function ContractPaymentsPanel({
                   <TableCell>
                     <div className="text-sm font-medium">{i.label}</div>
                     {i.statusReason && (i.status === "written_off" || i.status === "waived") ? (
-                      <div className="text-muted-foreground max-w-[260px] truncate text-xs">{i.statusReason}</div>
+                      <TruncatedText className="text-muted-foreground max-w-[260px] text-xs">{i.statusReason}</TruncatedText>
                     ) : i.reminderCount ? (
                       <div className="text-muted-foreground text-xs">
                         Reminded {i.reminderCount === 1 ? "once" : `${i.reminderCount} times`}
@@ -309,13 +310,13 @@ export function ContractPaymentsPanel({
                   <TableCell>
                     <ExpectedModeCell contractId={contractId} instalment={i} editable={permissions.canRecord} onSaved={reload} />
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell>
                     <Money value={i.total} className="text-sm" />
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell>
                     <Money value={i.receivedAmount} className="text-sm" />
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell>
                     <Money value={i.outstanding} className="text-sm font-medium" />
                   </TableCell>
                   <TableCell>
@@ -350,7 +351,7 @@ export function ContractPaymentsPanel({
                   <TableHead className="pl-5">Cheque no.</TableHead>
                   <TableHead>Bank</TableHead>
                   <TableHead>Date</TableHead>
-                  <TableHead className="text-right">Amount</TableHead>
+                  <TableHead>Amount</TableHead>
                   <TableHead>Instalment</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Bounce reason</TableHead>
@@ -365,7 +366,7 @@ export function ContractPaymentsPanel({
                     <TableCell className="pl-5 text-sm font-medium tabular-nums">{c.chequeNo}</TableCell>
                     <TableCell className="text-sm">{c.bank}</TableCell>
                     <TableCell className="text-sm tabular-nums">{formatContractDate(c.chequeDate)}</TableCell>
-                    <TableCell className="text-right">
+                    <TableCell>
                       <Money value={c.amount} className="text-sm" />
                     </TableCell>
                     <TableCell className="text-sm tabular-nums">{instalmentNo(c.instalmentId) ?? "—"}</TableCell>
@@ -375,7 +376,7 @@ export function ContractPaymentsPanel({
                     <TableCell className="max-w-[220px] text-sm">
                       {c.bounceReason ? (
                         <>
-                          <span className="line-clamp-2">{c.bounceReason}</span>
+                          <TruncatedText>{c.bounceReason}</TruncatedText>
                           {c.bounceCharges ? (
                             <span className="text-muted-foreground text-xs">
                               Charges <Money value={c.bounceCharges} />
@@ -412,7 +413,7 @@ export function ContractPaymentsPanel({
                 <TableRow>
                   <TableHead className="pl-5">Received</TableHead>
                   <TableHead>Mode</TableHead>
-                  <TableHead className="text-right">Amount</TableHead>
+                  <TableHead>Amount</TableHead>
                   <TableHead>Reference / receipt</TableHead>
                   <TableHead>Collected by</TableHead>
                   <TableHead>Handed over</TableHead>
@@ -435,7 +436,7 @@ export function ContractPaymentsPanel({
                         </div>
                       </TableCell>
                       <TableCell className={`text-sm ${struck}`}>{PAYMENT_MODE_LABELS[p.mode] ?? p.mode}</TableCell>
-                      <TableCell className="text-right">
+                      <TableCell>
                         <Money value={p.amount} className={`text-sm font-medium ${struck}`} />
                       </TableCell>
                       <TableCell className={`text-sm ${struck}`}>

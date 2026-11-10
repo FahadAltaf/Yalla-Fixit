@@ -150,7 +150,7 @@ export function UsageHistory({
                 <TableRow>
                   <TableHead className="pl-5">Date</TableHead>
                   <TableHead>Service</TableHead>
-                  <TableHead className="text-right">Quantity</TableHead>
+                  <TableHead>Quantity</TableHead>
                   <TableHead>Source</TableHead>
                   <TableHead>FSM reference</TableHead>
                   <TableHead>Recorded by</TableHead>
@@ -179,7 +179,7 @@ export function UsageHistory({
                           {KIND_LABELS[u.kind]}
                         </Badge>
                       </TableCell>
-                      <TableCell className="text-right align-top tabular-nums">
+                      <TableCell className="align-top tabular-nums">
                         <div className={isCorrection ? "text-warning" : undefined}>{amountOf(u)}</div>
                         {u.kind === "consumption" && u.correctedQuantity !== 0 ? (
                           <div className="text-muted-foreground text-xs">

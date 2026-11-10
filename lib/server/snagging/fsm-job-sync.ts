@@ -149,28 +149,193 @@ async function attachToWorkOrder(token: string, workOrderId: string, fileName: s
   if (!attach.ok) throw new SyncError(fsmReason(attach.json, attach.status), "report_attach", attach.json);
 }
 
-async function workOrderTransition(
+/* One blueprint step on a record (Zoho: "List transitions", then a PUT with the transition's id). */
+async function blueprintTransition(
   token: string,
-  workOrderId: string,
+  module: "Work_Orders" | "Service_Appointments",
+  recordId: string,
   pattern: RegExp,
   data?: Record<string, unknown>,
+  label = "complete",
 ): Promise<{ done: boolean; reason?: string; detail?: unknown }> {
-  const list = await fsmFetch(token, `/Work_Orders/${encodeURIComponent(workOrderId)}/actions/blueprint/transitions`);
+  const path = `/${module}/${encodeURIComponent(recordId)}/actions/blueprint`;
+  const list = await fsmFetch(token, `${path}/transitions`);
   if (!list.ok) return { done: false, reason: fsmReason(list.json, list.status), detail: list.json };
   const transitions = (list.json?.transitions ?? []) as Row[];
   const match = transitions.find((t) => t.enabled !== false && pattern.test(String(t.name ?? "")));
   if (!match) {
     return {
       done: false,
-      reason: `FSM offers no "complete" from status "${list.json?.process_info?.field_value ?? "unknown"}"`,
+      reason: `FSM offers no "${label}" from status "${list.json?.process_info?.field_value ?? "unknown"}"`,
       detail: transitions.map((t) => t.name),
     };
   }
-  const res = await fsmFetch(token, `/Work_Orders/${encodeURIComponent(workOrderId)}/actions/blueprint`, {
+  const res = await fsmFetch(token, path, {
     method: "PUT",
     body: JSON.stringify({ blueprint: [{ transition_id: String(match.id), ...(data ? { data } : {}) }] }),
   });
   return res.ok ? { done: true } : { done: false, reason: fsmReason(res.json, res.status), detail: res.json };
+}
+
+function workOrderTransition(token: string, workOrderId: string, pattern: RegExp, data?: Record<string, unknown>) {
+  return blueprintTransition(token, "Work_Orders", workOrderId, pattern, data);
+}
+
+type Technician = { resourceId: string; name: string; email: string; active: boolean };
+
+/** FSM's technicians (users with a service resource), with whether FSM lets them work. */
+async function fsmTechnicians(token: string): Promise<Technician[]> {
+  const out: Technician[] = [];
+  for (let page = 1; page <= 10; page += 1) {
+    const res = await fsmFetch(token, `/users?page=${page}&per_page=200`);
+    if (!res.ok) break;
+    for (const u of (res.json?.users ?? []) as Row[]) {
+      if (!u.Service_Resources?.id) continue;
+      out.push({
+        resourceId: String(u.Service_Resources.id),
+        name: String(u.full_name ?? u.Service_Resources.Name ?? u.email ?? ""),
+        email: String(u.email ?? "").toLowerCase(),
+        /* An inactive user's appointment can be dispatched, but FSM refuses Start Work on it. */
+        active: u.client_status === "Active" && u.Service_Resources.isActive !== false,
+      });
+    }
+    if (!res.json?.info?.more_records) break;
+  }
+  return out;
+}
+
+/**
+ * The FSM technician an inspection's appointment is booked to: the
+ * inspector's own, matched on their email, when FSM lets them work; else
+ * the one the office books portal-made inspections to
+ * (SNAGGING_FSM_SERVICE_RESOURCE_ID); else why there is none.
+ */
+function resourceForInspector(
+  technicians: Technician[],
+  inspector: { email: string | null; name: string | null },
+): { resourceId: string } | { reason: string } {
+  const own = inspector.email ? technicians.find((t) => t.email === inspector.email!.trim().toLowerCase()) : undefined;
+  if (own?.active) return { resourceId: own.resourceId };
+  const fallback = process.env.SNAGGING_FSM_SERVICE_RESOURCE_ID?.trim();
+  if (fallback) return { resourceId: fallback };
+  const who = inspector.name ?? "The inspector";
+  return {
+    reason: own
+      ? `${who}'s FSM user (${own.name}, ${own.email}) is inactive, and FSM does not let an inactive technician start work`
+      : `${who} has no technician in FSM (matched on ${inspector.email ?? "no email"})`,
+  };
+}
+
+/**
+ * Completes a work order the way this FSM account completes one: through
+ * its service appointment (SNG-189). The work order has no "Complete" of its
+ * own from New; the appointment is dispatched, started and completed, and
+ * completing it with $complete_wo completes the work order (Zoho: "Complete
+ * Work for Service Appointment").
+ *
+ * The inspection's appointment is made when the work order has none: on the
+ * day of the inspection, for the inspector's FSM service resource, covering
+ * every service line. One already on the work order is used instead, so a
+ * retry carries on from where the last attempt stopped.
+ */
+async function completeThroughAppointment(
+  token: string,
+  workOrderId: string,
+  job: Row,
+  inspector: { email: string | null; name: string | null },
+): Promise<{ done: boolean; reason?: string; detail?: unknown; appointment?: string }> {
+  const wo = await readWorkOrder(token, workOrderId);
+  if (!wo) return { done: false, reason: "The work order could not be read from FSM" };
+
+  const live = ((wo.Appointments_X_Services ?? []) as Row[]).find(
+    (axs) => axs.Service_Appointment?.id && axs.is_line_item_active !== false && !/cancel/i.test(String(axs.SLI_Status ?? "")),
+  );
+  let appointmentId = live ? String(live.Service_Appointment.id) : null;
+  let appointmentName = live ? ((live.Service_Appointment.name as string | undefined) ?? null) : null;
+  const technicians = await fsmTechnicians(token);
+
+  if (appointmentId) {
+    /*
+      An appointment already on the work order (an earlier attempt, or the
+      office's own) carries on from where it stopped. One booked to a
+      technician FSM no longer lets work cannot be started, and FSM only
+      says "Error occured while processing blueprint actions": the reason
+      is said instead, and the office reassigns it in FSM before Retry.
+    */
+    const appointment = (await fsmGetRecord<Row>(token, "Service_Appointments", appointmentId)).record ?? null;
+    const leadId = String(appointment?.Lead?.id ?? "");
+    const lead = technicians.find((t) => t.resourceId === leadId);
+    const started = /in progress|completed/i.test(String(appointment?.Status ?? ""));
+    if (lead && !lead.active && !started) {
+      return {
+        done: false,
+        appointment: appointmentName ?? appointmentId,
+        reason: `appointment ${appointmentName ?? appointmentId} is booked to ${lead.name} (${lead.email}), whose FSM user is inactive, and FSM does not let an inactive technician start work. Reassign it in FSM to an active technician, then Retry`,
+      };
+    }
+  }
+
+  if (!appointmentId) {
+    const pick = resourceForInspector(technicians, inspector);
+    if ("reason" in pick) {
+      return { done: false, reason: `${pick.reason}, so no appointment was made to complete the work order` };
+    }
+    const resource = pick.resourceId;
+    const lineIds = ((wo.Service_Line_Items ?? []) as Row[]).map((line) => String(line.id)).filter(Boolean);
+    if (lineIds.length === 0) return { done: false, reason: "The work order has no service lines to put on an appointment" };
+    /* The day it was inspected (its appointment, else when it was submitted), in Dubai. */
+    const day = new Date(String(job.appointment_at ?? job.submitted_at ?? new Date().toISOString()));
+    const date = job.appointment_at || job.submitted_at
+      ? new Date(day.getTime() + 4 * 3600_000).toISOString().slice(0, 10)
+      : String(job.scheduled_date ?? day.toISOString().slice(0, 10));
+    const created = await fsmFetch(
+      token,
+      "/Service_Appointments",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          data: [
+            {
+              Summary: `${job.code} · Snagging inspection`.slice(0, 250),
+              Schedule_Type: "All Day",
+              Appointment_Date: date,
+              Due_Date: date,
+              Scheduled_Duration: 2 * 3600,
+              $Service_Line_Items: lineIds,
+              $Service_Resources: [resource],
+              $allow_overlapping: true,
+            },
+          ],
+        }),
+      },
+      { retry: false },
+    );
+    if (!created.ok) return { done: false, reason: `The appointment could not be made: ${fsmReason(created.json, created.status)}`, detail: created.json };
+    appointmentId = String(created.json?.data?.[0]?.id ?? "");
+    if (!appointmentId) return { done: false, reason: "FSM made the appointment but sent no id back", detail: created.json };
+    /* The create answer carries no name (AP-1234); it is read back for the log. */
+    appointmentName =
+      (created.json?.data?.[0]?.Name as string | undefined) ??
+      ((await fsmGetRecord<Row>(token, "Service_Appointments", appointmentId)).record?.Name as string | undefined) ??
+      null;
+  }
+
+  /* Each step only when FSM offers it, so an appointment already dispatched or started carries on. */
+  const steps: Array<[RegExp, string, Record<string, unknown> | undefined]> = [
+    [/^dispatch/i, "dispatch", undefined],
+    [/^start/i, "start work", undefined],
+    [/^complete/i, "complete work", { $complete_wo: true, $complete_pc_li: true }],
+  ];
+  let last: { done: boolean; reason?: string; detail?: unknown } = { done: false };
+  for (const [pattern, label, data] of steps) {
+    last = await blueprintTransition(token, "Service_Appointments", appointmentId, pattern, data, label);
+    /* A step that is not offered was already taken (or is not part of this account's flow). */
+    if (!last.done && !/offers no/i.test(String(last.reason ?? ""))) break;
+  }
+  /* Whatever the last step said, the work order's own status is the answer. */
+  const after = await readWorkOrder(token, workOrderId);
+  if (DONE_STATUSES.test(String(after?.Status ?? ""))) return { done: true, appointment: appointmentName ?? appointmentId };
+  return { ...last, done: false, appointment: appointmentName ?? appointmentId };
 }
 
 /**
@@ -257,7 +422,7 @@ async function syncJobOnce(
   const { data: jobRow } = await admin
     .from("snagging_jobs")
     .select(
-      "id, code, status, client_id, property_id, unit_label, building_name, fsm_work_order_id, fsm_work_order_number, fsm_status, fsm_report_version",
+      "id, code, status, client_id, property_id, unit_label, building_name, inspector_id, appointment_at, submitted_at, scheduled_date, fsm_work_order_id, fsm_work_order_number, fsm_status, fsm_report_version",
     )
     .eq("id", jobId)
     .maybeSingle();
@@ -282,6 +447,8 @@ async function syncJobOnce(
 
     let workOrderId = job.fsm_work_order_id as string | null;
     let status = job.fsm_status as string | null;
+    /* What FSM says now (an appointment, or the office, moves it on), not what was read when it was made. */
+    if (workOrderId) status = ((await readWorkOrder(token, workOrderId))?.Status as string | undefined) ?? status;
 
     if (!workOrderId) {
       const [{ data: client }, { data: property }, { data: quoteFsm }] = await Promise.all([
@@ -387,13 +554,26 @@ async function syncJobOnce(
           delete (unlinked.data[0] as Row).Estimate;
           created = await fsmFetch(token, "/Work_Orders", { method: "POST", body: JSON.stringify(unlinked) }, { retry: false });
           if (created.ok) {
+            /* The link is what finance invoices from (SNG-189): asked for again on the work order now that it exists. */
+            const newId = String(created.json?.data?.Work_Orders?.[0]?.id ?? "");
+            const linked = newId
+              ? await fsmFetch(
+                  token,
+                  `/Work_Orders/${encodeURIComponent(newId)}`,
+                  { method: "PUT", body: JSON.stringify({ data: [{ Estimate: estimateId }] }) },
+                  { retry: false },
+                )
+              : null;
             await log(admin, {
               quotationId: quote.id,
               jobId,
               action: "work_order_unlinked",
-              status: "success",
+              status: linked?.ok ? "success" : "failed",
               recordId: estimateId,
-              message: `FSM would not link the work order to estimate ${quote.quote_number} ("waiting for approval"), so it was created without the link; the quotation number is in its summary`,
+              message: linked?.ok
+                ? `FSM would not link the work order to estimate ${quote.quote_number} when creating it; the link was added to the work order afterwards`
+                : `FSM would not link the work order to estimate ${quote.quote_number} ("waiting for approval"${linked ? `; again afterwards: ${fsmReason(linked.json, linked.status)}` : ""}), so it has no link; the quotation number is in its summary`,
+              detail: linked?.json,
               actorId,
             });
           }
@@ -429,27 +609,42 @@ async function syncJobOnce(
     }
 
     /*
-      Completed in FSM, when FSM allows it. This account completes a work
-      order only through its service appointment ("Manage Appointment"
-      leads there), and snagging creates none in FSM (SNG-190), so FSM
-      offers no "Complete" on a new work order. That is logged and the
-      report is still attached: the work order is linked to its estimate
-      and carries the inspection report, which is what finance needs.
+      Completed in FSM. The work order's own "Complete" when FSM offers it;
+      otherwise the way this account completes one, through its service
+      appointment (SNG-189): snagging books its visits in the portal
+      (SNG-190), so the inspection's appointment is made here, on the day
+      it was inspected, and dispatched, started and completed with the
+      work order. A step FSM refuses is logged as failed with its reason,
+      and Retry on the job's Zoho FSM tab runs it again (SNG-191).
     */
+    let completion: { done: boolean; reason?: string } = { done: true };
     if (!status || !DONE_STATUSES.test(status)) {
-      const done = await workOrderTransition(token, workOrderId, /^complete/i, {
-        $force_complete: true,
-        Notes: `Inspection ${job.code} approved in the portal.`,
-      });
+      let done: { done: boolean; reason?: string; detail?: unknown; appointment?: string } = await workOrderTransition(
+        token,
+        workOrderId,
+        /^complete/i,
+        { $force_complete: true, Notes: `Inspection ${job.code} approved in the portal.` },
+      );
+      if (!done.done && /offers no/i.test(String(done.reason ?? ""))) {
+        const { data: inspectorRow } = job.inspector_id
+          ? await admin.from("user_profile").select("full_name, email").eq("id", job.inspector_id).maybeSingle()
+          : { data: null };
+        const inspector = (inspectorRow as { full_name: string | null; email: string | null } | null) ?? null;
+        done = await completeThroughAppointment(token, workOrderId, job, {
+          email: inspector?.email ?? null,
+          name: inspector?.full_name ?? null,
+        });
+      }
+      completion = done;
       await log(admin, {
         quotationId: quote.id,
         jobId,
         action: "work_order_complete",
-        status: done.done ? "success" : "skipped",
+        status: done.done ? "success" : "failed",
         recordId: workOrderId,
         message: done.done
-          ? "Work order completed in FSM"
-          : `Not completed in FSM: ${done.reason}. FSM completes a work order through its appointment.`,
+          ? `Work order completed in FSM${done.appointment ? ` through appointment ${done.appointment}` : ""}`
+          : `Not completed in FSM: ${done.reason}${done.appointment ? ` (appointment ${done.appointment})` : ""}. Retry once it is fixed.`,
         detail: done.detail,
         actorId,
       });
@@ -492,12 +687,17 @@ async function syncJobOnce(
       });
     }
 
+    /* A work order left open is the job's open sync problem, so the tab offers Retry for it. */
+    const completionError = completion.done ? null : `The work order is not completed in FSM: ${completion.reason}`;
     await admin
       .from("snagging_jobs")
-      .update({ fsm_status: status, fsm_synced_at: new Date().toISOString(), fsm_error: null })
+      .update({ fsm_status: status, fsm_synced_at: new Date().toISOString(), fsm_error: completionError })
       .eq("id", jobId);
     const number = ((await readWorkOrder(token, workOrderId))?.Name as string | undefined) ?? workOrderId;
-    return { ok: true, message: `In FSM as work order ${number} (${status ?? "status unknown"}).${reportNote}` };
+    return {
+      ok: completion.done,
+      message: `In FSM as work order ${number} (${status ?? "status unknown"}).${completionError ? ` ${completionError}.` : ""}${reportNote}`,
+    };
   } catch (err) {
     const message =
       err instanceof FsmConfigError

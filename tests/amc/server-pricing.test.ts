@@ -87,3 +87,54 @@ test("submit needs a ticked service and a base price on every ticked row", () =>
   );
   assert.equal(submittableProblem([{ serviceId: "a", included: true, basePrice: 0 }]), null);
 });
+
+/* Merge of main (Nov 2026): Scope of Works Library frequencies and custom services. */
+test("weekly and manpower services are charged per week and per month, on the server as in the wizard", async () => {
+  const { AMC_SERVICES } = await import("@/components/dashboard/extensions/amc/amc-constants");
+  const { calculateAmcTotals } = await import("@/components/dashboard/extensions/amc/amc-pricing");
+  const weekly = settings.services.find((s) => s.frequencyType === "weekly" && (!s.unitTypes || s.unitTypes.includes("villa")));
+  const manpower = settings.services.find((s) => s.frequencyType === "manpower" && (!s.unitTypes || s.unitTypes.includes("villa")));
+  assert.ok(weekly && manpower, "the library has a weekly and a manpower service offered on villas");
+  assert.ok(AMC_SERVICES.some((s) => s.id === weekly!.id));
+  const rows = [
+    { serviceId: weekly!.id, included: true, units: 1, frequency: 2, basePrice: 100 },
+    { serviceId: manpower!.id, included: true, units: 2, frequency: 6, basePrice: 1000 },
+  ];
+  const result = priceSubmission({ services: rows, discountPercent: 0, unitType: "villa", settings });
+  assert.ok(result.ok, result.ok ? "" : result.error);
+  if (!result.ok) return;
+  assert.equal(result.services[0].price, 100 * 2 * 52, "twice a week, 52 weeks");
+  assert.equal(result.services[1].price, 1000 * 2 * 12, "two people, twelve months");
+  const wizard = calculateAmcTotals({
+    ...(await import("@/components/dashboard/extensions/amc/amc-constants")).getDefaultFormValues(),
+    unitType: "villa",
+    serviceRows: rows.map((r) => ({ ...r, free: false })),
+    discountPercent: 0,
+  });
+  assert.equal(wizard.finalPrice, result.final_price, "the wizard and the server agree");
+});
+
+test("a custom service is accepted on any property, keeps its entered price and its wording", () => {
+  const card = {
+    id: "card-1",
+    card: { version: 1, items: [], packages: [], promotions: [] } as never,
+  };
+  const result = priceSubmission({
+    services: [
+      { serviceId: "custom-abc", included: true, units: 1, frequency: 4, basePrice: 250, customName: "Kitchen hood cleaning", customScope: "Degrease" },
+      { serviceId: "ac-ppm", included: true, units: 1, frequency: 4, basePrice: 100, equipment: " 10 FCU " },
+    ],
+    discountPercent: 0,
+    unitType: "apartment",
+    settings,
+    rateCard: card,
+  });
+  assert.ok(result.ok, result.ok ? "" : result.error);
+  if (!result.ok) return;
+  const custom = result.services[0];
+  assert.equal(custom.price, 1000, "priced as entered, not by the card");
+  assert.equal(custom.customName, "Kitchen hood cleaning");
+  assert.equal(custom.customScope, "Degrease");
+  assert.equal(result.services[1].equipment, "10 FCU");
+  assert.ok(!result.rateProblems.some((p) => p.includes("Kitchen")), "the card does not complain about the custom line");
+});

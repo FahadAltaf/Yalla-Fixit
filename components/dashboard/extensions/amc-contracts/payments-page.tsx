@@ -42,12 +42,13 @@ import {
 import { HistoryRequestError, clientHistoryService, type ClientPaymentReceived } from "@/modules/amc-contracts/client-history-service";
 import { ActionType, ResourceType } from "@/types/types";
 
-import { AmcNotificationsBell } from "./amc-notifications-bell";
 import { formatContractDate } from "./contract-status";
 import { ChequeActions, usePaymentDialogs, type PaymentDialogs } from "./payment-dialogs";
 import { ChequeStatusBadge, DaysOverdue, InstalmentStatusBadge } from "./payment-status";
 import { PaymentsToolbar } from "./payments-toolbar";
 import { useUrlTab } from "./profile/use-url-tab";
+import { TruncatedText } from "@/components/ui/truncated-text";
+import { ModuleGuide } from "@/components/dashboard/extensions/amc-contracts/module-guide";
 
 const TABS = ["instalments", "cheques"] as const;
 const contractHref = (contractId: string) => `/extensions/amc-contracts/${contractId}?tab=payments`;
@@ -143,8 +144,8 @@ export function PaymentsPage() {
     <PageHeading
       eyebrow="Finance"
       title="Payments"
+      info={<ModuleGuide module="payments" />}
       description="What is owed across AMC contracts and how late it is: instalments to chase and the cheque register."
-      actions={<AmcNotificationsBell />}
     />
   );
 
@@ -358,9 +359,9 @@ function InstalmentsTable({ version, onTotal, onRefresh }: { version: number; on
       header: "Property",
       cell: ({ row }) =>
         row.original.contract?.propertyLabel ? (
-          <span className="flex max-w-[240px] items-start gap-1.5 text-sm">
-            <Building2 className="text-muted-foreground mt-0.5 size-3.5 shrink-0" aria-hidden />
-            <span className="line-clamp-2">{row.original.contract.propertyLabel}</span>
+          <span className="flex max-w-[240px] min-w-0 items-center gap-1.5 text-sm">
+            <Building2 className="text-muted-foreground size-3.5 shrink-0" aria-hidden />
+            <TruncatedText text={row.original.contract.propertyLabel} />
           </span>
         ) : (
           <IconText icon={Building2} muted>
@@ -485,7 +486,7 @@ function ChequesTable({
       cell: ({ row }) => (
         <div className="space-y-0.5">
           <ChequeStatusBadge status={row.original.status} />
-          {row.original.bounceReason ? <div className="text-muted-foreground max-w-[200px] truncate text-xs">{row.original.bounceReason}</div> : null}
+          {row.original.bounceReason ? <TruncatedText className="text-muted-foreground max-w-[200px] text-xs">{row.original.bounceReason}</TruncatedText> : null}
         </div>
       ),
     },
@@ -651,7 +652,7 @@ export function ClientPaymentsPanel({ clientId }: { clientId: string }) {
                   <TableHead className="pl-5">Contract</TableHead>
                   <TableHead className="w-12">#</TableHead>
                   <TableHead>Due</TableHead>
-                  <TableHead className="text-right">Outstanding</TableHead>
+                  <TableHead>Outstanding</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="pr-5">Overdue</TableHead>
                 </TableRow>
@@ -661,11 +662,11 @@ export function ClientPaymentsPanel({ clientId }: { clientId: string }) {
                   <TableRow key={i.id} className="cursor-pointer" onClick={() => router.push(contractHref(i.contractId))}>
                     <TableCell className="pl-5">
                       <div className="text-sm font-medium tabular-nums">{i.contract?.contractNumber || "Contract"}</div>
-                      {i.contract?.propertyLabel ? <div className="text-muted-foreground max-w-[260px] truncate text-xs">{i.contract.propertyLabel}</div> : null}
+                      {i.contract?.propertyLabel ? <TruncatedText className="text-muted-foreground max-w-[260px] text-xs">{i.contract.propertyLabel}</TruncatedText> : null}
                     </TableCell>
                     <TableCell className="text-sm tabular-nums">{i.instalmentNo}</TableCell>
                     <TableCell className="text-sm tabular-nums">{formatContractDate(i.dueDate)}</TableCell>
-                    <TableCell className="text-right">
+                    <TableCell>
                       <Money value={i.outstanding} className="text-sm font-medium" />
                     </TableCell>
                     <TableCell>
@@ -741,7 +742,7 @@ function ClientCheques({ clientId }: { clientId: string }) {
                 <TableHead>Bank</TableHead>
                 <TableHead>Date</TableHead>
                 <TableHead>Contract</TableHead>
-                <TableHead className="text-right">Amount</TableHead>
+                <TableHead>Amount</TableHead>
                 <TableHead className="pr-5">Status</TableHead>
               </TableRow>
             </TableHeader>
@@ -755,13 +756,13 @@ function ClientCheques({ clientId }: { clientId: string }) {
                     <div className="text-sm tabular-nums">{c.contract?.contractNumber || "Contract"}</div>
                     {c.instalmentNo ? <div className="text-muted-foreground text-xs">Instalment {c.instalmentNo}</div> : null}
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell>
                     <Money value={c.amount} className="text-sm font-medium" />
                   </TableCell>
                   <TableCell className="pr-5">
                     <div className="space-y-0.5">
                       <ChequeStatusBadge status={c.status} />
-                      {c.bounceReason ? <div className="text-muted-foreground max-w-[200px] truncate text-xs">{c.bounceReason}</div> : null}
+                      {c.bounceReason ? <TruncatedText className="text-muted-foreground max-w-[200px] text-xs">{c.bounceReason}</TruncatedText> : null}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -833,7 +834,7 @@ function ClientPaymentsReceived({ clientId }: { clientId: string }) {
                 <TableHead>Contract</TableHead>
                 <TableHead className="w-12">#</TableHead>
                 <TableHead>Mode</TableHead>
-                <TableHead className="text-right">Amount</TableHead>
+                <TableHead>Amount</TableHead>
                 <TableHead className="pr-5">Reference / receipt</TableHead>
               </TableRow>
             </TableHeader>
@@ -853,11 +854,11 @@ function ClientPaymentsReceived({ clientId }: { clientId: string }) {
                     <TableCell className={`text-sm tabular-nums ${struck}`}>{p.contractNumber || "Contract"}</TableCell>
                     <TableCell className={`text-sm tabular-nums ${struck}`}>{p.instalmentNo ?? "—"}</TableCell>
                     <TableCell className={`text-sm ${struck}`}>{PAYMENT_MODE_LABELS[p.mode as PaymentMode] ?? p.mode}</TableCell>
-                    <TableCell className={`text-right ${struck}`}>
+                    <TableCell className={`${struck}`}>
                       <Money value={p.amount} className="text-sm font-medium" />
                     </TableCell>
                     <TableCell className={`pr-5 text-sm ${struck}`}>
-                      <div className="max-w-[220px] truncate">{p.reference || "—"}</div>
+                      <TruncatedText text={p.reference || "—"} className="max-w-[220px]" />
                       {p.receiptNo ? <div className="text-muted-foreground text-xs tabular-nums">Receipt {p.receiptNo}</div> : null}
                     </TableCell>
                   </TableRow>

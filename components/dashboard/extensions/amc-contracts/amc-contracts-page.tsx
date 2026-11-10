@@ -7,10 +7,10 @@ import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-lab
 import { Button } from "@/components/ui/button";
 import { PageHeading } from "@/components/dashboard/shared/kaizen";
 
-import { AmcNotificationsBell } from "./amc-notifications-bell";
 import { ContractsList } from "./contracts-list";
 import { ContractsSummary } from "./contracts-summary";
 import { CoverageCheckDialog } from "./coverage-check-dialog";
+import { ModuleGuide } from "@/components/dashboard/extensions/amc-contracts/module-guide";
 
 /**
  * /extensions/amc-contracts -- signed AMC agreements in operation, and
@@ -26,10 +26,10 @@ export function AmcContractsPage() {
       <PageHeading
         eyebrow="Operations"
         title="AMC contracts"
+        info={<ModuleGuide module="contracts" />}
         description="Activate signed AMC proposals, track what each contract covers and how much is used, and see what is expiring."
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <AmcNotificationsBell />
             {/* Contracts are made by activating a signed proposal, so the
                 heading's action is the question asked most: is this covered? */}
             <Button onClick={() => setChecking(true)}>

@@ -10,10 +10,9 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Money } from "@/components/ui/money";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { DataRow, SectionCard, SubHeading } from "@/components/dashboard/shared/kaizen";
+import { SectionCard, SubHeading } from "@/components/dashboard/shared/kaizen";
 import { ActionDialogContent, ErrorState, ListSkeleton, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
 import { todayInDubai } from "@/lib/amc/contracts";
 import { DatePickerField } from "@/components/dashboard/extensions/amc/components/date-picker-field";
@@ -27,6 +26,9 @@ import {
 } from "@/modules/amc-contracts/amc-contracts-service";
 
 import { formatContractDate } from "./contract-status";
+import { DetailList } from "./enquiries/enquiry-ui";
+
+const LINK = "hover:text-brand underline underline-offset-2";
 
 type Entitlement = ContractDetail["entitlements"][number];
 
@@ -134,28 +136,24 @@ export function ContractCommercial({
         <ListSkeleton rows={3} />
       ) : (
         <>
-          {data.originalProposal ? (
-            <DataRow
-              title={
-                <Link href={`/extensions/amc/${data.originalProposal.id}`} className="hover:underline">
-                  Proposal {data.originalProposal.proposalNumber}
-                </Link>
-              }
-              subtitle={data.originalProposal.signedAt ? `Signed ${formatContractDate(data.originalProposal.signedAt.slice(0, 10))}` : "Original proposal"}
-              trailing={<Money value={data.contractValue} className="text-sm" />}
-            />
-          ) : null}
           {data.renewalProposal ? (
-            <DataRow
-              title={
-                <Link href={`/extensions/amc/${data.renewalProposal.id}`} className="hover:underline">
-                  Renewal proposal {data.renewalProposal.proposalNumber}
-                </Link>
-              }
-              subtitle={data.renewalProposal.status.replace(/_/g, " ")}
+            <DetailList
+              rows={[
+                {
+                  label: "Renewal proposal",
+                  value: (
+                    <span className="inline-flex items-center gap-2">
+                      <Link href={`/extensions/amc/${data.renewalProposal.id}`} className={LINK}>
+                        {data.renewalProposal.proposalNumber}
+                      </Link>
+                      <span className="text-muted-foreground font-normal capitalize">{data.renewalProposal.status.replace(/_/g, " ")}</span>
+                    </span>
+                  ),
+                },
+              ]}
             />
           ) : null}
-          <SubHeading>Additional-service quotes</SubHeading>
+          <SubHeading className={data.renewalProposal ? "pt-2" : undefined}>Additional-service quotes</SubHeading>
           {data.quotes.length === 0 ? (
             <p className="text-muted-foreground text-sm">None yet.</p>
           ) : (

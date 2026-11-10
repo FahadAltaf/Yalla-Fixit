@@ -14,6 +14,7 @@ import { clientHistoryService, type AssetHistory } from "@/modules/amc-contracts
 import { CallOutStatusBadge } from "../call-out-shared";
 import { formatContractDate } from "../contract-status";
 import { useAmcData } from "../use-amc-data";
+import { TruncatedText } from "@/components/ui/truncated-text";
 
 /* The job sheet's check results (job-sheet-panel.tsx), the same words and tints. */
 const CHECK_LABELS: Record<string, string> = { ok: "OK", attention: "Needs attention", fault: "Fault", not_applicable: "Not applicable" };
@@ -183,8 +184,8 @@ function CallOutsSection({ callOuts, trade }: { callOuts: AssetHistory["callOuts
                   {c.number}
                 </Link>
                 <span className="text-muted-foreground"> · {formatContractDate(c.date)}</span>
-                <div className="line-clamp-2">{c.issue}</div>
-                {c.resolution ? <div className="text-muted-foreground line-clamp-2 text-xs">Resolution: {c.resolution}</div> : null}
+                <TruncatedText>{c.issue}</TruncatedText>
+                {c.resolution ? <TruncatedText className="text-muted-foreground text-xs">Resolution: {c.resolution}</TruncatedText> : null}
               </div>
               <CallOutStatusBadge status={c.status as CallOutStatus} />
             </li>

@@ -64,6 +64,7 @@ import {
 import { formatContractDate, formatDateTime } from "./contract-status";
 import { TechnicianSelect, useTechnicianName } from "./people-pickers";
 import { PartiesEditor, partiesInput, partiesProblem, partyDrafts, type PartyDrafts } from "./raise-additional-work-dialog";
+import { formatPhone } from "@/lib/phone/format-phone";
 
 const NONE = "__none";
 const PHOTO_KINDS = ["finding", "before", "after", "other"] as const satisfies readonly WorkPhotoKind[];
@@ -545,7 +546,7 @@ function WorkBody({
               const v = w.parties[p];
               return (
                 <Fact key={p} label={WORK_PARTY_LABELS[p]}>
-                  {v ? [v.name, v.email, v.phone].filter(Boolean).join(" · ") : <Muted>The client</Muted>}
+                  {v ? [v.name, v.email, formatPhone(v.phone)].filter(Boolean).join(" · ") : <Muted>The client</Muted>}
                 </Fact>
               );
             })}
@@ -576,9 +577,9 @@ function WorkBody({
                 <TableRow>
                   <TableHead className="pl-4">Description</TableHead>
                   <TableHead>Kind</TableHead>
-                  <TableHead className="text-right">Qty</TableHead>
-                  <TableHead className="text-right">Unit price</TableHead>
-                  <TableHead className="pr-4 text-right">Amount</TableHead>
+                  <TableHead>Qty</TableHead>
+                  <TableHead>Unit price</TableHead>
+                  <TableHead className="pr-4">Amount</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -586,11 +587,11 @@ function WorkBody({
                   <TableRow key={i}>
                     <TableCell className="max-w-[260px] pl-4 whitespace-normal">{l.description}</TableCell>
                     <TableCell>{l.kind === "labour" ? "Labour" : "Material"}</TableCell>
-                    <TableCell className="text-right tabular-nums">{l.quantity}</TableCell>
-                    <TableCell className="text-right">
+                    <TableCell className="tabular-nums">{l.quantity}</TableCell>
+                    <TableCell>
                       <Money value={l.unitPrice} />
                     </TableCell>
-                    <TableCell className="pr-4 text-right">
+                    <TableCell className="pr-4">
                       <Money value={l.quantity * l.unitPrice} />
                     </TableCell>
                   </TableRow>
@@ -686,7 +687,7 @@ function QuoteEditor({ drafts, setDrafts, disabled }: { drafts: LineDraft[]; set
               value={d.unitPrice}
               onChange={(e) => update(d.key, { unitPrice: e.target.value })}
             />
-            <span className="text-right text-sm">{Number.isFinite(amount) ? <Money value={amount} /> : <Muted>—</Muted>}</span>
+            <span className="text-sm">{Number.isFinite(amount) ? <Money value={amount} /> : <Muted>—</Muted>}</span>
             <Button
               size="icon"
               variant="ghost"

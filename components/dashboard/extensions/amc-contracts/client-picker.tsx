@@ -19,6 +19,7 @@ import {
   type ClientListRow,
   type CustomerRecord,
 } from "@/modules/amc-contracts/amc-contracts-service";
+import { formatPhone } from "@/lib/phone/format-phone";
 
 /** Clients loaded per page; scrolling to the end of the list loads the next page. */
 const PAGE_SIZE = 10;
@@ -178,7 +179,7 @@ export function ClientRowLabel({
         />
       ) : row.phone ? (
         <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
-          {row.phone}
+          {formatPhone(row.phone)}
         </span>
       ) : null}
     </>
@@ -194,13 +195,16 @@ export function ClientPicker({
   onPick,
   onAddNew,
   autoFocus,
+  defaultSearch,
 }: {
   onPick: (customer: CustomerRecord) => void;
   /** Adds a brand-new client, starting from what was typed; `fromFsm` when the list is Zoho FSM's. */
   onAddNew?: (typed: string, fromFsm: boolean) => void;
   autoFocus?: boolean;
+  /** What the search box starts with, such as a name typed on an older proposal. */
+  defaultSearch?: string;
 }) {
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState(defaultSearch ?? "");
   const [open, setOpen] = useState(false);
   const [linking, setLinking] = useState<string | null>(null);
   const list = useClientList(search, open);

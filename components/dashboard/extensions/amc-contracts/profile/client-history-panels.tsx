@@ -18,6 +18,7 @@ import { CallOutStatusBadge, WorkStatusBadge } from "../call-out-shared";
 import { formatContractDate } from "../contract-status";
 import { useAmcData } from "../use-amc-data";
 import { slotLabel, visitStatusTone } from "../visit-status";
+import { TruncatedText } from "@/components/ui/truncated-text";
 
 /**
  * The client page's history across all their contracts (BRD 5.9): the PPM
@@ -43,7 +44,7 @@ function ContractCell({ contractId, contractNumber, propertyLabel, tab }: { cont
       <Link href={contractHref(contractId, tab)} className="font-medium tabular-nums hover:underline">
         {contractNumber || "Contract"}
       </Link>
-      {propertyLabel ? <div className="text-muted-foreground max-w-[240px] truncate text-xs">{propertyLabel}</div> : null}
+      {propertyLabel ? <TruncatedText className="text-muted-foreground max-w-[240px] text-xs">{propertyLabel}</TruncatedText> : null}
     </>
   );
 }
@@ -70,7 +71,7 @@ function ScheduleTable({ visits }: { visits: ClientScheduleVisit[] }) {
             <TableRow key={v.id} className="h-14">
               <TableCell className="pl-5">
                 <div className="font-medium">PPM visit {v.visitNo}</div>
-                {v.services.length ? <div className="text-muted-foreground max-w-[260px] truncate text-xs">{v.services.join(", ")}</div> : null}
+                {v.services.length ? <TruncatedText className="text-muted-foreground max-w-[260px] text-xs">{v.services.join(", ")}</TruncatedText> : null}
               </TableCell>
               <TableCell>
                 <ContractCell contractId={v.contractId} contractNumber={v.contractNumber} propertyLabel={v.propertyLabel} tab="schedule" />
@@ -192,7 +193,7 @@ export function ServiceHistoryPanel({ customerId }: { customerId: string }) {
                 <TableHead>Contract</TableHead>
                 <TableHead>Detail</TableHead>
                 <TableHead>Status</TableHead>
-                <TableHead className="text-right">Amount</TableHead>
+                <TableHead>Amount</TableHead>
                 <TableHead className="w-12 pr-5" />
               </TableRow>
             </TableHeader>
@@ -217,12 +218,12 @@ export function ServiceHistoryPanel({ customerId }: { customerId: string }) {
                     <ContractCell contractId={e.contractId} contractNumber={e.contractNumber} propertyLabel={e.propertyLabel} />
                   </TableCell>
                   <TableCell>
-                    <div className="text-muted-foreground line-clamp-2 max-w-[300px] text-sm">{e.detail || "—"}</div>
+                    <TruncatedText text={e.detail || "—"} className="text-muted-foreground max-w-[300px] text-sm" />
                   </TableCell>
                   <TableCell>
                     <EntryStatus entry={e} />
                   </TableCell>
-                  <TableCell className="text-right">{e.amount !== null ? <Money value={e.amount} className="text-sm" /> : <span className="text-muted-foreground">—</span>}</TableCell>
+                  <TableCell>{e.amount !== null ? <Money value={e.amount} className="text-sm" /> : <span className="text-muted-foreground">—</span>}</TableCell>
                   <TableCell className="pr-5">
                     {e.kind === "visit" && e.hasReport ? (
                       <Button asChild variant="ghost" size="sm">

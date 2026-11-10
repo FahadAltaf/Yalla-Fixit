@@ -1,13 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
 import {
-  ArrowLeft,
   ClipboardCheck,
   FileText,
   ListCheck,
@@ -31,11 +29,12 @@ import {
   submissionToFormData,
 } from "./amc-submission-mapper";
 import { buildAmcPdf } from "./amc-document-utils";
-import { SubmissionStatusBanner } from "./submission-status-banner";
+import { EditingStatus, SubmissionStatusBanner } from "./submission-status-banner";
 import { AmcPreviewDialog } from "./amc-preview-dialog";
 import { computeAmcData, syncServiceRowsForUnitType } from "./amc-pricing";
 import {
   amcFormSchema,
+  isCustomServiceRow,
   type AmcDocumentType,
   type AmcFormData,
   type AmcSubmissionStatus,
@@ -238,8 +237,14 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
     const card = rules?.rateCard;
     if (!card) return;
     const rows = form.getValues("serviceRows");
-    const { rows: carded } = applyRateCard(rows, card.card, form.getValues("unitType"), rules.today, Number(form.getValues("discountPercent")) || 0);
-    const next = carded.map((row) => ({ ...row, basePrice: row.basePrice ?? undefined }));
+    /* A custom service (DEV-260) is not on the card: it keeps the price typed for it. */
+    const cardable = rows.filter((row) => !isCustomServiceRow(row));
+    const { rows: carded } = applyRateCard(cardable, card.card, form.getValues("unitType"), rules.today, Number(form.getValues("discountPercent")) || 0);
+    const cardedById = new Map(carded.map((row) => [row.serviceId, row]));
+    const next = rows.map((row) => {
+      const priced = cardedById.get(row.serviceId);
+      return priced ? { ...priced, basePrice: priced.basePrice ?? undefined } : row;
+    });
     if (JSON.stringify(next) !== JSON.stringify(rows)) {
       form.setValue("serviceRows", next as AmcFormData["serviceRows"], { shouldValidate: true });
     }
@@ -659,7 +664,12 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
         );
       case 3:
         return (
-          <ReviewStep form={form} computed={computed} />
+          <ReviewStep
+            form={form}
+            computed={computed}
+            settings={liveSettings}
+            onWordingSaved={() => void persistDraft()}
+          />
         );
       default:
         return null;
@@ -718,12 +728,16 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
                 Saving draft…
               </span>
             ) : null}
-            <Button variant="outline" asChild>
-              <Link href="/extensions/amc">
-                <ArrowLeft className="size-4" />
-                Back to proposals
-              </Link>
-            </Button>
+            {/*
+              Which proposal is open, and its status, where the All proposals
+              button was. The breadcrumb above already leads back to the list.
+            */}
+            {submissionMeta ? (
+              <EditingStatus
+                status={submissionMeta.status}
+                proposalNumber={watchedValues.proposalNumber}
+              />
+            ) : null}
           </div>
         }
       />

@@ -7,6 +7,8 @@ import {
   servicesForProperty,
   type AmcSettings,
 } from "@/components/dashboard/extensions/amc/amc-settings";
+import { chargeFrequencyType } from "@/components/dashboard/extensions/amc/amc-constants";
+import { isCustomServiceRow } from "@/components/dashboard/extensions/amc/amc-types";
 
 /**
  * Server-side pricing for a proposal: the figures the database stores.
@@ -34,6 +36,10 @@ export interface StoredServiceRow {
   /** Included at no charge: kept with the row so it reopens as free. */
   free: boolean;
   price: number;
+  /* Kept as entered (DEV-260/261). */
+  equipment?: string;
+  customName?: string;
+  customScope?: string;
   /* From the rate card, when one priced the row. */
   rateItemId?: string | null;
   standardRate?: number | null;
@@ -84,7 +90,8 @@ export function priceSubmission({
     servicesForProperty(settings, unitType).map((service) => [service.id, service]),
   );
   const notOffered = services
-    .filter((row) => row.included && !offered.has(row.serviceId))
+    /* A service added to this proposal alone is offered wherever it is added (DEV-260). */
+    .filter((row) => row.included && !offered.has(row.serviceId) && !isCustomServiceRow(row))
     .map((row) => row.serviceId);
   if (notOffered.length > 0) {
     return {
@@ -96,15 +103,26 @@ export function priceSubmission({
   }
 
   const label = (id: string) => offered.get(id)?.label ?? id;
+  /*
+    A custom service is not on the card, so it keeps the base price entered
+    on the proposal; every other row is priced by the card in force.
+  */
+  const cardable = services.filter((row) => !isCustomServiceRow(row));
   const carded = rateCard
-    ? applyRateCard(services, rateCard.card, unitType, day ?? new Date().toISOString().slice(0, 10), discountPercent, label)
+    ? applyRateCard(cardable, rateCard.card, unitType, day ?? new Date().toISOString().slice(0, 10), discountPercent, label)
     : null;
-  const rows = carded ? carded.rows : services;
-  const pricing = computeAmcPricing(rows, discountPercent);
+  const cardedById = new Map((carded?.rows ?? []).map((row) => [row.serviceId, row]));
+  const rows = services.map((row) => cardedById.get(row.serviceId) ?? row);
+  /* Weekly and manpower services are charged per week / per month (lib/amc/pricing.ts). */
+  const pricing = computeAmcPricing(
+    rows.map((row) => ({ ...row, frequencyType: chargeFrequencyType(row.serviceId) })),
+    discountPercent,
+  );
   return {
     ok: true,
     services: pricing.rows.map((row, i) => {
-      const rate = carded ? (carded.rows[i] as RateFields) : null;
+      const entered = services[i];
+      const rate = carded && cardedById.has(row.serviceId) ? (cardedById.get(row.serviceId) as unknown as RateFields) : null;
       return {
         serviceId: row.serviceId,
         included: row.included,
@@ -113,6 +131,9 @@ export function priceSubmission({
         basePrice: row.basePrice,
         free: row.free,
         price: row.price,
+        ...(entered?.equipment?.trim() ? { equipment: entered.equipment.trim() } : {}),
+        ...(entered?.customName !== undefined ? { customName: entered.customName } : {}),
+        ...(entered?.customScope !== undefined ? { customScope: entered.customScope } : {}),
         ...(rate
           ? {
               rateItemId: rate.rateItemId,

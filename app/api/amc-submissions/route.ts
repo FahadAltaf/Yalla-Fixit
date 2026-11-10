@@ -89,6 +89,9 @@ const submissionPayloadSchema = z.object({
       // Clause 6.3's rates for this proposal (AMC-057).
       fixedPriceRates: z.array(z.string().max(300)).max(20).optional(),
       accountManagers: z.tuple([accountManagerSchema, accountManagerSchema]),
+      // Contract wording edited on this proposal alone (DEV-263).
+      clauseOverrides: z.record(z.string(), z.string().max(20000)).optional(),
+      scopeOverrides: z.record(z.string(), z.string().max(20000)).optional(),
     })
     .optional(),
   /* FR2.4: rows as entered. basePrice is nullable -- a draft row the team
@@ -104,6 +107,9 @@ const submissionPayloadSchema = z.object({
   /* DEV-366: replaces monthly/quarterly/annual; customer.paymentTerms is kept as a compatible reading. */
   payment_plan: z.enum(PAYMENT_PLANS).optional(),
   payment_plan_custom: customPlanSchema.nullable().optional(),
+  /* The client and property records it is for, picked in the wizard (the typed details stay what prints). */
+  customer_id: z.string().uuid().nullable().optional(),
+  property_id: z.string().uuid().nullable().optional(),
 });
 
 const submissionUpdateSchema = submissionPayloadSchema.partial().extend({
@@ -217,6 +223,8 @@ type AmcSubmissionRow = {
   enquiry_id?: string | null;
   below_floor?: boolean | null;
   rate_card_version_id?: string | null;
+  customer_id?: string | null;
+  property_id?: string | null;
 };
 
 function mapRow(
@@ -268,6 +276,8 @@ function mapRow(
     enquiry_id: row.enquiry_id ?? null,
     below_floor: row.below_floor === true,
     rate_card_version_id: row.rate_card_version_id ?? null,
+    customer_id: row.customer_id ?? null,
+    property_id: row.property_id ?? null,
   };
 }
 
@@ -370,19 +380,22 @@ export async function GET(req: NextRequest) {
     /* Active AMC: the contract made from this proposal, if any. A
        database without the contracts table reports nothing. */
     let contractId: string | null | undefined;
+    let contractNumber: string | null = null;
     /* Phase 6: the contract exists from the client's approval. */
     if (row.status === "signed" || row.status === "proposal_approved" || row.status === "contract_sent") {
       const { data: contract, error: contractError } = await admin
         .from("amc_contracts")
-        .select("id")
+        .select("id, contract_number")
         .eq("submission_id", row.id)
-        .maybeSingle<{ id: string }>();
+        .maybeSingle<{ id: string; contract_number: string | null }>();
       contractId = contractError ? undefined : (contract?.id ?? null);
+      contractNumber = contract?.contract_number ?? null;
     }
 
     return NextResponse.json({
       ...mapRow(row, { viewerId: profile.id, names }),
       contract_id: contractId,
+      contract_number: contractNumber,
       /* One rule for the API and the buttons (lib/amc/workflow.ts),
          including whether a creator may approve their own proposal. */
       viewer_can_approve:
@@ -616,6 +629,8 @@ export async function POST(req: NextRequest) {
       ...(payload.property.propertyType ? { property_type: payload.property.propertyType } : {}),
       ...planFields(payload),
       ...(card ? { rate_card_version_id: priced.rate_card_version_id, below_floor: priced.below_floor } : {}),
+      ...(payload.customer_id !== undefined ? { customer_id: payload.customer_id } : {}),
+      ...(payload.property_id !== undefined ? { property_id: payload.property_id } : {}),
     },
     (row) => admin.from("amc_submissions").insert(row).select("*").single(),
   );

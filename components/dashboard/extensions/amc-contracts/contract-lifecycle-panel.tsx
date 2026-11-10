@@ -22,6 +22,7 @@ import type { ContractDetail } from "@/modules/amc-contracts/amc-contracts-servi
 import { clientProfileService } from "@/modules/amc-contracts/client-profile-service";
 
 import { formatContractDate, formatDateTime } from "./contract-status";
+import { TruncatedText } from "@/components/ui/truncated-text";
 
 async function lifecycle(contractId: string, action: LifecycleAction) {
   const response = await fetch(`/api/amc-contracts/${contractId}/lifecycle`, {
@@ -537,7 +538,7 @@ export function EntitlementTermsCard({ data, onChanged }: { data: ContractDetail
               <TableHead className="pl-5">Service</TableHead>
               <TableHead>Labour</TableHead>
               <TableHead>Materials</TableHead>
-              <TableHead className="text-right">Value limit</TableHead>
+              <TableHead>Value limit</TableHead>
               <TableHead>Exclusions</TableHead>
               {canEdit ? (
                 <TableHead className="pr-5">
@@ -552,9 +553,9 @@ export function EntitlementTermsCard({ data, onChanged }: { data: ContractDetail
                 <TableCell className="pl-5 text-sm font-medium">{e.serviceLabel}</TableCell>
                 <TableCell className="text-sm">{e.labourCovered ? "Covered" : "Chargeable"}</TableCell>
                 <TableCell className="text-sm">{MATERIAL_LABELS[e.materialCoverage ?? "consumables"]}</TableCell>
-                <TableCell className="text-right text-sm tabular-nums">{e.valueLimitAed != null ? `AED ${e.valueLimitAed.toLocaleString("en-AE")}` : "—"}</TableCell>
+                <TableCell className="text-sm tabular-nums">{e.valueLimitAed != null ? `AED ${e.valueLimitAed.toLocaleString("en-AE")}` : "—"}</TableCell>
                 <TableCell className="max-w-[240px] text-sm">
-                  <span className="line-clamp-2">{e.exclusions || "—"}</span>
+                  <TruncatedText>{e.exclusions || "—"}</TruncatedText>
                 </TableCell>
                 {canEdit ? (
                   <TableCell className="pr-5 text-right">

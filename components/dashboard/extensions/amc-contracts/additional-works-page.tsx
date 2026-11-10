@@ -16,11 +16,12 @@ import { Money } from "@/components/ui/money";
 import { additionalWorksService, type AdditionalWorkRecord } from "@/modules/amc-contracts/additional-works-service";
 
 import { AdditionalWorkDetailDialog, workSourceLabel } from "./additional-work-detail-dialog";
-import { AmcNotificationsBell } from "./amc-notifications-bell";
 import { ListToolbar, RiskBadge, WorkStatusBadge, useUrlDialog } from "./call-out-shared";
 import { RaiseAdditionalWorkDialog } from "./raise-additional-work-dialog";
 import { useAmcData } from "./use-amc-data";
 import { useDialog } from "./profile/use-dialog";
+import { TruncatedText } from "@/components/ui/truncated-text";
+import { ModuleGuide } from "@/components/dashboard/extensions/amc-contracts/module-guide";
 
 const SCOPE_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: "open", label: "Open work" },
@@ -47,7 +48,7 @@ export function workColumns({ withClient = true }: { withClient?: boolean } = {}
             cell: ({ row }) => (
               <span className="flex max-w-[240px] flex-col text-sm">
                 <span>{row.original.customerName || <span className="text-muted-foreground">—</span>}</span>
-                {row.original.propertyLabel ? <span className="text-muted-foreground line-clamp-1 text-xs">{row.original.propertyLabel}</span> : null}
+                {row.original.propertyLabel ? <TruncatedText text={row.original.propertyLabel} className="text-muted-foreground text-xs" /> : null}
               </span>
             ),
           } satisfies ColumnDef<AdditionalWorkRecord>,
@@ -62,9 +63,7 @@ export function workColumns({ withClient = true }: { withClient?: boolean } = {}
       id: "finding",
       header: "Finding",
       cell: ({ row }) => (
-        <span className="line-clamp-2 max-w-[280px] text-sm" title={row.original.finding}>
-          {row.original.finding}
-        </span>
+        <TruncatedText text={row.original.finding} className="max-w-[280px] text-sm" />
       ),
     },
     {
@@ -79,9 +78,9 @@ export function workColumns({ withClient = true }: { withClient?: boolean } = {}
     },
     {
       id: "total",
-      header: () => <span className="block text-right">Total</span>,
+      header: () => <span className="block">Total</span>,
       cell: ({ row }) => (
-        <span className="block text-right text-sm">
+        <span className="block text-sm">
           {row.original.quotationLines.length ? <Money value={row.original.totals.total} /> : <span className="text-muted-foreground">Not quoted</span>}
         </span>
       ),
@@ -143,10 +142,10 @@ export function AdditionalWorksPage() {
       <PageHeading
         eyebrow="Operations"
         title="Additional work"
+        info={<ModuleGuide module="additionalWork" />}
         description="Work outside the contract found on visits and call outs: quoted to the client, approved with evidence, done, invoiced and paid."
         actions={
           <>
-            <AmcNotificationsBell />
             {data?.canCreate && data.migrated ? (
               <Button onClick={() => raising.show(true)}>
                 <Plus className="size-4" />

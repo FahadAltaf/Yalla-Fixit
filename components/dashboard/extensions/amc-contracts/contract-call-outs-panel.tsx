@@ -100,10 +100,10 @@ export function ContractCallOutsPanel({ contractId, contractOpen }: { contractId
                 <TableHeader>
                   <TableRow>
                     <TableHead className="pl-5">Service</TableHead>
-                    <TableHead className="text-right">Included</TableHead>
-                    <TableHead className="text-right">Used</TableHead>
-                    <TableHead className="text-right">Booked</TableHead>
-                    <TableHead className="text-right">Remaining</TableHead>
+                    <TableHead>Included</TableHead>
+                    <TableHead>Used</TableHead>
+                    <TableHead>Booked</TableHead>
+                    <TableHead>Remaining</TableHead>
                     <TableHead className="pr-5" />
                   </TableRow>
                 </TableHeader>
@@ -111,11 +111,11 @@ export function ContractCallOutsPanel({ contractId, contractOpen }: { contractId
                   {allowances.data.allowances.map((a) => (
                     <TableRow key={a.entitlementId}>
                       <TableCell className="pl-5 font-medium">{a.serviceLabel}</TableCell>
-                      <TableCell className="text-right tabular-nums">{a.unlimited ? "Unlimited" : (a.included ?? <Muted>—</Muted>)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{a.used}</TableCell>
-                      <TableCell className="text-right tabular-nums">{a.reserved}</TableCell>
-                      <TableCell className="text-right tabular-nums">{a.unlimited ? "Unlimited" : (a.remaining ?? <Muted>—</Muted>)}</TableCell>
-                      <TableCell className="pr-5 text-right">
+                      <TableCell className="tabular-nums">{a.unlimited ? "Unlimited" : (a.included ?? <Muted>—</Muted>)}</TableCell>
+                      <TableCell className="tabular-nums">{a.used}</TableCell>
+                      <TableCell className="tabular-nums">{a.reserved}</TableCell>
+                      <TableCell className="tabular-nums">{a.unlimited ? "Unlimited" : (a.remaining ?? <Muted>—</Muted>)}</TableCell>
+                      <TableCell className="pr-5">
                         {a.nearZero ? (
                           <Badge variant="secondary" className={cn("border-0 font-medium", a.remaining === 0 ? "bg-danger/10 text-danger" : "bg-warning/10 text-warning")}>
                             {a.remaining === 0 ? "Used up" : "Nearly used up"}
@@ -257,7 +257,7 @@ export function ContractCallOutsPanel({ contractId, contractOpen }: { contractId
                         <TableHead className="pl-5">When</TableHead>
                         <TableHead>Service</TableHead>
                         <TableHead>Movement</TableHead>
-                        <TableHead className="text-right">Quantity</TableHead>
+                        <TableHead>Quantity</TableHead>
                         <TableHead>Call out</TableHead>
                         <TableHead className="pr-5">Note</TableHead>
                       </TableRow>
@@ -274,7 +274,7 @@ export function ContractCallOutsPanel({ contractId, contractOpen }: { contractId
                                 {kind?.label ?? m.kind}
                               </Badge>
                             </TableCell>
-                            <TableCell className="text-right tabular-nums">{m.quantity}</TableCell>
+                            <TableCell className="tabular-nums">{m.quantity}</TableCell>
                             <TableCell>{m.callOutNo ?? <Muted>—</Muted>}</TableCell>
                             <TableCell className="text-muted-foreground max-w-[260px] pr-5 whitespace-normal">{m.notes ?? "—"}</TableCell>
                           </TableRow>

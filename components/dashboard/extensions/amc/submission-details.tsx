@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   ChevronDown,
   Circle,
+  Download,
   FileType,
   EyeIcon,
   FileText,
@@ -25,7 +26,6 @@ import {
   MessageCircle,
   Send,
   Undo2,
-  UserRound,
   Users,
   XCircle,
 } from "lucide-react";
@@ -50,7 +50,9 @@ import {
   TabCount,
   timeAgo,
 } from "@/components/dashboard/shared/kaizen";
-import { SubmitButton } from "@/components/dashboard/shared/kaizen-states";
+import { SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
 import {
   Select,
@@ -76,10 +78,11 @@ import { formatPhoneForDocument } from "./amc-phone";
 import { lastSentAt, sendableDocument } from "./amc-send-dialog";
 import { amcStatusTone } from "./amc-status";
 import { submissionToFormData } from "./amc-submission-mapper";
+import { amcFormSchema } from "./amc-types";
 import { canDecideProposal } from "@/lib/amc/workflow";
 import { SignedContractAction } from "@/components/dashboard/extensions/amc-contracts/signed-contract-action";
 import { SignedArchiveRow } from "@/components/dashboard/extensions/amc-contracts/signed-archive-row";
-import { ServicesAndCost } from "./steps/review-step";
+import { Fact, ServicesAndCost } from "./steps/review-step";
 import {
   ProposalVersionsPanel,
   ReviseProposalDialog,
@@ -469,7 +472,17 @@ export function SubmissionDetails({
   const details = useMemo(() => {
     const form = submissionToFormData(submission);
     const data = computeAmcData(form, "proposal");
-    return { form, data };
+    /* DEV-263: the clauses and scopes reworded on this proposal, so the approver knows to read them. */
+    const editedWording = [
+      ...Object.keys(form.clauseOverrides ?? {}).map(
+        (id) => data.settings.clauseList.find((clause) => clause.id === id)?.title,
+      ),
+      ...Object.keys(form.scopeOverrides ?? {}).map((id) => {
+        const service = data.settings.services.find((item) => item.id === id);
+        return service ? `Scope of ${service.label}` : undefined;
+      }),
+    ].filter((title): title is string => Boolean(title));
+    return { form, data, editedWording };
   }, [submission]);
 
   /* The audit trail, loaded with the page and after any change. */
@@ -502,11 +515,45 @@ export function SubmissionDetails({
       : buildTimeline(submission);
   }, [submission, history, historyKey]);
 
-  const { form, data } = details;
+  const { form, data, editedWording } = details;
   const { totals } = data;
   const title = submission.customer.customerName || "Unnamed client";
   const awaiting = submission.status === "awaiting_approval";
   const canEdit = isAmcSubmissionEditable(submission.status) && submission.is_own !== false;
+  /* FR5.1 from the proposal's own page, as the wizard's last step does it: the owner's draft, or one sent back. */
+  const submittable = submission.is_own !== false && (submission.status === "draft" || submission.status === "sent_back");
+  const router = useRouter();
+  const { confirm, dialog: confirmDialog } = useConfirm();
+  const submitForApproval = () => {
+    /* The wizard's own checks first, so nothing half-filled goes up the ladder. */
+    const parsed = amcFormSchema.safeParse(form);
+    if (!parsed.success) {
+      toast.error(`Finish the proposal before submitting it: ${parsed.error.issues[0]?.message ?? "a required field is empty"}.`, {
+        action: { label: "Edit", onClick: () => router.push(`/extensions/amc/${submission.id}/edit`) },
+      });
+      return;
+    }
+    void confirm({
+      title: submission.status === "sent_back" ? "Submit this proposal again?" : "Submit this proposal?",
+      description:
+        "The approval rules are checked now (discount, value, payment plan, floor rates). Within them it is ready to share at once; otherwise it goes up the approval ladder, and nothing reaches the client until it is approved.",
+      confirmText: "Submit",
+      action: async () => {
+        const { outcome, warning } = await amcSubmissionsService.decide({ action: "submit", id: submission.id });
+        toast.success(
+          outcome && "outcome" in outcome
+            ? outcome.outcome === "pending"
+              ? `Sent to ${outcome.levelName} for approval. Nothing goes to the client until it is approved.`
+              : outcome.outcome === "covered"
+                ? "Approved: this version asks for no more than the last one was approved for. Share it with the client now."
+                : "No approval needed. Share it with the client now."
+            : "Sent for approval. Nothing goes to the client until the approver has reviewed it.",
+        );
+        if (warning) toast.warning(warning);
+        onChanged?.();
+      },
+    });
+  };
   /* Approver rights, less the creator's own proposal when self-approval
      is switched off (lib/amc/workflow.ts). */
   const canDecide = canDecideProposal({ canApprove, isOwner: submission.is_own !== false });
@@ -687,7 +734,7 @@ export function SubmissionDetails({
                   : null
               }
               recordAnswer={answerable ? () => setAnswerOpen(true) : null}
-              reject={canDecideNow && onReject ? () => onReject(submission) : null}
+              reject={null}
               rejectDisabled={deciding}
             />
 
@@ -695,6 +742,17 @@ export function SubmissionDetails({
 
             {canDecideNow ? (
               <>
+                {onReject ? (
+                  <Button
+                    variant="outline"
+                    className="text-destructive hover:text-destructive"
+                    disabled={deciding}
+                    onClick={() => onReject(submission)}
+                  >
+                    <XCircle className="size-4" />
+                    Reject
+                  </Button>
+                ) : null}
                 <Button variant="outline" disabled={deciding} onClick={() => onSendBack?.(submission)}>
                   <Undo2 className="size-4" />
                   Return
@@ -741,6 +799,19 @@ export function SubmissionDetails({
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
+            ) : submittable ? (
+              <>
+                <Button asChild variant="outline">
+                  <Link href={`/extensions/amc/${submission.id}/edit`}>
+                    <PencilIcon className="size-4" />
+                    Edit
+                  </Link>
+                </Button>
+                <Button onClick={submitForApproval}>
+                  <Send className="size-4" />
+                  {submission.status === "sent_back" ? "Submit again" : "Submit for approval"}
+                </Button>
+              </>
             ) : canEdit ? (
               <Button asChild>
                 <Link href={`/extensions/amc/${submission.id}/edit`}>
@@ -768,6 +839,7 @@ export function SubmissionDetails({
         ) : null}
       </Card>
 
+      {confirmDialog}
       {revisable ? (
         <ReviseProposalDialog submission={submission} open={reviseOpen} onOpenChange={setReviseOpen} />
       ) : null}
@@ -849,110 +921,83 @@ export function SubmissionDetails({
                 generated documents in the Download menu. */}
             {submission.status === "signed" ? <SignedArchiveRow submissionId={submission.id} /> : null}
 
-            <div className="grid gap-6 lg:grid-cols-2">
-              <SectionCard
-                icon={<UserRound />}
-                title="Client"
-                description="Who the proposal and the contract are written for."
-                bodyClassName="px-5 pb-4"
-              >
-                <DetailList
-                  rows={[
-                    { label: "Client", value: form.customerName },
-                    { label: "Client ID", value: form.customerId },
-                    { label: "Phone", value: formatPhoneForDocument(form.customerPhone) },
-                    { label: "Email", value: form.customerEmail },
-                  ]}
-                />
-              </SectionCard>
+            {/*
+              As on main: what the proposal is written for in one card, its
+              facts in a grid, and everyone named on it in a card of its own
+              under it. Four small cards side by side read as four records
+              rather than one proposal.
+            */}
+            <SectionCard
+              icon={<Building2 />}
+              title="Property and customer"
+              description="What the proposal and the contract are written for."
+              bodyClassName="px-5 pb-5"
+            >
+              <dl className="grid gap-x-6 gap-y-4 rounded-lg border p-4 sm:grid-cols-2 xl:grid-cols-4">
+                <Fact label="Customer">{form.customerName}</Fact>
+                <Fact label="Customer ID">{form.customerId}</Fact>
+                <Fact label="Phone">{formatPhoneForDocument(form.customerPhone)}</Fact>
+                <Fact label="Email">{form.customerEmail}</Fact>
+                <Fact label="Property category">{sentenceCase(form.propertyCategory)}</Fact>
+                <Fact label="Unit type">{sentenceCase(form.unitType)}</Fact>
+                <Fact label="Property detail">{form.propertyDetail}</Fact>
+                <Fact label="Address">{form.propertyAddress}</Fact>
+                <Fact label="Contract period">
+                  <span className="inline-flex items-center gap-1.5">
+                    <CalendarRange className="text-muted-foreground size-3.5" aria-hidden />
+                    {formatDisplayDate(form.startDate) || "—"} → {data.endDate || "—"}
+                  </span>
+                </Fact>
+                <Fact label="Payment terms">{formatPaymentLabel(form, totals.termMonths)}</Fact>
+                <Fact label="Proposal number">
+                  {submission.customer.proposalNumber
+                    ? `${submission.customer.proposalNumber}${(submission.current_version ?? 1) > 1 ? ` · V${submission.current_version}` : ""}`
+                    : null}
+                </Fact>
+                <Fact label="Property type">{sentenceCase(data.propertyTypeLabel)}</Fact>
+                <Fact label="Valid until">
+                  {submission.valid_until ? formatDisplayDate(submission.valid_until) : "Set when the proposal is sent"}
+                </Fact>
+                {submission.enquiry_id ? (
+                  <Fact label="Enquiry">
+                    <Link
+                      href={`/extensions/amc-contracts/enquiries/${submission.enquiry_id}`}
+                      className="hover:text-brand underline underline-offset-2"
+                    >
+                      Open the enquiry
+                    </Link>
+                  </Fact>
+                ) : null}
+              </dl>
+            </SectionCard>
 
-              <SectionCard
-                icon={<Building2 />}
-                title="Property"
-                description="Where the services are delivered."
-                bodyClassName="px-5 pb-4"
-              >
-                <DetailList
-                  rows={[
-                    { label: "Category", value: sentenceCase(form.propertyCategory) },
-                    { label: "Unit type", value: sentenceCase(form.unitType) },
-                    { label: "Property type", value: sentenceCase(data.propertyTypeLabel) },
-                    { label: "Property detail", value: form.propertyDetail },
-                    { label: "Address", value: form.propertyAddress },
-                  ]}
-                />
-              </SectionCard>
-
-              <SectionCard
-                icon={<CalendarRange />}
-                title="Contract"
-                description="The term, how it is paid, and the proposal it comes from."
-                bodyClassName="px-5 pb-4"
-              >
-                <DetailList
-                  rows={[
-                    {
-                      label: "Contract period",
-                      value: `${formatDisplayDate(form.startDate) || "—"} → ${data.endDate || "—"}`,
-                    },
-                    { label: "Payment terms", value: formatPaymentLabel(form, totals.termMonths) },
-                    {
-                      label: "Proposal number",
-                      value: submission.customer.proposalNumber
-                        ? `${submission.customer.proposalNumber}${(submission.current_version ?? 1) > 1 ? ` · V${submission.current_version}` : ""}`
-                        : null,
-                    },
-                    {
-                      label: "Valid until",
-                      value: submission.valid_until
-                        ? formatDisplayDate(submission.valid_until)
-                        : "Set when the proposal is sent",
-                    },
-                    {
-                      label: "Enquiry",
-                      value: submission.enquiry_id ? (
-                        <Link
-                          href={`/extensions/amc-contracts/enquiries/${submission.enquiry_id}`}
-                          className="hover:text-brand underline underline-offset-2"
-                        >
-                          Open the enquiry
-                        </Link>
-                      ) : null,
-                    },
-                  ]}
-                />
-              </SectionCard>
-
-              {/* Everyone named on the proposal, beside the contract they
-                  are contacts for. */}
-              <SectionCard
-                icon={<Users />}
-                title="Contacts"
-                description="Who the team coordinates with on the client's side, and who the client calls on ours."
-                bodyClassName="space-y-6 px-5 pb-5"
-              >
-                <ContactGroup
-                  title="Coordination contacts"
-                  people={form.coordinationContacts.map((contact) => ({
-                    name: contact.name,
-                    phone: contact.phone,
-                    role: contact.designation
-                      ? sentenceCase(formatDesignationLabel(contact.designation))
-                      : "",
-                  }))}
-                  empty="No coordination contacts on this proposal."
-                />
-                <ContactGroup
-                  title="Account managers"
-                  people={(form.accountManagers ?? []).map((manager) => ({
-                    name: manager.name,
-                    phone: manager.phone,
-                    role: "Account manager",
-                  }))}
-                  empty="No account managers on this proposal."
-                />
-              </SectionCard>
-            </div>
+            <SectionCard
+              icon={<Users />}
+              title="Contacts"
+              description="Who the team coordinates with on the client's side, and who the client calls on ours."
+              bodyClassName="space-y-6 px-5 pb-5"
+            >
+              <ContactGroup
+                title="Coordination contacts"
+                people={form.coordinationContacts.map((contact) => ({
+                  name: contact.name,
+                  phone: contact.phone,
+                  role: contact.designation
+                    ? sentenceCase(formatDesignationLabel(contact.designation))
+                    : "",
+                }))}
+                empty="No coordination contacts on this proposal."
+              />
+              <ContactGroup
+                title="Account managers"
+                people={(form.accountManagers ?? []).map((manager) => ({
+                  name: manager.name,
+                  phone: manager.phone,
+                  role: "Account manager",
+                }))}
+                empty="No account managers on this proposal."
+              />
+            </SectionCard>
           </>,
         )}
 
@@ -965,6 +1010,14 @@ export function SubmissionDetails({
             bodyClassName="px-5 pb-5"
           >
             <ServicesAndCost rows={data.frequencyRows} totals={totals} />
+            {editedWording.length > 0 ? (
+              <div className="mt-3 rounded-lg border border-dashed p-3 text-sm">
+                <p className="font-medium">Contract wording edited for this proposal</p>
+                <p className="text-muted-foreground mt-0.5">
+                  {editedWording.join(", ")}. Preview the contract to read the edited text.
+                </p>
+              </div>
+            ) : null}
           </SectionCard>,
         )}
 
@@ -1043,34 +1096,6 @@ export function SubmissionDetails({
 }
 
 /**
- * Label-and-value rows for a record somebody is reading, not editing --
- * the job page's DetailList. A missing value shows an em dash rather than
- * collapsing the row, so the record keeps its shape.
- */
-function DetailList({
-  rows,
-}: {
-  rows: Array<{ label: string; value?: ReactNode }>;
-}) {
-  return (
-    <dl className="divide-y">
-      {rows.map((row) => (
-        <div key={row.label} className="flex items-baseline justify-between gap-4 py-1.5">
-          <dt className="text-muted-foreground shrink-0 text-sm">{row.label}</dt>
-          <dd className="min-w-0 truncate text-right text-sm font-medium">
-            {row.value !== null && row.value !== undefined && row.value !== "" ? (
-              row.value
-            ) : (
-              <span className="text-muted-foreground font-normal">—</span>
-            )}
-          </dd>
-        </div>
-      ))}
-    </dl>
-  );
-}
-
-/**
  * The header's "More" menu: the documents as files, and the actions that
  * are not this proposal's next step.
  */
@@ -1091,16 +1116,20 @@ function MoreActions({
 }) {
   if (!onDownload && !revise && !recordAnswer && !reject) return null;
   const hasActions = Boolean(revise || recordAnswer || reject);
+  /* Named for what it holds: "Download" when the downloads are all there is, "More" once there are other actions too. */
+  const downloadsOnly = Boolean(onDownload) && !hasActions;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="outline" aria-busy={downloading}>
           {downloading ? (
             <Loader2 className="size-4 animate-spin" />
+          ) : downloadsOnly ? (
+            <Download className="size-4" />
           ) : (
             <MoreHorizontal className="size-4" />
           )}
-          More
+          {downloadsOnly ? "Download" : "More"}
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">

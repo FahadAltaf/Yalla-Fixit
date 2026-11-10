@@ -7,10 +7,10 @@ import { Plus } from "lucide-react";
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
 import { Button } from "@/components/ui/button";
 import { PageHeading } from "@/components/dashboard/shared/kaizen";
-import { AmcNotificationsBell } from "@/components/dashboard/extensions/amc-contracts/amc-notifications-bell";
 
 import { AmcApprovalNotice } from "./amc-approval-notice";
 import { SubmissionsList } from "./submissions-list";
+import { ModuleGuide } from "@/components/dashboard/extensions/amc-contracts/module-guide";
 
 /**
  * /extensions/amc -- where AMC proposals start: every proposal the viewer
@@ -26,13 +26,13 @@ export function AmcSubmissionsPage() {
       <PageHeading
         eyebrow="Sales"
         title="Proposals"
+        info={<ModuleGuide module="proposals" />}
         description="Create AMC proposals, send them for approval, and track each one until the client signs."
         /* Beside the title, where Jobs and Quotations put theirs. It sat
            in the table's toolbar, so the one action that starts the work
            was below the filters for finding work already started. */
         actions={
           <div className="flex items-center gap-2">
-            <AmcNotificationsBell className="size-9" />
             <Button asChild>
               <Link href="/extensions/amc/new">
                 <Plus className="size-4" />

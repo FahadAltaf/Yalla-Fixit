@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import { isPickable } from "@/lib/server/people/pickable-users";
 import { readAllRows } from "@/lib/server/snagging/read-all";
 import { ActionType, ResourceType, UserRoles } from "@/types/types";
 
@@ -49,23 +50,29 @@ async function rolesWithAccess(admin: SupabaseClient): Promise<string[]> {
   ];
 }
 
-/** Everyone active with access to Snagging, by name. */
+/**
+ * Everyone active with access to Snagging, by name. Accounts hidden from
+ * lists (DEV-458) are left out like deactivated ones; one already on a job
+ * stays there, because staffWithoutAccess below does not refuse them.
+ */
 export async function listSnaggingStaff(admin: SupabaseClient): Promise<SnaggingStaff[]> {
   const roleIds = await rolesWithAccess(admin);
   if (roleIds.length === 0) return [];
 
-  const rows = await readAllRows<SnaggingStaff>(
+  const rows = await readAllRows<SnaggingStaff & { hidden_from_lists: boolean | null }>(
     (from, to) =>
       admin
         .from("user_profile")
-        .select("id, full_name, email, is_active")
+        .select("id, full_name, email, is_active, hidden_from_lists")
         .in("role_id", roleIds)
         .order("full_name", { ascending: true, nullsFirst: false })
         .order("id", { ascending: true })
         .range(from, to),
     "snagging staff",
   );
-  return rows.filter((row) => row.is_active !== false);
+  return rows
+    .filter(isPickable)
+    .map(({ id, full_name, email, is_active }) => ({ id, full_name, email, is_active }));
 }
 
 /**

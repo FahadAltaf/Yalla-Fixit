@@ -49,6 +49,7 @@ import {
 
 import { ExportMenu } from "./export-menu";
 import { useAmcData } from "./use-amc-data";
+import { TruncatedText } from "@/components/ui/truncated-text";
 
 /**
  * The management dashboard and the operational and commercial reports
@@ -216,7 +217,7 @@ function CompactTable<R>({
         <TableHeader>
           <TableRow>
             {columns.map((c, i) => (
-              <TableHead key={c.key} className={cn(isFigure(c.kind) && "text-right", i === 0 && "pl-5", i === columns.length - 1 && "pr-5")}>
+              <TableHead key={c.key} className={cn(i === 0 && "pl-5", i === columns.length - 1 && "pr-5")}>
                 {c.label}
               </TableHead>
             ))}
@@ -237,7 +238,7 @@ function CompactTable<R>({
                     key={c.key}
                     className={cn(
                       "text-sm",
-                      isFigure(c.kind) && "text-right tabular-nums",
+                      isFigure(c.kind) && "tabular-nums",
                       i === 0 && "pl-5 font-medium",
                       i === columns.length - 1 && "pr-5",
                     )}
@@ -567,7 +568,7 @@ function Breakdown({
         <ul className="divide-y">
           {rows.map((r) => (
             <li key={r.key} className="flex items-center justify-between gap-3 py-2 text-sm">
-              <span className="min-w-0 truncate">{label(r.key)}</span>
+              <TruncatedText>{label(r.key)}</TruncatedText>
               <span className="flex shrink-0 items-center gap-2">
                 <span className="bg-muted hidden h-1.5 w-16 overflow-hidden rounded-full sm:block" aria-hidden>
                   <span className="bg-brand block h-full rounded-full" style={{ width: `${total ? Math.round((r.count / total) * 100) : 0}%` }} />

@@ -22,6 +22,7 @@ import {
 } from "@/modules/amc-contracts/amc-contracts-service";
 
 import { ClientRowLabel, customerForRow, useClientList } from "./client-picker";
+import { AmcPhoneInput } from "@/components/dashboard/extensions/amc/components/amc-phone-input";
 
 /**
  * Search the clients and pick one: Zoho FSM's clients, as on Snagging,
@@ -169,7 +170,7 @@ export function CustomerFields({ value, onChange }: { value: CustomerInput; onCh
       </div>
       <div className="grid gap-1.5">
         <Label htmlFor="cust-phone">Phone</Label>
-        <Input id="cust-phone" value={value.phone ?? ""} onChange={set("phone")} maxLength={40} />
+        <AmcPhoneInput id="cust-phone" value={value.phone ?? ""} onChange={(phone) => onChange({ ...value, phone })} />
       </div>
       <div className="grid gap-1.5">
         <Label htmlFor="cust-email">Email</Label>

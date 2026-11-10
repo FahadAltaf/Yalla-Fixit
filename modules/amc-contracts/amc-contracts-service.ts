@@ -83,6 +83,8 @@ export type CustomerInput = {
   trn?: string | null;
   preferredChannel?: "whatsapp" | "email" | "call" | "sms" | null;
   preferredLanguage?: string | null;
+  /* Required by Zoho FSM for a new client; kept on the shared Snagging client. */
+  maherId?: string | null;
 };
 export type PropertyInput = {
   label: string;
@@ -139,7 +141,7 @@ export type ContractListStatus =
   | "expired"
   | "cancelled";
 
-export type ContractSortKey = "contract" | "customer" | "property" | "start" | "end" | "value";
+export type ContractSortKey = "created" | "contract" | "customer" | "property" | "start" | "end" | "value";
 
 export interface ContractListRow {
   kind: "contract" | "pending";
@@ -170,7 +172,6 @@ export interface ContractListResponse {
   rows: ContractListRow[];
   totalCount: number;
   counts: Partial<Record<ContractListStatus, number>>;
-  managers: string[];
   canApprove: boolean;
 }
 
@@ -444,6 +445,10 @@ export const amcContractsService = {
   openFsmClient(fsmContactId: string) {
     return request<{ customer: CustomerRecord }>("/api/amc-contracts/customers/link", { method: "POST", body: JSON.stringify({ fsmContactId }) });
   },
+  /** Gives the client the next Client ID when it has none, and returns it. */
+  assignClientId(customerId: string) {
+    return request<{ customer: CustomerRecord }>(`/api/amc-contracts/customers/${customerId}/client-id`, { method: "POST" });
+  },
   createCustomer(input: CustomerInput) {
     return request<{ customer: CustomerRecord }>("/api/amc-contracts/customers", { method: "POST", body: JSON.stringify(input) });
   },
@@ -485,6 +490,11 @@ export const amcContractsService = {
       city?: string | null;
       zones?: string[];
       accessConstraints?: string | null;
+      address?: string | null;
+      unitNo?: string | null;
+      notes?: string | null;
+      parentPropertyId?: string | null;
+      floorsCount?: number | null;
     },
   ) {
     return request<{ property: PropertyRecord }>(`/api/amc-contracts/properties/${id}/details`, { method: "PUT", body: JSON.stringify(input) });
@@ -539,7 +549,8 @@ export const amcContractsService = {
     );
   },
   assessment(id: string) {
-    return request<{ assessment: AssessmentRecord; canEdit: boolean }>(`/api/amc-contracts/assessments/${id}`);
+    /* people: who can be the assessor, given when the caller can edit the visit. */
+    return request<{ assessment: AssessmentRecord; canEdit: boolean; people?: Array<{ id: string; name: string; email: string | null }> }>(`/api/amc-contracts/assessments/${id}`);
   },
   createAssessment(input: { customerId: string | null; propertyId: string | null; contractId?: string | null }) {
     return request<{ assessment: AssessmentRecord }>("/api/amc-contracts/assessments", { method: "POST", body: JSON.stringify(input) });

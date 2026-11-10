@@ -54,6 +54,8 @@ export function formDataToSubmissionPayload(
     priceListRows: data.priceListRows,
     fixedPriceRates: data.fixedPriceRates,
     accountManagers: data.accountManagers,
+    clauseOverrides: data.clauseOverrides,
+    scopeOverrides: data.scopeOverrides,
   };
 
   return {
@@ -65,6 +67,8 @@ export function formDataToSubmissionPayload(
     discount_amount: totals.discountAmount,
     final_price: totals.finalPrice,
     generated_documents: generatedDocuments,
+    ...(data.customerRecordId !== undefined ? { customer_id: data.customerRecordId } : {}),
+    ...(data.propertyRecordId !== undefined ? { property_id: data.propertyRecordId } : {}),
     ...(data.paymentPlan
       ? { payment_plan: data.paymentPlan, payment_plan_custom: data.paymentPlan === "custom" ? (data.paymentPlanCustom ?? null) : null }
       : {}),
@@ -81,11 +85,16 @@ export function submissionToFormData(submission: AmcDocumentSource): AmcFormData
     /* FR3.3: basePrice has to come back too, or reopening a submission
        silently blanks every price the team entered. */
     serviceRows: submission.services.map(
-      ({ serviceId, included, units, frequency, basePrice, free, rateItemId, standardRate, floorRate, promotionId, promotionPercent, belowFloor }) => ({
+      ({ serviceId, included, units, frequency, basePrice, free, equipment, customName, customScope, rateItemId, standardRate, floorRate, promotionId, promotionPercent, belowFloor }) => ({
         serviceId,
         included,
         units,
         frequency,
+        // DEV-261. Absent on anything saved before it existed.
+        equipment: equipment ?? "",
+        // DEV-260: only a custom service carries these.
+        ...(customName !== undefined ? { customName } : {}),
+        ...(customScope !== undefined ? { customScope } : {}),
         rateItemId,
         standardRate,
         floorRate,
@@ -116,6 +125,9 @@ export function submissionToFormData(submission: AmcDocumentSource): AmcFormData
       ? submission.document_options.priceListRows
       : [emptyPriceListRow(), emptyPriceListRow(), emptyPriceListRow()],
     fixedPriceRates: submission.document_options?.fixedPriceRates ?? [],
+    // DEV-263. None on a proposal saved before wording could be edited.
+    clauseOverrides: submission.document_options?.clauseOverrides ?? {},
+    scopeOverrides: submission.document_options?.scopeOverrides ?? {},
     accountManagers: submission.document_options?.accountManagers ?? [
       { name: "", phone: "" },
       { name: "", phone: "" },
@@ -124,6 +136,8 @@ export function submissionToFormData(submission: AmcDocumentSource): AmcFormData
     ...(submission.document_options?.entitlementTerms
       ? { entitlementTerms: submission.document_options.entitlementTerms }
       : {}),
+    customerRecordId: submission.customer_id ?? null,
+    propertyRecordId: submission.property_id ?? null,
     customerName: submission.customer.customerName,
     customerId: submission.customer.customerId ?? "",
     customerPhone: submission.customer.customerPhone,
@@ -137,6 +151,7 @@ export function submissionToFormData(submission: AmcDocumentSource): AmcFormData
     paymentPlan: submission.payment_plan ?? undefined,
     paymentPlanCustom: submission.payment_plan_custom ?? null,
     proposalNumber: submission.customer.proposalNumber,
+    contractNumber: submission.contract_number ?? undefined,
     submissionId: submission.id ?? "",
   };
 }

@@ -15,12 +15,13 @@ import { IdentityCell } from "@/components/ui/entity-avatar";
 import { CALL_OUT_PRIORITY_LABELS } from "@/lib/amc/call-outs";
 import { callOutsService, type CallOutRecord } from "@/modules/amc-contracts/call-outs-service";
 
-import { AmcNotificationsBell } from "./amc-notifications-bell";
 import { CallOutDetailDialog } from "./call-out-detail-dialog";
 import { CallOutStatusBadge, CoverageBadge, ListToolbar, PriorityBadge, SlaBadge, shortDateTime, useUrlDialog } from "./call-out-shared";
 import { LogCallOutDialog } from "./log-call-out-dialog";
 import { useAmcData } from "./use-amc-data";
 import { useDialog } from "./profile/use-dialog";
+import { TruncatedText } from "@/components/ui/truncated-text";
+import { ModuleGuide } from "@/components/dashboard/extensions/amc-contracts/module-guide";
 
 const SCOPE_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: "open", label: "Open call outs" },
@@ -55,7 +56,7 @@ export function callOutColumns({ withClient = true }: { withClient?: boolean } =
             cell: ({ row }) => (
               <span className="flex max-w-[240px] flex-col text-sm">
                 <span>{row.original.customerName || <span className="text-muted-foreground">—</span>}</span>
-                {row.original.propertyLabel ? <span className="text-muted-foreground line-clamp-1 text-xs">{row.original.propertyLabel}</span> : null}
+                {row.original.propertyLabel ? <TruncatedText text={row.original.propertyLabel} className="text-muted-foreground text-xs" /> : null}
               </span>
             ),
           } satisfies ColumnDef<CallOutRecord>,
@@ -65,9 +66,7 @@ export function callOutColumns({ withClient = true }: { withClient?: boolean } =
       id: "issue",
       header: "Issue",
       cell: ({ row }) => (
-        <span className="line-clamp-2 max-w-[280px] text-sm" title={row.original.issue}>
-          {row.original.issue}
-        </span>
+        <TruncatedText text={row.original.issue} className="max-w-[280px] text-sm" />
       ),
     },
     {
@@ -141,10 +140,10 @@ export function CallOutsPage() {
       <PageHeading
         eyebrow="Operations"
         title="Call outs"
+        info={<ModuleGuide module="callOuts" />}
         description="Emergency and non-emergency call outs on AMC contracts: the SLA clock, whether each is covered, and the visit, findings and additional work."
         actions={
           <>
-            <AmcNotificationsBell />
             {data?.canCreate && data.migrated ? (
               <Button onClick={() => logging.show(true)}>
                 <Plus className="size-4" />

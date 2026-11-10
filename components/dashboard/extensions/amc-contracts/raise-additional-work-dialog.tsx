@@ -29,6 +29,7 @@ import { additionalWorksService } from "@/modules/amc-contracts/additional-works
 
 import { ContractPicker, Field, errorText, type PickedContract } from "./call-out-shared";
 import { TechnicianSelect } from "./people-pickers";
+import { AmcPhoneInput } from "@/components/dashboard/extensions/amc/components/amc-phone-input";
 
 const NONE = "__none";
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -114,15 +115,12 @@ export function PartiesEditor({ value, onChange, disabled }: { value: PartyDraft
                 value={d.email}
                 onChange={(e) => set(p, { email: e.target.value })}
               />
-              <Input
+              <AmcPhoneInput
                 id={`${id}-phone`}
-                type="tel"
-                aria-label={`${WORK_PARTY_LABELS[p]} phone`}
-                placeholder="Phone"
-                maxLength={40}
+                ariaLabel={`${WORK_PARTY_LABELS[p]} phone`}
                 disabled={disabled}
                 value={d.phone}
-                onChange={(e) => set(p, { phone: e.target.value })}
+                onChange={(phone) => set(p, { phone })}
               />
             </div>
           </fieldset>

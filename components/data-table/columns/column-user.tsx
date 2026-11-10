@@ -9,6 +9,7 @@ import { UserRowActions } from "../actions/user-actions";
 import { IconText } from "./icon-text";
 import { cn } from "@/lib/actions/utils";
 import { IdentityCell } from "@/components/ui/entity-avatar";
+import { TruncatedText } from "@/components/ui/truncated-text";
 import {
   BrushIcon,
   CalendarDaysIcon,
@@ -46,9 +47,9 @@ export function getUserColumns(
                   <UserRoundIcon className="size-4" />
                 </AvatarFallback>
               </Avatar>
-              <div className="flex min-w-0 flex-col">
-                <span className="truncate font-medium">{user.full_name || "N/A"}</span>
-                <span className="text-muted-foreground truncate text-xs">{user.email || ""}</span>
+              <div className="flex max-w-72 min-w-0 flex-col">
+                <TruncatedText text={user.full_name || "N/A"} className="font-medium" />
+                {user.email ? <TruncatedText text={user.email} className="text-muted-foreground text-xs" /> : null}
               </div>
             </div>
           );

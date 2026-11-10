@@ -14,10 +14,11 @@ import type { AmcConfig, AmcConfigSection } from "@/lib/amc/config";
 import type { AmcTemplatesConfig } from "@/lib/amc/message-templates";
 import { amcPlatformService, type AmcConfigResponse } from "@/modules/amc-platform/amc-platform-service";
 
-import { CONFIG_VIEWS, SECTION_DEFS, type ConfigView } from "./config-fields";
+import { CONFIG_VIEWS, SECTION_DEFS, VISIBLE_CONFIG_VIEWS, type ConfigView } from "./config-fields";
 import { RolesAndJobs } from "./roles-jobs";
 import { ConfigSectionForm } from "./section-form";
 import { TemplatesEditor } from "./templates-editor";
+import { ModuleGuide } from "@/components/dashboard/extensions/amc-contracts/module-guide";
 
 /**
  * AMC configuration (DEV-419): the values the business changes without a
@@ -34,7 +35,7 @@ export function AmcConfigurationPage() {
   const [error, setError] = useState<string | null>(null);
 
   const viewParam = searchParams.get("view");
-  const view: ConfigView = CONFIG_VIEWS.some((v) => v.value === viewParam) ? (viewParam as ConfigView) : "approvals";
+  const view: ConfigView = VISIBLE_CONFIG_VIEWS.some((v) => v.value === viewParam) ? (viewParam as ConfigView) : "approvals";
   const setView = (next: ConfigView) => {
     const params = new URLSearchParams(searchParams.toString());
     params.set("view", next);
@@ -126,7 +127,7 @@ export function AmcConfigurationPage() {
       <PillTabs<ConfigView>
         value={view}
         onChange={setView}
-        tabs={CONFIG_VIEWS.map((v) => ({
+        tabs={VISIBLE_CONFIG_VIEWS.map((v) => ({
           value: v.value,
           label: v.label,
           count: v.value === "history" ? data.history.length : undefined,
@@ -167,7 +168,8 @@ function Heading() {
     <PageHeading
       eyebrow="Configuration"
       title="AMC configuration"
-      description="Approval ladder, payment bands, pipeline, schedule, service levels, renewals, the email and message texts, the AMC roles and the scheduled jobs. Changes apply from the next action; every change is recorded."
+      info={<ModuleGuide module="configuration" />}
+      description="Approval ladder, payment bands, pipeline, schedule, service levels and the email and message texts. Changes apply from the next action; every change is recorded."
     />
   );
 }

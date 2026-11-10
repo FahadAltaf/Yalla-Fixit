@@ -24,10 +24,13 @@ import { recordAmcAudit } from "@/lib/server/amc/audit";
 import {
   CLIENT_EMBED,
   PROPERTY_EMBED,
+  PROPERTY_PLACE_COLUMNS,
+  type PropertyPlace,
   createAssessment,
   createCustomer,
   createProperty,
   embeddedClient,
+  embeddedPlace,
   embeddedProperty,
   getCustomer,
   getProperty,
@@ -79,7 +82,12 @@ export interface EnquiryRecord {
   source: string;
   referrer: string | null;
   customer: { id: string; name: string; customerRef: string | null; lifecycle: string };
-  property: { id: string; label: string; propertyCategory: string | null; unitType: string | null } | null;
+  property: {
+    id: string;
+    label: string;
+    propertyCategory: string | null;
+    unitType: string | null;
+  } & PropertyPlace | null;
   contactName: string;
   contactPhone: string | null;
   contactEmail: string | null;
@@ -108,7 +116,7 @@ export interface EnquiryRecord {
 
 const ENQUIRY_COLUMNS =
   "id, enquiry_number, enquired_at, source, referrer, customer_id, property_id, contact_name, contact_phone, contact_email, contact_whatsapp, preferred_channel, preferred_language, area, property_category, unit_type, need, owner_id, stage, stage_changed_at, lost_reason, lost_notes, next_follow_up_at, last_activity_at, submission_id, created_by, created_at, " +
-  `customer:snagging_clients(${CLIENT_EMBED}), property:snagging_properties(${PROPERTY_EMBED}), ` +
+  `customer:snagging_clients(${CLIENT_EMBED}), property:snagging_properties(${PROPERTY_EMBED}, ${PROPERTY_PLACE_COLUMNS}), ` +
   "owner:user_profile!amc_enquiries_owner_id_fkey(id, full_name, email), submission:amc_submissions!amc_enquiries_submission_id_fkey(id, proposal_number, status)";
 
 function mapEnquiry(r: Row, config: Pick<AmcConfig, "enquiries" | "proposals">, now: Date): EnquiryRecord {
@@ -133,7 +141,7 @@ function mapEnquiry(r: Row, config: Pick<AmcConfig, "enquiries" | "proposals">, 
       customerRef: c?.customerRef ?? null,
       lifecycle: c?.lifecycle ?? "client",
     },
-    property: p,
+    property: p ? { ...p, ...embeddedPlace(r.property) } : null,
     contactName: String(r.contact_name),
     contactPhone: str(r.contact_phone),
     contactEmail: str(r.contact_email),

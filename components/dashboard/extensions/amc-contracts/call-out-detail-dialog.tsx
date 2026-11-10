@@ -55,6 +55,8 @@ import { formatDateTime } from "./contract-status";
 import { useDialog } from "./profile/use-dialog";
 import { RaiseAdditionalWorkDialog } from "./raise-additional-work-dialog";
 import { durationLabel, slotDate, slotLabel, slotTime } from "./visit-status";
+import { formatPhone, phoneHref } from "@/lib/phone/format-phone";
+import { TruncatedText } from "@/components/ui/truncated-text";
 
 type Working = "suggest" | "schedule" | "attend" | "record" | null;
 type Tab = "visit" | "findings" | "photos" | "works";
@@ -313,8 +315,8 @@ function CallOutBody({ data, working, setWorking, changed }: BodyProps) {
               {c.onSiteContactName}
               {c.onSiteContactName && c.onSiteContactPhone ? " · " : null}
               {c.onSiteContactPhone ? (
-                <a className="text-brand underline-offset-2 hover:underline" href={`tel:${c.onSiteContactPhone}`}>
-                  {c.onSiteContactPhone}
+                <a className="text-brand underline-offset-2 hover:underline" href={phoneHref(c.onSiteContactPhone)}>
+                  {formatPhone(c.onSiteContactPhone)}
                 </a>
               ) : null}
             </span>
@@ -450,7 +452,7 @@ function CallOutBody({ data, working, setWorking, changed }: BodyProps) {
                           <WorkStatusBadge status={w.status} />
                           <RiskBadge risk={w.risk} />
                         </span>
-                        <span className="text-muted-foreground line-clamp-2 text-xs">{w.finding}</span>
+                        <TruncatedText className="text-muted-foreground text-xs">{w.finding}</TruncatedText>
                       </span>
                       <span className="shrink-0">{w.total ? <Money value={w.total} /> : <Muted>Not quoted</Muted>}</span>
                     </button>
@@ -738,9 +740,10 @@ function AttendSection({ callOut: c, canEdit, working, setWorking, changed }: Se
       }
     >
       <div className="flex flex-wrap items-end gap-3">
-        <div className="grid gap-2">
+        {/* The picker sizes itself from its box (a container query), so the box needs a width of its own: in a flex row it shrank to nothing. */}
+        <div className="grid w-full max-w-sm gap-2">
           <Field id={id} label="Arrived at" hint={beforeCall ? <span className="text-danger">Attendance cannot be before the call.</span> : undefined}>
-            <DateTimeSelect id={id} className="max-w-sm" value={attendedAt} onChange={setAttendedAt} />
+            <DateTimeSelect id={id} value={attendedAt} onChange={setAttendedAt} />
           </Field>
         </div>
         <SubmitButton

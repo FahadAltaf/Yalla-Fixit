@@ -22,6 +22,7 @@ import { ActionDialogContent } from "@/components/dashboard/shared/kaizen-states
 import { defaultShareChannel, whatsappNumber } from "@/lib/amc/approval-ladder";
 
 import type { AmcSubmission } from "./amc-types";
+import { formatPhone } from "@/lib/phone/format-phone";
 
 export type AmcSendDeliver = "email" | "link" | "whatsapp";
 
@@ -239,7 +240,7 @@ export function AmcSendDialog({
                         />
                         <span className="min-w-0 flex-1 truncate">
                           {o.name ? <span className="font-medium">{o.name} · </span> : null}
-                          {o.address}
+                          {channel === "whatsapp" ? formatPhone(o.address) || o.address : o.address}
                         </span>
                       </label>
                     </li>

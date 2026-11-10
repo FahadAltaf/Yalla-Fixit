@@ -1,0 +1,105 @@
+import { executeRESTBackend } from "@/lib/rest-server";
+import type { SavedFilter } from "@/lib/server/reports/access";
+import type { AttendanceReport, ComplianceReport } from "@/lib/server/reports/compliance";
+import type { MyCompliance } from "@/lib/server/reports/disputes";
+import type { CapacityReport, UtilizationReport } from "@/lib/server/reports/planning";
+import type { ActualTimesReport, QuotationReport, UnflaggedReport } from "@/lib/server/reports/reports";
+
+export type ReportKey = "quotations" | "exceptions" | "utilization" | "capacity" | "compliance" | "attendance";
+export type ReportFilters = Record<string, string>;
+export type ReportCan = { can: { view: boolean; export: boolean } };
+
+export type ReportRequestOptions = {
+  page?: number;
+  pageSize?: number;
+  /** Log this load as an opening of the report (once per visit). */
+  logView?: boolean;
+  /** Every matching row, for a file; needs Export. */
+  exportFormat?: "csv" | "xlsx";
+  signal?: AbortSignal;
+};
+
+function paramsOf(filters: ReportFilters, options: ReportRequestOptions): Record<string, string | number> {
+  const params: Record<string, string | number> = {};
+  for (const [key, value] of Object.entries(filters)) if (value) params[key] = value;
+  if (options.exportFormat) params.export = options.exportFormat;
+  else {
+    params.page = options.page ?? 0;
+    params.pageSize = options.pageSize ?? 25;
+  }
+  if (options.logView) params.log = "view";
+  return params;
+}
+
+export const reportsService = {
+  quotations: (filters: ReportFilters, options: ReportRequestOptions = {}) =>
+    executeRESTBackend<QuotationReport & ReportCan>("/api/reports/quotations", {
+      params: paramsOf(filters, options),
+      signal: options.signal,
+    }),
+
+  exceptions: (filters: ReportFilters, options: ReportRequestOptions = {}) =>
+    executeRESTBackend<(UnflaggedReport | ActualTimesReport) & ReportCan>("/api/reports/exceptions", {
+      params: paramsOf(filters, options),
+      signal: options.signal,
+    }),
+
+  utilization: (filters: ReportFilters, options: ReportRequestOptions = {}) =>
+    executeRESTBackend<UtilizationReport & ReportCan>("/api/reports/utilization", {
+      params: paramsOf(filters, options),
+      signal: options.signal,
+    }),
+
+  capacity: (filters: ReportFilters, options: ReportRequestOptions = {}) =>
+    executeRESTBackend<CapacityReport & ReportCan>("/api/reports/capacity", {
+      params: paramsOf(filters, options),
+      signal: options.signal,
+    }),
+
+  compliance: (filters: ReportFilters, options: ReportRequestOptions = {}) =>
+    executeRESTBackend<ComplianceReport & { can: ReportCan["can"] & { waive: boolean; finalize: boolean; raise: boolean; review: boolean } }>("/api/reports/compliance", {
+      params: paramsOf(filters, options),
+      signal: options.signal,
+    }),
+
+  waive: (input: {
+    month: string;
+    reason: string;
+    note?: string | null;
+    eventKeys?: string[];
+    outage?: { from: string; to: string; kinds: string[] };
+  }) => executeRESTBackend<{ waived: number; matched: number }>("/api/reports/compliance/waivers", { method: "POST", body: input }),
+
+  finalizeMonth: (month: string) =>
+    executeRESTBackend<{ statements: number; hrReport: string }>("/api/reports/compliance/finalize", { method: "POST", body: { month } }),
+
+  /* Disputes (DEV-449): raised by the technician, or for them with onBehalf; decided by a named reviewer. */
+  raiseDispute: (input: { month: string; eventKey: string; reason: string; onBehalf?: boolean }) =>
+    executeRESTBackend<{ id: string }>("/api/reports/compliance/disputes", { method: "POST", body: input }),
+
+  decideDispute: (id: string, input: { outcome: "accepted" | "rejected"; waiverReason?: string; note?: string }) =>
+    executeRESTBackend<{ outcome: "accepted" | "rejected" }>(`/api/reports/compliance/disputes/${encodeURIComponent(id)}`, { method: "POST", body: input }),
+
+  myCompliance: (month?: string) =>
+    executeRESTBackend<MyCompliance>("/api/reports/compliance/me", { params: month ? { month } : {} }),
+
+  attendance: (filters: ReportFilters, options: ReportRequestOptions = {}) =>
+    executeRESTBackend<AttendanceReport & ReportCan>("/api/reports/attendance", {
+      params: paramsOf(filters, options),
+      signal: options.signal,
+    }),
+
+  savedFilters: (report: ReportKey) =>
+    executeRESTBackend<{ lastUsed: ReportFilters | null; saved: SavedFilter[] }>("/api/reports/saved-filters", {
+      params: { report },
+    }),
+
+  rememberFilters: (report: ReportKey, filters: ReportFilters) =>
+    executeRESTBackend<{ ok: true }>("/api/reports/saved-filters", { method: "PUT", body: { report, filters } }),
+
+  saveFilters: (report: ReportKey, name: string, filters: ReportFilters) =>
+    executeRESTBackend<SavedFilter>("/api/reports/saved-filters", { method: "POST", body: { report, name, filters } }),
+
+  deleteFilters: (id: string) =>
+    executeRESTBackend<{ ok: true }>("/api/reports/saved-filters", { method: "DELETE", params: { id } }),
+};

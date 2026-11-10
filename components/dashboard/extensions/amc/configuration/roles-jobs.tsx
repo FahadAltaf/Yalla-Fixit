@@ -113,7 +113,7 @@ function RoleTemplatesCard({ isAdmin }: { isAdmin: boolean }) {
               <p className="text-muted-foreground mt-1 text-sm">{t.description}</p>
               <p className="text-muted-foreground mt-2 text-xs">
                 {t.grants
-                  .map((g) => `${getResourceDisplayName(g.resource).replace(/ \(.*\)$/, "")}: ${g.actions.map(getActionDisplayName).join(", ")}`)
+                  .map((g) => `${getResourceDisplayName(g.resource).replace(/ \(.*\)$/, "")}: ${g.actions.map((action) => getActionDisplayName(action, g.resource)).join(", ")}`)
                   .join(" · ")}
               </p>
             </li>

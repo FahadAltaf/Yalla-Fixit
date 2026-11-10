@@ -8,17 +8,18 @@ import { PageHeading, PillTabs, SectionCard, timeAgo } from "@/components/dashbo
 import { DataState, ListSkeleton } from "@/components/dashboard/shared/kaizen-states";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
-import type { InAppNotification } from "@/lib/server/amc/notifications";
+import type { InAppNotification } from "@/lib/server/notifications/inbox";
 import { cn } from "@/lib/utils";
-import { amcPlatformService } from "@/modules/amc-platform/amc-platform-service";
+import { notificationsService } from "@/modules/reporting/reporting-service";
 
 const PAGE = 30;
 type Filter = "unread" | "all";
 
 /**
- * The notifications inbox (BRD 6.2): everything the portal told you, newest
+ * The notifications inbox (BRD §6.2): everything the portal told you, newest
  * first. Unread ones also show on the home page until opened; opening one
- * marks it read and goes to the record.
+ * marks it read and goes to the record. The same shape as the AMC inbox on
+ * amc-hardening, over the shared portal_notifications table.
  */
 export function NotificationsInbox() {
   const router = useRouter();
@@ -34,7 +35,7 @@ export function NotificationsInbox() {
     setLoading(true);
     setError(null);
     try {
-      const page = await amcPlatformService.notifications({ limit: PAGE, unread: which === "unread" });
+      const page = await notificationsService.list({ limit: PAGE, unread: which === "unread" });
       setItems(page.notifications);
       setUnread(page.unread);
       setDone(page.notifications.length < PAGE);
@@ -44,12 +45,15 @@ export function NotificationsInbox() {
       setLoading(false);
     }
   }, []);
-  useEffect(() => void load(filter), [load, filter]);
+
+  useEffect(() => {
+    void load(filter);
+  }, [load, filter]);
 
   const more = async () => {
     setLoadingMore(true);
     try {
-      const page = await amcPlatformService.notifications({ limit: PAGE, offset: items.length, unread: filter === "unread" });
+      const page = await notificationsService.list({ limit: PAGE, offset: items.length, unread: filter === "unread" });
       setItems((list) => [...list, ...page.notifications]);
       setDone(page.notifications.length < PAGE);
     } finally {
@@ -61,15 +65,17 @@ export function NotificationsInbox() {
     if (!n.readAt) {
       setItems((list) => list.map((i) => (i.id === n.id ? { ...i, readAt: new Date().toISOString() } : i)));
       setUnread((u) => Math.max(0, u - 1));
-      void amcPlatformService.markRead({ ids: [n.id] }).catch(() => undefined);
+      void notificationsService.markRead({ ids: [n.id] }).catch(() => undefined);
     }
     if (n.link) router.push(n.link);
   };
 
   const markAll = async () => {
     setUnread(0);
-    setItems((list) => (filter === "unread" ? [] : list.map((i) => ({ ...i, readAt: i.readAt ?? new Date().toISOString() }))));
-    await amcPlatformService.markRead({ all: true }).catch(() => undefined);
+    setItems((list) =>
+      filter === "unread" ? [] : list.map((i) => ({ ...i, readAt: i.readAt ?? new Date().toISOString() })),
+    );
+    await notificationsService.markRead({ all: true }).catch(() => undefined);
   };
 
   return (
@@ -77,7 +83,7 @@ export function NotificationsInbox() {
       <PageHeading
         eyebrow="Inbox"
         title="Notifications"
-        description="Approvals waiting, decisions, signatures, reminders and escalations. Unread ones also show on the home page until you open them."
+        description="Items waiting for you, decisions and alerts. Unread ones also show on the home page until you open them."
         actions={
           <Button variant="outline" size="sm" disabled={unread === 0} onClick={() => void markAll()}>
             <CheckCheck className="size-4" />
@@ -105,7 +111,11 @@ export function NotificationsInbox() {
               <EmptyState
                 icon={<Bell className="size-5" />}
                 title={filter === "unread" ? "You're all caught up" : "No notifications yet"}
-                description={filter === "unread" ? "Nothing is waiting to be opened." : "Approvals, client answers, signatures and reminders will appear here."}
+                description={
+                  filter === "unread"
+                    ? "Nothing is waiting to be opened."
+                    : "Invoicing items, queries, alerts and reports will appear here."
+                }
               />
             </div>
           }
@@ -118,7 +128,10 @@ export function NotificationsInbox() {
                   onClick={() => open(n)}
                   className={cn("hover:bg-muted/60 flex w-full gap-3 px-5 py-3.5 text-left", !n.readAt && "bg-primary/5")}
                 >
-                  <span className={cn("mt-1.5 size-2 shrink-0 rounded-full", n.readAt ? "bg-transparent" : "bg-primary")} aria-hidden />
+                  <span
+                    className={cn("mt-1.5 size-2 shrink-0 rounded-full", n.readAt ? "bg-transparent" : "bg-primary")}
+                    aria-hidden
+                  />
                   <span className="min-w-0 flex-1">
                     <span className="block text-sm font-medium">{n.title}</span>
                     <span className="text-muted-foreground mt-0.5 block text-sm">{n.body}</span>

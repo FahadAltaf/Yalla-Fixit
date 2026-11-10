@@ -66,6 +66,13 @@ export function useSection<T>(
   const [error, setError] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const mounted = useRef(true);
+  /*
+    The URL this section shows now. An answer for an earlier URL (a search
+    typed on, a filter changed) that arrives late is cached but never shown:
+    it would replace the current rows with the old ones.
+  */
+  const current = useRef(url);
+  current.current = url;
 
   useEffect(() => {
     mounted.current = true;
@@ -84,6 +91,7 @@ export function useSection<T>(
   }, []);
 
   const run = useCallback(async () => {
+    const isCurrent = () => mounted.current && current.current === url;
     const cached = cache.get(url);
     if (cached && Date.now() - cached.at < staleMs) {
       setData(cached.data as T);
@@ -111,17 +119,17 @@ export function useSection<T>(
 
       const result = (await promise) as T;
       cache.set(url, { data: result, at: Date.now() });
-      if (mounted.current) {
+      if (isCurrent()) {
         setData(result);
         setError(null);
       }
     } catch (err) {
-      if (mounted.current) {
+      if (isCurrent()) {
         setError(err instanceof Error ? err.message : "This section could not be loaded");
       }
     } finally {
       inFlight.delete(url);
-      if (mounted.current) setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   }, [url, staleMs]);
 

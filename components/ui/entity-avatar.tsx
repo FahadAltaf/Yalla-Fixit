@@ -3,6 +3,7 @@
 import { UserRound, type LucideIcon } from "lucide-react";
 
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { TruncatedText } from "@/components/ui/truncated-text";
 import { cn } from "@/lib/actions/utils";
 
 // The identity avatar used by every table that has a "who" or "what" column.
@@ -81,14 +82,13 @@ export function IdentityCell({
       <span className="bg-muted text-muted-foreground flex size-8 shrink-0 items-center justify-center rounded-full">
         <Icon className="size-4" aria-hidden />
       </span>
-      <div className="flex min-w-0 flex-col">
-        <span className="flex items-center gap-1.5 truncate font-medium">
-          {title}
-          {badge}
+      {/* A cut title or subtitle shows in full on hover (3 Nov). */}
+      <div className="flex max-w-72 min-w-0 flex-col">
+        <span className="flex min-w-0 items-center gap-1.5 font-medium">
+          <TruncatedText text={title} />
+          {badge ? <span className="shrink-0">{badge}</span> : null}
         </span>
-        {subtitle ? (
-          <span className="text-muted-foreground truncate text-xs">{subtitle}</span>
-        ) : null}
+        {subtitle ? <TruncatedText text={subtitle} className="text-muted-foreground text-xs" /> : null}
       </div>
     </div>
   );

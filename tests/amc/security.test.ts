@@ -299,9 +299,17 @@ test("client links: unknown, malformed and expired tokens are refused; stored on
 
 test("password reset tokens are stored hashed", () => {
   const raw = "a".repeat(64);
-  assert.match(hashResetToken(raw), /^[0-9a-f]{64}$/);
-  assert.notEqual(hashResetToken(raw), raw);
-  assert.equal(hashResetToken(raw), hashResetToken(raw));
+  /* Keyed since 3 Nov 2026 (main): the hash needs a server secret. */
+  const saved = process.env.PASSWORD_RESET_SECRET;
+  process.env.PASSWORD_RESET_SECRET = "test-secret";
+  try {
+    assert.match(hashResetToken(raw), /^[0-9a-f]{64}$/);
+    assert.notEqual(hashResetToken(raw), raw);
+    assert.equal(hashResetToken(raw), hashResetToken(raw));
+  } finally {
+    if (saved === undefined) delete process.env.PASSWORD_RESET_SECRET;
+    else process.env.PASSWORD_RESET_SECRET = saved;
+  }
   const actions = readFileSync(path.join(process.cwd(), "modules", "auth", "auth-actions.ts"), "utf8");
   assert.match(actions, /\.is\("used_at", null\)/, "single use: claimed atomically");
   assert.match(actions, /token: hashResetToken\(token\)/, "only the hash is stored");
@@ -354,4 +362,28 @@ test("notifications: you see and mark only your own", async () => {
   await markNotificationsRead(w.client as never, "u-a", "all");
   assert.notEqual(w.table("amc_notifications").find((n) => n.id === "n1")!.read_at, null);
   assert.equal(w.table("amc_notifications").find((n) => n.id === "n2")!.read_at, null);
+});
+
+/* Merge of main (Nov 2026): one inbox over portal_notifications and amc_notifications. */
+test("the shared inbox shows AMC and portal notifications together, newest first, and marks both read", async () => {
+  const { listMyNotifications: listInbox, markNotificationsRead: markInbox } = await import("@/lib/server/notifications/inbox");
+  const w = fakeSupabase({
+    portal_notifications: [
+      { id: "p1", recipient_user_id: "u-a", channel: "in_app", status: "delivered", event: "finance.digest", title: "t", body: "b", link: null, requires_action: false, created_at: "2026-11-01T10:00:00Z", read_at: null, resolved_at: null },
+      { id: "p2", recipient_user_id: "u-a", channel: "in_app", status: "suppressed", event: "finance.digest", title: "t", body: "b", link: null, requires_action: false, created_at: "2026-11-03T10:00:00Z", read_at: null, resolved_at: null },
+    ],
+    amc_notifications: [
+      { id: "a1", recipient_user_id: "u-a", channel: "in_app", event: "contract_signed", title: "t", body: "b", link: null, created_at: "2026-11-02T10:00:00Z", read_at: null },
+      { id: "a2", recipient_user_id: "u-b", channel: "in_app", event: "contract_signed", title: "t", body: "b", link: null, created_at: "2026-11-04T10:00:00Z", read_at: null },
+    ],
+  });
+  const page = await listInbox(w.client as never, "u-a", { limit: 10, offset: 0, unreadOnly: false });
+  assert.deepEqual(page.notifications.map((n) => n.id), ["a1", "p1"], "own rows only, suppressed left out, newest first");
+  assert.equal(page.unread, 2);
+  const second = await listInbox(w.client as never, "u-a", { limit: 1, offset: 1, unreadOnly: false });
+  assert.deepEqual(second.notifications.map((n) => n.id), ["p1"], "paging runs across both stores");
+  await markInbox(w.client as never, "u-a", "all");
+  assert.notEqual(w.table("amc_notifications").find((n) => n.id === "a1")!.read_at, null);
+  assert.notEqual(w.table("portal_notifications").find((n) => n.id === "p1")!.read_at, null);
+  assert.equal(w.table("amc_notifications").find((n) => n.id === "a2")!.read_at, null, "someone else's stays unread");
 });

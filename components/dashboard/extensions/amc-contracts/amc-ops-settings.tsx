@@ -25,9 +25,9 @@ import {
   type DiscountConfig,
 } from "@/modules/amc-contracts/amc-contracts-service";
 
-import { AmcNotificationsBell } from "./amc-notifications-bell";
 import { ConfigTableToolbar, LocalDataTable } from "./config-table";
 import { useAmcData } from "./use-amc-data";
+import { ModuleGuide } from "@/components/dashboard/extensions/amc-contracts/module-guide";
 
 /** AMC operations settings: the site visit checklist and the additional-service discount. Approvers edit. */
 export function AmcOpsSettings() {
@@ -37,8 +37,8 @@ export function AmcOpsSettings() {
       <PageHeading
         eyebrow="Configuration"
         title="Operations settings"
+        info={<ModuleGuide module="opsSettings" />}
         description="Notifications and reminders, the site visit checklist and the AMC discount on additional services. AMC proposal wording and prices stay in AMC Settings."
-        actions={<AmcNotificationsBell />}
       />
       <NotificationSettings />
       <DiscountSettings />
@@ -320,8 +320,8 @@ function ChecklistSettings() {
     },
     {
       id: "order",
-      header: () => <div className="text-right">Order</div>,
-      cell: ({ row }) => <div className="text-right text-sm tabular-nums">{row.original.sortOrder}</div>,
+      header: () => <div>Order</div>,
+      cell: ({ row }) => <div className="text-sm tabular-nums">{row.original.sortOrder}</div>,
     },
     {
       id: "status",

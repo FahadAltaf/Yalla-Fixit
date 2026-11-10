@@ -25,7 +25,6 @@ import {
 import { loadPendingActivations } from "@/lib/server/amc/contract-operations";
 import { readAmcConfig } from "@/lib/server/amc/config";
 import { gateAfterOneStepActivation } from "@/lib/server/amc/payments";
-import { fetchAllRowsById } from "@/lib/server/amc/paging";
 import { likeTerm, pageParams } from "@/lib/server/snagging/search";
 import { ActionType, ResourceType } from "@/types/types";
 
@@ -41,8 +40,9 @@ import { ActionType, ResourceType } from "@/types/types";
  *   cancelled
  *
  * Query: status, search (customer, customer ID, contract number, property,
- * account manager), manager, sort (contract | customer | property | start |
- * end | value), dir (asc | desc), page, pageSize.
+ * account manager), manager, sort (created | contract | customer | property |
+ * start | end | value), dir (asc | desc), page, pageSize. Newest first unless
+ * told otherwise.
  */
 
 const LIST_STATUSES = [
@@ -57,6 +57,7 @@ const LIST_STATUSES = [
 type ListStatus = (typeof LIST_STATUSES)[number];
 
 const SORT_COLUMNS = {
+  created: "created_at",
   contract: "proposal_number",
   customer: "customer_name",
   property: "property_label",
@@ -92,9 +93,10 @@ export async function GET(req: NextRequest) {
     : "all";
   const term = likeTerm(params.get("search"));
   const manager = likeTerm(params.get("manager"));
-  const sortParam = params.get("sort") ?? "end";
-  const sort: SortKey = sortParam in SORT_COLUMNS ? (sortParam as SortKey) : "end";
-  const ascending = params.get("dir") !== "desc";
+  const sortParam = params.get("sort") ?? "created";
+  const sort: SortKey = sortParam in SORT_COLUMNS ? (sortParam as SortKey) : "created";
+  const dirParam = params.get("dir");
+  const ascending = dirParam ? dirParam === "asc" : sort !== "created";
   const { page, pageSize, from, to } = pageParams(params, { defaultSize: 10 });
 
   const today = todayInDubai();
@@ -186,36 +188,10 @@ export async function GET(req: NextRequest) {
       });
   };
 
-  /* Account managers on the visible contracts, for the filter. */
-  const loadManagers = async (): Promise<string[]> => {
-    const { data, error } = await fetchAllRowsById<Row>((afterId, size) => {
-      let q = admin
-        .from("amc_contracts")
-        .select("id, account_manager_names, amc_submissions!amc_contracts_submission_id_fkey!inner(owner_id)")
-        .neq("account_manager_names", "")
-        .order("id")
-        .limit(size);
-      if (afterId) q = q.gt("id", afterId);
-      if (!canApprove) q = q.eq("amc_submissions.owner_id", userId);
-      return q;
-    });
-    if (error) return [];
-    const names = new Set<string>();
-    for (const row of data) {
-      String(row.account_manager_names ?? "")
-        .split(",")
-        .map((n) => n.trim())
-        .filter(Boolean)
-        .forEach((n) => names.add(n));
-    }
-    return [...names].sort((a, b) => a.localeCompare(b));
-  };
-
   try {
     const countStatuses: ListStatus[] = ["not_started", "active", "expiring", "expired", "cancelled"];
-    const [pending, managers, ...countResults] = await Promise.all([
+    const [pending, ...countResults] = await Promise.all([
       loadPending(),
-      loadManagers(),
       contractQuery("all", true),
       ...countStatuses.map((s) => contractQuery(s, true)),
     ]);
@@ -236,7 +212,7 @@ export async function GET(req: NextRequest) {
     countStatuses.forEach((s, i) => {
       counts[s] = countResults[i + 1].count ?? 0;
     });
-    const base = { counts, managers, canApprove: gate.canApprove, page, pageSize };
+    const base = { counts, canApprove: gate.canApprove, page, pageSize };
 
     if (status === "pending_activation") {
       return NextResponse.json({ ...base, rows: pending.slice(from, to + 1), totalCount: pending.length });
@@ -254,7 +230,7 @@ export async function GET(req: NextRequest) {
     if (contractTo >= 0) {
       const { data, error, count } = await contractQuery(status)
         .order(SORT_COLUMNS[sort], { ascending })
-        .order("end_date", { ascending: true })
+        .order("created_at", { ascending: false })
         .range(contractFrom, contractTo);
       if (error) throw error;
       /* The select string is built at runtime, so the client cannot type it. */

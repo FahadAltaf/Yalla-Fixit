@@ -5,6 +5,7 @@ import {
   grandTotalFromFinal,
   rowPrice,
 } from "@/lib/amc/pricing";
+import { chargeFrequencyType } from "./amc-constants";
 import type {
   AmcComputedData,
   AmcDocumentType,
@@ -17,10 +18,25 @@ import type {
 import { UNIT_TYPE_LABELS } from "@/lib/amc/client-profile";
 import { paymentPlanLabel } from "@/lib/amc/proposal-rules";
 
+import { isCustomServiceRow } from "./amc-types";
 import { contractTermMonths } from "./amc-date-utils";
 import { amountToWordsAed } from "./utils/amount-to-words";
-import { getAmcSettingsDefaults, servicesForProperty } from "./amc-settings";
-import type { AmcServiceDefinition, AmcSettings } from "./amc-settings";
+import {
+  AMC_CLAUSE_TEXT_ROLES,
+  getAmcSettingsDefaults,
+  servicesForProperty,
+} from "./amc-settings";
+import type { AmcClauseTextRole, AmcServiceDefinition, AmcSettings } from "./amc-settings";
+
+/**
+ * A service's name with the equipment it covers, as the documents print
+ * it: "A/C Preventive Maintenance (10 FCU)" (DEV-261). The name alone
+ * when no equipment was entered.
+ */
+export function withEquipment(name: string, equipment: string | null | undefined): string {
+  const covered = equipment?.trim();
+  return covered ? `${name} (${covered})` : name;
+}
 
 /**
  * The VAT-inclusive total, from the figure a submission stores.
@@ -47,9 +63,18 @@ export function grandTotalOf(finalPriceExclVat: number): number {
   every checked row has one.
 */
 export function computeServiceRowPrice(row: AmcServiceRow): number {
-  // Unticked and "included at no charge" rows are 0 (rowPrice handles
-  // both), so the table, the totals and the documents cannot disagree.
-  return rowPrice(row);
+  return rowPrice(priceableRow(row));
+}
+
+/*
+  A row as lib/amc/pricing.ts prices it: with its service's frequency type,
+  which decides how many times a year the base price is charged (Scope of
+  Works Library: a pool is serviced so many times a WEEK, a deployed cleaner
+  is priced per person per MONTH). A service added to the proposal alone
+  (DEV-260) is a fixed number of visits a year.
+*/
+export function priceableRow<T extends { serviceId: string }>(row: T): T & { frequencyType: string | null } {
+  return { ...row, frequencyType: chargeFrequencyType(row.serviceId) };
 }
 
 /*
@@ -64,7 +89,7 @@ export function calculateAmcTotals(data: AmcFormData): AmcTotals {
     because the divisor was hard-coded to a year. The dates decide it.
   */
   const termMonths = contractTermMonths(data.startDate, data.endDate);
-  const pricing = computeAmcPricing(data.serviceRows, data.discountPercent ?? 0, termMonths);
+  const pricing = computeAmcPricing(data.serviceRows.map(priceableRow), data.discountPercent ?? 0, termMonths);
 
   return {
     subtotal: pricing.subtotal,
@@ -94,7 +119,12 @@ function formatPropertyTypeLabel(data: AmcFormData): string {
   return `${category} - ${unit}`;
 }
 
-function formatFrequencyForPdf(service: AmcService, frequency: number): string {
+function formatFrequencyForPdf(
+  service: Pick<AmcService, "frequencyType" | "frequencySuffix">,
+  frequency: number,
+): string {
+  // As the Scope of Works Library writes them: "4 times per year + call-backs".
+  const suffix = service.frequencySuffix ?? "";
   switch (service.frequencyType) {
     case "covered":
       return "Covered";
@@ -102,10 +132,18 @@ function formatFrequencyForPdf(service: AmcService, frequency: number): string {
       return "Unlimited";
     case "handyman":
       return `${frequency} hours per year`;
+    case "weekly":
+      return `${frequency} ${frequency === 1 ? "visit" : "visits"} per week${suffix}`;
+    case "manpower":
+      return `Daily (${frequency} days per week)${suffix}`;
     case "ppm":
     case "fixed":
     default:
-      return `${frequency} per year`;
+      // In the Service Summary's own words: once, twice, monthly.
+      if (frequency === 1) return `Once per year${suffix}`;
+      if (frequency === 2) return `Twice per year${suffix}`;
+      if (frequency === 12) return `Monthly (12 times per year)${suffix}`;
+      return `${frequency} times per year${suffix}`;
   }
 }
 
@@ -138,10 +176,16 @@ function buildFrequencyRows(data: AmcFormData, settings: AmcSettings): Frequency
           work of their own: the AC, the pumps, the tanks, the ducts.
         */
         hasUnits:
-          service.hasScopeSection === true && service.frequencyType !== "handyman",
+          service.hasScopeSection === true &&
+          service.frequencyType !== "handyman" &&
+          // A call-out is not counted in units, even with a scope section of its own.
+          service.frequencyType !== "unlimited" &&
+          service.frequencyType !== "covered",
         frequency: formatFrequencyForPdf(service, row.frequency),
         price: computeServiceRowPrice(row),
         reference: service.reference,
+        equipment: row.equipment?.trim() ?? "",
+        unitOfMeasure: service.unitOfMeasure ?? "",
       };
     })
     .filter((row): row is FrequencyRow => Boolean(row));
@@ -151,7 +195,95 @@ function offeredRowsOnly(data: AmcFormData, settings: AmcSettings): AmcServiceRo
   const offered = new Set(
     servicesForProperty(settings, data.unitType).map((service) => service.id),
   );
-  return data.serviceRows.filter((row) => !row.included || offered.has(row.serviceId));
+  return data.serviceRows.filter(
+    (row) => !row.included || offered.has(row.serviceId) || isCustomServiceRow(row),
+  );
+}
+
+/*
+  The services this proposal can print: AMC Settings' own, plus any the
+  team added to this proposal alone (DEV-260).
+
+  A custom service is given the shape of a settings service -- a fixed
+  number of visits a year, a scope section of its own, offered on every
+  kind of property -- with its scope text beside the others. Done once
+  here, so the frequency table, the contract's clauses and the proposal's
+  list all find it the way they find any other service.
+*/
+export function withProposalServices(settings: AmcSettings, data: Pick<AmcFormData, "serviceRows">): AmcSettings {
+  const custom = data.serviceRows.filter(isCustomServiceRow);
+  if (custom.length === 0) return settings;
+  const name = (row: AmcServiceRow) => row.customName?.trim() || "Additional service";
+  return {
+    ...settings,
+    services: [
+      ...settings.services,
+      ...custom.map((row) => ({
+        id: row.serviceId,
+        label: name(row),
+        scope: name(row),
+        sectionTitle: name(row),
+        frequencyType: "fixed" as const,
+        villaOnly: false,
+        hasScopeSection: true,
+        reference: "Clause",
+        enabled: true,
+      })),
+    ],
+    serviceScopes: {
+      ...settings.serviceScopes,
+      /* One point per line as typed; the contract reads points as
+         blank-line separated blocks. */
+      ...Object.fromEntries(
+        custom.map((row) => [
+          row.serviceId,
+          (row.customScope ?? "")
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .join("\n\n"),
+        ]),
+      ),
+    },
+  };
+}
+
+/*
+  The contract's wording as this proposal has it (DEV-263): AMC Settings'
+  text, with any clause or service scope the team edited on this proposal
+  put in its place. The settings themselves are never touched, so the
+  default stays what it was for every other proposal.
+
+  Placeholders such as {{handymanHours}} survive the edit and are still
+  filled from the service table when the document is built, which is
+  what keeps an edited clause from contradicting the table.
+*/
+export function withProposalWording(
+  settings: AmcSettings,
+  data: Pick<AmcFormData, "clauseOverrides" | "scopeOverrides">,
+): AmcSettings {
+  const clauseOverrides = data.clauseOverrides ?? {};
+  const scopeOverrides = data.scopeOverrides ?? {};
+  if (Object.keys(clauseOverrides).length === 0 && Object.keys(scopeOverrides).length === 0) {
+    return settings;
+  }
+  const textRoles = new Set<string>(AMC_CLAUSE_TEXT_ROLES);
+  const clauses = { ...settings.clauses };
+  const clauseList = settings.clauseList.map((clause) => {
+    const body = clauseOverrides[clause.id];
+    if (typeof body !== "string") return clause;
+    // The builder reads some clauses by role, so the role's copy follows.
+    if (clause.role && textRoles.has(clause.role)) {
+      clauses[clause.role as AmcClauseTextRole] = body;
+    }
+    return { ...clause, body };
+  });
+  return {
+    ...settings,
+    clauseList,
+    clauses,
+    serviceScopes: { ...settings.serviceScopes, ...scopeOverrides },
+  };
 }
 
 export function computeAmcData(
@@ -167,6 +299,7 @@ export function computeAmcData(
   const categoryLabel =
     data.propertyCategory === "residential" ? "RESIDENTIAL" : "COMMERCIAL";
   const endDate = data.endDate ? formatDisplayDate(data.endDate) : "";
+  settings = withProposalServices(withProposalWording(settings, data), data);
 
   return {
     documentType,
@@ -229,10 +362,12 @@ export function syncServiceRowsForUnitType(
       free: service.includedFree === true,
       basePrice: undefined,
     };
-  });
+  })
+    // Custom services are offered on every kind of property, so they stay (DEV-260).
+    .concat(serviceRows.filter(isCustomServiceRow));
 
   const removedIncluded = serviceRows
-    .filter((row) => row.included && !offeredIds.has(row.serviceId))
+    .filter((row) => row.included && !offeredIds.has(row.serviceId) && !isCustomServiceRow(row))
     .map((row) => row.serviceId);
 
   return { rows, removedIncluded };

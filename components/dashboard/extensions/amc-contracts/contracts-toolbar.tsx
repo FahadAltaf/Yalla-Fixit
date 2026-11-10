@@ -9,13 +9,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
-export const ALL_MANAGERS = "__all__";
-
 /**
  * Toolbar for the AMC contracts table, the same shape as the snagging jobs
  * toolbar: search with its icon and a status dropdown on the left, page
- * size and Refresh on the right. The account manager filter sits beside
- * the status, because "my contracts" is the other question asked here.
+ * size and Refresh on the right. Search also matches the account manager.
  *
  * Search is controlled, so "Clear filters" on the empty state can empty it.
  */
@@ -26,9 +23,6 @@ export function ContractsToolbar({
   statusOptions,
   status,
   onStatusChange,
-  managers,
-  manager,
-  onManagerChange,
   pageSize,
   onPageSizeChange,
   onRefresh,
@@ -39,9 +33,6 @@ export function ContractsToolbar({
   statusOptions: ReadonlyArray<{ value: string; label: string; count?: number }>;
   status: string;
   onStatusChange: (value: string) => void;
-  managers: string[];
-  manager: string;
-  onManagerChange: (value: string) => void;
   pageSize: number;
   onPageSizeChange: (size: number) => void;
   onRefresh: () => void;
@@ -73,19 +64,6 @@ export function ContractsToolbar({
             </div>
           </div>
           <StatusSelect options={statusOptions} value={status} onChange={onStatusChange} />
-          <Select value={manager} onValueChange={onManagerChange}>
-            <SelectTrigger className="w-full whitespace-nowrap sm:w-52" aria-label="Filter by account manager">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL_MANAGERS}>All account managers</SelectItem>
-              {managers.map((name) => (
-                <SelectItem key={name} value={name}>
-                  {name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
         </div>
 
         <div className="flex gap-3 sm:flex-row sm:items-center sm:gap-4">

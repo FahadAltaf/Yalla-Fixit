@@ -15,12 +15,20 @@ import {
 } from "@/components/ui/table";
 
 import type { AmcComputedData, AmcFormData } from "../amc-types";
+import { contractClauseReferences } from "../amc-document-model";
 import { termFeeLabel } from "../amc-date-utils";
-import { formatDisplayDate, formatPaymentLabel } from "../amc-pricing";
+import { formatDisplayDate, formatPaymentLabel, withEquipment } from "../amc-pricing";
+import { getAmcSettingsDefaults, type AmcSettings } from "../amc-settings";
+import { ProposalWording } from "../components/proposal-wording";
+import { TruncateIfText, TruncatedText } from "@/components/ui/truncated-text";
 
 interface StepProps {
   form: UseFormReturn<AmcFormData>;
   computed: AmcComputedData;
+  /* AMC Settings as loaded, without this proposal's edits; the shipped text until then. */
+  settings?: AmcSettings;
+  /* Saves the draft after the contract wording is edited. */
+  onWordingSaved?: () => void;
 }
 
 /**
@@ -60,11 +68,29 @@ export function ReviewSection({
 }
 
 /** One label over its value, as a read-only field. */
-export function Fact({ label, children }: { label: string; children: React.ReactNode }) {
+export function Fact({
+  label,
+  children,
+  action,
+  note,
+}: {
+  label: string;
+  children: React.ReactNode;
+  /** A small icon button beside the label (change, edit). */
+  action?: React.ReactNode;
+  /** A muted line under the value, e.g. where a live record now differs. */
+  note?: React.ReactNode;
+}) {
   return (
     <div className="min-w-0">
-      <dt className="text-muted-foreground text-xs">{label}</dt>
-      <dd className="mt-0.5 truncate text-sm font-medium">{children || "—"}</dd>
+      <dt className="text-muted-foreground flex h-4 items-center gap-1 text-xs">
+        {label}
+        {action}
+      </dt>
+      <dd className="mt-0.5 truncate text-sm font-medium">
+        <TruncateIfText>{children || "—"}</TruncateIfText>
+      </dd>
+      {note ? <TruncatedText className="text-muted-foreground mt-0.5 text-xs">{note}</TruncatedText> : null}
     </div>
   );
 }
@@ -127,9 +153,9 @@ export function ServicesAndCost({
               </TableRow>
             ) : (
               rows.map((row) => (
-                <TableRow key={row.scope}>
+                <TableRow key={row.serviceId}>
                   <TableCell className="align-top text-sm">
-                    <span className="font-medium">{row.scope}</span>
+                    <span className="font-medium">{withEquipment(row.scope, row.equipment)}</span>
                     {row.reference ? (
                       <span className="text-muted-foreground mt-0.5 block text-xs">
                         {row.reference}
@@ -280,7 +306,7 @@ export function ServicesAndCost({
  * approval. The documents themselves open in a preview from the buttons
  * beside Submit, rather than sitting in a scroll box on the page.
  */
-export function ReviewStep({ form, computed }: StepProps) {
+export function ReviewStep({ form, computed, settings, onWordingSaved }: StepProps) {
   const values = form.watch();
   const { totals } = computed;
 
@@ -319,8 +345,22 @@ export function ReviewStep({ form, computed }: StepProps) {
         title="Services and cost"
         description="As it appears in the documents, with the total before and after 5% VAT."
       >
-        <ServicesAndCost rows={computed.frequencyRows} totals={totals} />
+        <ServicesAndCost rows={withContractReferences(computed)} totals={totals} />
       </ReviewSection>
+
+      {/* DEV-263: the contract's clauses, editable for this proposal alone. */}
+      <ProposalWording
+        form={form}
+        computed={computed}
+        settings={settings ?? getAmcSettingsDefaults()}
+        onSaved={onWordingSaved}
+      />
     </div>
   );
+}
+
+/* Each row's clause as the contract numbers it, not the fixed reference in AMC Settings (AMC-057). */
+function withContractReferences(computed: AmcComputedData): AmcComputedData["frequencyRows"] {
+  const references = contractClauseReferences(computed);
+  return computed.frequencyRows.map((row) => ({ ...row, reference: references.get(row.serviceId) ?? row.reference }));
 }

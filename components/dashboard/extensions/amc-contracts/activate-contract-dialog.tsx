@@ -19,6 +19,7 @@ import { AMC_VAT_PERCENT } from "@/lib/amc/pricing";
 import { amcContractsService, type ActivationPreview } from "@/modules/amc-contracts/amc-contracts-service";
 
 import { CALL_OUT_LABELS, ENTITLEMENT_TYPE_LABELS, formatContractDate, formatDateTime } from "./contract-status";
+import { TruncatedText } from "@/components/ui/truncated-text";
 
 /**
  * Activate AMC: turns a signed proposal into an operational contract.
@@ -265,8 +266,8 @@ function Fact({ label, value, hint }: { label: string; value: React.ReactNode; h
   return (
     <div className="min-w-0">
       <dt className="text-muted-foreground text-xs">{label}</dt>
-      <dd className="truncate font-medium">{value}</dd>
-      {hint ? <dd className="text-muted-foreground truncate text-xs">{hint}</dd> : null}
+      <dd className="font-medium min-w-0"><TruncatedText>{value}</TruncatedText></dd>
+      {hint ? <dd className="text-muted-foreground text-xs min-w-0"><TruncatedText>{hint}</TruncatedText></dd> : null}
     </div>
   );
 }

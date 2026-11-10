@@ -28,11 +28,12 @@ import { todayInDubai } from "@/lib/amc/contracts";
 import { SKILL_LEVEL_LABELS, SKILL_LEVELS, type SkillLevel, type Trade } from "@/lib/amc/visits";
 import { visitsService, type TechnicianProfileInput, type TechnicianRecord } from "@/modules/amc-contracts/visits-service";
 
-import { AmcNotificationsBell } from "./amc-notifications-bell";
 import { formatContractDate } from "./contract-status";
 import { useAmcData } from "./use-amc-data";
 import { useDialog } from "./profile/use-dialog";
 import { SKILL_TONE } from "./visit-status";
+import { TruncatedText } from "@/components/ui/truncated-text";
+import { ModuleGuide } from "@/components/dashboard/extensions/amc-contracts/module-guide";
 
 const TRADE_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: "any", label: "All trades" },
@@ -109,7 +110,7 @@ export function TechniciansPage() {
         header: "Areas",
         cell: ({ row }) =>
           row.original.areas.length ? (
-            <span className="line-clamp-2 max-w-[220px] text-sm">{row.original.areas.join(", ")}</span>
+            <TruncatedText text={row.original.areas.join(", ")} className="max-w-[220px] text-sm" />
           ) : (
             <span className="text-muted-foreground text-sm">Any</span>
           ),
@@ -164,8 +165,8 @@ export function TechniciansPage() {
       <PageHeading
         eyebrow="Configuration"
         title="Technicians"
+        info={<ModuleGuide module="technicians" />}
         description="Each technician's trades, level, certificates and access permissions decide who the visit board suggests for a visit."
-        actions={<AmcNotificationsBell />}
       />
 
       {data && !data.migrated ? (

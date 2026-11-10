@@ -24,11 +24,11 @@ import { useDebounce } from "@/hooks/use-debounce";
 import { amcContractsService, type AmcReports as Reports } from "@/modules/amc-contracts/amc-contracts-service";
 
 import { CommercialReportView, DashboardReport, OperationsReport, PeriodPicker, defaultReportPeriod, type ReportPeriod } from "./amc-insights";
-import { AmcNotificationsBell } from "./amc-notifications-bell";
 import { ConfigTableToolbar, LocalDataTable } from "./config-table";
 import { CONTRACT_STATUS_LABELS, formatContractDate } from "./contract-status";
 import { ExportMenu } from "./export-menu";
 import { useAmcData } from "./use-amc-data";
+import { ModuleGuide } from "@/components/dashboard/extensions/amc-contracts/module-guide";
 
 type Tab = "expiry" | "pipeline" | "managers" | "services";
 /* Phase 12 puts the dashboard and the period reports in front of the portfolio reports. */
@@ -65,7 +65,7 @@ const BUCKET_TONES: Record<ExpiryBucket, string> = {
 /* A right-aligned column header, for the figures. */
 const right = (text: string) =>
   function RightHeader() {
-    return <div className="text-right">{text}</div>;
+    return <div>{text}</div>;
   };
 
 /* A link inside a clickable row: it opens its own record, not the row's. */
@@ -112,8 +112,8 @@ export function AmcReports() {
       <PageHeading
         eyebrow="Insights"
         title="Reports"
+        info={<ModuleGuide module="reports" />}
         description="The dashboard, operations and commercial reports, and the contract portfolio, from contract data only. Draft or rejected proposals and quotes are never counted as revenue."
-        actions={<AmcNotificationsBell />}
       />
 
       <PillTabs tabs={REPORT_TABS} value={tab} onChange={setTab} />
@@ -547,14 +547,14 @@ function ManagersReport({ reports }: { reports: Reports }) {
   }));
   const tableColumns: ColumnDef<ManagerRow, unknown>[] = [
     { id: "manager", header: "Account manager", cell: ({ row }) => <IdentityCell title={row.original.manager} /> },
-    { id: "inForce", header: right("Active"), cell: ({ row }) => <div className="text-right text-sm tabular-nums">{row.original.inForce}</div> },
-    { id: "expiring", header: right("Expiring (90 days)"), cell: ({ row }) => <div className="text-right text-sm tabular-nums">{row.original.expiringWithin90}</div> },
-    { id: "renewals", header: right("Renewals in progress"), cell: ({ row }) => <div className="text-right text-sm tabular-nums">{row.original.renewalsInProgress}</div> },
+    { id: "inForce", header: right("Active"), cell: ({ row }) => <div className="text-sm tabular-nums">{row.original.inForce}</div> },
+    { id: "expiring", header: right("Expiring (90 days)"), cell: ({ row }) => <div className="text-sm tabular-nums">{row.original.expiringWithin90}</div> },
+    { id: "renewals", header: right("Renewals in progress"), cell: ({ row }) => <div className="text-sm tabular-nums">{row.original.renewalsInProgress}</div> },
     {
       id: "value",
       header: right("Contract value"),
       cell: ({ row }) => (
-        <div className="text-right">
+        <div>
           <Money value={row.original.inForceValue} className="text-sm" />
         </div>
       ),
@@ -563,7 +563,7 @@ function ManagersReport({ reports }: { reports: Reports }) {
       id: "properties",
       header: right("Properties covered"),
       cell: ({ row }) => (
-        <div className="text-right text-sm tabular-nums">
+        <div className="text-sm tabular-nums">
           {row.original.propertiesCovered}
           {row.original.contractsWithoutProperty ? <span className="text-muted-foreground text-xs"> (+{row.original.contractsWithoutProperty} unlinked)</span> : null}
         </div>
@@ -607,23 +607,23 @@ function ServicesReport({ reports }: { reports: Reports }) {
   const tableColumns: ColumnDef<ServiceRow, unknown>[] = [
     { id: "service", header: "Service", cell: ({ row }) => <span className="font-medium">{row.original.serviceLabel}</span> },
     { id: "type", header: "Unit", cell: ({ row }) => <span className="text-sm">{TYPE_LABELS[row.original.entitlementType]}</span> },
-    { id: "contracts", header: right("Contracts"), cell: ({ row }) => <div className="text-right text-sm tabular-nums">{row.original.contracts}</div> },
+    { id: "contracts", header: right("Contracts"), cell: ({ row }) => <div className="text-sm tabular-nums">{row.original.contracts}</div> },
     {
       id: "included",
       header: right("Included"),
-      cell: ({ row }) => <div className="text-right text-sm tabular-nums">{row.original.included !== null ? formatQuantity(row.original.included) : "—"}</div>,
+      cell: ({ row }) => <div className="text-sm tabular-nums">{row.original.included !== null ? formatQuantity(row.original.included) : "—"}</div>,
     },
     {
       id: "used",
       header: right("Used"),
       cell: ({ row }) => (
-        <div className="text-right text-sm tabular-nums">{row.original.entitlementType === "informational" ? "—" : formatQuantity(row.original.used)}</div>
+        <div className="text-sm tabular-nums">{row.original.entitlementType === "informational" ? "—" : formatQuantity(row.original.used)}</div>
       ),
     },
     {
       id: "exhausted",
       header: right("Exhausted"),
-      cell: ({ row }) => <div className="text-right text-sm tabular-nums">{row.original.included !== null ? row.original.exhausted : "—"}</div>,
+      cell: ({ row }) => <div className="text-sm tabular-nums">{row.original.included !== null ? row.original.exhausted : "—"}</div>,
     },
   ];
   return (

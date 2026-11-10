@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect } from "react";
+import { Fragment, useEffect, useState } from "react";
 import type { UseFormReturn } from "react-hook-form";
+import { Pencil, Plus, Trash2, Wrench } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   FormControl,
@@ -14,6 +16,7 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Separator } from "@/components/ui/separator";
 import {
   Table,
@@ -29,7 +32,21 @@ import { formatCurrencyAED } from "@/utils/format-currency";
 import { isFrequencyEditable } from "../amc-constants";
 import { calculateAmcTotals, computeServiceRowPrice } from "../amc-pricing";
 import { servicesForProperty, type AmcServiceDefinition } from "../amc-settings";
-import { BASE_PRICE_MESSAGE, type AmcFormData } from "../amc-types";
+import {
+  BASE_PRICE_MESSAGE,
+  CUSTOM_SERVICE_PREFIX,
+  isCustomServiceRow,
+  type AmcFormData,
+  type AmcService,
+} from "../amc-types";
+import { CustomServiceDialog, type CustomServiceDraft } from "./custom-service-dialog";
+
+/* What the frequency counts, where it is not visits a year (Scope of Works Library). */
+const FREQUENCY_UNIT: Partial<Record<AmcService["frequencyType"], string>> = {
+  handyman: "hours a year",
+  weekly: "visits a week",
+  manpower: "days a week",
+};
 
 /* "A", "A and B", "A, B and C". */
 function listNames(names: string[]): string {
@@ -64,8 +81,30 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
   const totals = calculateAmcTotals(formValues);
   const availableServices = servicesForProperty({ services: [...catalogue] }, unitType);
   const enabledCount = catalogue.filter((service) => service.enabled !== false).length;
+  /*
+    What the table lists: the standard services for this kind of property,
+    then any added to this proposal alone (DEV-260), which are a number of
+    visits a year like a PPM service.
+  */
+  const listed: (Pick<AmcService, "id" | "label" | "frequencyType" | "category" | "unitOfMeasure"> & {
+    custom: boolean;
+  })[] = [
+    ...availableServices.map((service) => ({ ...service, custom: false })),
+    ...serviceRows.filter(isCustomServiceRow).map((row) => ({
+      id: row.serviceId,
+      label: row.customName?.trim() || "Custom service",
+      frequencyType: "fixed" as const,
+      category: "Custom services",
+      unitOfMeasure: undefined,
+      custom: true,
+    })),
+  ];
+  // null: closed. "new": adding one. Otherwise the id being edited.
+  const [editing, setEditing] = useState<string | null>(null);
+  const editingRow =
+    editing && editing !== "new" ? serviceRows.find((row) => row.serviceId === editing) : undefined;
   // Ticked, not free, and no price yet: what the base price error is about.
-  const unpriced = availableServices
+  const unpriced = listed
     .filter((service) => {
       const row = serviceRows.find((r) => r.serviceId === service.id);
       return Boolean(row?.included && !row.free && row.basePrice === undefined);
@@ -102,6 +141,38 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
     form.setValue("serviceRows", nextRows, { shouldValidate: true });
   };
 
+  const saveCustom = (draft: CustomServiceDraft) => {
+    if (editing && editing !== "new") {
+      updateRow(editing, draft);
+      return;
+    }
+    form.setValue(
+      "serviceRows",
+      [
+        ...serviceRows,
+        {
+          serviceId: `${CUSTOM_SERVICE_PREFIX}${crypto.randomUUID()}`,
+          included: true,
+          units: 1,
+          frequency: 1,
+          free: false,
+          basePrice: undefined,
+          equipment: "",
+          ...draft,
+        },
+      ],
+      { shouldValidate: true },
+    );
+  };
+
+  const removeCustom = (serviceId: string) => {
+    form.setValue(
+      "serviceRows",
+      serviceRows.filter((row) => row.serviceId !== serviceId),
+      { shouldValidate: true },
+    );
+  };
+
   return (
     <div className="space-y-4">
       <FormField
@@ -119,11 +190,11 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
                     <TableHead className="w-[120px]">Frequency</TableHead>
                     <TableHead className="w-[70px] text-left">Free</TableHead>
                     <TableHead className="w-[120px]">{rateCard ? "Rate" : "Base price"}</TableHead>
-                    <TableHead className="w-[120px] text-right">Price</TableHead>
+                    <TableHead className="w-[120px]">Price</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {availableServices.map((service) => {
+                  {listed.map((service, index) => {
                     const rowIndex = serviceRows.findIndex(
                       (row) => row.serviceId === service.id,
                     );
@@ -134,9 +205,27 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
                     const frequencyEditable = isFrequencyEditable(
                       service.frequencyType,
                     );
+                    /*
+                      The Scope of Works Library's groups (HVAC, MEP,
+                      cleaning, ...), each opened by a row of its own so
+                      thirty-odd services can be scanned.
+                    */
+                    const groupStarts =
+                      Boolean(service.category) && service.category !== listed[index - 1]?.category;
 
                     return (
-                      <TableRow key={service.id}>
+                      <Fragment key={service.id}>
+                      {groupStarts ? (
+                        <TableRow className="bg-muted/40 hover:bg-muted/40">
+                          <TableCell
+                            colSpan={7}
+                            className="text-muted-foreground py-2 text-[11px] font-semibold tracking-wide uppercase"
+                          >
+                            {service.category}
+                          </TableCell>
+                        </TableRow>
+                      ) : null}
+                      <TableRow>
                         <TableCell>
                           <Checkbox
                             checked={row.included}
@@ -148,13 +237,78 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
                             aria-label={`Include ${service.label}`}
                           />
                         </TableCell>
-                        <TableCell className="text-xs">{service.label}</TableCell>
+                        <TableCell className="text-xs">
+                          {service.custom ? (
+                            <div className="flex items-center gap-1.5">
+                              <span>{service.label}</span>
+                              <Badge variant="outline" className="px-1.5 py-0 text-[10px] font-normal">
+                                Custom
+                              </Badge>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="size-6"
+                                aria-label={`Edit ${service.label}`}
+                                onClick={() => setEditing(service.id)}
+                              >
+                                <Pencil className="size-3.5" />
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="text-muted-foreground hover:text-destructive size-6"
+                                aria-label={`Remove ${service.label}`}
+                                onClick={() => removeCustom(service.id)}
+                              >
+                                <Trash2 className="size-3.5" />
+                              </Button>
+                            </div>
+                          ) : (
+                            <span className="block">{service.label}</span>
+                          )}
+                          {/* What one unit is, so the units entered mean the same thing every time. */}
+                          {service.unitOfMeasure ? (
+                            <span className="text-muted-foreground mt-0.5 block text-[11px]">
+                              {service.unitOfMeasure}
+                            </span>
+                          ) : null}
+                          {/*
+                            DEV-261: what the service covers here, as the
+                            signed contracts name it. Only on a ticked row,
+                            since only those print.
+                          */}
+                          {row.included ? (
+                            /*
+                              Labelled inside the field, so a value such as
+                              "98" still reads as the equipment and not as
+                              a stray number beside the service name.
+                            */
+                            <InputGroup className="mt-2 h-8 w-full max-w-[260px] rounded-[12px]">
+                              <InputGroupAddon className="text-muted-foreground gap-1.5 pr-0 text-[11px] font-medium">
+                                <Wrench className="size-3.5" aria-hidden />
+                                Equipment
+                              </InputGroupAddon>
+                              <InputGroupInput
+                                className="h-8 text-xs md:text-xs"
+                                placeholder="e.g. 10 FCU"
+                                maxLength={80}
+                                aria-label={`Equipment for ${service.label}`}
+                                value={row.equipment ?? ""}
+                                onChange={(event) =>
+                                  updateRow(service.id, { equipment: event.target.value })
+                                }
+                              />
+                            </InputGroup>
+                          ) : null}
+                        </TableCell>
                         <TableCell>
                           <Input
                             type="number"
                             min={1}
                             step={1}
-                            className="h-8 text-xs"
+                            className="h-8 min-w-16 text-xs"
                             placeholder="1"
                             disabled={!row.included}
                             value={row.units}
@@ -203,7 +357,7 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
                               type="number"
                               min={1}
                               step={1}
-                              className="h-8 text-xs"
+                              className="h-8 min-w-16 text-xs"
                               placeholder="e.g. 2"
                               disabled={!row.included}
                               aria-label={`Frequency for ${service.label}`}
@@ -217,7 +371,14 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
                                 })
                               }
                             />
-                          ) : (
+                          ) : null}
+                          {/* What the number counts, where it is not visits a year. */}
+                          {frequencyEditable && FREQUENCY_UNIT[service.frequencyType] ? (
+                            <span className="text-muted-foreground mt-0.5 block text-[11px]">
+                              {FREQUENCY_UNIT[service.frequencyType]}
+                            </span>
+                          ) : null}
+                          {frequencyEditable ? null : (
                             <span className="text-muted-foreground text-xs">
                               {service.frequencyType === "unlimited"
                                 ? "Unlimited"
@@ -278,8 +439,8 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
                             <span className="text-muted-foreground text-xs">
                               Included
                             </span>
-                          ) : rateCard ? (
-                            /* From the rate card: read-only (BRD 5.3). */
+                          ) : rateCard && !service.custom ? (
+                            /* From the rate card: read-only (BRD 5.3). A custom service is not on the card, so its price is entered. */
                             <div className="grid gap-0.5 text-xs">
                               {row.basePrice === undefined ? (
                                 <span className={row.included ? "text-destructive" : "text-muted-foreground"}>No rate on the card</span>
@@ -297,7 +458,7 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
                               type="number"
                               min={0}
                               step="0.01"
-                              className="h-8 text-xs"
+                              className="h-8 min-w-20 text-xs"
                               placeholder="0.00"
                               disabled={!row.included}
                               aria-label={`Base price for ${service.label}`}
@@ -318,7 +479,7 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
                             />
                           )}
                         </TableCell>
-                        <TableCell className="text-right text-xs font-medium tabular-nums">
+                        <TableCell className="text-xs font-medium tabular-nums">
                           {row.included && !row.free && row.basePrice === undefined ? (
                             <span className="text-muted-foreground">—</span>
                           ) : (
@@ -331,10 +492,17 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
                           ) : null}
                         </TableCell>
                       </TableRow>
+                      </Fragment>
                     );
                   })}
                 </TableBody>
               </Table>
+            </div>
+            <div>
+              <Button type="button" variant="outline" size="sm" onClick={() => setEditing("new")}>
+                <Plus className="size-4" />
+                Add custom service
+              </Button>
             </div>
             {/*
               Names the services still waiting for a price (AMC-057). The
@@ -353,6 +521,19 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
             )}
           </FormItem>
         )}
+      />
+
+      <CustomServiceDialog
+        open={editing !== null}
+        onOpenChange={(open) => {
+          if (!open) setEditing(null);
+        }}
+        initial={
+          editingRow
+            ? { customName: editingRow.customName ?? "", customScope: editingRow.customScope ?? "" }
+            : null
+        }
+        onSave={saveCustom}
       />
 
       <div className="rounded-lg border bg-muted/30 p-4 space-y-3">
@@ -411,7 +592,7 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
 
       {availableServices.length !== enabledCount && (
         <p className="text-xs text-muted-foreground">
-          Services that AMC Settings doesn&apos;t offer on this kind of property are hidden.
+          Services not offered on this kind of property are hidden.
         </p>
       )}
     </div>

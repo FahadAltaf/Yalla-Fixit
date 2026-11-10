@@ -47,6 +47,7 @@ import {
 } from "@/lib/snagging/zone-geometry";
 import { nowLocal, toLocalInstant } from "@/lib/snagging/schedule-defaults";
 import { PlanZoneCanvas } from "./plan-zone-canvas";
+import { ExistingClientDialog } from "./existing-client-dialog";
 import { LocationPicker } from "./location-picker";
 import { InspectorPicker } from "./inspector-picker";
 
@@ -1475,6 +1476,8 @@ function ClientPicker({
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
+  /* Add client found the email already in FSM: that client is chosen, and a popup says so. */
+  const [existingClient, setExistingClient] = useState<SnaggingClientOption | null>(null);
   /*
     The list on screen: the pages loaded so far for one search. Clients are
     kept in Zoho FSM (Sami, 14 Oct 2026) and searched there, newest first,
@@ -1610,6 +1613,7 @@ function ClientPicker({
     set("client_phone", client.client_phone ?? "");
     setAddOpen(false);
     setSearch("");
+    if (client.existed) setExistingClient(client);
   }
 
   function clear() {
@@ -1638,6 +1642,7 @@ function ClientPicker({
           </Button>
         </div>
         <AddClientDialog open={addOpen} onOpenChange={setAddOpen} onSave={saveNew} requireEmail={fromFsm} />
+        <ExistingClientDialog client={existingClient} onClose={() => setExistingClient(null)} />
       </>
     );
   }
@@ -1764,6 +1769,7 @@ function ClientPicker({
         onSave={saveNew}
         requireEmail={fromFsm}
       />
+      <ExistingClientDialog client={existingClient} onClose={() => setExistingClient(null)} />
     </div>
   );
 }
@@ -1817,7 +1823,8 @@ function AddClientDialog({
         maher_id: maherId.trim() || undefined,
       });
       onSave(created);
-      toast.success(`${created.client_name} added`);
+      /* FSM already had the email: the picker says so in a popup (ExistingClientDialog). */
+      if (!created.existed) toast.success(`${created.client_name} added`);
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Could not add the client");
     } finally {

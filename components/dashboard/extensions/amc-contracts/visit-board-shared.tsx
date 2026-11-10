@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { CONFIRMATION_LABELS, type AccessStatus } from "@/lib/amc/visits";
 import { cn } from "@/lib/utils";
 import type { BoardData, BoardVisit } from "@/modules/amc-contracts/visits-service";
+import { TruncatedText } from "@/components/ui/truncated-text";
 
 export type BoardCallOut = BoardData["callOuts"][number];
 
@@ -218,13 +219,13 @@ export function ToPlaceCard({
         {canEdit ? <GripVertical className="text-muted-foreground/60 group-hover:text-muted-foreground mt-0.5 size-4 shrink-0" aria-hidden /> : null}
         <div className="min-w-0 flex-1 space-y-2">
           <div>
-            <p className="truncate font-medium" title={visit.customerName}>
+            <TruncatedText className="font-medium">
               {visit.customerName || "Client"}
-            </p>
-            <p className="text-muted-foreground truncate text-xs">
+            </TruncatedText>
+            <TruncatedText className="text-muted-foreground text-xs">
               {visit.contractNumber} · Visit {visit.visitNo}
               {visit.propertyLabel ? ` · ${visit.propertyLabel}` : ""}
-            </p>
+            </TruncatedText>
           </div>
           <ServiceBadges services={visit.services} max={2} />
           <div className="flex flex-wrap items-center gap-1.5">
@@ -275,15 +276,15 @@ export function CallOutToPlaceCard({ callOut, onOpen }: { callOut: BoardCallOut;
         <PhoneCall className={cn("mt-0.5 size-4 shrink-0", emergency ? "text-danger" : "text-muted-foreground")} aria-hidden />
         <div className="min-w-0 flex-1 space-y-1.5">
           <div>
-            <p className="truncate font-medium" title={callOut.customerName}>
+            <TruncatedText className="font-medium">
               {callOut.customerName || "Client"}
-            </p>
-            <p className="text-muted-foreground truncate text-xs">
+            </TruncatedText>
+            <TruncatedText className="text-muted-foreground text-xs">
               {callOut.callOutNo}
               {callOut.propertyLabel ? ` · ${callOut.propertyLabel}` : ""}
-            </p>
+            </TruncatedText>
           </div>
-          <p className="line-clamp-2 text-xs">{callOut.issue}</p>
+          <TruncatedText className="text-xs">{callOut.issue}</TruncatedText>
           <div className="flex flex-wrap items-center gap-1.5">
             <Badge variant="secondary" className={cn("border-0 font-medium", emergency ? "bg-danger/10 text-danger" : "bg-mist text-ink-soft")}>
               {emergency ? "Emergency" : "Non emergency"}

@@ -1,6 +1,36 @@
 import { TODO_STATUS_LABELS, Todo } from "@/types/types";
 import { clientEmailHtml, escapeEmailHtml } from "@/lib/email-brand";
 import { internalRequestHeaders } from "@/lib/internal-signature";
+import { mentionsToPlainText } from "@/lib/todos/mentions";
+
+/**
+ * FR-17: the email a user gets when a comment @-mentions them. A pure
+ * builder, so server routes can send it in process (lib/server/send-email.ts)
+ * and `emailService.sendTodoMentionEmail` can send it over HTTP.
+ */
+export function buildTodoMentionEmail(
+  todo: Pick<Todo, "todo_key" | "title">,
+  authorName: string,
+  commentBody: string,
+): { subject: string; html: string } {
+  const subject = `${authorName} mentioned you — ${todo.todo_key}`;
+  const todoUrl = `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3032"}/todos?todo=${encodeURIComponent(todo.todo_key)}`;
+  const excerpt = mentionsToPlainText(commentBody);
+  const html = clientEmailHtml({
+    eyebrow: "Todos",
+    // The builder escapes the heading itself; paragraphs are trusted HTML.
+    heading: `${authorName} mentioned you in a comment`,
+    paragraphs: [
+      escapeEmailHtml(excerpt.length > 1200 ? `${excerpt.slice(0, 1200)}…` : excerpt).replace(/\n/g, "<br>"),
+    ],
+    details: [
+      { label: "ID", value: todo.todo_key },
+      { label: "Title", value: todo.title },
+    ],
+    cta: { label: "Open the todo", url: todoUrl },
+  });
+  return { subject, html };
+}
 
 interface EmailOptions {
   to?: string | string[];
@@ -33,6 +63,10 @@ export const emailService = {
             ...(inBrowser ? {} : await internalRequestHeaders("send-email")),
           },
           body: JSON.stringify({ to, subject, html, cc, attachment }),
+          // FR-18: a mail endpoint that hangs must not hold a todo save open
+          // until the platform times it out; a timeout here becomes a
+          // rejected promise, which callers turn into a warning.
+          signal: AbortSignal.timeout(15_000),
         }
       );
       const data = await response.json();
@@ -91,6 +125,49 @@ export const emailService = {
       cta: { label: "Open the inspection", url: jobUrl },
       footnote:
         "You are receiving this because you are named as the reviewer or approval manager on this job.",
+    });
+    return emailService.sendEmail({ to, subject, html });
+  },
+
+  /**
+   * SNG-100 — the inspector found the property not as quoted, so the
+   * quotation is void until a revised one is approved. Goes to the
+   * quotation's coordinator and the job's approval manager.
+   */
+  sendSnaggingQuotationVoidEmail: async ({
+    to,
+    code,
+    unit,
+    quotationNumber,
+    reason,
+    inspector,
+    jobUrl,
+  }: {
+    to: string[];
+    code: string;
+    unit: string;
+    quotationNumber: string;
+    reason: string;
+    inspector: string | null;
+    jobUrl: string;
+  }) => {
+    const subject = `Property not as quoted — quotation ${quotationNumber} is void (${code})`;
+    const html = clientEmailHtml({
+      eyebrow: "Snagging",
+      heading: "Property not as quoted",
+      paragraphs: [
+        `The inspector found the unit is not as the quotation describes, so quotation ${quotationNumber} is void.`,
+        "Raise a revised quotation from the job and send it to the client. The inspection cannot be approved until the client approves the revised one.",
+      ],
+      details: [
+        { label: "Inspection", value: code },
+        { label: "Unit", value: unit },
+        { label: "Quotation", value: quotationNumber },
+        { label: "Found", value: reason },
+        ...(inspector ? [{ label: "Flagged by", value: inspector }] : []),
+      ],
+      cta: { label: "Open the inspection", url: jobUrl },
+      footnote: "You are receiving this because you raised the quotation or are the approval manager on this job.",
     });
     return emailService.sendEmail({ to, subject, html });
   },
@@ -245,6 +322,15 @@ export const emailService = {
     });
 
     return emailService.sendEmail({ to: email, subject, html });
+  },
+
+  sendTodoMentionEmail: async (
+    email: string,
+    todo: Pick<Todo, "todo_key" | "title">,
+    authorName: string,
+    commentBody: string,
+  ) => {
+    return emailService.sendEmail({ to: email, ...buildTodoMentionEmail(todo, authorName, commentBody) });
   },
 
   sendTodoReminderEmail: async (emails: string[], todo: Todo) => {

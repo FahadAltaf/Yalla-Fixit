@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { TruncateIfText } from "@/components/ui/truncated-text";
 
 /**
  * Label-and-value rows for a record being read, as on Snagging's job
@@ -17,8 +18,8 @@ export function DetailList({
       {rows.map((row) => (
         <div key={row.label} className="flex items-baseline justify-between gap-4 py-2">
           <dt className="text-muted-foreground shrink-0 text-sm">{row.label}</dt>
-          <dd className="min-w-0 text-right text-sm font-medium">
-            {row.value === null || row.value === undefined || row.value === "" ? <span className="text-muted-foreground font-normal">—</span> : row.value}
+          <dd className="min-w-0 truncate text-right text-sm font-medium">
+            {row.value === null || row.value === undefined || row.value === "" ? <span className="text-muted-foreground font-normal">—</span> : <TruncateIfText>{row.value}</TruncateIfText>}
             {row.hint ? <div className="text-muted-foreground text-xs font-normal">{row.hint}</div> : null}
           </dd>
         </div>

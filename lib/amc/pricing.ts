@@ -9,7 +9,9 @@
  * (1 AED = 100 fils) and rounded once, half up, at the step that creates
  * it:
  *
- *   row        = basePrice x units x frequency       (exact in fils)
+ *   row        = basePrice x units x times a year   (exact in fils)
+ *                (times a year = frequency; x52 for a weekly service;
+ *                 12 for manpower, priced per person per month)
  *   subtotal   = sum of ticked rows
  *   discount   = subtotal x discount%   -> rounded half up to the fil
  *   final      = subtotal - discount                (annual fee, excl. VAT)
@@ -82,6 +84,20 @@ export interface AmcPricingRowInput {
    * base price is asked for and the row costs 0.
    */
   free?: boolean | null;
+  /**
+   * The service's frequency type, when known: "weekly" charges the base
+   * price frequency x 52 times a year, "manpower" 12 times (per person per
+   * month; the frequency is days a week). Anything else: frequency times.
+   */
+  frequencyType?: string | null;
+}
+
+/** How many times a year a row's base price is charged (Scope of Works Library). */
+export function chargeableTimesPerYear(frequency: number, frequencyType?: string | null): number {
+  const visits = Math.trunc(frequency);
+  if (frequencyType === "weekly") return visits * 52;
+  if (frequencyType === "manpower") return 12;
+  return visits;
 }
 
 export interface AmcPricedRow {
@@ -120,7 +136,7 @@ export function rowPriceFils(row: AmcPricingRowInput): number {
   if (!row.included) return 0;
   if (row.free) return 0;
   const baseFils = toFils(row.basePrice ?? 0);
-  return baseFils * Math.trunc(row.units) * Math.trunc(row.frequency);
+  return baseFils * Math.trunc(row.units) * chargeableTimesPerYear(row.frequency, row.frequencyType);
 }
 
 export function rowPrice(row: AmcPricingRowInput): number {
@@ -213,6 +229,11 @@ export const amcServiceRowInputSchema = z.object({
   free: z.boolean().optional().default(false),
   /** Accepted for compatibility, never trusted. */
   price: z.number().optional(),
+  /* What the service covers on this property ("10 FCU") (DEV-261). */
+  equipment: z.string().max(80).optional(),
+  /* A service added to this proposal alone (DEV-260): its id starts "custom-". */
+  customName: z.string().max(120).optional(),
+  customScope: z.string().max(4000).optional(),
 });
 
 export const amcServiceRowsInputSchema = z

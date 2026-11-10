@@ -63,6 +63,9 @@ export function AddressDialog({
   defaults,
   propertyId = null,
   missing = [],
+  editing = false,
+  full = false,
+  parentOptions,
   onSaved,
 }: {
   open: boolean;
@@ -75,17 +78,33 @@ export function AddressDialog({
   propertyId?: string | null;
   /** What that address lacks, said in the dialog. */
   missing?: string[];
+  /**
+   * Edits the address on file (with `propertyId`) rather than completing it:
+   * nothing beyond the unit reference is required, and the AMC block also
+   * asks what the AMC property form asked (address line, unit no., floors,
+   * the building it is part of, notes), so this one form replaces that one.
+   */
+  editing?: boolean;
+  /**
+   * A new address on the full form, as the client page adds one: every AMC
+   * field (and the building it is part of), and only the reference required.
+   */
+  full?: boolean;
+  /** The client's properties a new one can be part of. */
+  parentOptions?: Array<{ id: string; label: string }>;
   /** Told about the property once it and its AMC details are saved. */
   onSaved: (propertyId: string) => void;
 }) {
-  const completing = Boolean(propertyId);
+  const completing = Boolean(propertyId) && !editing;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[90dvh] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl">
         <DialogHeader className="px-6 pt-6 pb-4">
-          <DialogTitle>{completing ? "Complete the address" : `Add an address for ${clientName}`}</DialogTitle>
+          <DialogTitle>{editing ? `${clientName} · address` : completing ? "Complete the address" : `Add an address for ${clientName}`}</DialogTitle>
           <DialogDescription>
-            {completing
+            {editing
+              ? "Changes the address for AMC and Snagging alike, as on the Clients page. Signed contracts keep their own copy."
+              : completing
               ? `This address is missing ${missing.length ? missing.join(", ").toLowerCase() : "some details"}. Fill them in to use it; they are saved to ${clientName}'s address for every job and visit after.`
               : "As on the Clients page: the unit, what it is and its pin on the map. Saved to the client, and to Zoho FSM when it is connected."}
           </DialogDescription>
@@ -93,9 +112,9 @@ export function AddressDialog({
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden border-t">
           {open ? (
             propertyId ? (
-              <CompleteBody clientId={clientId} propertyId={propertyId} onCancel={() => onOpenChange(false)} onSaved={onSaved} />
+              <CompleteBody clientId={clientId} propertyId={propertyId} editing={editing} onCancel={() => onOpenChange(false)} onSaved={onSaved} />
             ) : (
-              <AddressBody clientId={clientId} defaults={defaults} onCancel={() => onOpenChange(false)} onSaved={onSaved} />
+              <AddressBody clientId={clientId} defaults={defaults} full={full} parentOptions={parentOptions} onCancel={() => onOpenChange(false)} onSaved={onSaved} />
             )
           ) : null}
         </div>
@@ -108,15 +127,19 @@ export function AddressDialog({
 function CompleteBody({
   clientId,
   propertyId,
+  editing,
   onCancel,
   onSaved,
 }: {
   clientId: string;
   propertyId: string;
+  editing: boolean;
   onCancel: () => void;
   onSaved: (propertyId: string) => void;
 }) {
-  const [state, setState] = useState<{ address: SnaggingProperty; amc: PropertyRecord | null } | { error: string } | null>(null);
+  const [state, setState] = useState<
+    { address: SnaggingProperty; amc: PropertyRecord | null; others: PropertyRecord[] } | { error: string } | null
+  >(null);
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
@@ -125,7 +148,11 @@ function CompleteBody({
       ([{ data }, { properties }]) => {
         if (stale) return;
         const address = data.find((a) => a.id === propertyId);
-        setState(address ? { address, amc: properties.find((p) => p.id === propertyId) ?? null } : { error: "That address could not be found on the client." });
+        setState(
+          address
+            ? { address, amc: properties.find((p) => p.id === propertyId) ?? null, others: properties.filter((p) => p.id !== propertyId) }
+            : { error: "That address could not be found on the client." },
+        );
       },
       (e) => !stale && setState({ error: e instanceof Error ? e.message : "Could not load the address." }),
     );
@@ -154,7 +181,19 @@ function CompleteBody({
       </div>
     );
   }
-  return <AddressBody clientId={clientId} address={state.address} amc={state.amc} onCancel={onCancel} onSaved={onSaved} />;
+  /* "Part of" offers the client's other properties, not the ones already under this one. */
+  const parentOptions = editing ? state.others.filter((p) => p.parentPropertyId !== propertyId).map((p) => ({ id: p.id, label: p.label })) : undefined;
+  return (
+    <AddressBody
+      clientId={clientId}
+      address={state.address}
+      amc={state.amc}
+      full={editing}
+      parentOptions={parentOptions}
+      onCancel={onCancel}
+      onSaved={onSaved}
+    />
+  );
 }
 
 function AddressBody({
@@ -162,6 +201,8 @@ function AddressBody({
   address = null,
   amc = null,
   defaults,
+  full = false,
+  parentOptions,
   onCancel,
   onSaved,
 }: {
@@ -169,6 +210,8 @@ function AddressBody({
   address?: SnaggingProperty | null;
   amc?: PropertyRecord | null;
   defaults?: Defaults;
+  full?: boolean;
+  parentOptions?: Array<{ id: string; label: string }>;
   onCancel: () => void;
   onSaved: (propertyId: string) => void;
 }) {
@@ -183,12 +226,18 @@ function AddressBody({
   );
   const [zones, setZones] = useState((amc?.zones ?? []).join(", "));
   const [access, setAccess] = useState(amc?.accessConstraints ?? "");
+  /* The rest of what the AMC property form asked; on a full form only (a property edited, or added from the client). */
+  const [addressLine, setAddressLine] = useState(amc?.address ?? "");
+  const [unitNo, setUnitNo] = useState(amc?.unitNo ?? "");
+  const [floorsCount, setFloorsCount] = useState(amc?.floorsCount != null ? String(amc.floorsCount) : "");
+  const [parentId, setParentId] = useState<string | null>(amc?.parentPropertyId ?? null);
+  const [notes, setNotes] = useState(amc?.notes ?? "");
 
   return (
     <AddressForm
       clientId={clientId}
       address={address}
-      requireComplete
+      requireComplete={!full}
       defaults={{
         community: defaults?.community ?? null,
         property_type: snaggingType(defaults?.unitType ?? amc?.unitType, defaults?.propertyCategory ?? amc?.propertyCategory),
@@ -206,6 +255,16 @@ function AddressBody({
             city: city.trim() || null,
             zones: commercial ? zones.split(",").map((z) => z.trim()).filter(Boolean) : [],
             accessConstraints: access.trim() || null,
+            ...(full
+              ? {
+                  address: addressLine.trim() || null,
+                  unitNo: unitNo.trim() || null,
+                  notes: notes.trim() || null,
+                  parentPropertyId: parentId,
+                  /* A villa's floors are on the form above; a building's are asked here. */
+                  ...(saved.property_type === "villa" ? {} : { floorsCount: floorsCount.trim() && Number(floorsCount) >= 0 ? Math.round(Number(floorsCount)) : null }),
+                }
+              : {}),
           });
         } catch (e) {
           toast.warning("The address was saved, but not its AMC details.", {
@@ -262,9 +321,46 @@ function AddressBody({
               </FormField>
             ) : null}
           </div>
+          {full ? (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <FormField label="Address line" htmlFor="amc-address">
+                <Input id="amc-address" value={addressLine} onChange={(e) => setAddressLine(e.target.value)} maxLength={300} placeholder="e.g. Plot 12, Al Barsha 1" />
+              </FormField>
+              <FormField label="Unit no." htmlFor="amc-unit-no">
+                <Input id="amc-unit-no" value={unitNo} onChange={(e) => setUnitNo(e.target.value)} maxLength={60} placeholder="e.g. 1904" />
+              </FormField>
+              {type !== "villa" ? (
+                <FormField label="Floors in the building" htmlFor="amc-floors">
+                  <Input id="amc-floors" type="number" inputMode="numeric" min={0} value={floorsCount} onChange={(e) => setFloorsCount(e.target.value)} placeholder="e.g. 40" />
+                </FormField>
+              ) : null}
+              {parentOptions && parentOptions.length > 0 ? (
+                <FormField label="Part of" htmlFor="amc-parent">
+                  <Select value={parentId ?? "none"} onValueChange={(v) => setParentId(v === "none" ? null : v)}>
+                    <SelectTrigger id="amc-parent" className="w-full">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Not part of another property</SelectItem>
+                      {parentOptions.map((p) => (
+                        <SelectItem key={p.id} value={p.id}>
+                          {p.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </FormField>
+              ) : null}
+            </div>
+          ) : null}
           <FormField label="Access constraints" htmlFor="amc-access">
             <Textarea id="amc-access" rows={2} value={access} onChange={(e) => setAccess(e.target.value)} maxLength={2000} placeholder="e.g. No work on Fridays; service lift only" />
           </FormField>
+          {full ? (
+            <FormField label="Notes" htmlFor="amc-notes">
+              <Textarea id="amc-notes" rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} maxLength={2000} />
+            </FormField>
+          ) : null}
         </FormBlock>
       )}
     />

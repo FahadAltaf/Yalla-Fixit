@@ -47,6 +47,8 @@ import { CustomerSearch, PropertySelect } from "./customer-pickers";
 import { useDialog } from "./profile/use-dialog";
 import { Tint } from "./renewal-shared";
 import { useAmcData } from "./use-amc-data";
+import { formatPhone } from "@/lib/phone/format-phone";
+import { AmcPhoneInput } from "@/components/dashboard/extensions/amc/components/amc-phone-input";
 
 /**
  * A contract's amendments (Phase 13: DEV-417): scope change, property
@@ -374,7 +376,7 @@ function AmendmentDetails({ amendment: a, propertyLabel }: { amendment: Amendmen
           </>
         ),
       });
-      const contact = [str(to.customerEmail), str(to.customerPhone)].filter(Boolean).join(" · ");
+      const contact = [str(to.customerEmail), formatPhone(str(to.customerPhone))].filter(Boolean).join(" · ");
       if (contact) facts.push({ label: "Contact", value: contact });
       if (str(d.from)) facts.push({ label: "From", value: str(d.from) });
       break;
@@ -869,7 +871,7 @@ function TransferFields({
           <Input id={`${base}-party-email`} type="email" maxLength={200} value={form.partyEmail} onChange={(e) => set("partyEmail", e.target.value)} />
         </Field>
         <Field id={`${base}-party-phone`} label="Phone (optional)">
-          <Input id={`${base}-party-phone`} type="tel" maxLength={40} value={form.partyPhone} onChange={(e) => set("partyPhone", e.target.value)} />
+          <AmcPhoneInput id={`${base}-party-phone`} value={form.partyPhone} onChange={(phone) => set("partyPhone", phone)} />
         </Field>
       </div>
     </div>

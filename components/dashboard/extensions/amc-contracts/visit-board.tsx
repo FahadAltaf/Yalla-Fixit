@@ -19,7 +19,6 @@ import { Switch } from "@/components/ui/switch";
 import { todayInDubai } from "@/lib/amc/contracts";
 import { visitsService, type BoardVisit } from "@/modules/amc-contracts/visits-service";
 
-import { AmcNotificationsBell } from "./amc-notifications-bell";
 import { CallOutDetailDialog } from "./call-out-detail-dialog";
 import { useDialog } from "./profile/use-dialog";
 import { useAmcData } from "./use-amc-data";
@@ -37,6 +36,7 @@ import {
   type BoardCallOut,
   type DragPayload,
 } from "./visit-board-shared";
+import { ModuleGuide } from "@/components/dashboard/extensions/amc-contracts/module-guide";
 
 /**
  * AMC -> Visit board (Phase 9: DEV-392, 393, 394). A day of technicians as
@@ -164,10 +164,10 @@ export function VisitBoard() {
     <PageHeading
       eyebrow="Operations"
       title="Visit board"
+      info={<ModuleGuide module="visitBoard" />}
       description="Place PPM visits, move them inside their window and change the crew. Live jobs and leave show who is busy."
       actions={
         <>
-          <AmcNotificationsBell />
           <DateNav date={date} onChange={setDate} onStep={(d) => setDate(addDays(date, d))} onToday={() => setDate(today)} isToday={date === today} />
         </>
       }

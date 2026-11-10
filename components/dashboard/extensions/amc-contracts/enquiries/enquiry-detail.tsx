@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   ArrowLeft,
   ArrowRight,
+  Boxes,
   Building2,
   CalendarPlus,
   ChevronDown,
@@ -12,14 +13,16 @@ import {
   FileSignature,
   History,
   Inbox,
+  Link2,
+  MapPin,
   MessageSquarePlus,
   Pencil,
-  RefreshCw,
   SearchX,
   Shuffle,
   TriangleAlert,
   X,
 } from "lucide-react";
+import { format } from "date-fns";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
@@ -39,6 +42,11 @@ import {
   StatGridSkeleton,
   SubmitButton,
 } from "@/components/dashboard/shared/kaizen-states";
+import {
+  GoogleLocationMap,
+  hasGoogleMapsKey,
+} from "@/components/dashboard/snagging/google-location-map";
+import { LocationMap } from "@/components/dashboard/snagging/location-map";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -68,7 +76,14 @@ import {
 import { enquiriesService } from "@/modules/amc-contracts/enquiries-service";
 import { proposalRulesService } from "@/modules/amc-submissions";
 
+import { AddressDialog, useAddressFormAccess } from "../address-dialog";
 import { formatContractDate, formatDateTime } from "../contract-status";
+import {
+  DetailHeaderCard,
+  DetailHeaderSkeleton,
+  DetailToolbar,
+} from "../detail-header";
+import { EditClientDialog } from "../edit-client-dialog";
 import { LIFECYCLE_TONE } from "../profile/identity-card";
 import { useUrlTab } from "../profile/use-url-tab";
 import { useAmcData } from "../use-amc-data";
@@ -78,12 +93,28 @@ import {
   SiteVisitDialog,
   StageDialog,
 } from "./enquiry-dialogs";
-import { DetailList, SiteVisitStatusBadge, StageBadge } from "./enquiry-ui";
+import {
+  DetailList,
+  HeadingIconButton,
+  HeadingWithActions,
+  SiteVisitStatusBadge,
+  StageBadge,
+  propertyRows,
+} from "./enquiry-ui";
 import { LinkPropertyDialog } from "./link-property-dialog";
+import { formatPhone, phoneHref, toE164Phone } from "@/lib/phone/format-phone";
 
 /* Three tabs, as on a quotation: what it is, the work done for it (site visits), and what happened to it. */
 const TABS = ["details", "site-visits", "activity"] as const;
-type OpenDialog = "edit" | "stage" | "follow-up" | "site-visit" | "link" | null;
+type OpenDialog =
+  | "edit"
+  | "stage"
+  | "follow-up"
+  | "site-visit"
+  | "link"
+  | "client"
+  | "property"
+  | null;
 type ActivityView = "follow-ups" | "history";
 
 const ENQUIRIES = "/extensions/amc-contracts/enquiries";
@@ -97,8 +128,16 @@ const ENQUIRIES = "/extensions/amc-contracts/enquiries";
 export function EnquiryDetail({ id }: { id: string }) {
   /* Set by Refresh and cleared when the answer lands; the page stays on screen meanwhile. */
   const [refreshing, setRefreshing] = useState(false);
+  const [fetchedAt, setFetchedAt] = useState<number | null>(null);
   const { data, error, loading, reload } = useAmcData(
-    () => enquiriesService.get(id).finally(() => setRefreshing(false)),
+    () =>
+      enquiriesService
+        .get(id)
+        .then((result) => {
+          setFetchedAt(Date.now());
+          return result;
+        })
+        .finally(() => setRefreshing(false)),
     id,
   );
   const meta = useAmcData(() => enquiriesService.meta(), "enquiry-meta");
@@ -116,6 +155,8 @@ export function EnquiryDetail({ id }: { id: string }) {
     );
   }, []);
   const [dialog, setDialog] = useState<OpenDialog>(null);
+  /* The address form saves through Snagging; without Snagging (Create) the property is edited on its own page. */
+  const addressForm = useAddressFormAccess();
   const [stageChoice, setStageChoice] = useState<string | undefined>(undefined);
   const router = useRouter();
   const [starting, setStarting] = useState(false);
@@ -214,93 +255,108 @@ export function EnquiryDetail({ id }: { id: string }) {
 
   return (
     <div className="flex w-full flex-1 flex-col gap-6">
-      {/* Back to the list on the left, everything this enquiry can do on the right: the toolbar a quotation carries. */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <BackToEnquiries />
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={refresh}
-            disabled={loading || refreshing}
-            aria-label="Refresh this enquiry"
-          >
-            <RefreshCw
-              className={refreshing ? "size-4 animate-spin" : "size-4"}
-            />
-            <span className="hidden sm:inline">Refresh</span>
-          </Button>
-          {ready && e ? (
+      {/* As the client page: the way back and Refresh, then the enquiry's card with what it can do. */}
+      <DetailToolbar
+        backHref={ENQUIRIES}
+        backLabel="Enquiries"
+        fetchedAt={fetchedAt}
+        refreshing={refreshing || loading}
+        onRefresh={refresh}
+      />
+
+      {!ready || !e || !m ? (
+        error || meta.error ? null : (
+          <DetailHeaderSkeleton />
+        )
+      ) : (
+        <DetailHeaderCard
+          badges={
             <>
-              {e.proposal ? (
-                <Button asChild variant="outline" size="sm">
-                  <Link href={`/extensions/amc/${e.proposal.id}`}>
-                    <FileSignature className="size-4" />
-                    Proposal {e.proposal.proposalNumber}
-                  </Link>
-                </Button>
-              ) : canStartProposal ? (
-                <SubmitButton
-                  variant="outline"
-                  size="sm"
-                  onClick={() => void startProposal()}
-                  pending={starting}
-                  pendingLabel="Starting…"
-                  disabled={!e.property}
-                  title={e.property ? undefined : "Link the property first"}
-                  icon={<FileSignature className="size-4" />}
-                >
-                  Create proposal
-                </SubmitButton>
-              ) : null}
-              {canEdit ? (
+              <Badge variant="outline">Enquiry</Badge>
+              <Badge variant="outline" className="tabular-nums">
+                {e.enquiryNumber}
+              </Badge>
+              <Badge variant="outline">{e.source}</Badge>
+            </>
+          }
+          title={e.customer.name || "Enquiry"}
+          status={<StageBadge stage={e.stage} stages={m.stages} />}
+          subline={[
+            e.property?.label ?? "No property linked yet",
+            `enquired ${formatDateTime(e.enquiredAt)}`,
+            e.owner ? `owned by ${e.owner.name}` : "no owner yet",
+          ].join(" · ")}
+          actions={
+            <>
+              {ready && e ? (
                 <>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setDialog("edit")}
-                  >
-                    <Pencil className="size-4" />
-                    Edit
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => openStage()}
-                  >
-                    <Shuffle className="size-4" />
-                    Change stage
-                  </Button>
-                  {/* One button for reaching the client, as a quotation's Share: a follow-up, or a visit to the property. */}
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button size="sm">
-                        <MessageSquarePlus className="size-4" />
-                        Log activity
-                        <ChevronDown className="size-3.5" />
+                  {e.proposal ? (
+                    <Button asChild variant="outline">
+                      <Link href={`/extensions/amc/${e.proposal.id}`}>
+                        <FileSignature className="size-4" />
+                        Proposal {e.proposal.proposalNumber}
+                      </Link>
+                    </Button>
+                  ) : canStartProposal ? (
+                    <SubmitButton
+                      variant="outline"
+                      onClick={() => void startProposal()}
+                      pending={starting}
+                      pendingLabel="Starting…"
+                      disabled={!e.property}
+                      title={e.property ? undefined : "Link the property first"}
+                      icon={<FileSignature className="size-4" />}
+                    >
+                      Create proposal
+                    </SubmitButton>
+                  ) : null}
+                  {canEdit ? (
+                    <>
+                      <Button
+                        variant="outline"
+                        onClick={() => setDialog("edit")}
+                      >
+                        <Pencil className="size-4" />
+                        Edit
                       </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuItem onClick={() => setDialog("follow-up")}>
-                        <MessageSquarePlus className="size-4" />
-                        Log follow-up
-                      </DropdownMenuItem>
-                      {!closed ? (
-                        <DropdownMenuItem
-                          onClick={() => setDialog("site-visit")}
-                        >
-                          <CalendarPlus className="size-4" />
-                          Book site visit
-                        </DropdownMenuItem>
-                      ) : null}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                      <Button variant="outline" onClick={() => openStage()}>
+                        <Shuffle className="size-4" />
+                        Change stage
+                      </Button>
+                      {/* One button for reaching the client, as a quotation's Share: a follow-up, or a visit to the property. */}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button>
+                            <MessageSquarePlus className="size-4" />
+                            Log activity
+                            <ChevronDown className="size-3.5" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem
+                            onClick={() => setDialog("follow-up")}
+                          >
+                            <MessageSquarePlus className="size-4" />
+                            Log follow-up
+                          </DropdownMenuItem>
+                          {!closed ? (
+                            <DropdownMenuItem
+                              onClick={() => setDialog("site-visit")}
+                            >
+                              <CalendarPlus className="size-4" />
+                              Book site visit
+                            </DropdownMenuItem>
+                          ) : null}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </>
+                  ) : null}
                 </>
               ) : null}
             </>
-          ) : null}
-        </div>
-      </div>
+          }
+        />
+      )}
 
       {error || meta.error ? (
         <ErrorState
@@ -418,14 +474,17 @@ export function EnquiryDetail({ id }: { id: string }) {
                           ? "progress"
                           : "neutral"
                     }
+                    /* The time goes in the headline: stat cards no longer draw their caption line. */
                     headline={
-                      e.followUp === "overdue"
-                        ? "Overdue"
-                        : e.followUp === "today"
-                          ? "Due today"
-                          : e.nextFollowUpAt
-                            ? "Planned"
-                            : "Not planned"
+                      e.nextFollowUpAt
+                        ? `${
+                            e.followUp === "overdue"
+                              ? "Overdue"
+                              : e.followUp === "today"
+                                ? "Due today"
+                                : "Planned"
+                          } at ${timeOf(e.nextFollowUpAt)}`
+                        : "Not planned"
                     }
                     caption={
                       e.nextFollowUpAt
@@ -484,160 +543,226 @@ export function EnquiryDetail({ id }: { id: string }) {
                   description="Who is enquiring, how to reach them, and the property it is for."
                   bodyClassName="px-5 pb-5"
                 >
-                  <div className="grid gap-6 lg:grid-cols-2">
-                    <div className="min-w-0 space-y-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <SubHeading>Client</SubHeading>
-                        <Badge
-                          variant="secondary"
-                          className={`border-0 font-medium ${LIFECYCLE_TONE[e.customer.lifecycle as keyof typeof LIFECYCLE_TONE] ?? ""}`}
+                  {/*
+                    As the job's Setup tab: the two lists stacked on the left and
+                    the map filling the right. Side by side, Client (seven rows)
+                    and Property (four) left a hole under the shorter one.
+                  */}
+                  <div className="grid items-stretch gap-6 lg:grid-cols-2">
+                    <div className="min-w-0 space-y-6">
+                      <div className="space-y-3">
+                        <SubHeading
+                          action={
+                            <Badge
+                              variant="secondary"
+                              className={`border-0 font-medium ${LIFECYCLE_TONE[e.customer.lifecycle as keyof typeof LIFECYCLE_TONE] ?? ""}`}
+                            >
+                              {LIFECYCLE_LABELS[
+                                e.customer
+                                  .lifecycle as keyof typeof LIFECYCLE_LABELS
+                              ] ?? e.customer.lifecycle}
+                            </Badge>
+                          }
                         >
-                          {LIFECYCLE_LABELS[
-                            e.customer
-                              .lifecycle as keyof typeof LIFECYCLE_LABELS
-                          ] ?? e.customer.lifecycle}
-                        </Badge>
+                          <HeadingWithActions label="Client">
+                            {canEdit ? (
+                              <HeadingIconButton
+                                label="Edit client"
+                                icon={<Pencil />}
+                                onClick={() => setDialog("client")}
+                              />
+                            ) : null}
+                          </HeadingWithActions>
+                        </SubHeading>
+                        <DetailList
+                          rows={[
+                            {
+                              label: "Name",
+                              value: (
+                                <Link
+                                  href={`/extensions/amc-contracts/customers/${e.customer.id}`}
+                                  className={LINK}
+                                >
+                                  {e.customer.name}
+                                </Link>
+                              ),
+                            },
+                            {
+                              label: "Customer ID",
+                              value: e.customer.customerRef,
+                            },
+                            ...(e.contactName &&
+                            e.contactName !== e.customer.name
+                              ? [{ label: "Contact", value: e.contactName }]
+                              : []),
+                            {
+                              label: "Phone",
+                              value: e.contactPhone ? (
+                                <a
+                                  href={phoneHref(e.contactPhone)}
+                                  className={LINK}
+                                >
+                                  {formatPhone(e.contactPhone)}
+                                </a>
+                              ) : null,
+                            },
+                            {
+                              label: "Email",
+                              value: e.contactEmail ? (
+                                <a
+                                  href={`mailto:${e.contactEmail}`}
+                                  className={LINK}
+                                >
+                                  {e.contactEmail}
+                                </a>
+                              ) : null,
+                            },
+                            {
+                              label: "WhatsApp",
+                              value: e.contactWhatsapp ? (
+                                <a
+                                  href={`https://wa.me/${toE164Phone(e.contactWhatsapp).slice(1)}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className={LINK}
+                                >
+                                  {formatPhone(e.contactWhatsapp)}
+                                </a>
+                              ) : null,
+                            },
+                            {
+                              label: "Prefers",
+                              value:
+                                [
+                                  e.preferredChannel
+                                    ? (CHANNEL_LABELS[
+                                        e.preferredChannel as keyof typeof CHANNEL_LABELS
+                                      ] ?? e.preferredChannel)
+                                    : null,
+                                  e.preferredLanguage,
+                                ]
+                                  .filter(Boolean)
+                                  .join(" · ") || null,
+                            },
+                          ]}
+                        />
                       </div>
-                      <DetailList
-                        rows={[
-                          {
-                            label: "Name",
-                            value: (
-                              <Link
-                                href={`/extensions/amc-contracts/customers/${e.customer.id}`}
-                                className="hover:text-brand underline underline-offset-2"
+
+                      <div className="space-y-3">
+                        <SubHeading
+                          action={
+                            e.property ? (
+                              <Button asChild variant="ghost" size="sm">
+                                <Link
+                                  href={`/extensions/amc-contracts/properties/${e.property.id}?tab=assets&view=scope`}
+                                >
+                                  <Boxes className="size-3.5" />
+                                  Assets and scope
+                                </Link>
+                              </Button>
+                            ) : canEdit ? (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setDialog("link")}
                               >
-                                {e.customer.name}
-                              </Link>
-                            ),
-                          },
-                          {
-                            label: "Customer ID",
-                            value: e.customer.customerRef,
-                          },
-                          {
-                            label: "Contact",
-                            value:
-                              e.contactName !== e.customer.name
-                                ? e.contactName
-                                : null,
-                          },
-                          {
-                            label: "Phone",
-                            value: e.contactPhone ? (
-                              <a
-                                href={`tel:${e.contactPhone}`}
-                                className="hover:text-brand underline underline-offset-2"
-                              >
-                                {e.contactPhone}
-                              </a>
-                            ) : null,
-                          },
-                          {
-                            label: "Email",
-                            value: e.contactEmail ? (
-                              <a
-                                href={`mailto:${e.contactEmail}`}
-                                className="hover:text-brand underline underline-offset-2"
-                              >
-                                {e.contactEmail}
-                              </a>
-                            ) : null,
-                          },
-                          { label: "WhatsApp", value: e.contactWhatsapp },
-                          {
-                            label: "Prefers",
-                            value:
-                              [
-                                e.preferredChannel
-                                  ? (CHANNEL_LABELS[
-                                      e.preferredChannel as keyof typeof CHANNEL_LABELS
-                                    ] ?? e.preferredChannel)
-                                  : null,
-                                e.preferredLanguage,
-                              ]
-                                .filter(Boolean)
-                                .join(" · ") || null,
-                          },
-                        ].filter((row) => row.label !== "Contact" || row.value)}
-                      />
+                                <Link2 className="size-3.5" />
+                                Link a property
+                              </Button>
+                            ) : null
+                          }
+                        >
+                          <HeadingWithActions label="Property">
+                            {e.property && canEdit && addressForm ? (
+                              <HeadingIconButton
+                                label="Edit property"
+                                icon={<Pencil />}
+                                onClick={() => setDialog("property")}
+                              />
+                            ) : null}
+                          </HeadingWithActions>
+                        </SubHeading>
+                        <DetailList
+                          rows={[
+                            /* As the job's Setup tab, then the area the client named on the enquiry. */
+                            ...propertyRows({
+                              unit: e.property ? (
+                                <Link
+                                  href={`/extensions/amc-contracts/properties/${e.property.id}`}
+                                  className={LINK}
+                                >
+                                  {e.property.label}
+                                </Link>
+                              ) : (
+                                <span className="text-muted-foreground font-normal">
+                                  Not linked yet
+                                </span>
+                              ),
+                              place: e.property,
+                              typeLabel:
+                                unitType(e.property?.unitType ?? null) ??
+                                unitType(e.unitType),
+                              category:
+                                capitalise(
+                                  e.property?.propertyCategory ??
+                                    e.propertyCategory ??
+                                    "",
+                                ) || null,
+                            }),
+                            { label: "Area", value: e.area },
+                          ]}
+                        />
+                      </div>
                     </div>
 
-                    <div className="min-w-0 space-y-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <SubHeading>Property</SubHeading>
-                        {e.property ? (
-                          <Button
-                            asChild
-                            size="sm"
-                            variant="ghost"
-                            className="-my-1 h-7"
-                          >
-                            <Link
-                              href={`/extensions/amc-contracts/properties/${e.property.id}?tab=assets&view=scope`}
-                            >
-                              Assets and scope
-                            </Link>
-                          </Button>
-                        ) : canEdit ? (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="-my-1 h-7"
-                            onClick={() => setDialog("link")}
-                          >
-                            Link a property
-                          </Button>
-                        ) : null}
-                      </div>
-                      <DetailList
-                        rows={[
-                          {
-                            label: "Address",
-                            value: e.property ? (
+                    <div className="flex min-w-0 flex-col space-y-3">
+                      <SubHeading>Location</SubHeading>
+                      {e.property?.lat != null && e.property?.lng != null ? (
+                        hasGoogleMapsKey() ? (
+                          <GoogleLocationMap
+                            className="min-h-64 flex-1"
+                            lat={e.property.lat}
+                            lng={e.property.lng}
+                            label={e.property.label || null}
+                          />
+                        ) : (
+                          <LocationMap
+                            className="min-h-64 flex-1"
+                            lat={e.property.lat}
+                            lng={e.property.lng}
+                            label={e.property.label || null}
+                          />
+                        )
+                      ) : (
+                        <div className="text-muted-foreground flex min-h-48 flex-1 flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-6 text-center text-sm">
+                          {e.property ? (
+                            <>
+                              <p>No location pinned on the property record.</p>
+                              <Button asChild variant="outline" size="sm">
+                                <Link
+                                  href={`/extensions/amc-contracts/properties/${e.property.id}`}
+                                >
+                                  <MapPin className="size-3.5" />
+                                  Open the property
+                                </Link>
+                              </Button>
+                            </>
+                          ) : (
+                            <p className="max-w-xs">
+                              No property linked yet. The property record,
+                              assets and scope are captured at the site visit,
+                              or on the{" "}
                               <Link
-                                href={`/extensions/amc-contracts/properties/${e.property.id}`}
-                                className="hover:text-brand underline underline-offset-2"
+                                href={`/extensions/amc-contracts/customers/${e.customer.id}`}
+                                className="hover:text-foreground underline underline-offset-2"
                               >
-                                {e.property.label}
+                                client&apos;s page
                               </Link>
-                            ) : (
-                              <span className="text-muted-foreground font-normal">
-                                Not linked yet
-                              </span>
-                            ),
-                          },
-                          {
-                            label: "Type",
-                            value:
-                              unitType(e.property?.unitType ?? null) ??
-                              unitType(e.unitType),
-                          },
-                          {
-                            label: "Category",
-                            value:
-                              capitalise(
-                                e.property?.propertyCategory ??
-                                  e.propertyCategory ??
-                                  "",
-                              ) || null,
-                          },
-                          { label: "Area", value: e.area },
-                        ]}
-                      />
-                      {!e.property ? (
-                        <p className="text-muted-foreground text-xs">
-                          The property record, assets and scope are captured at
-                          the site visit, or on the{" "}
-                          <Link
-                            href={`/extensions/amc-contracts/customers/${e.customer.id}`}
-                            className="hover:text-foreground underline underline-offset-2"
-                          >
-                            client&apos;s page
-                          </Link>
-                          .
-                        </p>
-                      ) : null}
+                              .
+                            </p>
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </SectionCard>
@@ -645,16 +770,19 @@ export function EnquiryDetail({ id }: { id: string }) {
                 <SectionCard
                   title="The enquiry"
                   icon={<Inbox />}
-                  description="What they asked for, where they came from, and who owns it."
+                  description="What they asked for, where they came from, who owns it and when they are next contacted."
                   bodyClassName="px-5 pb-5"
                 >
-                  <div className="grid gap-6 lg:grid-cols-2">
-                    <div className="min-w-0 space-y-3">
+                  <div className="grid items-stretch gap-6 lg:grid-cols-2">
+                    {/* The request in a box that runs the column's height, as the map does above, so it never ends in a hole. */}
+                    <div className="flex min-w-0 flex-col space-y-3">
                       <SubHeading>What they need</SubHeading>
-                      <p className="text-sm whitespace-pre-wrap">{e.need}</p>
+                      <p className="bg-muted/30 flex-1 rounded-lg border p-4 text-sm leading-relaxed whitespace-pre-wrap">
+                        {e.need}
+                      </p>
                     </div>
                     <div className="min-w-0 space-y-3">
-                      <SubHeading>Ownership</SubHeading>
+                      <SubHeading>Owner and follow-up</SubHeading>
                       <DetailList
                         rows={[
                           {
@@ -672,6 +800,16 @@ export function EnquiryDetail({ id }: { id: string }) {
                             value: e.owner?.name ?? "Unassigned",
                           },
                           {
+                            label: "Next follow-up",
+                            value: e.nextFollowUpAt ? (
+                              formatDateTime(e.nextFollowUpAt)
+                            ) : (
+                              <span className="text-muted-foreground font-normal">
+                                Not planned
+                              </span>
+                            ),
+                          },
+                          {
                             label: "In this stage since",
                             value: formatDateTime(e.stageChangedAt),
                           },
@@ -682,7 +820,7 @@ export function EnquiryDetail({ id }: { id: string }) {
                                   value: (
                                     <Link
                                       href={`/extensions/amc/${e.proposal.id}`}
-                                      className="hover:text-brand underline underline-offset-2"
+                                      className={LINK}
                                     >
                                       {e.proposal.proposalNumber} (
                                       {e.proposal.status.replace(/_/g, " ")})
@@ -705,9 +843,7 @@ export function EnquiryDetail({ id }: { id: string }) {
                 title="Site visits"
                 description="Visits to the property booked from this enquiry. A completed one feeds the proposal: asset counts, condition and recommended scope."
                 icon={<ClipboardCheck />}
-                bodyClassName={
-                  siteVisits.length === 0 ? "border-t" : "px-5 pb-5"
-                }
+                bodyClassName="border-t"
                 action={
                   canEdit && !closed ? (
                     <Button
@@ -741,41 +877,43 @@ export function EnquiryDetail({ id }: { id: string }) {
                     }
                   />
                 ) : (
-                  siteVisits.map((v) => (
-                    <DataRow
-                      key={v.id}
-                      icon={<ClipboardCheck />}
-                      title={
-                        <Link
-                          href={`/extensions/amc-contracts/assessments/${v.id}`}
-                          className="hover:underline"
-                        >
-                          {v.assessmentNumber}
-                        </Link>
-                      }
-                      subtitle={
-                        [
-                          v.scheduledAt ? formatDateTime(v.scheduledAt) : null,
-                          v.assessorName,
-                          v.property?.label,
-                        ]
-                          .filter(Boolean)
-                          .join(" · ") || undefined
-                      }
-                      trailing={
-                        <div className="flex flex-col items-end gap-1">
-                          <SiteVisitStatusBadge status={v.status} />
-                          {v.attendance ? (
-                            <span className="text-muted-foreground text-xs">
-                              {ATTENDANCE_LABELS[
-                                v.attendance as SiteVisitAttendance
-                              ] ?? v.attendance}
-                            </span>
-                          ) : null}
-                        </div>
-                      }
-                    />
-                  ))
+                  <div className="divide-y">
+                    {siteVisits.map((v) => (
+                      <DataRow
+                        key={v.id}
+                        icon={<ClipboardCheck />}
+                        title={
+                          <Link
+                            href={`/extensions/amc-contracts/assessments/${v.id}`}
+                            className="hover:underline"
+                          >
+                            {v.assessmentNumber}
+                          </Link>
+                        }
+                        subtitle={
+                          [
+                            v.scheduledAt ? formatDateTime(v.scheduledAt) : null,
+                            v.assessorName,
+                            v.property?.label,
+                          ]
+                            .filter(Boolean)
+                            .join(" · ") || undefined
+                        }
+                        trailing={
+                          <div className="flex flex-col items-end gap-1">
+                            <SiteVisitStatusBadge status={v.status} />
+                            {v.attendance ? (
+                              <span className="text-muted-foreground text-xs">
+                                {ATTENDANCE_LABELS[
+                                  v.attendance as SiteVisitAttendance
+                                ] ?? v.attendance}
+                              </span>
+                            ) : null}
+                          </div>
+                        }
+                      />
+                    ))}
+                  </div>
                 )}
               </SectionCard>,
             )}
@@ -973,11 +1111,34 @@ export function EnquiryDetail({ id }: { id: string }) {
             enquiry={e}
             onSave={async (input) =>
               after(
-                input.moveToStage ? `Follow-up logged. Moved to ${input.moveToStage}.` : "Follow-up logged",
+                input.moveToStage
+                  ? `Follow-up logged. Moved to ${input.moveToStage}.`
+                  : "Follow-up logged",
                 await enquiriesService.addFollowUp(e.id, input),
               )
             }
           />
+          <EditClientDialog
+            open={dialog === "client"}
+            onOpenChange={(open) => !open && setDialog(null)}
+            customerId={e.customer.id}
+            onSaved={reload}
+          />
+          {e.property && addressForm ? (
+            <AddressDialog
+              open={dialog === "property"}
+              onOpenChange={(open) => !open && setDialog(null)}
+              clientId={e.customer.id}
+              clientName={e.customer.name}
+              propertyId={e.property.id}
+              editing
+              onSaved={() => {
+                setDialog(null);
+                toast.success("Property saved");
+                reload();
+              }}
+            />
+          ) : null}
           {dialog === "link" ? (
             <LinkPropertyDialog
               open
@@ -1033,11 +1194,17 @@ function BackToEnquiries() {
     <Button asChild variant="ghost" size="sm" className="-ml-2 self-start">
       <Link href={ENQUIRIES}>
         <ArrowLeft className="size-4" />
-        Back to enquiries
+        Enquiries
       </Link>
     </Button>
   );
 }
+
+/* A link inside a detail row, as the job and quotation pages draw them. */
+const LINK = "hover:text-brand underline underline-offset-2";
+
+/** "14:30", in the same 24-hour clock as formatDateTime. */
+const timeOf = (value: string) => format(new Date(value), "HH:mm");
 
 const capitalise = (v: string) =>
   v ? v.charAt(0).toUpperCase() + v.slice(1) : v;

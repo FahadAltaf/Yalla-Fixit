@@ -24,6 +24,7 @@ import {
   statusFromVerdict,
 } from "@/lib/server/snagging/workflow";
 import { syncPushSchema, type SyncPushInput } from "@/modules/snagging/schemas";
+import { emailQuotationVoid, voidForFurnishing } from "@/lib/server/snagging/quotation-void";
 import { ActionType, ResourceType, SnaggingTaskStatus, SnaggingVerdict } from "@/types/types";
 
 /**
@@ -1398,9 +1399,17 @@ async function submitVisit(
   visit.status = "submitted";
 }
 
-/** The device reporting that work has started on site (FR-1.06). */
+/** The device reporting that work has started on site (FR-1.06), or the property not as quoted (SNG-100). */
 async function applyTaskProgress(admin: Admin, ctx: Ctx, payload: Record<string, unknown>): Promise<void> {
   const job = writableJob(ctx, ctx.mutation.entity_id);
+  /*
+    The app folds queued updates to the same job into one, so a start and a
+    furnishing report can arrive together: each part is applied.
+  */
+  if (typeof payload.furnishing_found === "boolean") {
+    await applyFurnishingReport(admin, ctx, job, payload);
+    if (payload.status === undefined) return;
+  }
   if (payload.status !== "in_progress") throw new Error("The app may only move an inspection to in_progress");
   // On a visit the start was already recorded against the visit when this
   // push began, and the approved job must not be moved back to on-site.
@@ -1427,6 +1436,43 @@ async function applyTaskProgress(admin: Admin, ctx: Ctx, payload: Record<string,
   });
 
   ctx.jobById.set(job.id, { ...job, status: "in_progress" });
+}
+
+/**
+ * The inspector's report that the unit's furnishing is not as quoted
+ * (SNG-100). The quotation the job stands on becomes void, the office is
+ * emailed, and the job waits for a revised quotation before it can be
+ * approved. The inspector carries on: nothing here changes the job.
+ * Reported again, or matching the quotation, it changes nothing.
+ */
+async function applyFurnishingReport(
+  admin: Admin,
+  ctx: Ctx,
+  job: ReturnType<typeof writableJob>,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  // A visit has no quotation of its own to void; its job's was settled before it.
+  if (job.visit) return;
+  const found = payload.furnishing_found as boolean;
+  const note = typeof payload.furnishing_note === "string" ? payload.furnishing_note.slice(0, 500) : null;
+  const result = await voidForFurnishing(admin, { jobId: job.id, found, note, actorId: ctx.userId });
+  auditFrom(ctx, {
+    entityType: "task",
+    entityId: job.id,
+    taskId: job.id,
+    eventType: result.voided ? "quotation_voided" : "furnishing_reported",
+    justification: result.reason ?? note,
+    payload: { code: job.code, furnished_found: found, quotation: result.quotation?.quote_number ?? null },
+  });
+  if (result.voided && result.quotation) {
+    await emailQuotationVoid(admin, {
+      jobId: job.id,
+      quotationNumber: result.quotation.quote_number,
+      quotationCreatedBy: result.quotation.created_by,
+      reason: result.reason ?? "",
+      inspectorName: ctx.actorLabel,
+    });
+  }
 }
 
 function toNumber(value: unknown): number | null {

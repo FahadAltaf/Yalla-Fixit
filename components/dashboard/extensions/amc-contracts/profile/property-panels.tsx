@@ -44,6 +44,9 @@ import { formatContractDate } from "../contract-status";
 import { useAmcData } from "../use-amc-data";
 import { AssetHistoryDialog } from "./asset-history-dialog";
 import { useDialog } from "./use-dialog";
+import { formatPhone } from "@/lib/phone/format-phone";
+import { AmcPhoneInput } from "@/components/dashboard/extensions/amc/components/amc-phone-input";
+import { TruncatedText } from "@/components/ui/truncated-text";
 
 const nul = (v: string | null | undefined) => (v && v.trim() ? v.trim() : null);
 const CONDITION_TONE: Record<string, string> = {
@@ -142,7 +145,7 @@ export function AssetsPanel({ propertyId, canEdit }: { propertyId: string; canEd
               <TableRow className="hover:bg-transparent">
                 <TableHead className="pl-5">Asset</TableHead>
                 <TableHead>Trade</TableHead>
-                <TableHead className="text-right">Qty</TableHead>
+                <TableHead>Qty</TableHead>
                 <TableHead>Location</TableHead>
                 <TableHead>Make / model</TableHead>
                 <TableHead>Serial</TableHead>
@@ -164,7 +167,7 @@ export function AssetsPanel({ propertyId, canEdit }: { propertyId: string; canEd
                     ) : null}
                   </TableCell>
                   <TableCell>{TRADE_LABELS[a.trade as keyof typeof TRADE_LABELS] ?? a.trade}</TableCell>
-                  <TableCell className="text-right tabular-nums">{a.quantity}</TableCell>
+                  <TableCell className="tabular-nums">{a.quantity}</TableCell>
                   <TableCell>{a.location ?? "—"}</TableCell>
                   <TableCell>{[a.make, a.model].filter(Boolean).join(" ") || "—"}</TableCell>
                   <TableCell className="font-mono text-xs">{a.serialNo ?? "—"}</TableCell>
@@ -264,6 +267,8 @@ function AssetDialog({
   const [busy, setBusy] = useState(false);
   const text = (k: keyof AssetInput) => (e: { target: { value: string } }) => setV((x) => ({ ...x, [k]: e.target.value }));
   const suggestions = ASSET_TYPE_SUGGESTIONS[v.trade as keyof typeof ASSET_TYPE_SUGGESTIONS] ?? [];
+  /* A serial number is one machine: the quantity is 1 while one is entered (the server refuses anything else). */
+  const hasSerial = Boolean(v.serialNo?.trim());
 
   const save = () =>
     runSave(
@@ -317,7 +322,21 @@ function AssetDialog({
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="asset-qty">Quantity</Label>
-            <Input id="asset-qty" type="number" min={1} max={1000} value={v.quantity} onChange={(e) => setV((x) => ({ ...x, quantity: Math.max(1, Number(e.target.value) || 1) }))} />
+            <Input
+              id="asset-qty"
+              type="number"
+              min={1}
+              max={1000}
+              value={hasSerial ? 1 : v.quantity}
+              disabled={hasSerial}
+              aria-describedby={hasSerial ? "asset-qty-hint" : undefined}
+              onChange={(e) => setV((x) => ({ ...x, quantity: Math.max(1, Number(e.target.value) || 1) }))}
+            />
+            {hasSerial ? (
+              <p id="asset-qty-hint" className="text-muted-foreground text-xs">
+                One unit: a serial number belongs to one machine. Clear it to count identical units together.
+              </p>
+            ) : null}
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="asset-location">Location</Label>
@@ -333,7 +352,15 @@ function AssetDialog({
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="asset-serial">Serial number</Label>
-            <Input id="asset-serial" value={v.serialNo ?? ""} onChange={text("serialNo")} maxLength={80} />
+            <Input
+              id="asset-serial"
+              value={v.serialNo ?? ""}
+              maxLength={80}
+              onChange={(e) => {
+                const serialNo = e.target.value;
+                setV((x) => ({ ...x, serialNo, quantity: serialNo.trim() ? 1 : x.quantity }));
+              }}
+            />
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="asset-capacity">Capacity (optional)</Label>
@@ -497,7 +524,7 @@ export function AccessRulesPanel({ propertyId, canEdit }: { propertyId: string; 
                     r.issuer ? `Issued by ${r.issuer}` : null,
                     `${dayList(r.permittedDays)}${r.permittedFrom && r.permittedTo ? `, ${r.permittedFrom}–${r.permittedTo}` : ""}`,
                     r.parking ? `Parking: ${r.parking}` : null,
-                    r.contactName ? `Contact: ${r.contactName}${r.contactPhone ? ` (${r.contactPhone})` : ""}` : null,
+                    r.contactName ? `Contact: ${r.contactName}${r.contactPhone ? ` (${formatPhone(r.contactPhone)})` : ""}` : null,
                   ]
                     .filter(Boolean)
                     .join(" · ")}
@@ -646,7 +673,7 @@ function AccessRuleDialog({
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="rule-phone">Contact phone (optional)</Label>
-            <Input id="rule-phone" value={v.contactPhone ?? ""} onChange={text("contactPhone")} maxLength={40} />
+            <AmcPhoneInput id="rule-phone" value={v.contactPhone ?? ""} onChange={(contactPhone) => setV((x) => ({ ...x, contactPhone }))} />
           </div>
           <div className="grid gap-1.5 sm:col-span-2">
             <Label htmlFor="rule-notes">Notes (optional)</Label>
@@ -758,9 +785,9 @@ export function ScopePanel({ propertyId, canEdit }: { propertyId: string; canEdi
               <TableRow className="hover:bg-transparent">
                 <TableHead className="pl-5">Service</TableHead>
                 <TableHead>Trade</TableHead>
-                <TableHead className="text-right">Qty</TableHead>
-                <TableHead className="text-right">Visits / year</TableHead>
-                <TableHead className="text-right">Per visit</TableHead>
+                <TableHead>Qty</TableHead>
+                <TableHead>Visits / year</TableHead>
+                <TableHead>Per visit</TableHead>
                 <TableHead>Preferred</TableHead>
                 <TableHead>Exclusions</TableHead>
                 <TableHead className="w-12 pr-5" />
@@ -776,9 +803,9 @@ export function ScopePanel({ propertyId, canEdit }: { propertyId: string; canEdi
                       {asset ? <div className="text-muted-foreground text-xs">For {asset.assetType}{asset.location ? `, ${asset.location}` : ""}</div> : null}
                     </TableCell>
                     <TableCell>{TRADE_LABELS[i.trade as keyof typeof TRADE_LABELS] ?? i.trade}</TableCell>
-                    <TableCell className="text-right tabular-nums">{i.quantity}</TableCell>
-                    <TableCell className="text-right tabular-nums">{i.frequencyPerYear ?? "—"}</TableCell>
-                    <TableCell className="text-right tabular-nums">
+                    <TableCell className="tabular-nums">{i.quantity}</TableCell>
+                    <TableCell className="tabular-nums">{i.frequencyPerYear ?? "—"}</TableCell>
+                    <TableCell className="tabular-nums">
                       {i.durationMinutes
                         ? i.durationMinutes >= 60
                           ? `${Math.floor(i.durationMinutes / 60)} h${i.durationMinutes % 60 ? ` ${i.durationMinutes % 60} min` : ""}`
@@ -790,7 +817,7 @@ export function ScopePanel({ propertyId, canEdit }: { propertyId: string; canEdi
                         .filter(Boolean)
                         .join(" · ") || "—"}
                     </TableCell>
-                    <TableCell className="text-muted-foreground max-w-56 truncate text-sm">{i.exclusions ?? "—"}</TableCell>
+                    <TableCell className="text-muted-foreground max-w-56 text-sm"><TruncatedText>{i.exclusions ?? "—"}</TruncatedText></TableCell>
                     <TableCell className="pr-5">
                       {canEdit ? (
                         <RowMenu label={`Actions for ${label(i.serviceId)}`}>

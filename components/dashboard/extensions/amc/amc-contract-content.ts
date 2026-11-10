@@ -62,7 +62,17 @@ function plural(n: number, word: string) {
   Units are the multiplier in the price (base price x units x frequency), so
   they are stated too whenever there is more than one.
 */
-export function fillAmcTokens(text: string, serviceRows: TokenServiceRow[]): string {
+export function fillAmcTokens(
+  text: string,
+  serviceRows: TokenServiceRow[],
+  /*
+    Services the catalogue counts as unlimited. Non-emergency call-outs are
+    unlimited in the Scope of Works Library (Oct 2026) and were a counted
+    number of visits before; a sent proposal keeps its own catalogue, so it
+    keeps the wording it went out with.
+  */
+  unlimited: ReadonlySet<string> = new Set(),
+): string {
   const row = (id: string) =>
     serviceRows.find((item) => item.serviceId === id && item.included);
   const perUnit = (units: number) =>
@@ -82,7 +92,9 @@ export function fillAmcTokens(text: string, serviceRows: TokenServiceRow[]): str
     .replace(
       /\{\{nonEmergencyVisits\}\}/g,
       nonEmergency
-        ? `(${plural(nonEmergency.frequency, "free non-emergency visit")} per year${perUnit(nonEmergency.units)} ${nonEmergency.frequency === 1 ? "is" : "are"} included.)`
+        ? unlimited.has("non-emergency")
+          ? "(Unlimited non-emergency visits are included.)"
+          : `(${plural(nonEmergency.frequency, "free non-emergency visit")} per year${perUnit(nonEmergency.units)} ${nonEmergency.frequency === 1 ? "is" : "are"} included.)`
         : "",
     )
     /* FR4.1 — the two call-out lines of clause 1.1. Each is a whole line
@@ -97,7 +109,9 @@ export function fillAmcTokens(text: string, serviceRows: TokenServiceRow[]): str
     .replace(
       /\{\{nonEmergencyCallOuts\}\}/g,
       nonEmergency
-        ? `${plural(nonEmergency.frequency, "free non-emergency call-out")} per year${perUnit(nonEmergency.units)} (as per definition of non-emergency on Clause No {{clause:nonEmergencyCallOut}})`
+        ? unlimited.has("non-emergency")
+          ? "Unlimited non-emergency call-outs (as per definition of non-emergency on Clause No {{clause:nonEmergencyCallOut}})"
+          : `${plural(nonEmergency.frequency, "free non-emergency call-out")} per year${perUnit(nonEmergency.units)} (as per definition of non-emergency on Clause No {{clause:nonEmergencyCallOut}})`
         : "",
     )
     /* An emptied token can leave a double space behind. Newlines are left
@@ -123,6 +137,8 @@ export function buildClause1Operation(opts: {
   /* FR4.1 — clause 1.1 promises emergency and non-emergency call-outs. It
      may only promise the ones this proposal actually includes. */
   serviceRows: TokenServiceRow[];
+  /* Services the catalogue counts as unlimited (see fillAmcTokens). */
+  unlimited?: ReadonlySet<string>;
   /* FR6.2 — the standard text of 1.1, 1.2 and 1.3, from AMC Settings. */
   text: {
     helpdeskScheduling: string;
@@ -161,7 +177,7 @@ export function buildClause1Operation(opts: {
      nothing — and textBlocks then drops it, rather than leaving a gap. */
   const fill = (value: string) =>
     textBlocks(value)
-      .map((block) => fillAmcTokens(block, opts.serviceRows))
+      .map((block) => fillAmcTokens(block, opts.serviceRows, opts.unlimited))
       .filter(Boolean);
 
   return {

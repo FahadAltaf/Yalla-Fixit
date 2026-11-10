@@ -3,6 +3,7 @@ export { usersService } from "./users/services/users-service";
 export { rolesService } from "./roles/services/roles-service";
 export { todosService } from "./todos/services/todos-service";
 export { snaggingService } from "./snagging/services/snagging-service";
+export { complianceService } from "./compliance/services/compliance-service";
 
 // Export all models
 export { type User } from "@/types/types";

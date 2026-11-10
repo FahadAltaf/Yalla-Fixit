@@ -48,6 +48,7 @@ import {
   type Channel,
   type ConfirmationState,
 } from "./visit-status";
+import { formatPhone } from "@/lib/phone/format-phone";
 
 type Working = "whatsapp" | "email" | "attempt" | "access" | "upload" | "suggest" | "assign" | "pass" | null;
 
@@ -708,7 +709,7 @@ function AccessRuleItem({ rule: r }: { rule: VisitDetail["accessRules"][number] 
     `${dayList(r.permittedDays)}${hours}`,
     r.parking ? `Parking: ${r.parking}` : null,
   ].filter(Boolean);
-  const contact = [r.contactName, r.contactPhone].filter(Boolean).join(" · ");
+  const contact = [r.contactName, formatPhone(r.contactPhone)].filter(Boolean).join(" · ");
   return (
     <li className="grid gap-1 rounded-lg border px-3 py-2.5 text-sm">
       <span className="font-medium">{ACCESS_TYPE_LABELS[r.accessType as keyof typeof ACCESS_TYPE_LABELS] ?? r.accessType}</span>

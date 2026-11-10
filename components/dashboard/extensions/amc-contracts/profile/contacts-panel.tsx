@@ -21,6 +21,9 @@ import { clientProfileService, type ContactInput, type ContactRecord } from "@/m
 
 import { useAmcData } from "../use-amc-data";
 import { useDialog } from "./use-dialog";
+import { formatPhone, phoneHref } from "@/lib/phone/format-phone";
+import { AmcPhoneInput } from "@/components/dashboard/extensions/amc/components/amc-phone-input";
+import { TruncatedText } from "@/components/ui/truncated-text";
 
 /** A client's contacts (BRD 5.9): as many as needed, each with a role. Deactivated, never deleted. */
 export function ContactsPanel({ customerId, canEdit }: { customerId: string; canEdit: boolean }) {
@@ -87,20 +90,20 @@ export function ContactsPanel({ customerId, canEdit }: { customerId: string; can
                   </span>
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="truncate font-medium">{c.name}</span>
+                      <TruncatedText className="font-medium">{c.name}</TruncatedText>
                       <Badge variant="secondary" className={`border-0 font-medium ${c.role === "primary" ? "bg-brand-50 text-brand" : "bg-mist text-ink-soft"}`}>
                         {CONTACT_ROLE_LABELS[c.role as keyof typeof CONTACT_ROLE_LABELS] ?? c.role}
                       </Badge>
                       {!c.active ? <span className="text-muted-foreground text-xs">Inactive</span> : null}
                     </div>
-                    {c.position ? <div className="text-muted-foreground truncate text-xs">{c.position}</div> : null}
+                    {c.position ? <TruncatedText className="text-muted-foreground text-xs">{c.position}</TruncatedText> : null}
                   </div>
                 </div>
                 <div className="text-muted-foreground flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
                   {c.phone ? (
-                    <a href={`tel:${c.phone}`} className="hover:text-foreground inline-flex items-center gap-1.5">
+                    <a href={phoneHref(c.phone)} className="hover:text-foreground inline-flex items-center gap-1.5">
                       <Phone className="size-3.5" aria-hidden />
-                      {c.phone}
+                      {formatPhone(c.phone)}
                     </a>
                   ) : null}
                   {wa ? (
@@ -230,11 +233,11 @@ function ContactDialog({
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="ct-phone">Phone</Label>
-            <Input id="ct-phone" value={value.phone ?? ""} onChange={set("phone")} maxLength={40} placeholder="05x xxx xxxx" />
+            <AmcPhoneInput id="ct-phone" value={value.phone ?? ""} onChange={(phone) => setValue((v) => ({ ...v, phone }))} />
           </div>
           <div className="grid gap-1.5">
             <Label htmlFor="ct-wa">WhatsApp (if different)</Label>
-            <Input id="ct-wa" value={value.whatsapp ?? ""} onChange={set("whatsapp")} maxLength={40} />
+            <AmcPhoneInput id="ct-wa" value={value.whatsapp ?? ""} onChange={(whatsapp) => setValue((v) => ({ ...v, whatsapp }))} />
           </div>
           <div className="grid gap-1.5 sm:col-span-2">
             <Label htmlFor="ct-email">Email</Label>

@@ -1,13 +1,19 @@
 "use client";
 
+import Link from "next/link";
 import { AlarmClock, CalendarClock, Flag } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Hint } from "@/components/ui/hint";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ENQUIRY_STAGE, isAtOrAfter } from "@/lib/amc/enquiries";
 import { cn } from "@/lib/utils";
 import type { EnquiryRecord } from "@/modules/amc-contracts/enquiries-service";
+import { formatPhone, phoneHref } from "@/lib/phone/format-phone";
+import type { PropertyPlace } from "@/lib/server/amc/business";
+import { TruncateIfText } from "@/components/ui/truncated-text";
 
 /* Soft-tinted pills in theme tokens, as on Snagging: one tone per part of the pipeline. */
 const TONE = {
@@ -112,14 +118,131 @@ export function formatClock(at: number): string {
  * Label-and-value rows for a record being read, as on Snagging's job setup.
  * A missing value shows an em dash, so the shape of the record stays the same.
  */
-export function DetailList({ rows }: { rows: Array<{ label: string; value?: React.ReactNode }> }) {
+/**
+ * A section label with its actions as small icons right beside it (edit the
+ * record, open it elsewhere), as the Client and Property headings on the
+ * enquiry and site visit pages. Goes inside SubHeading.
+ */
+export function HeadingWithActions({ label, children }: { label: string; children?: React.ReactNode }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      {label}
+      <span className="inline-flex items-center gap-0.5 tracking-normal normal-case">{children}</span>
+    </span>
+  );
+}
+
+/** One of those icons; a tooltip names it, as the icon buttons on a client's addresses do. */
+export function HeadingIconButton({
+  label,
+  icon,
+  onClick,
+  href,
+}: {
+  label: string;
+  icon: React.ReactNode;
+  onClick?: () => void;
+  href?: string;
+}) {
+  return (
+    <Hint label={label}>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="text-muted-foreground hover:text-foreground size-6 [&_svg]:size-3.5"
+        aria-label={label}
+        onClick={onClick}
+        asChild={Boolean(href)}
+      >
+        {href ? <Link href={href}>{icon}</Link> : icon}
+      </Button>
+    </Hint>
+  );
+}
+
+const sqft = (value: number | null | undefined) => (value ? `${value.toLocaleString("en-US")} sq ft` : null);
+
+/**
+ * A property as the job's Setup tab lists it (unit, building, community,
+ * type, bedrooms, areas, floors, developer, external areas), with AMC's
+ * category after the type. Empty values keep their row and show a dash, as
+ * the job's do, so every property reads the same way.
+ */
+export function propertyRows({
+  unit,
+  place,
+  typeLabel,
+  category,
+}: {
+  /** The unit's name, usually a link to the property. */
+  unit: React.ReactNode;
+  place: PropertyPlace | null | undefined;
+  typeLabel: string | null;
+  category: string | null;
+}): Array<{ label: string; value?: React.ReactNode }> {
+  return [
+    { label: "Unit", value: unit },
+    { label: "Building", value: place?.buildingName },
+    { label: "Community", value: place?.community },
+    { label: "Type", value: typeLabel },
+    { label: "Category", value: category },
+    { label: "Bedrooms", value: place?.bedrooms == null ? null : place.bedrooms === 0 ? "Studio" : String(place.bedrooms) },
+    { label: "Built-up area", value: sqft(place?.builtUpSqft) },
+    { label: "Plot area", value: sqft(place?.plotSqft) },
+    { label: "Floors", value: place?.floors ? String(place.floors) : null },
+    { label: "Developer", value: place?.developer },
+    { label: "External areas", value: place ? (place.externalAreasInScope ? "In scope" : "Not in scope") : null },
+  ];
+}
+
+/**
+ * A client as the job's Setup tab lists them: name, then how to reach
+ * them. The phone reads as the international phone input shows it.
+ */
+export function clientRows({
+  name,
+  customerRef,
+  email,
+  phone,
+  linkClassName,
+}: {
+  name: React.ReactNode;
+  customerRef?: string | null;
+  email: string | null | undefined;
+  phone: string | null | undefined;
+  linkClassName: string;
+}): Array<{ label: string; value?: React.ReactNode }> {
+  return [
+    { label: "Name", value: name },
+    { label: "Customer ID", value: customerRef },
+    {
+      label: "Email",
+      value: email ? (
+        <a href={`mailto:${email}`} className={linkClassName}>
+          {email}
+        </a>
+      ) : null,
+    },
+    {
+      label: "Phone",
+      value: phone ? (
+        <a href={phoneHref(phone)} className={linkClassName}>
+          {formatPhone(phone)}
+        </a>
+      ) : null,
+    },
+  ];
+}
+
+/** Label and value rows; give a row a `key` when two can share a label (two people of the same name). */
+export function DetailList({ rows }: { rows: Array<{ key?: string; label: string; value?: React.ReactNode }> }) {
   return (
     <dl className="divide-y">
       {rows.map((row) => (
-        <div key={row.label} className="flex items-baseline justify-between gap-4 py-2">
+        <div key={row.key ?? row.label} className="flex items-baseline justify-between gap-4 py-1.5">
           <dt className="text-muted-foreground shrink-0 text-sm">{row.label}</dt>
-          <dd className="min-w-0 text-right text-sm font-medium">
-            {row.value === null || row.value === undefined || row.value === "" ? <span className="text-muted-foreground font-normal">—</span> : row.value}
+          <dd className="min-w-0 truncate text-right text-sm font-medium">
+            {row.value === null || row.value === undefined || row.value === "" ? <span className="text-muted-foreground font-normal">—</span> : <TruncateIfText>{row.value}</TruncateIfText>}
           </dd>
         </div>
       ))}

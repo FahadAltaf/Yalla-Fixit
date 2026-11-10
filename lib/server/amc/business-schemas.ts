@@ -18,6 +18,8 @@ export const customerSchema = z
     notes: optionalText(2000),
     /* Phase 2 (BRD 5.9): identity and preferences. */
     ...customerProfileFields,
+    /* Maher_Id__C, which Zoho FSM requires of a new client (stored on the shared Snagging client). */
+    maherId: optionalText(60),
   })
   .strict();
 

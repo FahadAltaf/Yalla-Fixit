@@ -24,8 +24,9 @@ import {
   type FsmWorkOrderForAmc,
 } from "@/modules/amc-contracts/amc-contracts-service";
 
-import { AmcNotificationsBell } from "./amc-notifications-bell";
 import { ConfigTableToolbar, LocalDataTable } from "./config-table";
+import { TruncatedText } from "@/components/ui/truncated-text";
+import { ModuleGuide } from "@/components/dashboard/extensions/amc-contracts/module-guide";
 
 type Service = FsmServiceMappingOverview["services"][number];
 
@@ -90,8 +91,8 @@ export function FsmServiceMapping() {
       header: "AMC service",
       cell: ({ row }) => (
         <div className="flex min-w-0 flex-col">
-          <span className="truncate font-medium">{row.original.label}</span>
-          <span className="text-muted-foreground truncate text-xs">{row.original.amcServiceId}</span>
+          <TruncatedText className="font-medium">{row.original.label}</TruncatedText>
+          <TruncatedText className="text-muted-foreground text-xs">{row.original.amcServiceId}</TruncatedText>
         </div>
       ),
     },
@@ -101,8 +102,8 @@ export function FsmServiceMapping() {
       cell: ({ row }) =>
         row.original.fsmServiceId ? (
           <div className="flex min-w-0 flex-col">
-            <span className="truncate text-sm">{row.original.fsmServiceName ?? "—"}</span>
-            <span className="text-muted-foreground truncate text-xs tabular-nums">{row.original.fsmServiceId}</span>
+            <TruncatedText className="text-sm">{row.original.fsmServiceName ?? "—"}</TruncatedText>
+            <TruncatedText className="text-muted-foreground text-xs tabular-nums">{row.original.fsmServiceId}</TruncatedText>
           </div>
         ) : (
           <span className="text-muted-foreground text-sm">Not mapped</span>
@@ -148,8 +149,8 @@ export function FsmServiceMapping() {
       <PageHeading
         eyebrow="Configuration"
         title="FSM service mapping"
+        info={<ModuleGuide module="fsmMapping" />}
         description="Which Zoho FSM service each AMC service corresponds to. FSM work is matched to a contract's services through this."
-        actions={<AmcNotificationsBell />}
       />
       {data && !data.migrated ? (
         <Alert className="border-warning/30 bg-warning/5">

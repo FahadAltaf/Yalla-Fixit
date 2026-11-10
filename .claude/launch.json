@@ -4,14 +4,38 @@
     {
       "name": "portal",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
       "port": 3032
     },
     {
       "name": "yfi-web",
       "runtimeExecutable": "cmd",
-      "runtimeArgs": ["/c", "cd /d ..\\yfi-mobile-app\\YFI-MobileApp && node scripts/dev-web.mjs --port 8081"],
+      "runtimeArgs": [
+        "/c",
+        "cd /d ..\\yfi-mobile-app\\YFI-MobileApp && node scripts/dev-web.mjs --port 8081"
+      ],
       "port": 8081
+    },
+    {
+      "name": "finance-reporting",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "cd /d ..\\_wt\\finance-reporting && set NEXT_DIST_DIR=.next-p6dev&& npm run dev -- -p 3034"
+      ],
+      "port": 3034
+    },
+    {
+      "name": "portal-amc",
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": [
+        "/c",
+        "set NEXT_DIST_DIR=.next-amcdev&& npm run dev -- -p 3035"
+      ],
+      "port": 3035
     }
   ]
 }

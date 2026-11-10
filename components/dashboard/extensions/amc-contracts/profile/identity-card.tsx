@@ -4,7 +4,7 @@ import { useState } from "react";
 import { BadgeCheck, IdCard, Link2, Megaphone, Pencil } from "lucide-react";
 import { toast } from "sonner";
 
-import { SectionCard } from "@/components/dashboard/shared/kaizen";
+import { SectionCard, SubHeading } from "@/components/dashboard/shared/kaizen";
 import { ActionDialogContent, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -36,7 +36,7 @@ export function IdentityCard({ customer, canEdit, onChanged }: { customer: Custo
   const licenceState = documentExpiryState(customer.tradeLicenseExpiry, todayInDubai(), 60);
   const company = customer.customerType !== "individual";
 
-  const left = [
+  const identity = [
     {
       label: "Status",
       value: (
@@ -47,6 +47,9 @@ export function IdentityCard({ customer, canEdit, onChanged }: { customer: Custo
       hint: customer.becameClientAt ? `Client since ${formatContractDate(customer.becameClientAt.slice(0, 10))}` : null,
     },
     { label: "Type", value: customer.customerType === "company" ? "Company" : customer.customerType === "individual" ? "Individual" : null },
+  ];
+  /* How to reach them and how FSM knows them; beside Identity so the two lists come out near the same length. */
+  const preferences = [
     { label: "Preferred channel", value: customer.preferredChannel ? CHANNEL_LABELS[customer.preferredChannel] : null },
     { label: "Preferred language", value: customer.preferredLanguage },
     {
@@ -64,7 +67,7 @@ export function IdentityCard({ customer, canEdit, onChanged }: { customer: Custo
       hint: customer.fsmContactId ? null : "Links FSM work orders to this client",
     },
   ];
-  const right = company
+  const companyRows = company
     ? [
         {
           label: "Trade licence",
@@ -86,9 +89,16 @@ export function IdentityCard({ customer, canEdit, onChanged }: { customer: Custo
 
   return (
     <SectionCard icon={<IdCard />} title="Identity and preferences" bodyClassName="px-5 pb-5">
-      <div className="grid gap-x-8 sm:grid-cols-2">
-        <DetailList rows={left} />
-        {right.length ? <DetailList rows={right} /> : null}
+      {/* Headed lists side by side, as the enquiry and job pages lay theirs out. */}
+      <div className="grid gap-x-8 gap-y-6 sm:grid-cols-2">
+        <div className="min-w-0 space-y-3">
+          <SubHeading>Identity</SubHeading>
+          <DetailList rows={[...identity, ...companyRows]} />
+        </div>
+        <div className="min-w-0 space-y-3">
+          <SubHeading>Preferences</SubHeading>
+          <DetailList rows={preferences} />
+        </div>
       </div>
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-md border px-4 py-3">
         <div className="flex items-start gap-3">

@@ -1,0 +1,63 @@
+import { executeRESTBackend } from "@/lib/rest-server";
+import type { ReportingSettings, ReportingSettingsOverrides } from "@/lib/reporting/settings";
+import type { InAppNotification } from "@/lib/server/notifications/inbox";
+import type { ReportingSettingsHistoryEntry } from "@/lib/server/reporting/audit";
+import type { FsmResourceStatus } from "@/lib/server/finance/fsm-sync/status";
+import type { PickableUser } from "@/lib/server/people/pickable-users";
+
+export type ReportingSettingsResponse = {
+  settings: ReportingSettings;
+  defaults: ReportingSettings;
+  overrides: ReportingSettingsOverrides;
+  history: ReportingSettingsHistoryEntry[];
+  users: PickableUser[];
+  canEdit: boolean;
+};
+
+export type PublicHoliday = { id: string; date: string; name: string };
+
+export const reportingService = {
+  getSettings: () => executeRESTBackend<ReportingSettingsResponse>("/api/reporting-settings"),
+
+  saveSettings: (overrides: ReportingSettingsOverrides) =>
+    executeRESTBackend<{
+      settings: ReportingSettings;
+      overrides: ReportingSettingsOverrides;
+      changedKeys: string[];
+      history: ReportingSettingsHistoryEntry[];
+    }>("/api/reporting-settings", { method: "PUT", body: overrides as Record<string, unknown> }),
+
+  fsmStatus: () =>
+    executeRESTBackend<{ resources: FsmResourceStatus[] }>("/api/finance/fsm-sync/status"),
+
+  listHolidays: () => executeRESTBackend<{ holidays: PublicHoliday[] }>("/api/reporting-settings/holidays"),
+
+  saveHoliday: (input: { date: string; name: string }) =>
+    executeRESTBackend<{ holidays: PublicHoliday[] }>("/api/reporting-settings/holidays", { method: "POST", body: input }),
+
+  removeHoliday: (id: string) =>
+    executeRESTBackend<{ holidays: PublicHoliday[] }>("/api/reporting-settings/holidays", {
+      method: "DELETE",
+      params: { id },
+    }),
+};
+
+export const notificationsService = {
+  list: (options: { limit: number; offset?: number; unread?: boolean }) =>
+    executeRESTBackend<{ notifications: InAppNotification[]; unread: number }>("/api/notifications", {
+      params: {
+        limit: options.limit,
+        offset: options.offset ?? 0,
+        ...(options.unread ? { unread: "1" } : {}),
+      },
+    }),
+
+  /* The sidebar's unread count listens for this (30 Oct), so it drops as soon as one is opened. */
+  markRead: async (which: { all: true } | { ids: string[] }) => {
+    const result = await executeRESTBackend<{ ok: true }>("/api/notifications", { method: "POST", body: which });
+    if (typeof window !== "undefined") window.dispatchEvent(new Event(NOTIFICATIONS_CHANGED));
+    return result;
+  },
+};
+
+export const NOTIFICATIONS_CHANGED = "notifications:changed";

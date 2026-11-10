@@ -19,12 +19,14 @@ import { IdentityCell } from "@/components/ui/entity-avatar";
 import { useDebounce } from "@/hooks/use-debounce";
 import { enquiriesService, type EnquiryListParams, type EnquiryRecord } from "@/modules/amc-contracts/enquiries-service";
 
-import { AmcNotificationsBell } from "../amc-notifications-bell";
 import { formatContractDate, formatDateTime } from "../contract-status";
 import { ExportMenu } from "../export-menu";
 import { useAmcData } from "../use-amc-data";
 import { EnquiryFlags, StageBadge } from "./enquiry-ui";
 import { FilterPopover, ListToolbar } from "./list-toolbar";
+import { formatPhone } from "@/lib/phone/format-phone";
+import { TruncatedText } from "@/components/ui/truncated-text";
+import { ModuleGuide } from "@/components/dashboard/extensions/amc-contracts/module-guide";
 
 type View = "open" | "mine" | "follow_ups" | "idle" | "all";
 
@@ -132,8 +134,8 @@ export function EnquiriesPage() {
           const e = row.original;
           return (
             <div className="flex min-w-0 flex-col">
-              <span className="truncate text-sm">{e.contactName}</span>
-              <span className="text-muted-foreground truncate text-xs">{e.contactPhone ?? e.contactWhatsapp ?? e.contactEmail ?? "No contact details"}</span>
+              <TruncatedText className="text-sm">{e.contactName}</TruncatedText>
+              <TruncatedText className="text-muted-foreground text-xs">{formatPhone(e.contactPhone ?? e.contactWhatsapp) || e.contactEmail || "No contact details"}</TruncatedText>
             </div>
           );
         },
@@ -142,7 +144,7 @@ export function EnquiriesPage() {
         id: "need",
         header: "Need",
         enableSorting: false,
-        cell: ({ row }) => <span className="line-clamp-2 max-w-[260px] text-sm whitespace-normal">{row.original.need}</span>,
+        cell: ({ row }) => <TruncatedText text={row.original.need} className="max-w-[260px] text-sm" />,
       },
       {
         id: "source",
@@ -206,10 +208,10 @@ export function EnquiriesPage() {
       <PageHeading
         eyebrow="Sales"
         title="Enquiries"
+        info={<ModuleGuide module="enquiries" />}
         description="Every AMC enquiry from first contact to won or lost: who owns it, what was said, when to follow up."
         actions={
           <>
-            <AmcNotificationsBell />
             {m?.canCreate ? (
               <Button asChild>
                 <Link href="/extensions/amc-contracts/enquiries/new">
@@ -313,7 +315,7 @@ export function EnquiriesPage() {
                           date: formatContractDate(e.enquiredAt),
                           client: e.customer.name,
                           contact: e.contactName,
-                          phone: e.contactPhone ?? e.contactWhatsapp ?? "",
+                          phone: formatPhone(e.contactPhone ?? e.contactWhatsapp),
                           source: e.source,
                           need: e.need,
                           owner: e.owner?.name ?? "",

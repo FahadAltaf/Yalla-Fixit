@@ -165,7 +165,7 @@ export function ProposalVersionsPanel({ submission }: { submission: AmcSubmissio
                 <TableRow>
                   <TableHead className="pl-5">Service</TableHead>
                   {columns.map((c) => (
-                    <TableHead key={c.key} className="text-right last:pr-5">
+                    <TableHead key={c.key} className="last:pr-5">
                       {c.label}
                     </TableHead>
                   ))}
@@ -178,7 +178,7 @@ export function ProposalVersionsPanel({ submission }: { submission: AmcSubmissio
                     {columns.map((c) => {
                       const line = c.lines.find((l) => l.serviceId === id && l.included);
                       return (
-                        <TableCell key={c.key} className="text-right text-sm tabular-nums last:pr-5">
+                        <TableCell key={c.key} className="text-sm tabular-nums last:pr-5">
                           {line ? (
                             <>
                               {formatCurrencyAED(line.price)}
@@ -199,7 +199,7 @@ export function ProposalVersionsPanel({ submission }: { submission: AmcSubmissio
                 <TableRow>
                   <TableCell className="pl-5 text-sm">Discount</TableCell>
                   {columns.map((c) => (
-                    <TableCell key={c.key} className="text-right text-sm tabular-nums last:pr-5">
+                    <TableCell key={c.key} className="text-sm tabular-nums last:pr-5">
                       {c.discount}%
                     </TableCell>
                   ))}
@@ -207,7 +207,7 @@ export function ProposalVersionsPanel({ submission }: { submission: AmcSubmissio
                 <TableRow>
                   <TableCell className="pl-5 text-sm font-medium">Final price</TableCell>
                   {columns.map((c) => (
-                    <TableCell key={c.key} className="text-right text-sm font-medium tabular-nums last:pr-5">
+                    <TableCell key={c.key} className="text-sm font-medium tabular-nums last:pr-5">
                       {formatCurrencyAED(c.finalPrice)}
                     </TableCell>
                   ))}
@@ -215,7 +215,7 @@ export function ProposalVersionsPanel({ submission }: { submission: AmcSubmissio
                 <TableRow>
                   <TableCell className="pl-5 text-sm">Payment plan</TableCell>
                   {columns.map((c) => (
-                    <TableCell key={c.key} className="text-right text-sm last:pr-5">
+                    <TableCell key={c.key} className="text-sm last:pr-5">
                       {c.plan ? PAYMENT_PLAN_LABELS[c.plan as PaymentPlan] ?? c.plan : "—"}
                     </TableCell>
                   ))}

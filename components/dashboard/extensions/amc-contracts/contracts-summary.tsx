@@ -100,6 +100,7 @@ export function ContractsSummary({ refreshKey }: { refreshKey: number }) {
             {data.recentUsage.map((u) => (
               <DataRow
                 key={u.id}
+                className="px-0"
                 title={
                   <Link href={`${BASE}/${u.contractId}`} className="hover:underline">
                     {u.customerName || u.proposalNumber}

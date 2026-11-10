@@ -40,29 +40,31 @@ export function ClientEnquiriesCard({ customerId }: { customerId: string }) {
           </Button>
         ) : undefined
       }
-      bodyClassName={list.enquiries.length === 0 ? "border-t" : "px-5 pb-5"}
+      bodyClassName="border-t"
     >
       {list.enquiries.length === 0 ? (
         <EmptyState icon={<Inbox className="size-5" />} title="No enquiries" description="Enquiries logged for this client appear here." />
       ) : (
-        list.enquiries.map((e) => (
-          <DataRow
-            key={e.id}
-            icon={<Inbox />}
-            title={
-              <Link href={`/extensions/amc-contracts/enquiries/${e.id}`} className="hover:underline">
-                {e.enquiryNumber} · {e.need}
-              </Link>
-            }
-            subtitle={[formatContractDate(e.enquiredAt), e.source, e.owner?.name].filter(Boolean).join(" · ")}
-            trailing={
-              <div className="flex flex-col items-end gap-1">
-                <StageBadge stage={e.stage} stages={meta.stages} />
-                <EnquiryFlags enquiry={e} compact />
-              </div>
-            }
-          />
-        ))
+        <div className="divide-y">
+          {list.enquiries.map((e) => (
+            <DataRow
+              key={e.id}
+              icon={<Inbox />}
+              title={
+                <Link href={`/extensions/amc-contracts/enquiries/${e.id}`} className="hover:underline">
+                  {e.enquiryNumber} · {e.need}
+                </Link>
+              }
+              subtitle={[formatContractDate(e.enquiredAt), e.source, e.owner?.name].filter(Boolean).join(" · ")}
+              trailing={
+                <div className="flex flex-col items-end gap-1">
+                  <StageBadge stage={e.stage} stages={meta.stages} />
+                  <EnquiryFlags enquiry={e} compact />
+                </div>
+              }
+            />
+          ))}
+        </div>
       )}
     </SectionCard>
   );

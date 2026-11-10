@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import type { SnaggingTaskStatus } from "@/types/types";
+import { isAdminUser } from "@/lib/role-permissions";
+import type { SnaggingTaskStatus, User } from "@/types/types";
 
 /**
  * Shared query helpers for the Snagging Overview sections.
@@ -71,9 +72,9 @@ export async function countJobs(
   ─────────────────────────── whose records ───────────────────────────
 
   FR-10.01: the Overview shows each user what THEY need to act on, from
-  the records they created or were assigned. Analytics (FR-10.02+) stays
-  everything-for-everyone; that difference is the point of having two
-  screens rather than one with a filter on it.
+  the records they created or were assigned. Since the UAT of Oct 2026
+  Analytics follows the same rule, and an admin sees the whole
+  organisation on both (readerScope).
 
   "Assigned" is read as any role the job puts a name in, not the
   inspector alone. Scoping to inspector_id only would mean a reviewer or
@@ -87,8 +88,18 @@ const JOB_ROLES = [
   "approval_manager_id",
 ] as const;
 
-/** Narrows a snagging_jobs query to the ones this user has a hand in. */
-export function myJobs<T>(query: T, userId: string): T {
+/**
+ * Whose records the reader's Overview and Analytics count (UAT, Oct 2026):
+ * an admin sees the whole organisation's, so null; anyone else sees only
+ * their own, so their id. Pass the result to myJobs / myQuotations.
+ */
+export function readerScope(accessUser: User | null | undefined, userId: string): string | null {
+  return isAdminUser(accessUser) ? null : userId;
+}
+
+/** Narrows a snagging_jobs query to the ones this user has a hand in; null leaves it whole. */
+export function myJobs<T>(query: T, userId: string | null): T {
+  if (!userId) return query;
   return (query as any).or(
     JOB_ROLES.map((column) => `${column}.eq.${userId}`).join(","),
   ) as T;
@@ -100,7 +111,8 @@ export function myJobs<T>(query: T, userId: string): T {
  * A quotation carries only its author — there is nobody to assign one
  * to — so "worked on" can only mean raised it.
  */
-export function myQuotations<T>(query: T, userId: string): T {
+export function myQuotations<T>(query: T, userId: string | null): T {
+  if (!userId) return query;
   return (query as any).eq("created_by", userId) as T;
 }
 
@@ -108,10 +120,18 @@ export function myQuotations<T>(query: T, userId: string): T {
 export async function countSnags(
   admin: Admin,
   refine: Refine<any> = (query) => query,
+  /* readerScope: only snags on jobs this user has a hand in; null counts all. */
+  userId: string | null = null,
 ): Promise<number> {
-  const { count, error } = await refine(
-    admin.from("snagging_snags").select("id", { count: "exact", head: true }),
-  );
+  const base = userId
+    ? admin
+        .from("snagging_snags")
+        .select("id, job:job_id!inner(id)", { count: "exact", head: true })
+        .or(JOB_ROLES.map((column) => `${column}.eq.${userId}`).join(","), {
+          referencedTable: "job",
+        })
+    : admin.from("snagging_snags").select("id", { count: "exact", head: true });
+  const { count, error } = await refine(base);
   if (error) throw new Error(error.message);
   return count ?? 0;
 }

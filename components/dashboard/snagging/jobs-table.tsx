@@ -18,6 +18,7 @@ import { snaggingService, type SnaggingTaskFilters } from "@/modules/snagging";
 import { ActionType, ResourceType, type SnaggingTaskSummary } from "@/types/types";
 
 import { SnaggingApprovalNotice } from "./approval-notice";
+import { NotAsQuotedNotice } from "./not-as-quoted-notice";
 import { ErrorState, PageHeading } from "./shared";
 import {
   JOB_FILTERS,
@@ -54,6 +55,9 @@ export default function JobsTable({
   const router = useRouter();
   const params = useSearchParams();
   const { userProfile } = useAuth();
+  // Jobs whose quotation is void, from the alert above the table; their rows are tagged.
+  const [notAsQuoted, setNotAsQuoted] = useState<Set<string>>(() => new Set());
+  const columns = useMemo(() => getSnaggingJobColumns({ notAsQuoted }), [notAsQuoted]);
 
   const initialFilter = (params.get("status") as FilterValue) ?? "all";
   /*
@@ -194,6 +198,12 @@ export default function JobsTable({
       */}
       <SnaggingApprovalNotice />
 
+      {/*
+        SNG-100: jobs held up because the property is not as quoted, in the
+        words the job page uses. Nothing renders when there are none.
+      */}
+      <NotAsQuotedNotice onLoaded={setNotAsQuoted} />
+
       {error ? (
         <ErrorState
           title="Could not load jobs"
@@ -223,7 +233,7 @@ export default function JobsTable({
               onCreate={() => router.push("/snagging/quotations/new")}
             />
           }
-          columns={getSnaggingJobColumns()}
+          columns={columns}
           onGlobalFilterChange={handleGlobalFilterChange}
           onSortingChange={handleSortingChange}
           onPageChange={handlePageChange}

@@ -75,6 +75,21 @@ export function SubmissionStatusBanner({
     );
   }
 
+  // Every other state is the one line the page header carries (EditingStatus).
+  return null;
+}
+
+/**
+ * "Editing AMC-2026-6912 · Draft": which proposal is open and where it
+ * stands. In the page header, where the All proposals button used to be.
+ */
+export function EditingStatus({
+  status,
+  proposalNumber,
+}: {
+  status: AmcSubmissionStatus;
+  proposalNumber?: string;
+}) {
   return (
     <div className="text-muted-foreground flex flex-wrap items-center gap-2 text-sm">
       <FileText className="size-4" />

@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { todayInDubai } from "@/lib/amc/contracts";
 import { applyRateCard, diffRateCards, emptyRateCard, parseRateCard, versionInForce, type RateCard } from "@/lib/amc/rate-card";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
+import { isCustomServiceRow } from "@/components/dashboard/extensions/amc/amc-types";
 import { ContractError, isMissingTable } from "@/lib/server/amc/contracts";
 
 /**
@@ -147,7 +148,10 @@ export async function submissionRateProblem(admin: Admin, submissionId: string):
   if (error || !data?.rate_card_version_id) return null;
   const version = await getRateCardVersion(admin, String(data.rate_card_version_id));
   if (!version?.valid) return null;
-  const rows = (Array.isArray(data.services) ? data.services : []) as Parameters<typeof applyRateCard>[0];
+  /* A service added to the proposal alone (DEV-260) is not on the card; it keeps its typed price. */
+  const rows = ((Array.isArray(data.services) ? data.services : []) as Parameters<typeof applyRateCard>[0]).filter(
+    (row) => !isCustomServiceRow(row),
+  );
   const model = String((data.property as Row | null)?.unitType ?? "");
   const { problems } = applyRateCard(rows, version.card, model, todayInDubai(), Number(data.discount_percent ?? 0));
   return problems.length ? `${problems.join(" ")} Correct the lines, or ask for the rate card to be updated.` : null;

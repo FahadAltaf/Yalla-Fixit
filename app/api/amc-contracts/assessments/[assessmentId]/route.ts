@@ -4,6 +4,7 @@ import { canReadAssessment } from "@/lib/amc/access";
 import { contractErrorResponse, requireContractAccess } from "@/lib/server/amc/contract-access";
 import { deleteDraftAssessment, getAssessment, updateAssessment } from "@/lib/server/amc/business";
 import { UUID, updateAssessmentSchema } from "@/lib/server/amc/business-schemas";
+import { listAmcPeople } from "@/lib/server/amc/enquiries";
 
 /** One assessment: read, edit while a draft, delete a draft. Completed assessments are history. */
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ assessmentId: string }> }) {
@@ -14,12 +15,12 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ assessment
   try {
     const assessment = await getAssessment(gate.admin, assessmentId);
     if (!canReadAssessment(gate.actor, assessment.createdBy, assessment.assessorId)) return NextResponse.json({ error: "Assessment not found." }, { status: 404 });
-    return NextResponse.json({
-      assessment,
-      canEdit:
-        assessment.status === "draft" &&
-        (gate.canApprove || gate.actor.ops.edit || assessment.createdBy === gate.userId || assessment.assessorId === gate.userId),
-    });
+    const canEdit =
+      assessment.status === "draft" &&
+      (gate.canApprove || gate.actor.ops.edit || assessment.createdBy === gate.userId || assessment.assessorId === gate.userId);
+    /* Who can be sent on it, for the Assessor list (the same people as Book site visit), only to someone who can change it. */
+    const people = canEdit ? await listAmcPeople(gate.admin) : [];
+    return NextResponse.json({ assessment, canEdit, people });
   } catch (error) {
     return contractErrorResponse(error, "Could not load the assessment");
   }

@@ -169,7 +169,9 @@ export const SECTION_DEFS: SectionDef[] = [
           { value: "email", label: "Email" },
         ],
       },
-      { key: "noShowsConsumeVisit", label: "No-shows in a row that count as a used visit", kind: "number", min: 1, max: 10 },
+      /* "No-shows in a row that count as a used visit" is hidden (6 Nov): the
+         rule only compares a visit with the try before it, so it stays at
+         the default 2 (lib/amc/config.ts); any other number did nothing. */
       { key: "durationPerServiceMinutes", label: "Standard duration per service", kind: "number", unit: "minutes", min: 5, max: 1440 },
       { key: "durationPerExtraUnitMinutes", label: "Extra time per additional AC unit", kind: "number", unit: "minutes", min: 0, max: 600 },
       { key: "accessAlertDaysBefore", label: "Alert when access is not ready this close to a visit", kind: "number", unit: "days", min: 0, max: 60 },
@@ -261,3 +263,12 @@ export const CONFIG_VIEWS = [
 ] as const;
 
 export type ConfigView = (typeof CONFIG_VIEWS)[number]["value"];
+
+/*
+ * Hidden from the screen (6 Nov, at the user's request): "Allowances and
+ * renewals" and "Roles and jobs". Their rules still run on the values saved
+ * (or the defaults); the sections are simply not shown. Take a view out of
+ * this set to show it again.
+ */
+export const HIDDEN_CONFIG_VIEWS: ReadonlySet<ConfigView> = new Set<ConfigView>(["delivery", "roles"]);
+export const VISIBLE_CONFIG_VIEWS = CONFIG_VIEWS.filter((v) => !HIDDEN_CONFIG_VIEWS.has(v.value));

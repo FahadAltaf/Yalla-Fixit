@@ -20,7 +20,6 @@ import { RENEWAL_OUTCOME_LABELS, type RenewalStage } from "@/lib/amc/renewal-out
 import type { ExportColumn, ExportRow } from "@/lib/snagging/export-table";
 import { proposalEditHref, proposalHref, renewalsService, type RenewalDueRow } from "@/modules/amc-contracts/renewals-service";
 
-import { AmcNotificationsBell } from "./amc-notifications-bell";
 import { ListToolbar } from "./call-out-shared";
 import { formatContractDate } from "./contract-status";
 import { ExportMenu } from "./export-menu";
@@ -34,6 +33,8 @@ import {
   daysLeftLabel,
 } from "./renewal-shared";
 import { useAmcData } from "./use-amc-data";
+import { TruncatedText } from "@/components/ui/truncated-text";
+import { ModuleGuide } from "@/components/dashboard/extensions/amc-contracts/module-guide";
 
 type StageFilter = "all" | Exclude<RenewalStage, "not_due">;
 
@@ -153,9 +154,9 @@ export function RenewalsPage() {
               >
                 {row.original.number || "Contract"}
               </Link>
-              <span className="text-muted-foreground truncate text-xs">
+              <TruncatedText className="text-muted-foreground text-xs">
                 {[row.original.customerName, row.original.propertyLabel].filter(Boolean).join(" · ") || "—"}
-              </span>
+              </TruncatedText>
             </div>
           </div>
         ),
@@ -211,9 +212,7 @@ export function RenewalsPage() {
           <span className="flex max-w-[200px] flex-col items-start gap-1">
             <RenewalOutcomeBadge outcome={row.original.outcome} />
             {row.original.outcomeReason ? (
-              <span className="text-muted-foreground line-clamp-1 text-xs" title={row.original.outcomeReason}>
-                {row.original.outcomeReason}
-              </span>
+              <TruncatedText text={row.original.outcomeReason} className="text-muted-foreground max-w-[220px] text-xs" />
             ) : null}
           </span>
         ),
@@ -223,7 +222,7 @@ export function RenewalsPage() {
         header: "Account managers",
         cell: ({ row }) =>
           row.original.accountManagers.length ? (
-            <span className="line-clamp-2 max-w-[200px] text-sm">{row.original.accountManagers.join(", ")}</span>
+            <TruncatedText text={row.original.accountManagers.join(", ")} className="max-w-[200px] text-sm" />
           ) : (
             <span className="text-muted-foreground text-sm">—</span>
           ),
@@ -297,10 +296,10 @@ export function RenewalsPage() {
       <PageHeading
         eyebrow="Contracts"
         title="Renewals"
+        info={<ModuleGuide module="renewals" />}
         description={`Contracts inside the ${leadDays ?? "configured"}-day renewal window, idle renewals, and ones that ended without a renewal.`}
         actions={
           <>
-            <AmcNotificationsBell />
             <ExportMenu name="renewals" columns={EXPORT_COLUMNS} rows={matching.map(exportRow)} />
           </>
         }

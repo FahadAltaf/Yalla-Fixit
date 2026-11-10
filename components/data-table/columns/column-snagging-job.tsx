@@ -6,10 +6,11 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Clock, UserRound } from "lucide-react";
+import { AlertTriangle, Clock, UserRound } from "lucide-react";
 
 import { IconText } from "@/components/data-table/columns/icon-text";
 import { IdentityCell } from "@/components/ui/entity-avatar";
+import { TruncatedText } from "@/components/ui/truncated-text";
 import { Hint } from "@/components/ui/hint";
 import {
   SeverityCounts,
@@ -30,7 +31,12 @@ import type { SnaggingTaskSummary } from "@/types/types";
  * is resolved on the server; a column the API cannot order by leaves
  * `enableSorting` off rather than silently doing nothing.
  */
-export function getSnaggingJobColumns(): ColumnDef<SnaggingTaskSummary>[] {
+export function getSnaggingJobColumns(
+  options: {
+    /* Jobs whose quotation is void (property not as quoted, SNG-100); their rows are tagged. */
+    notAsQuoted?: ReadonlySet<string>;
+  } = {},
+): ColumnDef<SnaggingTaskSummary>[] {
   return [
     /*
       No Code column.
@@ -60,6 +66,12 @@ export function getSnaggingJobColumns(): ColumnDef<SnaggingTaskSummary>[] {
               subtitle={place || "No property recorded"}
               icon={UserRound}
             />
+            {options.notAsQuoted?.has(task.id) ? (
+              <span className="bg-danger/10 text-danger mt-1.5 ml-11 inline-flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-[11px] font-medium">
+                <AlertTriangle className="size-3" aria-hidden />
+                Not as quoted
+              </span>
+            ) : null}
           </div>
         );
       },
@@ -89,7 +101,8 @@ export function getSnaggingJobColumns(): ColumnDef<SnaggingTaskSummary>[] {
         const extra = names.length - 1;
         const cell = (
           <IconText icon={UserRound}>
-            <span className="truncate">{names[0]}</span>
+            {/* With others, the tooltip below lists everyone; alone, a cut name shows whole on hover. */}
+            {extra > 0 ? <span className="truncate">{names[0]}</span> : <TruncatedText text={names[0]} className="max-w-40" />}
             {extra > 0 ? (
               <span className="text-muted-foreground shrink-0"> +{extra}</span>
             ) : null}

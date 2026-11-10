@@ -22,6 +22,7 @@ import type { Trade } from "@/lib/amc/visits";
 import { callOutsService, type CoverageResponse, type CreateCallOutResult } from "@/modules/amc-contracts/call-outs-service";
 
 import { ContractPicker, CoverageBadge, Field, PreparedMessage, errorText, fromLocalInput, nowLocalInput, shortDateTime, type PickedContract } from "./call-out-shared";
+import { AmcPhoneInput } from "@/components/dashboard/extensions/amc/components/amc-phone-input";
 
 const NONE = "__none";
 
@@ -299,7 +300,7 @@ export function LogCallOutDialog({
                 <Input id={ids.contactName} maxLength={120} value={contactName} onChange={(e) => setContactName(e.target.value)} />
               </Field>
               <Field id={ids.contactPhone} label="Contact phone (optional)" hint="The acknowledgement goes here, else to the client.">
-                <Input id={ids.contactPhone} type="tel" maxLength={40} value={contactPhone} onChange={(e) => setContactPhone(e.target.value)} />
+                <AmcPhoneInput id={ids.contactPhone} value={contactPhone} onChange={setContactPhone} />
               </Field>
             </div>
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { CalendarPlus, CheckCircle2, MessageSquarePlus, Save, XCircle } from "lucide-react";
 import { toast } from "sonner";
 
@@ -20,13 +20,15 @@ import {
   type FollowUpChannel,
 } from "@/lib/amc/enquiries";
 import { cn } from "@/lib/utils";
-import { amcContractsService, type PropertyInput } from "@/modules/amc-contracts/amc-contracts-service";
+import { amcContractsService, type PropertyOverview } from "@/modules/amc-contracts/amc-contracts-service";
 import { enquiriesService, type EnquiryMeta, type EnquiryRecord, type UpdateEnquiryInput } from "@/modules/amc-contracts/enquiries-service";
 
-import { PropertyDialog } from "../customer-property-views";
 import { AddressDialog, useAddressFormAccess } from "../address-dialog";
+import { LinkedCard, printedAddress } from "../linked-card";
 import { EnquiryPropertySelect } from "./enquiry-property-select";
+import { PropertyPickerField } from "../property-picker-field";
 import { Field, PersonSelect, SimpleSelect, fromLocalInput, localInputIn, toLocalInput } from "./enquiry-ui";
+import { AmcPhoneInput } from "@/components/dashboard/extensions/amc/components/amc-phone-input";
 
 /* ------------------------------------------------------------------ */
 /* Shared bits                                                         */
@@ -135,6 +137,57 @@ function EnquiryForm({ meta, enquiry, onSaved, work, onCancel }: EnquiryFormProp
   const set = (patch: Partial<EnquiryDraft>) => setDraft((d) => ({ ...d, ...patch }));
   const referral = /referr/i.test(draft.source);
 
+  /* The property, as on New enquiry and a new proposal: a card once picked, else the client's list with Add. */
+  const addressForm = useAddressFormAccess();
+  const [property, setProperty] = useState<PropertyOverview["property"] | null>(null);
+  const [propertyDialog, setPropertyDialog] = useState<"add" | "edit" | null>(null);
+  const [addressesKey, setAddressesKey] = useState(0);
+  const [loadingProperty, setLoadingProperty] = useState(false);
+
+  /** Reads the property for its card; with `apply`, its type, category and area become the enquiry's. */
+  const loadProperty = async (id: string, apply: boolean) => {
+    setLoadingProperty(true);
+    try {
+      const { overview } = await amcContractsService.property(id);
+      const p = overview.property;
+      setProperty(p);
+      if (apply) {
+        const unit = (UNIT_TYPES as readonly string[]).includes(p.unitType ?? "") ? (p.unitType as EnquiryDraft["unitType"]) : null;
+        const category =
+          p.propertyCategory === "commercial" || p.propertyCategory === "residential"
+            ? p.propertyCategory
+            : unit
+              ? (UNIT_TYPE_CATEGORY[unit as keyof typeof UNIT_TYPE_CATEGORY] as EnquiryDraft["propertyCategory"])
+              : null;
+        setDraft((d) => ({
+          ...d,
+          propertyId: p.id,
+          unitType: unit ?? d.unitType,
+          propertyCategory: category ?? d.propertyCategory,
+          area: p.community ?? d.area,
+        }));
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not read the property.");
+    } finally {
+      setLoadingProperty(false);
+    }
+  };
+  /* The property already on the enquiry, for its card. */
+  useEffect(() => {
+    if (enquiry.property?.id) void loadProperty(enquiry.property.id, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once, for the property the dialog opened with
+  }, []);
+  const pickProperty = (id: string | null) => {
+    if (!id) {
+      setProperty(null);
+      set({ propertyId: null });
+      return;
+    }
+    set({ propertyId: id });
+    void loadProperty(id, true);
+  };
+
   const save = () =>
     work.run(async () => {
       const { enquiry: saved } = await enquiriesService.update(enquiry.id, cleanDraft(draft));
@@ -159,13 +212,13 @@ function EnquiryForm({ meta, enquiry, onSaved, work, onCancel }: EnquiryFormProp
               <Input id="enq-contact" value={draft.contactName} onChange={(e) => set({ contactName: e.target.value })} maxLength={200} />
             </Field>
             <Field label="Phone" htmlFor="enq-phone">
-              <Input id="enq-phone" inputMode="tel" value={draft.contactPhone ?? ""} onChange={(e) => set({ contactPhone: e.target.value })} maxLength={40} />
+              <AmcPhoneInput id="enq-phone" value={draft.contactPhone ?? ""} onChange={(contactPhone) => set({ contactPhone })} />
             </Field>
             <Field label="Email" htmlFor="enq-email">
               <Input id="enq-email" type="email" value={draft.contactEmail ?? ""} onChange={(e) => set({ contactEmail: e.target.value })} maxLength={200} />
             </Field>
             <Field label="WhatsApp" htmlFor="enq-wa">
-              <Input id="enq-wa" inputMode="tel" value={draft.contactWhatsapp ?? ""} onChange={(e) => set({ contactWhatsapp: e.target.value })} maxLength={40} />
+              <AmcPhoneInput id="enq-wa" value={draft.contactWhatsapp ?? ""} onChange={(contactWhatsapp) => set({ contactWhatsapp })} />
             </Field>
             <Field label="Preferred channel">
               <SimpleSelect
@@ -194,38 +247,6 @@ function EnquiryForm({ meta, enquiry, onSaved, work, onCancel }: EnquiryFormProp
                 <Input id="enq-ref" value={draft.referrer ?? ""} onChange={(e) => set({ referrer: e.target.value })} maxLength={200} />
               </Field>
             ) : null}
-            <Field label="Area" htmlFor="enq-area">
-              <Input id="enq-area" placeholder="Community or district" value={draft.area ?? ""} onChange={(e) => set({ area: e.target.value })} maxLength={120} />
-            </Field>
-            <Field label="Property type">
-              <SimpleSelect
-                label="Property type"
-                allowNone
-                value={draft.unitType}
-                options={UNIT_TYPES.map((t) => [t, UNIT_TYPE_LABELS[t]])}
-                onChange={(v) =>
-                  set({
-                    unitType: v as EnquiryDraft["unitType"],
-                    propertyCategory: v ? (UNIT_TYPE_CATEGORY[v as keyof typeof UNIT_TYPE_CATEGORY] as EnquiryDraft["propertyCategory"]) ?? draft.propertyCategory : draft.propertyCategory,
-                  })
-                }
-              />
-            </Field>
-            <Field label="Category">
-              <SimpleSelect
-                label="Category"
-                allowNone
-                value={draft.propertyCategory}
-                options={[
-                  ["residential", "Residential"],
-                  ["commercial", "Commercial"],
-                ]}
-                onChange={(v) => set({ propertyCategory: v as EnquiryDraft["propertyCategory"] })}
-              />
-            </Field>
-            <Field label="Property" className="sm:col-span-2">
-              <EnquiryPropertySelect customerId={enquiry.customer.id} value={draft.propertyId ?? null} onChange={(id) => set({ propertyId: id })} />
-            </Field>
             <Field label="What the client needs" htmlFor="enq-need" className="sm:col-span-2">
               <Textarea id="enq-need" rows={3} value={draft.need} onChange={(e) => set({ need: e.target.value })} maxLength={2000} placeholder="In short: services, units, timing, anything agreed" />
             </Field>
@@ -236,6 +257,92 @@ function EnquiryForm({ meta, enquiry, onSaved, work, onCancel }: EnquiryFormProp
               <DateTimeSelect id="enq-next" value={toLocalInput(draft.nextFollowUpAt)} onChange={(value) => set({ nextFollowUpAt: fromLocalInput(value) })} />
             </Field>
           </div>
+        </section>
+
+        <section className="grid gap-4">
+          <div>
+            <h3 className="text-sm font-medium">Property</h3>
+            <p className="text-muted-foreground text-xs">Pick one of the client&apos;s properties, or add a new one.</p>
+          </div>
+          {draft.propertyId ? (
+            <LinkedCard
+              title={property?.label || (loadingProperty ? "Reading the property…" : "Property")}
+              detail={
+                [
+                  draft.unitType ? UNIT_TYPE_LABELS[draft.unitType as keyof typeof UNIT_TYPE_LABELS] : null,
+                  draft.propertyCategory === "commercial" ? "Commercial" : draft.propertyCategory === "residential" ? "Residential" : null,
+                  property ? printedAddress(property) : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ") || "No details on file yet"
+              }
+              onEdit={addressForm ? () => setPropertyDialog("edit") : undefined}
+              editLabel="Edit property"
+              onChange={() => pickProperty(null)}
+              busy={loadingProperty}
+            />
+          ) : (
+            <EnquiryPropertySelect
+              customerId={enquiry.customer.id}
+              clientName={enquiry.customer.name}
+              value={null}
+              refreshKey={addressesKey}
+              onChange={pickProperty}
+              onAddNew={addressForm ? () => setPropertyDialog("add") : undefined}
+            />
+          )}
+          {/* No property yet: what the client said about it. Once one is picked, these come from it. */}
+          {!draft.propertyId ? (
+            <div className="grid gap-4 sm:grid-cols-3">
+              <Field label="Property type">
+                <SimpleSelect
+                  label="Property type"
+                  allowNone
+                  value={draft.unitType}
+                  options={UNIT_TYPES.map((t) => [t, UNIT_TYPE_LABELS[t]])}
+                  onChange={(v) =>
+                    set({
+                      unitType: v as EnquiryDraft["unitType"],
+                      propertyCategory: v ? (UNIT_TYPE_CATEGORY[v as keyof typeof UNIT_TYPE_CATEGORY] as EnquiryDraft["propertyCategory"]) ?? draft.propertyCategory : draft.propertyCategory,
+                    })
+                  }
+                />
+              </Field>
+              <Field label="Category">
+                <SimpleSelect
+                  label="Category"
+                  allowNone
+                  value={draft.propertyCategory}
+                  options={[
+                    ["residential", "Residential"],
+                    ["commercial", "Commercial"],
+                  ]}
+                  onChange={(v) => set({ propertyCategory: v as EnquiryDraft["propertyCategory"] })}
+                />
+              </Field>
+              <Field label="Area" htmlFor="enq-area">
+                <Input id="enq-area" placeholder="Community or district" value={draft.area ?? ""} onChange={(e) => set({ area: e.target.value })} maxLength={120} />
+              </Field>
+            </div>
+          ) : null}
+          {addressForm ? (
+            <AddressDialog
+              open={propertyDialog !== null}
+              onOpenChange={(open) => !open && setPropertyDialog(null)}
+              clientId={enquiry.customer.id}
+              clientName={enquiry.customer.name}
+              defaults={{ unitType: draft.unitType, propertyCategory: draft.propertyCategory, community: draft.area }}
+              propertyId={propertyDialog === "edit" ? (draft.propertyId ?? null) : null}
+              editing={propertyDialog === "edit"}
+              full={propertyDialog === "add"}
+              onSaved={(id) => {
+                setPropertyDialog(null);
+                setAddressesKey((k) => k + 1);
+                set({ propertyId: id });
+                void loadProperty(id, true);
+              }}
+            />
+          ) : null}
         </section>
       </div>
 
@@ -476,10 +583,6 @@ function SiteVisitForm({ meta, enquiry, onSave, work, onCancel }: SiteVisitProps
   const [propertyComplete, setPropertyComplete] = useState(false);
   const [when, setWhen] = useState(() => localInputIn(2, 10));
   const [assessorId, setAssessorId] = useState<string | null>(enquiry.owner?.id ?? meta.me);
-  const [addingProperty, setAddingProperty] = useState(false);
-  const [propertyVersion, setPropertyVersion] = useState(0);
-  /* A new address on the Clients page's form (with the map) when Snagging addresses can be added; the AMC form otherwise. */
-  const addressForm = useAddressFormAccess();
   const scheduledAt = fromLocalInput(when);
 
   return (
@@ -491,17 +594,16 @@ function SiteVisitForm({ meta, enquiry, onSave, work, onCancel }: SiteVisitProps
         </DialogDescription>
       </DialogHeader>
       <div className="grid gap-4 py-2">
-        {/* The client's saved and Zoho FSM addresses, or a new one added here. */}
-        <Field label="Property" hint={`Pick one of ${enquiry.customer.name}'s properties, or add a new one.`}>
-          <EnquiryPropertySelect
-            customerId={enquiry.customer.id}
+        {/* As on New enquiry and a new proposal: the property as a card (Edit property, Change), or the client's list with Add. */}
+        <Field label="Property" hint={propertyId ? undefined : `Pick one of ${enquiry.customer.name}'s properties, or add a new one.`}>
+          <PropertyPickerField
+            clientId={enquiry.customer.id}
             clientName={enquiry.customer.name}
             requireComplete
             onCompleteChange={setPropertyComplete}
-            value={propertyId}
-            onChange={setPropertyId}
-            onAddNew={() => setAddingProperty(true)}
-            refreshKey={propertyVersion}
+            propertyId={propertyId}
+            onChange={(id) => setPropertyId(id)}
+            defaults={{ unitType: enquiry.unitType, propertyCategory: enquiry.propertyCategory, community: enquiry.area }}
           />
         </Field>
         <Field label="Date and time" htmlFor="sv-when">
@@ -525,37 +627,6 @@ function SiteVisitForm({ meta, enquiry, onSave, work, onCancel }: SiteVisitProps
           Book site visit
         </SubmitButton>
       </DialogFooter>
-      {addressForm ? (
-        <AddressDialog
-          open={addingProperty}
-          onOpenChange={(open) => !open && setAddingProperty(false)}
-          clientId={enquiry.customer.id}
-          clientName={enquiry.customer.name}
-          defaults={{ unitType: enquiry.unitType, propertyCategory: enquiry.propertyCategory, community: enquiry.area }}
-          onSaved={(id) => {
-            setPropertyId(id);
-            setPropertyVersion((v) => v + 1);
-            setAddingProperty(false);
-          }}
-        />
-      ) : addingProperty ? (
-        <PropertyDialog
-          title={`Add property for ${enquiry.customer.name}`}
-          initial={{
-            label: "",
-            unitType: (enquiry.unitType as PropertyInput["unitType"]) ?? null,
-            propertyCategory: (enquiry.propertyCategory as PropertyInput["propertyCategory"]) ?? null,
-            community: enquiry.area,
-          }}
-          onOpenChange={(open) => !open && setAddingProperty(false)}
-          onSave={async (input) => {
-            const { property } = await amcContractsService.createProperty(enquiry.customer.id, input);
-            setPropertyId(property.id);
-            setPropertyVersion((v) => v + 1);
-            setAddingProperty(false);
-          }}
-        />
-      ) : null}
     </>
   );
 }

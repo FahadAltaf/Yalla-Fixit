@@ -86,14 +86,20 @@ const DashboardHeader = () => {
   void useBreadcrumbLabelVersion();
   return (
     <header className="before:bg-background/60 sticky top-0 z-50 before:absolute before:inset-0 before:mask-[linear-gradient(var(--card),var(--card)_18%,transparent_100%)] before:backdrop-blur-md">
-      <div className="bg-card relative z-51 mx-auto mt-3 flex w-[calc(100%-2rem)] items-center justify-between rounded-xl border px-6 py-2 sm:w-[calc(100%-3rem)]">
-        <div className="flex items-center gap-1.5 sm:gap-4">
+      <div className="bg-card relative z-51 mx-auto mt-3 flex w-[calc(100%-2rem)] items-center justify-between gap-2 rounded-xl border px-4 py-2 sm:w-[calc(100%-3rem)] sm:px-6">
+        {/* min-w-0 lets the breadcrumb shrink and truncate instead of wrapping the bar onto two lines. */}
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:gap-4">
           <SidebarTrigger className="[&_svg]:!size-5" />
           <Separator orientation="vertical" className="hidden !h-8 sm:block" />
-          <Breadcrumb>
+          <Breadcrumb className="min-w-0">
             {/* Sized to sit level with the sidebar toggle: the default
                 14px text and 15px icon read small in a 56px bar. */}
-            <BreadcrumbList className="gap-2 text-[15px] sm:gap-2.5">
+            {/*
+              One line on a phone: home, an ellipsis for the levels between,
+              and the page itself, truncated if it is long. The whole trail
+              from sm up, where there is room for it.
+            */}
+            <BreadcrumbList className="flex-nowrap gap-2 text-[15px] sm:flex-wrap sm:gap-2.5">
               <BreadcrumbItem>
                 <BreadcrumbLink
                   href="/"
@@ -111,6 +117,16 @@ const DashboardHeader = () => {
                   </BreadcrumbItem>
                 </>
               )}
+              {crumbs.length > 1 ? (
+                <>
+                  <BreadcrumbSeparator className="text-muted-foreground/50 sm:hidden"> / </BreadcrumbSeparator>
+                  <BreadcrumbItem className="sm:hidden">
+                    <BreadcrumbLink href={crumbs[crumbs.length - 2].href} aria-label="Up one level">
+                      …
+                    </BreadcrumbLink>
+                  </BreadcrumbItem>
+                </>
+              ) : null}
               {crumbs.map(({ segment, href, label: fixed }, index) => {
                 const isLast = index === crumbs.length - 1;
                 // A page that knows its own name supplies one; otherwise
@@ -134,10 +150,15 @@ const DashboardHeader = () => {
 
                 return (
                   <React.Fragment key={`${index}:${href}`}>
-                    <BreadcrumbSeparator className="text-muted-foreground/50"> / </BreadcrumbSeparator>
-                    <BreadcrumbItem>
+                    <BreadcrumbSeparator
+                      className={`text-muted-foreground/50 ${isLast ? "" : "hidden sm:block"}`}
+                    >
+                      {" "}
+                      /{" "}
+                    </BreadcrumbSeparator>
+                    <BreadcrumbItem className={isLast ? "min-w-0" : "hidden sm:inline-flex"}>
                       {isLast ? (
-                        <BreadcrumbPage className="font-semibold">{label}</BreadcrumbPage>
+                        <BreadcrumbPage className="block truncate font-semibold">{label}</BreadcrumbPage>
                       ) : (
                         <BreadcrumbLink href={href}>{label}</BreadcrumbLink>
                       )}

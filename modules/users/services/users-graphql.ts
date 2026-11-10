@@ -57,6 +57,7 @@ query GetUsers($filter: user_profileFilter, $limit: Int = 10, $offset: Int = 0, 
         full_name
         is_active
         receives_schedule_approval_email
+        is_task_manager
 
 
         last_login
@@ -147,6 +148,7 @@ export const GET_USERS = `
            full_name
            is_active
            receives_schedule_approval_email
+           is_task_manager
            last_login
            profile_image
            created_at
@@ -185,6 +187,7 @@ query GetUsersById($id: UUID!) {
        full_name
        is_active
        receives_schedule_approval_email
+       is_task_manager
        last_login
        profile_image
        created_at
@@ -220,6 +223,7 @@ export const UPDATE_USER = `
     $profile_image: String
     $is_active: Boolean
     $receives_schedule_approval_email: Boolean
+    $is_task_manager: Boolean
   ) {
     updateuser_profileCollection(
       filter: { id: { eq: $id } }
@@ -231,6 +235,7 @@ export const UPDATE_USER = `
         profile_image: $profile_image
         is_active: $is_active
         receives_schedule_approval_email: $receives_schedule_approval_email
+        is_task_manager: $is_task_manager
       }
     ) {
       affectedCount
@@ -244,6 +249,7 @@ export const UPDATE_USER = `
         profile_image
         is_active
         receives_schedule_approval_email
+        is_task_manager
       }
     }
   }

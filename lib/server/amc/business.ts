@@ -184,6 +184,52 @@ export function embeddedProperty(
   };
 }
 
+/*
+  The address lines and map pin of an embedded Snagging property, for the
+  pages that show a property with its map (an enquiry, a site visit), as
+  the job and quotation pages do. Kept apart from embeddedProperty so the
+  pages that only need the label do not read them.
+*/
+export const PROPERTY_PLACE_COLUMNS =
+  "building_name, community, location_lat, location_lng, developer_name, bedrooms, built_up_area_sqft, plot_area_sqft, floors, external_areas_in_scope";
+
+/** The unit as the job's Setup tab lists it: where it is, its size and its pin. */
+export interface PropertyPlace {
+  buildingName: string | null;
+  community: string | null;
+  lat: number | null;
+  lng: number | null;
+  developer: string | null;
+  bedrooms: number | null;
+  builtUpSqft: number | null;
+  plotSqft: number | null;
+  floors: number | null;
+  externalAreasInScope: boolean;
+}
+
+/** The email and phone of an embedded Snagging client, when the embed asked for them. */
+function clientContact(v: unknown): { email: string | null; phone: string | null } {
+  const c = one(v);
+  return { email: str(c?.email), phone: str(c?.phone) };
+}
+
+export function embeddedPlace(v: unknown): PropertyPlace {
+  const sp = one(v);
+  const num = (x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : typeof x === "string" && x.trim() && Number.isFinite(Number(x)) ? Number(x) : null);
+  return {
+    buildingName: str(sp?.building_name),
+    community: str(sp?.community),
+    lat: num(sp?.location_lat),
+    lng: num(sp?.location_lng),
+    developer: str(sp?.developer_name),
+    bedrooms: num(sp?.bedrooms),
+    builtUpSqft: num(sp?.built_up_area_sqft),
+    plotSqft: num(sp?.plot_area_sqft),
+    floors: num(sp?.floors),
+    externalAreasInScope: sp?.external_areas_in_scope === true,
+  };
+}
+
 const missingColumn = (error: { code?: string } | null | undefined) => error?.code === "42703" || error?.code === "PGRST204";
 
 /**
@@ -380,6 +426,34 @@ export async function writeClientProfile(
   if (error) throw customerWriteError(error);
 }
 
+/*
+  Client IDs the portal gives while Zoho FSM is only read (its writes are
+  off): "YFI" and the next number after the highest short one on file
+  (YFI1001, YFI1002…). A client from FSM keeps FSM's own number
+  (Customer_Id__C: "YFI" and its long contact id) when it has one; those are
+  left out of the count, so the two never collide.
+*/
+const CLIENT_ID_PREFIX = "YFI";
+
+export async function nextClientRef(admin: Admin): Promise<string> {
+  const { data, error } = await admin.from("amc_client_profiles").select("customer_ref").ilike("customer_ref", `${CLIENT_ID_PREFIX}%`);
+  if (error) throw fail(error);
+  let max = 1000;
+  for (const row of (data ?? []) as Row[]) {
+    const match = /^YFI(\d{1,8})$/i.exec(String(row.customer_ref ?? "").trim());
+    if (match) max = Math.max(max, Number(match[1]));
+  }
+  return `${CLIENT_ID_PREFIX}${max + 1}`;
+}
+
+/** Gives the client the next Client ID when it has none; one it has is never changed. */
+export async function ensureClientRef(admin: Admin, clientId: string, actorId: string | null): Promise<void> {
+  const { data, error } = await admin.from("amc_client_profiles").select("customer_ref").eq("client_id", clientId).maybeSingle<Row>();
+  if (error) throw fail(error);
+  if (str(data?.customer_ref)) return;
+  await writeClientProfile(admin, clientId, { customer_ref: await nextClientRef(admin) }, actorId, true);
+}
+
 /* An ilike pattern that matches the text exactly, wildcards included. */
 const exactly = (text: string) => text.replace(/[\\%_]/g, (c) => `\\${c}`);
 
@@ -440,6 +514,8 @@ export async function createCustomer(admin: Admin, input: CustomerInput, actor: 
      again because an enquiry named them: their standing stays as it is. */
   if (match) delete profile.lifecycle;
   await writeClientProfile(admin, id, profile, actor.id, true);
+  /* No Client ID typed: the next one is given (FSM is only read, so it cannot number them). */
+  await ensureClientRef(admin, id, actor.id);
   await recordAmcAudit(admin, {
     entityType: "customer",
     entityId: id,
@@ -628,6 +704,13 @@ export interface PropertyDetailsInput {
   city?: string | null;
   zones?: string[];
   accessConstraints?: string | null;
+  /* Asked when the property is edited on the address form, as the AMC property form asked them. */
+  address?: string | null;
+  unitNo?: string | null;
+  notes?: string | null;
+  parentPropertyId?: string | null;
+  /** Floors of a building; the address form keeps a count for villas only. */
+  floorsCount?: number | null;
 }
 
 /**
@@ -646,7 +729,18 @@ export async function updatePropertyDetails(admin: Admin, id: string, input: Pro
   if (input.city !== undefined) fields.city = blankToNull(input.city);
   if (input.zones !== undefined) fields.zones = input.zones.map((z) => z.trim()).filter(Boolean);
   if (input.accessConstraints !== undefined) fields.access_constraints = blankToNull(input.accessConstraints);
+  if (input.address !== undefined) fields.address = blankToNull(input.address);
+  if (input.unitNo !== undefined) fields.unit_no = blankToNull(input.unitNo);
+  if (input.notes !== undefined) fields.notes = blankToNull(input.notes);
+  if (input.parentPropertyId !== undefined) fields.parent_property_id = input.parentPropertyId || null;
   if (Object.keys(fields).length > 0) await writePropertyProfile(admin, id, fields, actor);
+  if (input.floorsCount !== undefined) {
+    const { error } = await admin
+      .from("snagging_properties")
+      .update({ floors: input.floorsCount, updated_at: new Date().toISOString() })
+      .eq("id", id);
+    if (error) throw fail(error);
+  }
   return getProperty(admin, id);
 }
 
@@ -1037,8 +1131,8 @@ export interface AssessmentRecord {
   id: string;
   assessmentNumber: string;
   status: "draft" | "completed";
-  customer: { id: string; name: string; customerRef: string | null } | null;
-  property: { id: string; label: string } | null;
+  customer: { id: string; name: string; customerRef: string | null; email: string | null; phone: string | null } | null;
+  property: ({ id: string; label: string } & PropertyPlace) | null;
   contractId: string | null;
   proposal: { id: string; proposalNumber: string; status: string } | null;
   assessedOn: string | null;
@@ -1073,7 +1167,7 @@ export interface AssessmentRecord {
   }>;
 }
 
-const ASSESSMENT_JOINS = `customer:snagging_clients(${CLIENT_EMBED}), property:snagging_properties(${PROPERTY_EMBED}), submission:amc_submissions!amc_assessments_submission_id_fkey(id, proposal_number, status)`;
+const ASSESSMENT_JOINS = `customer:snagging_clients(${CLIENT_EMBED}, email, phone), property:snagging_properties(${PROPERTY_EMBED}, ${PROPERTY_PLACE_COLUMNS}), submission:amc_submissions!amc_assessments_submission_id_fkey(id, proposal_number, status)`;
 const ASSESSMENT_COLUMNS_V1 = `id, assessment_number, status, customer_id, property_id, contract_id, submission_id, assessed_on, assessor_id, assessor_name, property_category, unit_type, bedrooms, size_sqft, occupancy, summary, findings, notes, recommended_service_ids, completed_at, created_by, created_at, ${ASSESSMENT_JOINS}`;
 /* The site-visit columns (20261007130000). */
 const SITE_VISIT_COLUMNS = ["enquiry_id", "scheduled_at", "attendance", "asset_counts", "access_notes", "exclusions"] as const;
@@ -1087,8 +1181,8 @@ function mapAssessment(r: Row, items: Row[] = []): AssessmentRecord {
     id: String(r.id),
     assessmentNumber: String(r.assessment_number),
     status: r.status as "draft" | "completed",
-    customer: c ? { id: c.id, name: c.name, customerRef: c.customerRef } : null,
-    property: p ? { id: p.id, label: p.label } : null,
+    customer: c ? { id: c.id, name: c.name, customerRef: c.customerRef, ...clientContact(r.customer) } : null,
+    property: p ? { id: p.id, label: p.label, ...embeddedPlace(r.property) } : null,
     contractId: str(r.contract_id),
     proposal: s ? { id: String(s.id), proposalNumber: String(s.proposal_number ?? ""), status: String(s.status) } : null,
     assessedOn: str(r.assessed_on),

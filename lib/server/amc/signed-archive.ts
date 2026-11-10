@@ -334,8 +334,10 @@ export async function archiveSignedContract(
   const { data: row, error } = await admin.from("amc_submissions").select("*").eq("id", submissionId).maybeSingle<AmcSubmission>();
   if (error) throw new ArchiveError(error.message, 500);
   if (!row) throw new ArchiveError("Not found", 404);
+  /* The archived contract prints the contract's own number, as the client saw it on the link. */
+  const { data: contract } = await admin.from("amc_contracts").select("contract_number").eq("submission_id", submissionId).maybeSingle<{ contract_number: string | null }>();
 
-  const content = buildSignedContractContent(row);
+  const content = buildSignedContractContent({ ...row, contract_number: contract?.contract_number ?? null });
   const contentSha = contentHash(content);
   const html = renderSignedContractHtml(content, contentSha);
   const pdf = await (opts.renderPdf ?? renderPdf)(html);

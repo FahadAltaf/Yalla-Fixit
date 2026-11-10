@@ -27,13 +27,15 @@ import { amcContractsService, type ClientListRow, type CustomerInput, type Custo
 import type { SnaggingClientOption } from "@/modules/snagging/services/snagging-service";
 import { ActionType, ResourceType } from "@/types/types";
 
-import { AmcNotificationsBell } from "./amc-notifications-bell";
 import { customerForRow } from "./client-picker";
 import { ClientsToolbar } from "./clients-toolbar";
 import { CustomerFields, UNIT_TYPE_LABELS, cleanCustomer } from "./customer-pickers";
 import { useAmcData } from "./use-amc-data";
 import { LIFECYCLE_TONE } from "./profile/identity-card";
 import { useDialog } from "./profile/use-dialog";
+import { formatPhone } from "@/lib/phone/format-phone";
+import { TruncatedText } from "@/components/ui/truncated-text";
+import { ModuleGuide } from "@/components/dashboard/extensions/amc-contracts/module-guide";
 
 type LifecycleFilter = "all" | "prospect" | "client" | "former";
 
@@ -62,7 +64,7 @@ function Contact({ icon: Icon, value }: { icon: typeof Phone; value: string | nu
   return (
     <span className="flex min-w-0 items-center gap-2 text-sm">
       <Icon className="text-muted-foreground size-3.5 shrink-0" aria-hidden />
-      <span className="truncate">{value}</span>
+      <TruncatedText text={value} />
     </span>
   );
 }
@@ -160,7 +162,7 @@ export function CustomersPage() {
         id: "phone",
         header: "Phone",
         enableSorting: false,
-        cell: ({ row }) => <Contact icon={Phone} value={row.original.phone} />,
+        cell: ({ row }) => <Contact icon={Phone} value={formatPhone(row.original.phone) || null} />,
       },
       {
         id: "email",
@@ -262,6 +264,7 @@ export function CustomersPage() {
       <PageHeading
         eyebrow="Master data"
         title="Clients"
+        info={<ModuleGuide module="clients" />}
         description={
           source === "fsm"
             ? "The same clients and addresses as Snagging, read from Zoho FSM. Contracts keep what was signed; these records say who the client is today."
@@ -269,7 +272,6 @@ export function CustomersPage() {
         }
         actions={
           <>
-            <AmcNotificationsBell className="size-9" />
             <Button onClick={() => adding.show(true)}>
               <Plus className="size-4" />
               New client

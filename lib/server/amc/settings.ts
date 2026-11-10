@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   amcSettingsOverridesSchema,
   getAmcSettingsDefaults,
+  KNOWN_CLAUSE_ROLES,
   mergeAmcSettings,
   type AmcSettings,
   type AmcSettingsOverrides,
@@ -52,12 +53,20 @@ export async function writeAmcSettingsOverrides(
   overrides: AmcSettingsOverrides,
   actorId: string,
 ): Promise<AmcSettingsOverrides> {
+  /*
+    A saved clause list records which standard clauses existed when it was
+    saved, so one added in a later release goes into it once, and one an
+    admin takes out afterwards stays out (mergeAmcSettings).
+  */
+  const stored: AmcSettingsOverrides = overrides.clauseList?.length
+    ? { ...overrides, knownRoles: [...KNOWN_CLAUSE_ROLES] }
+    : overrides;
   const { data, error } = await admin
     .from(SETTINGS_TABLE)
     .upsert(
       {
         id: SETTINGS_ROW_ID,
-        overrides,
+        overrides: stored,
         updated_by: actorId,
         updated_at: new Date().toISOString(),
       },

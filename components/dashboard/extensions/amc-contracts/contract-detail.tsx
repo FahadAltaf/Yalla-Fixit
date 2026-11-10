@@ -50,10 +50,10 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
-  DataRow,
   SectionCard,
   StatCard,
   StatCardGrid,
+  SubHeading,
   TabCount,
 } from "@/components/dashboard/shared/kaizen";
 import {
@@ -95,17 +95,19 @@ import { usePaymentDialogs } from "./payment-dialogs";
 import { useUrlTab } from "./profile/use-url-tab";
 import { RecordUsageDialog } from "./record-usage-dialog";
 import { UsageHistory } from "./usage-history";
+import { TruncateIfText, TruncatedText } from "@/components/ui/truncated-text";
+import { Fact } from "@/components/dashboard/extensions/amc/steps/review-step";
 
 const LIST = "/extensions/amc-contracts";
 
-const TABS = ["overview", "coverage", "schedule", "call-outs", "usage", "fsm", "commercial", "payments", "renewal", "amendments", "documents", "history"] as const;
+const TABS = ["overview", "coverage", "schedule", "call-outs", "usage", "fsm", "payments", "renewal", "amendments", "documents", "history"] as const;
 type Tab = (typeof TABS)[number];
 
 /**
  * One operational AMC contract, laid out like a Snagging job: the way back
  * and Refresh, a header card with the contract's state and its next step,
  * the four figures, then tabs for its lifecycle, every service and its
- * allowance, the PPM schedule, usage, FSM, commercial, payments, renewal,
+ * allowance, the PPM schedule, usage, FSM, payments, renewal,
  * documents and history.
  */
 export function ContractDetail({ id }: { id: string }) {
@@ -255,9 +257,12 @@ function ContractView({
             icon: <Banknote className="size-4" />,
             onClick: () => paymentDialogs.open(contract.id, { kind: "record_payment", instalment: firstInstalment }),
           }
-        : canRecord
-          ? { label: "Record usage", icon: <Plus className="size-4" />, onClick: () => recordUsage(null) }
-          : null;
+        : permissions.canHold && status === "on_hold"
+          ? /* The one thing to do with a held contract, beside its reason. */
+            { label: "Resume", icon: <Play className="size-4" />, onClick: () => lifecycleDialogs.openStatus("active") }
+          : canRecord
+            ? { label: "Record usage", icon: <Plus className="size-4" />, onClick: () => recordUsage(null) }
+            : null;
   const recordInMore = canRecord && primary?.label !== "Record usage";
   const holdItems = [
     permissions.canRecordScan ? (
@@ -283,12 +288,6 @@ function ContractView({
       <DropdownMenuItem key="snooze" onClick={() => lifecycleDialogs.open("snooze")}>
         <AlarmClock className="size-4" />
         Snooze follow-up
-      </DropdownMenuItem>
-    ) : null,
-    permissions.canHold && status === "on_hold" ? (
-      <DropdownMenuItem key="resume" onClick={() => lifecycleDialogs.openStatus("active")}>
-        <Play className="size-4" />
-        Resume
       </DropdownMenuItem>
     ) : null,
   ].filter(Boolean);
@@ -486,7 +485,7 @@ function ContractView({
         />
         <StatCard
           label="Coverage"
-          value={<span className="text-xl tabular-nums">{summary.totalServices} services</span>}
+          value={<span className="text-xl tabular-nums">{summary.totalServices} {summary.totalServices === 1 ? "service" : "services"}</span>}
           headline={
             counted
               ? `${summary.withRemaining} with allowance left${summary.exhausted ? ` · ${summary.exhausted} exhausted` : ""}`
@@ -544,7 +543,6 @@ function ContractView({
             <TabCount value={summary.usageEvents} />
           </TabsTrigger>
           <TabsTrigger value="fsm">FSM</TabsTrigger>
-          <TabsTrigger value="commercial">Commercial</TabsTrigger>
           {canViewPayments ? (
             <TabsTrigger value="payments">
               Payments
@@ -565,25 +563,42 @@ function ContractView({
           <>
             {/* Phase 6: from the client's approval to activation and after. */}
             <ContractLifecycleCard data={data} />
-            <div className="grid gap-6 lg:grid-cols-2">
-              <ContractCustomer contract={contract} canManage={permissions.canCorrect} />
-              <SectionCard title="Source" icon={<FileSignature />} bodyClassName="px-5 pb-5">
+            <ContractCustomer
+              contract={contract}
+              facts={
+                <>
+                  <Fact label="Proposal">
+                    <Link href={`/extensions/amc/${contract.submissionId}`} className="hover:text-brand underline underline-offset-2">
+                      {source?.proposal_number ?? contract.proposalNumber}
+                    </Link>
+                  </Fact>
+                  <Fact label="Signed by">{contract.signedByName}</Fact>
+                  <Fact label="Signed">{formatDateTime(contract.signedAt)}</Fact>
+                  {/* The record is stamped when it is created; it is only activated once it starts. */}
+                  <Fact label="Activated">
+                    {["draft", "pending_client_signature", "pending_internal_signature", "signed"].includes(status) ? null : formatDateTime(contract.activatedAt)}
+                  </Fact>
+                </>
+              }
+            />
+            {/* The money side, here rather than on a tab of its own, so the overview answers what the contract is worth. */}
+            <div className="grid gap-6 lg:grid-cols-3">
+              <SectionCard title="Commercial" icon={<ReceiptText />} bodyClassName="px-5 pb-5">
                 <DetailList
                   rows={[
-                    {
-                      label: "Proposal",
-                      value: (
-                        <Link href={`/extensions/amc/${contract.submissionId}`} className="hover:text-brand underline underline-offset-2">
-                          {source?.proposal_number ?? contract.proposalNumber}
-                        </Link>
-                      ),
-                    },
-                    { label: "Signed by", value: contract.signedByName },
-                    { label: "Signed", value: formatDateTime(contract.signedAt) },
-                    { label: "Activated", value: formatDateTime(contract.activatedAt) },
+                    { label: "Subtotal", value: <Money value={contract.subtotal} /> },
+                    ...(contract.discountAmount > 0
+                      ? [{ label: `Discount (${contract.discountPercent}%)`, value: <>−<Money value={contract.discountAmount} /></> }]
+                      : []),
+                    { label: "Fee before VAT", value: <Money value={contract.finalPrice} /> },
+                    { label: `VAT (${AMC_VAT_PERCENT}%)`, value: <Money value={contract.vatAmount} /> },
+                    { label: "Grand total", value: <Money value={contract.grandTotal} className="font-semibold" /> },
                   ]}
                 />
               </SectionCard>
+              <div className="lg:col-span-2">
+                <ContractCommercial contract={contract} entitlements={entitlements} canManage={permissions.canCorrect} />
+              </div>
             </div>
           </>,
         )}
@@ -603,9 +618,9 @@ function ContractView({
                     <TableRow>
                       <TableHead className="pl-5">Service</TableHead>
                       <TableHead>Type</TableHead>
-                      <TableHead className="text-right">Included</TableHead>
-                      <TableHead className="text-right">Used</TableHead>
-                      <TableHead className="text-right">Remaining</TableHead>
+                      <TableHead>Included</TableHead>
+                      <TableHead>Used</TableHead>
+                      <TableHead>Remaining</TableHead>
                       <TableHead>Frequency</TableHead>
                       <TableHead>Call-out class</TableHead>
                       <TableHead>State</TableHead>
@@ -626,13 +641,13 @@ function ContractView({
                             ) : null}
                           </TableCell>
                           <TableCell>{ENTITLEMENT_TYPE_LABELS[e.entitlementType]}</TableCell>
-                          <TableCell className="text-right tabular-nums">
+                          <TableCell className="tabular-nums">
                             {e.includedQuantity !== null ? formatQuantity(e.includedQuantity) : e.entitlementType === "unlimited" ? "Unlimited" : "—"}
                           </TableCell>
-                          <TableCell className="text-right tabular-nums">
+                          <TableCell className="tabular-nums">
                             {e.entitlementType === "informational" ? "—" : formatQuantity(e.usedQuantity)}
                           </TableCell>
-                          <TableCell className="text-right tabular-nums">
+                          <TableCell className="tabular-nums">
                             {e.remainingQuantity !== null
                               ? `${formatQuantity(e.remainingQuantity)} ${unitWord(e.entitlementType, e.remainingQuantity)}`
                               : e.entitlementType === "unlimited"
@@ -670,17 +685,21 @@ function ContractView({
               {commitments?.fromSnapshot ? (
                 <>
                   {/* As the client signed them: from this contract's frozen wording. */}
-                  {commitments.emergencyResponse ? (
-                    <DataRow title="Emergency response (as signed)" subtitle={commitments.emergencyResponse} trailing={<NotMeasured label="Not measured" />} />
-                  ) : null}
-                  {commitments.standardResponse ? (
-                    <DataRow title="Standard response (as signed)" subtitle={commitments.standardResponse} trailing={<NotMeasured label="Not measured" />} />
-                  ) : null}
-                  <DataRow
-                    title="24/7 technical support line"
-                    subtitle={commitments.helpdeskIncluded ? "Included in this contract" : "Not one of this contract's services"}
-                  />
-                  {commitments.supportContact ? <DataRow title="Support contact (as signed)" subtitle={commitments.supportContact} /> : null}
+                  <div>
+                    <SubHeading>As signed</SubHeading>
+                    <DetailList
+                      rows={[
+                        ...(commitments.emergencyResponse
+                          ? [{ label: "Emergency response", value: <Promised value={commitments.emergencyResponse} note="Not measured" /> }]
+                          : []),
+                        ...(commitments.standardResponse
+                          ? [{ label: "Standard response", value: <Promised value={commitments.standardResponse} note="Not measured" /> }]
+                          : []),
+                        { label: "24/7 technical support line", value: commitments.helpdeskIncluded ? "Included" : "Not included" },
+                        ...(commitments.supportContact ? [{ label: "Support contact", value: commitments.supportContact }] : []),
+                      ]}
+                    />
+                  </div>
                   <p className="text-muted-foreground text-xs">
                     Read from the wording frozen with this contract, so later settings changes do not alter it.
                   </p>
@@ -689,14 +708,16 @@ function ContractView({
               {commitments?.fromSnapshot ? null : sla.length === 0 ? (
                 <p className="text-muted-foreground text-sm">No call-out services on this contract, so no response targets.</p>
               ) : (
-                sla.map((s) => (
-                  <DataRow
-                    key={s.callOutClass}
-                    title={s.label}
-                    subtitle={`Target ${s.targetMinutes} minutes from the request`}
-                    trailing={<NotMeasured label="Status unknown" />}
+                <div>
+                  <SubHeading>Response targets</SubHeading>
+                  <DetailList
+                    rows={sla.map((s) => ({
+                      key: s.callOutClass,
+                      label: s.label,
+                      value: <Promised value={`${s.targetMinutes} minutes from the request`} note="Status unknown" />,
+                    }))}
                   />
-                ))
+                </div>
               )}
               <p className="text-muted-foreground text-xs">
                 Whether a call-out met its target needs the request and arrival times from FSM, which the
@@ -731,28 +752,6 @@ function ContractView({
           />,
         )}
 
-        {panel(
-          "commercial",
-          <div className="grid gap-6 lg:grid-cols-3">
-            <SectionCard title="Commercial" icon={<ReceiptText />} bodyClassName="px-5 pb-5">
-              <DetailList
-                rows={[
-                  { label: "Subtotal", value: <Money value={contract.subtotal} /> },
-                  ...(contract.discountAmount > 0
-                    ? [{ label: `Discount (${contract.discountPercent}%)`, value: <>−<Money value={contract.discountAmount} /></> }]
-                    : []),
-                  { label: "Fee before VAT", value: <Money value={contract.finalPrice} /> },
-                  { label: `VAT (${AMC_VAT_PERCENT}%)`, value: <Money value={contract.vatAmount} /> },
-                  { label: "Grand total", value: <Money value={contract.grandTotal} className="font-semibold" /> },
-                ]}
-              />
-            </SectionCard>
-            <div className="lg:col-span-2">
-              <ContractCommercial contract={contract} entitlements={entitlements} canManage={permissions.canCorrect} />
-            </div>
-          </div>,
-        )}
-
         {canViewPayments
           ? panel(
               "payments",
@@ -771,7 +770,7 @@ function ContractView({
           <div className="grid gap-6 lg:grid-cols-2">
             <ContractRenewal
               contractId={contract.id}
-              proposalNumber={contract.proposalNumber}
+              proposalNumber={contract.lifecycle?.contractNumber ?? contract.proposalNumber}
               canRenew={permissions.canRenew}
               onChanged={() => void load()}
             />
@@ -845,7 +844,8 @@ function ContractView({
       <CoverageCheckDialog
         open={checking}
         onOpenChange={setChecking}
-        contract={{ id: contract.id, proposalNumber: contract.proposalNumber, customerName: contract.customerName }}
+        /* Named by the contract number the team and the client know it by. */
+        contract={{ id: contract.id, proposalNumber: contract.lifecycle?.contractNumber ?? contract.proposalNumber, customerName: contract.customerName }}
       />
       <SendClientReportDialog
         open={reporting}
@@ -941,18 +941,28 @@ function CopyId({ id }: { id: string }) {
 }
 
 /** Label-and-value rows, as on a Snagging job's setup: an em dash when empty. */
-function DetailList({ rows }: { rows: Array<{ label: string; value?: ReactNode }> }) {
+function DetailList({ rows }: { rows: Array<{ key?: string; label: string; value?: ReactNode }> }) {
   return (
     <dl className="divide-y">
       {rows.map((row) => (
-        <div key={row.label} className="flex items-baseline justify-between gap-4 py-1.5">
+        <div key={row.key ?? row.label} className="flex items-baseline justify-between gap-4 py-1.5">
           <dt className="text-muted-foreground shrink-0 text-sm">{row.label}</dt>
           <dd className="min-w-0 truncate text-right text-sm font-medium">
-            {row.value || row.value === 0 ? row.value : <span className="text-muted-foreground font-normal">—</span>}
+            {row.value || row.value === 0 ? <TruncateIfText>{row.value}</TruncateIfText> : <span className="text-muted-foreground font-normal">—</span>}
           </dd>
         </div>
       ))}
     </dl>
+  );
+}
+
+/** A promised figure, and a badge saying the portal cannot yet tell whether it is met. */
+function Promised({ value, note }: { value: string; note: string }) {
+  return (
+    <span className="flex min-w-0 items-center justify-end gap-2">
+      <TruncatedText text={value} />
+      <NotMeasured label={note} />
+    </span>
   );
 }
 

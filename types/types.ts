@@ -15,6 +15,11 @@ export interface User {
   status?: string;
   // When TRUE, this user receives the "schedule needs approval" email.
   receives_schedule_approval_email?: boolean;
+  // Kept out of people pickers (DEV-458); still listed in Users.
+  hidden_from_lists?: boolean;
+  // FR-20: when TRUE, a task this user owns and is the only assignee of is
+  // private to them (hidden from everyone else, admins included).
+  is_task_manager?: boolean;
 
   settings?: {
     edges: {
@@ -179,6 +184,63 @@ export enum ResourceType {
     They are different jobs, so they are different permissions.
   */
   MOBILE_APP = "mobile_app",
+  // Finance (BRD §5.1, DEV-462). The group, then its pages.
+  FINANCE = "finance",
+  /* Ready to invoice, Finance's view: View it; Edit raises queries, holds
+     and marks not invoiceable; Approve records the MAHER invoice. */
+  FINANCE_QUEUE = "finance_queue",
+  /* The coordinator's side of the queue. Create asks for an item to be
+     excluded as not invoiceable, and answers Finance's queries; Approve
+     verifies an exclusion (Behrouz, BRD §5.1 Step 5). */
+  FINANCE_EXCLUSIONS = "finance_exclusions",
+  /* The Queries page (3 Nov). Replying and closing follow the person's view
+     above; a work order's own queries show to anyone who may open it. */
+  FINANCE_QUERIES = "finance_queries",
+  /* The Invoicing metrics page and its month-end revenue (3 Nov). */
+  FINANCE_METRICS = "finance_metrics",
+  // Reports (BRD §5.2). The group, then each report: View and Export.
+  REPORTS = "reports",
+  REPORTS_QUOTATIONS = "reports_quotations",
+  REPORTS_UTILIZATION = "reports_utilization",
+  REPORTS_CAPACITY = "reports_capacity",
+  REPORTS_ATTENDANCE = "reports_attendance",
+  REPORTS_REVENUE = "reports_revenue",
+  REPORTS_EXCEPTIONS = "reports_exceptions",
+  /* Everyone's check-in compliance. Edit waives a miss; Approve decides a
+     dispute; Export. Its own key since the merge with main (2 Nov):
+     "compliance" is main's Manpower Compliance module. */
+  REPORTS_COMPLIANCE = "reports_compliance",
+  /* A technician's own compliance and statement, resolved from the
+     session, never from the request. */
+  COMPLIANCE_SELF = "compliance_self",
+  /* Thresholds, digest time, ageing limits (BRD §6.6). */
+  REPORTING_SETTINGS = "reporting_settings",
+  // Manpower Compliance (FRD FR-9)
+  /*
+    The module: employees, their Emirates ID, passport and training
+    status, the reminder list. View / Create / Edit / Delete (archive) /
+    Export. Seeing a full identity number is NOT one of these actions; it
+    is a per-user allowlist kept in its own table, so a role grant can
+    never reach it.
+  */
+  COMPLIANCE = "compliance",
+  /* Settings page: certificate types, designation and nationality lists,
+     reminder recipients, role requirements. */
+  COMPLIANCE_SETTINGS = "compliance_settings",
+  /*
+    Seeing a FULL Emirates ID or passport number (FRD FR-9, decision D2:
+    Jesusa, Riyaz and Behrouz). No menu entry; View only; granted per role
+    on the Permissions screen and NOT inherited by admins, because the
+    privacy rule applies to admins too. Every reveal is audited.
+  */
+  COMPLIANCE_IDENTITY = "compliance_identity",
+  /*
+    Workforce (C6, Sami 31 Oct 2026): the lists Scheduling and Compliance
+    share -- roles, service types, tags, leave types, designations,
+    nationalities -- on Settings → Workforce. Granted to admins and
+    managers; the module keys (Scheduling, Compliance settings) still work.
+  */
+  WORKFORCE_SETTINGS = "workforce_settings",
 }
 
 export type TodoStatus =
@@ -199,6 +261,8 @@ export interface TodoComment {
   created_at: string;
   updated_at?: string;
   author?: User;
+  // FR-17: ids of the users this comment @-mentions (stored as data).
+  mentions?: string[];
 }
 
 export interface TodoUpdateLog {
@@ -241,6 +305,35 @@ export interface Todo {
   assignees?: User[];
   comments?: TodoComment[];
   updates?: TodoUpdateLog[];
+  // FR-17: everyone @-mentioned in this todo's comments. A mention grants
+  // read and comment access while the comment exists.
+  mentioned_user_ids?: string[];
+  // FR-17 point 7: those mentioned by the owner; only they can open a private todo.
+  owner_mentioned_user_ids?: string[];
+  // FR-16: how many files are attached (the list itself loads with the dialog).
+  attachment_count?: number;
+}
+
+// FR-16: one file attached to a todo. `signed_url` is minted per read and
+// lives for an hour; it is never stored.
+export interface TodoAttachment {
+  id: string;
+  todo_id: string;
+  // Set when the file was posted with a comment; null for a file on the task.
+  comment_id?: string | null;
+  uploaded_by: string | null;
+  file_name: string;
+  content_type: string;
+  size_bytes: number;
+  created_at: string;
+  uploader?: {
+    id: string;
+    email?: string | null;
+    first_name?: string | null;
+    last_name?: string | null;
+    full_name?: string | null;
+  } | null;
+  signed_url: string | null;
 }
 
 export const TODO_STATUS_LABELS: Record<TodoStatus, string> = {
@@ -303,7 +396,38 @@ export interface TechnicianReference {
   // Team-arranged row order on the schedule board ("Custom" sort). Null =
   // not arranged yet.
   board_position?: number | null;
+  // Finance & Reports (DEV-457, 458). See migration 20261020110000.
+  email?: string | null;
+  user_profile_id?: string | null;
+  employment_status?: TechnicianEmploymentStatus;
+  /** First day no longer working (YYYY-MM-DD). */
+  leaving_date?: string | null;
+  hidden_from_lists?: boolean;
+  /** ISO weekdays off, 1 = Monday .. 7 = Sunday. Null = not recorded. */
+  rest_weekdays?: number[] | null;
+  /** Hours a working day, net of breaks; null = the standard day (8 h). Migration 20261028100000. */
+  daily_hours?: number | null;
+  /** The contract's weekly limit (e.g. 48, 60); null = daily hours x working days. Migration 20261102100000. */
+  weekly_hours?: number | null;
+  /** Days off a week, not fixed weekdays; null = 1. Migration 20261102100000. */
+  off_days_per_week?: number | null;
+  // FR-23: first FSM sync that found the technician inactive. Null while active.
+  deactivated_at?: string | null;
 }
+
+// FR-21: one option of the managed leave-type list (lookup_options,
+// list_key 'leave_type'). leave_records.leave_type holds the NAME as text,
+// so deleting an option retires it: past records keep their text, the
+// dropdown stops offering it.
+export interface LeaveType {
+  id: string;
+  name: string;
+  sort_order: number;
+  // Leave records (any status) that carry this name, case-insensitive.
+  record_count?: number;
+}
+
+export type TechnicianEmploymentStatus = "active" | "resigned";
 
 export interface TechnicianTag {
   id: string;
@@ -322,6 +446,8 @@ export interface LeaveRecord {
   technician_fsm_id: string;
   technician?: TechnicianReference;
   leave_type: string;
+  /** DEV-456. Null on records made before categories, or by live main. */
+  leave_category?: "annual" | "sick" | "public_holiday" | "offset" | null;
   start_at: string;
   end_at: string;
   status: LeaveStatus;
@@ -810,6 +936,15 @@ export interface SnaggingTask {
    * holds assignment back.
    */
   quotation_status?: string | null;
+  /**
+   * SNG-100: the job's quotation is void because the inspector found the
+   * property not as quoted. `blocking` until the revised one is approved.
+   */
+  quotation_void?: {
+    quotation: { id: string; quote_number: string; voided_at: string; void_reason: string | null };
+    revised: { id: string; quote_number: string; status: string } | null;
+    blocking: boolean;
+  } | null;
   /** As quoted (SNG-100): furnished or not. Null when no quotation says. */
   furnished?: boolean | null;
   /** Booked outside working hours, as quoted. Null when no quotation says. */

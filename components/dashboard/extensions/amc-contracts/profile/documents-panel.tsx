@@ -23,6 +23,7 @@ import { clientProfileService, type DocumentRecord } from "@/modules/amc-contrac
 import { formatContractDate } from "../contract-status";
 import { useAmcData } from "../use-amc-data";
 import { useDialog } from "./use-dialog";
+import { TruncatedText } from "@/components/ui/truncated-text";
 
 const LEVEL_LABELS: Record<DocumentLevel, string> = {
   customer: "Client",
@@ -121,15 +122,15 @@ export function DocumentsPanel({
                   </span>
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="truncate font-medium">{d.title}</span>
+                      <TruncatedText className="font-medium">{d.title}</TruncatedText>
                       <span className="text-muted-foreground text-xs tabular-nums">
                         v{d.version}
                         {d.superseded ? " (earlier)" : ""}
                       </span>
                     </div>
-                    <div className="text-muted-foreground truncate text-xs">
+                    <TruncatedText className="text-muted-foreground text-xs">
                       {[d.category, rollsUp ? `For the ${LEVEL_LABELS[d.level].toLowerCase()}` : null, `${d.fileName} · ${sizeLabel(d.sizeBytes)}`].filter(Boolean).join(" · ")}
-                    </div>
+                    </TruncatedText>
                   </div>
                 </div>
                 <div className="text-right text-sm">

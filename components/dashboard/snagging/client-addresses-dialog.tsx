@@ -153,15 +153,36 @@ export function ClientAddressesDialog({
         className="flex max-h-[90vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl"
         showCloseButton
       >
-        <DialogHeader className="px-6 pt-6 pb-4 text-left">
-          <DialogTitle className="pr-10 text-lg">
-            {client?.client_name ?? "Client"} · addresses
-          </DialogTitle>
-          <DialogDescription>
-            The units this client has on file, here and in Zoho FSM. Picking the
-            client on a quotation or a job fills in the newest one, so it is not
-            typed again. A new address is added in Zoho FSM too.
-          </DialogDescription>
+        {/*
+          Add address sits at the end of the title, as an icon, where it is
+          seen before the list (it was a button under the list, below the
+          fold on a client with a few units). Left of the close button.
+        */}
+        <DialogHeader className="flex-row items-center gap-3 px-6 pt-6 pb-4 pr-14 text-left">
+          <div className="min-w-0 flex-1 space-y-1.5">
+            <DialogTitle className="text-lg">
+              {client?.client_name ?? "Client"} · addresses
+            </DialogTitle>
+            <DialogDescription>
+              The units this client has on file, here and in Zoho FSM. Picking the
+              client on a quotation or a job fills in the newest one, so it is not
+              typed again. A new address is added in Zoho FSM too.
+            </DialogDescription>
+          </div>
+          {canEdit && !editing ? (
+            <Hint label="Add address">
+              <Button
+                variant="outline"
+                size="icon"
+                className="shrink-0"
+                onClick={() => setEditing("new")}
+                disabled={loading}
+                aria-label="Add address"
+              >
+                <Plus className="size-4" />
+              </Button>
+            </Hint>
+          ) : null}
         </DialogHeader>
 
         {/*
@@ -214,7 +235,7 @@ export function ClientAddressesDialog({
                 <EmptyState
                   icon={<MapPin />}
                   title="No address on file"
-                  description="Add one now, or it will be saved with this client's first quotation."
+                  description="Add one with + above, or it will be saved with this client's first quotation."
                 />
               ) : (
                 <div className="divide-y overflow-hidden rounded-lg border">
@@ -249,15 +270,60 @@ export function ClientAddressesDialog({
                   ))}
                 </div>
               )}
-
-              {canEdit ? (
-                <Button variant="outline" onClick={() => setEditing("new")}>
-                  <Plus className="size-4" />
-                  Add address
-                </Button>
-              ) : null}
             </div>
           )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * One address, opened straight on its form: the job's Setup tab edits its
+ * unit here, the same form and layout as a client's addresses, so an
+ * address is corrected one way wherever it is opened from.
+ */
+export function EditAddressDialog({
+  open,
+  onOpenChange,
+  address,
+  clientName,
+  onSaved,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** The record to edit; it must belong to a client. */
+  address: SnaggingProperty & { client_id: string };
+  clientName?: string | null;
+  onSaved: (saved: SnaggingProperty) => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        className="flex max-h-[90vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl"
+        showCloseButton
+      >
+        <DialogHeader className="px-6 pt-6 pb-4 pr-14 text-left">
+          <DialogTitle className="text-lg">
+            {clientName ? `${clientName} · address` : "Address"}
+          </DialogTitle>
+          <DialogDescription>
+            The unit on this client&apos;s file. A change here is the same
+            change on every quotation and job for this unit.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden border-t">
+          {open ? (
+            <AddressForm
+              clientId={address.client_id}
+              address={address}
+              onCancel={() => onOpenChange(false)}
+              onSaved={(saved) => {
+                onOpenChange(false);
+                onSaved(saved);
+              }}
+            />
+          ) : null}
         </div>
       </DialogContent>
     </Dialog>
@@ -392,8 +458,12 @@ export function AddressForm({
   clientId: string;
   address: SnaggingProperty | null;
   onCancel: () => void;
-  /** Told about the saved address. */
-  onSaved: (saved: SnaggingProperty) => void;
+  /**
+   * Told about the saved address. A caller with more to save (AMC: the
+   * property's contract details) returns a promise; the form keeps saving,
+   * and says the address is saved, only once that is done too.
+   */
+  onSaved: (saved: SnaggingProperty) => void | Promise<void>;
   /** Starting values for a new address. */
   defaults?: { community?: string | null; property_type?: SnaggingPropertyType };
   /** More fields from the caller, shown before the documents; given the type chosen. */
@@ -527,6 +597,9 @@ export function AddressForm({
         }
       }
 
+      /* The caller's part first, so "Saving…" lasts until everything is saved and the toast comes as the form closes. */
+      await onSaved(saved);
+
       if (failed.length > 0) {
         toast.warning(
           `The address was saved, but the ${failed.join(" and ")} did not upload.`,
@@ -542,7 +615,6 @@ export function AddressForm({
             "It will be filled in when this client is picked on a quotation or a job.",
         });
       }
-      onSaved(saved);
     } catch (err) {
       toast.error(
         err instanceof Error ? err.message : "Could not save the address",

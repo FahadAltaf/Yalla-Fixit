@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Building2, ChevronRight, ClipboardCheck, Layers, Pencil, Plus, Receipt, RefreshCw, ScrollText, TriangleAlert, UserRound, UserX } from "lucide-react";
+import { ArrowLeft, Building2, ChevronRight, ClipboardCheck, Layers, Pencil, Plus, Receipt, ScrollText, TriangleAlert, UserRound, UserX } from "lucide-react";
 import { toast } from "sonner";
 
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
@@ -26,11 +26,14 @@ import { useAuth } from "@/context/AuthContext";
 import { RENEWAL_STAGE_LABELS, type RenewalStage } from "@/lib/amc/business";
 import { LIFECYCLE_LABELS, documentExpiryState } from "@/lib/amc/client-profile";
 import { formatQuantity, todayInDubai } from "@/lib/amc/contracts";
-import { amcContractsService, type CustomerInput, type CustomerOverview, type PropertyInput, type PropertyOverview, type PropertyRecord } from "@/modules/amc-contracts/amc-contracts-service";
+import { amcContractsService, type CustomerOverview, type PropertyInput, type PropertyOverview, type PropertyRecord } from "@/modules/amc-contracts/amc-contracts-service";
 
 import { ELIGIBILITY_LABELS } from "./contract-commercial";
 import { CONTRACT_STATUS_LABELS, contractStatusTone, formatContractDate } from "./contract-status";
+import { AddressDialog, useAddressFormAccess } from "./address-dialog";
 import { CustomerDialog } from "./customers-page";
+import { DetailHeaderCard, DetailHeaderSkeleton, DetailToolbar } from "./detail-header";
+import { customerInput } from "./edit-client-dialog";
 import { ClientPaymentsPanel } from "./payments-page";
 import { PropertyFields, UNIT_TYPE_LABELS, cleanProperty } from "./customer-pickers";
 import { useAmcData } from "./use-amc-data";
@@ -44,6 +47,8 @@ import { AccessRulesPanel, AssetsPanel, ScopePanel } from "./profile/property-pa
 import { useDialog } from "./profile/use-dialog";
 import { useUrlTab } from "./profile/use-url-tab";
 import { ClientEnquiriesCard } from "./enquiries/client-enquiries-card";
+import { formatPhone } from "@/lib/phone/format-phone";
+import { TruncatedText } from "@/components/ui/truncated-text";
 
 type ContractItem = CustomerOverview["contracts"][number];
 type AssessmentItem = CustomerOverview["assessments"][number];
@@ -56,10 +61,6 @@ const unitTypeLabel = (t: string | null) => (t ? (UNIT_TYPE_LABELS[t as keyof ty
 /* The record-page frame, as on Snagging's job page                    */
 /* ------------------------------------------------------------------ */
 
-/** "14:32" on the viewer's own clock, for the "Updated" note beside Refresh. */
-function formatClock(at: number): string {
-  return new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit" }).format(new Date(at));
-}
 
 /**
  * The page's data with the time it arrived, and a Refresh that knows when
@@ -75,41 +76,6 @@ function useRecord<T>(load: () => Promise<T>, key: string) {
     record.reload();
   };
   return { ...record, data: record.data?.value ?? null, fetchedAt: record.data?.fetchedAt ?? null, refreshing, refresh };
-}
-
-/** Back link on the left; when it was read and Refresh on the right. It never waits on the record. */
-function DetailToolbar({
-  backHref,
-  backLabel,
-  fetchedAt,
-  refreshing,
-  onRefresh,
-}: {
-  backHref: string;
-  backLabel: string;
-  fetchedAt?: number | null;
-  refreshing?: boolean;
-  onRefresh?: () => void;
-}) {
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-2">
-      <Button asChild variant="ghost" size="sm" className="-ml-2 self-start">
-        <Link href={backHref}>
-          <ArrowLeft className="size-4" />
-          {backLabel}
-        </Link>
-      </Button>
-      {onRefresh ? (
-        <div className="flex items-center gap-3">
-          {fetchedAt ? <span className="text-muted-foreground hidden text-xs sm:inline">Updated {formatClock(fetchedAt)}</span> : null}
-          <Button variant="outline" size="sm" onClick={onRefresh} disabled={refreshing} aria-label="Refresh this page">
-            <RefreshCw className={refreshing ? "size-4 animate-spin" : "size-4"} />
-            <span className="hidden sm:inline">Refresh</span>
-          </Button>
-        </div>
-      ) : null}
-    </div>
-  );
 }
 
 /** The header card, tabs and a panel greyed out while the record arrives. */
@@ -172,18 +138,21 @@ function ContractsTable({ contracts, showProperty = true }: { contracts: Contrac
                 </div>
               </TableCell>
               {showProperty ? (
-                <TableCell>
-                  {c.propertyId ? (
-                    <Link href={`/extensions/amc-contracts/properties/${c.propertyId}`} className="hover:underline" onClick={(e) => e.stopPropagation()}>
-                      {c.propertyLabel || "Property"}
-                    </Link>
-                  ) : (
-                    <span>{c.propertyLabel || "—"}</span>
-                  )}
+                <TableCell className="max-w-[320px]">
+                  {/* One line with "…"; the whole address on hover. */}
+                  <TruncatedText>
+                    {c.propertyId ? (
+                      <Link href={`/extensions/amc-contracts/properties/${c.propertyId}`} className="hover:underline" onClick={(e) => e.stopPropagation()}>
+                        {c.propertyLabel || "Property"}
+                      </Link>
+                    ) : (
+                      c.propertyLabel || "—"
+                    )}
+                  </TruncatedText>
                 </TableCell>
               ) : null}
-              <TableCell className="tabular-nums">{formatContractDate(c.startDate)}</TableCell>
-              <TableCell className="tabular-nums">
+              <TableCell className="whitespace-nowrap tabular-nums">{formatContractDate(c.startDate)}</TableCell>
+              <TableCell className="whitespace-nowrap tabular-nums">
                 {formatContractDate(c.endDate)}
                 <div className="text-muted-foreground text-xs">{c.expiryLabel}</div>
               </TableCell>
@@ -192,7 +161,9 @@ function ContractsTable({ contracts, showProperty = true }: { contracts: Contrac
                   {CONTRACT_STATUS_LABELS[c.displayStatus]}
                 </Badge>
               </TableCell>
-              <TableCell>{c.accountManagers.join(", ") || "—"}</TableCell>
+              <TableCell className="max-w-[200px]">
+                <TruncatedText text={c.accountManagers.join(", ") || "—"} />
+              </TableCell>
               <TableCell>
                 {c.coverage.totalServices} services
                 {c.coverage.exhausted ? <div className="text-danger text-xs">{c.coverage.exhausted} exhausted</div> : null}
@@ -225,7 +196,7 @@ function AssessmentsList({ assessments }: { assessments: AssessmentItem[] }) {
               {a.assessorName ? ` · ${a.assessorName}` : ""}
               {a.propertyLabel ? ` · ${a.propertyLabel}` : ""}
             </span>
-            {a.summary ? <div className="text-muted-foreground line-clamp-2 text-xs">{a.summary}</div> : null}
+            {a.summary ? <TruncatedText className="text-muted-foreground text-xs">{a.summary}</TruncatedText> : null}
             {a.proposal ? (
               <div className="text-xs">
                 Proposal{" "}
@@ -303,6 +274,8 @@ export function CustomerDetail({ id }: { id: string }) {
   useBreadcrumbLabel(id, data?.overview.customer.name ?? "Client");
   const editing = useDialog();
   const addingProperty = useDialog();
+  /* A new property on the Snagging address form, as Edit property uses (needs Snagging (Create)). */
+  const addressForm = useAddressFormAccess();
   /* Payments (Phase 7) only for AMC Payments (View), as /api/amc-payments answers. */
   const { userProfile } = useAuth();
   const canViewPayments = canViewAmcPayments(userProfile);
@@ -361,7 +334,7 @@ export function CustomerDetail({ id }: { id: string }) {
                 {LIFECYCLE_LABELS[customer.lifecycle]}
               </Badge>
             </div>
-            <p className="text-muted-foreground text-sm">{[customer.company, customer.phone, customer.email].filter(Boolean).join(" · ") || "No contact details recorded"}</p>
+            <p className="text-muted-foreground text-sm">{[customer.company, formatPhone(customer.phone), customer.email].filter(Boolean).join(" · ") || "No contact details recorded"}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {canEdit ? (
@@ -512,6 +485,22 @@ export function CustomerDetail({ id }: { id: string }) {
           reload();
         }}
       />
+      {addressForm ? (
+        <AddressDialog
+          key={`address-${addingProperty.key}`}
+          open={addingProperty.open}
+          onOpenChange={addingProperty.onOpenChange}
+          clientId={customer.id}
+          clientName={customer.name}
+          full
+          parentOptions={properties.map((p) => ({ id: p.id, label: p.label }))}
+          onSaved={() => {
+            addingProperty.onOpenChange(false);
+            toast.success("Property added");
+            reload();
+          }}
+        />
+      ) : (
       <PropertyDialog
         key={`property-${addingProperty.key}`}
         open={addingProperty.open}
@@ -527,27 +516,11 @@ export function CustomerDetail({ id }: { id: string }) {
           reload();
         }}
       />
+      )}
     </div>
   );
 }
 
-function customerInput(c: CustomerOverview["customer"]): CustomerInput {
-  return {
-    name: c.name,
-    customerRef: c.customerRef,
-    company: c.company,
-    email: c.email,
-    phone: c.phone,
-    notes: c.notes,
-    customerType: c.customerType as CustomerInput["customerType"],
-    lifecycle: c.lifecycle,
-    tradeLicenseNo: c.tradeLicenseNo,
-    tradeLicenseExpiry: c.tradeLicenseExpiry,
-    trn: c.trn,
-    preferredChannel: c.preferredChannel as CustomerInput["preferredChannel"],
-    preferredLanguage: c.preferredLanguage,
-  };
-}
 
 /* ------------------------------------------------------------------ */
 
@@ -571,7 +544,7 @@ function initialView<T extends string>(allowed: readonly T[], fallback: T): T {
  */
 export function PropertyDetail({ id }: { id: string }) {
   const router = useRouter();
-  const { data, error, loading, reload, refreshing, refresh } = useRecord(() => amcContractsService.property(id), id);
+  const { data, error, loading, reload, fetchedAt, refreshing, refresh } = useRecord(() => amcContractsService.property(id), id);
   useBreadcrumbLabel("properties", "Properties");
   useBreadcrumbLabel(id, data?.overview.property.label ?? "Property");
   const editing = useDialog();
@@ -589,13 +562,10 @@ export function PropertyDetail({ id }: { id: string }) {
     setActivityOpened((prev) => (prev.has(next) ? prev : new Set(prev).add(next)));
   };
 
-  const owner = data?.overview.customer ?? null;
-  const backHref = owner ? `${CLIENTS_HREF}/${owner.id}?tab=properties` : CLIENTS_HREF;
-
   if (error && /not found/i.test(error))
     return (
       <div className="flex w-full flex-1 flex-col gap-6">
-        <BackLink href={CLIENTS_HREF} label="Back to clients" />
+        <BackLink href={CLIENTS_HREF} label="Clients" />
         <Card className="p-0">
           <EmptyState
             icon={<Building2 className="size-5" />}
@@ -626,18 +596,47 @@ export function PropertyDetail({ id }: { id: string }) {
 
   return (
     <div className="flex w-full flex-1 flex-col gap-6">
-      {/* Back to the client on the left, everything the property can do on the right: the toolbar a quotation carries. */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <BackLink href={backHref} label={owner ? `Back to ${owner.name}` : "Back to clients"} />
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <Button variant="outline" size="sm" onClick={refresh} disabled={loading || refreshing} aria-label="Refresh this property">
-            <RefreshCw className={refreshing ? "size-4 animate-spin" : "size-4"} />
-            <span className="hidden sm:inline">Refresh</span>
-          </Button>
-          {property ? (
+      {/* As the client page: the way back and Refresh, then the property's card with what it can do. */}
+      <DetailToolbar
+        backHref={customer ? `${CLIENTS_HREF}/${customer.id}?tab=properties` : CLIENTS_HREF}
+        backLabel={customer?.name ?? "Clients"}
+        fetchedAt={fetchedAt}
+        refreshing={refreshing}
+        onRefresh={data ? refresh : undefined}
+      />
+
+      {!property ? (
+        error ? null : <DetailHeaderSkeleton />
+      ) : (
+        <DetailHeaderCard
+          badges={
+            <>
+              <Badge variant="outline">Property</Badge>
+              {property.propertyCategory ? <Badge variant="outline">{property.propertyCategory === "commercial" ? "Commercial" : "Residential"}</Badge> : null}
+              {unitTypeLabel(property.unitType) ? <Badge variant="outline">{unitTypeLabel(property.unitType)}</Badge> : null}
+            </>
+          }
+          title={property.label || "Property"}
+          status={
+            current ? (
+              <Badge variant="secondary" className={`border-0 font-medium ${contractStatusTone(current.displayStatus)}`}>
+                {CONTRACT_STATUS_LABELS[current.displayStatus]}
+              </Badge>
+            ) : (
+              <Badge variant="secondary" className="bg-mist text-ink-soft border-0 font-medium">
+                No AMC
+              </Badge>
+            )
+          }
+          subline={
+            [[property.building, property.community, property.city].filter(Boolean).join(", "), customer ? `for ${customer.name}` : "No client linked"]
+              .filter(Boolean)
+              .join(" · ")
+          }
+          actions={
             <>
               {customer ? (
-                <Button asChild variant="outline" size="sm">
+                <Button asChild variant="outline">
                   <Link href={`${CLIENTS_HREF}/${customer.id}`}>
                     <UserRound className="size-4" />
                     Open the client
@@ -645,7 +644,7 @@ export function PropertyDetail({ id }: { id: string }) {
                 </Button>
               ) : null}
               {current ? (
-                <Button asChild variant="outline" size="sm">
+                <Button asChild variant="outline">
                   <Link href={`/extensions/amc-contracts/${current.id}`}>
                     <ScrollText className="size-4" />
                     {current.proposalNumber}
@@ -653,16 +652,16 @@ export function PropertyDetail({ id }: { id: string }) {
                 </Button>
               ) : null}
               {canEdit ? (
-                <Button variant="outline" size="sm" onClick={() => editing.show(true)}>
+                <Button variant="outline" onClick={() => editing.show(true)}>
                   <Pencil className="size-4" />
                   Edit
                 </Button>
               ) : null}
-              <StartAssessmentButton customerId={customer?.id ?? null} propertyId={property.id} size="sm" />
+              <StartAssessmentButton customerId={customer?.id ?? null} propertyId={property.id} />
             </>
-          ) : null}
-        </div>
-      </div>
+          }
+        />
+      )}
 
       {error ? (
         <ErrorState title="Could not load this property" message={error} onRetry={reload} />
@@ -908,6 +907,7 @@ export function PropertyDetail({ id }: { id: string }) {
           onOpenChange={editing.onOpenChange}
           property={property}
           customerId={customer?.id ?? null}
+          clientName={customer?.name ?? null}
           childIds={units.children.map((u) => u.id)}
           onSaved={reload}
         />
@@ -984,8 +984,8 @@ function CurrentAmcCard({ current }: { current: PropertyOverview["current"] }) {
               <TableRow className="hover:bg-transparent">
                 <TableHead className="pl-5">Service</TableHead>
                 <TableHead>Type</TableHead>
-                <TableHead className="text-right">Used</TableHead>
-                <TableHead className="pr-5 text-right">Included</TableHead>
+                <TableHead>Used</TableHead>
+                <TableHead className="pr-5">Included</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -993,8 +993,8 @@ function CurrentAmcCard({ current }: { current: PropertyOverview["current"] }) {
                 <TableRow key={`${e.serviceId}-${e.entitlementType}`} className="h-12">
                   <TableCell className="pl-5">{e.serviceLabel}</TableCell>
                   <TableCell className="capitalize">{e.entitlementType === "informational" ? "included" : e.entitlementType}</TableCell>
-                  <TableCell className="text-right tabular-nums">{e.entitlementType === "informational" ? "—" : formatQuantity(e.usedQuantity)}</TableCell>
-                  <TableCell className="pr-5 text-right tabular-nums">
+                  <TableCell className="tabular-nums">{e.entitlementType === "informational" ? "—" : formatQuantity(e.usedQuantity)}</TableCell>
+                  <TableCell className="pr-5 tabular-nums">
                     {e.includedQuantity !== null ? formatQuantity(e.includedQuantity) : e.entitlementType === "unlimited" ? "Unlimited" : "—"}
                   </TableCell>
                 </TableRow>
@@ -1015,6 +1015,7 @@ function EditPropertyDialog({
   onOpenChange,
   property,
   customerId,
+  clientName,
   childIds,
   onSaved,
 }: {
@@ -1022,6 +1023,7 @@ function EditPropertyDialog({
   onOpenChange: (open: boolean) => void;
   property: PropertyRecord;
   customerId: string | null;
+  clientName?: string | null;
   childIds: string[];
   onSaved: () => void;
 }) {
@@ -1043,6 +1045,31 @@ function EditPropertyDialog({
       gone = true;
     };
   }, [open, customerId, property.id, childKey]);
+  const addressForm = useAddressFormAccess();
+
+  /*
+    The same form as a client's addresses in Snagging (unit, type, size, the
+    pin and the paperwork), with AMC's own fields beneath, so a property is
+    edited one way everywhere. It saves through Snagging, so without
+    Snagging (Create), or for an address with no client, the AMC form stays.
+  */
+  if (addressForm && customerId) {
+    return (
+      <AddressDialog
+        open={open}
+        onOpenChange={onOpenChange}
+        clientId={customerId}
+        clientName={clientName ?? "Client"}
+        propertyId={property.id}
+        editing
+        onSaved={() => {
+          onOpenChange(false);
+          toast.success("Property saved. Signed contracts are unchanged.");
+          onSaved();
+        }}
+      />
+    );
+  }
 
   return (
     <PropertyDialog

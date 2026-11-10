@@ -193,7 +193,7 @@ export function PublicAmcDocument({ token }: { token: string }) {
         title="Contract signed"
         description={`Thank you. Signed by ${doc.signedByName ?? "you"}${
           doc.signedAt ? ` on ${new Date(doc.signedAt).toLocaleDateString("en-GB")}` : ""
-        }. Your AMC is now in place and our team will be in touch to schedule the first visit.`}
+        }. Our team will be in touch about the first payment, and your visits are scheduled once it is received.`}
         icon={<CheckCircle2 size={32} className="text-green-600" />}
         iconBg="bg-green-50"
       />
@@ -237,7 +237,9 @@ export function PublicAmcDocument({ token }: { token: string }) {
 
   const isContract = doc.kind === "contract";
   const noun = isContract ? "contract" : "proposal";
-  const numbered = doc.proposalNumber ? `${noun} ${doc.proposalNumber}` : `this ${noun}`;
+  /* A contract is named by its own number (AMC-C-…), as its document prints it. */
+  const number = (isContract ? clientDocument?.source.contract_number : null) || doc.proposalNumber;
+  const numbered = number ? `${noun} ${number}` : `this ${noun}`;
 
   const sentOn = formatClientDate(clientDocument?.sentAt ?? null);
   /* The fee is for the term, which is not always a year. */

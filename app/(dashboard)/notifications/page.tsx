@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 
-import { AmcAccessGate } from "@/components/dashboard/extensions/amc/amc-access-gate";
 import { NotificationsInbox } from "@/components/dashboard/notifications/notifications-inbox";
 
 export const metadata: Metadata = {
@@ -8,12 +7,8 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 
-/* The portal notifications inbox (BRD 6.2). AMC is the module that sends
-   them today, so the AMC access rule applies. */
+/* The portal notifications inbox (BRD §6.2). Everyone signed in has one;
+   the API returns only the caller's own. */
 export default function NotificationsPage() {
-  return (
-    <AmcAccessGate>
-      <NotificationsInbox />
-    </AmcAccessGate>
-  );
+  return <NotificationsInbox />;
 }
