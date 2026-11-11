@@ -48,6 +48,9 @@ test("every AMC page asks about its own permission on the server", () => {
     ["app/(dashboard)/extensions/amc-contracts/assessments/page.tsx", "AMC_SITE_VISITS"],
     ["app/(dashboard)/extensions/amc-contracts/reports/page.tsx", "AMC_REPORTS"],
     ["app/(dashboard)/extensions/amc-contracts/board/page.tsx", "AMC_VISITS"],
+    ["app/(dashboard)/extensions/amc-contracts/visits/page.tsx", "AMC_VISITS"],
+    ["app/(dashboard)/extensions/amc-contracts/visits/[id]/page.tsx", "AMC_VISITS"],
+    ["app/(dashboard)/extensions/amc-contracts/additional-works/[id]/page.tsx", "AMC_ADDITIONAL_WORKS"],
     ["app/(dashboard)/extensions/amc-contracts/payments/page.tsx", "AMC_PAYMENTS"],
   ];
   for (const [file, resource] of gates) {

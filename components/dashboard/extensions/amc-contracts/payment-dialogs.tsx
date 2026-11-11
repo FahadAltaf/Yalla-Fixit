@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-import { ActionDialogContent, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
+import { ActionDialogContent, SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
@@ -81,6 +81,7 @@ export function usePaymentDialogs(onChanged: () => unknown) {
   const [whatsapp, setWhatsapp] = useState<{ text: string; url: string } | null>(null);
   const [whatsappOpen, setWhatsappOpen] = useState(false);
   const [reminding, setReminding] = useState<string | null>(null);
+  const { confirm, dialog: confirmDialog } = useConfirm();
 
   const open = (contractId: string, request: PaymentDialogRequest) => {
     setCurrent({ contractId, request });
@@ -98,7 +99,12 @@ export function usePaymentDialogs(onChanged: () => unknown) {
   };
 
   /* Email 4 goes from the server; the WhatsApp text comes back for the coordinator to send. */
-  const sendReminder = async (contractId: string, instalment: Pick<InstalmentRecord, "id" | "instalmentNo">) => {
+  /* Asked first (11 Nov 2026): it acts at once, so it is confirmed like every other step. */
+  const sendReminder = (contractId: string, instalment: Pick<InstalmentRecord, "id" | "instalmentNo">) =>
+    void confirm({ title: `Send a reminder for instalment ${instalment.instalmentNo}?`, description: "Emails the client a payment reminder and prepares a WhatsApp message to send yourself.", confirmText: "Send reminder" }).then((ok) => {
+      if (ok) void sendReminderNow(contractId, instalment);
+    });
+  const sendReminderNow = async (contractId: string, instalment: Pick<InstalmentRecord, "id" | "instalmentNo">) => {
     setReminding(instalment.id);
     try {
       const result = await paymentsService.paymentAction(contractId, { action: "send_reminder", instalmentId: instalment.id });
@@ -158,6 +164,7 @@ export function usePaymentDialogs(onChanged: () => unknown) {
         submit={submit}
       />
       <HandoverDialog open={openKind === "handover"} onOpenChange={close} payment={payment} submit={submit} />
+      {confirmDialog}
       <WhatsappDialog open={whatsappOpen} onOpenChange={setWhatsappOpen} message={whatsapp} />
     </>
   );

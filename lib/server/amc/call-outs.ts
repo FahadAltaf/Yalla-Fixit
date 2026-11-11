@@ -287,7 +287,7 @@ export async function createCallOut(admin: Admin, input: CallOutCreateInput, act
     userIds: [contract.ownerId, ...(input.priority === "emergency" ? supervisors : [])].filter((v): v is string => Boolean(v) && v !== actor.id),
     title: `Call out logged: ${label}`,
     body: `${contract.customerName}, ${contract.propertyLabel}: ${input.issue.slice(0, 200)}`,
-    link: `/extensions/amc-contracts/call-outs?open=${id}`,
+    link: `/extensions/amc-contracts/visits/${id}`,
     entityType: "call_out",
     entityId: id,
     contractId: contract.id,
@@ -587,6 +587,48 @@ export async function callOutNeed(admin: Admin, row: Row, trades: Trade[], date:
   };
 }
 
+/**
+ * Who can do a contract's work in one trade at a slot: the technicians with
+ * the trade (or an expired certificate for it), free or why not, the
+ * suggested crew, and how many on the roster have the trade (for "why
+ * nobody"). Call outs and additional work ask the same question.
+ */
+export async function crewSuggestion(
+  admin: Admin,
+  input: { contractId: string; trade: Trade | null; date: string; time: string; durationMinutes: number; ignoreIds: string[] },
+) {
+  const trades = input.trade ? [input.trade] : [];
+  const need = await callOutNeed(admin, { contract_id: input.contractId }, trades, input.date);
+  const fits = await crewFitsForSlot(admin, need, dubaiSlot(input.date, input.time, input.durationMinutes), null, input.ignoreIds);
+  return {
+    fits: fits.filter((f) => f.covers.length > 0 || f.blockers.some((b) => b.startsWith("Certificate"))),
+    suggested: suggestCrew(fits, trades),
+    skilledByTrade: Object.fromEntries(trades.map((trade) => [trade, fits.filter((f) => f.covers.includes(trade)).length])),
+    rosterSize: fits.length,
+  };
+}
+
+/**
+ * Checks a chosen crew for a slot as a call out's is checked: nobody
+ * blocked (leave, double booking, access, competence), and a reason when it
+ * is not the suggested crew. Returns the slot to store.
+ */
+export async function checkCrewForSlot(
+  admin: Admin,
+  input: { contractId: string; trade: Trade | null; date: string; time: string; durationMinutes: number; technicianIds: string[]; overrideReason: string | null; ignoreIds: string[] },
+) {
+  const slot = dubaiSlot(input.date, input.time, input.durationMinutes);
+  const trades = input.trade ? [input.trade] : [];
+  const need = await callOutNeed(admin, { contract_id: input.contractId }, trades, input.date);
+  const fits = await crewFitsForSlot(admin, need, slot, input.technicianIds, input.ignoreIds);
+  const problems = assignmentProblems(fits, trades);
+  if (problems.length) throw new ContractError(problems.join(" "), 409);
+  const suggested = suggestCrew(await crewFitsForSlot(admin, need, slot, null, input.ignoreIds), trades).technicianIds;
+  const same = suggested.length === input.technicianIds.length && suggested.every((t) => input.technicianIds.includes(t));
+  if (suggested.length && !same && !input.overrideReason) throw new ContractError("This is not the suggested crew: say why it was chosen instead.", 400);
+  return slot;
+}
+
 export async function performCallOutAction(admin: Admin, id: string, action: CallOutAction, actor: Actor, config: AmcConfig) {
   const row = await loadCallOut(admin, id);
   const status = row.status as CallOutStatus;
@@ -837,7 +879,7 @@ export async function runCallOutSweep(admin: Admin, config: AmcConfig, now = new
       userIds: [c.ownerId, ...supervisors].filter((v): v is string => Boolean(v)),
       title: `${c.slaState === "missed" ? "SLA missed" : "SLA at risk"}: call out ${c.callOutNo} (${CALL_OUT_PRIORITY_LABELS[c.priority]})`,
       body: `${c.customerName}, ${c.propertyLabel}: attend by ${new Date(due).toLocaleString("en-GB", { timeZone: "Asia/Dubai" })}.`,
-      link: `/extensions/amc-contracts/call-outs?open=${c.id}`,
+      link: `/extensions/amc-contracts/visits/${c.id}`,
       entityType: "call_out",
       entityId: c.id,
       contractId: c.contractId,

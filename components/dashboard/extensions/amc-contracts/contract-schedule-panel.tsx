@@ -1,18 +1,21 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import { format } from "date-fns";
 import {
   CalendarCheck,
   CalendarClock,
   CalendarDays,
   CalendarPlus,
+  CheckCircle2,
   Combine,
   Database,
   EllipsisVertical,
   ExternalLink,
   History,
   MoreHorizontal,
+  Plus,
   RefreshCw,
   Settings2,
   Split,
@@ -20,7 +23,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-import { ListPager, SectionCard, StatCard, StatCardGrid } from "@/components/dashboard/shared/kaizen";
+import { SectionCard, StatCard, StatCardGrid } from "@/components/dashboard/shared/kaizen";
 import { ActionDialogContent, ErrorState, SectionSkeleton, StatGridSkeleton, SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -43,6 +46,8 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import DateSelect from "@/components/ui/date-select";
 import { todayInDubai } from "@/lib/amc/contracts";
+import { cn } from "@/lib/utils";
+import { visitPageHref } from "@/lib/amc/field-visits";
 import { PLANNABLE_STATUSES, VISIT_CHANGE_LABELS, VISIT_STATUS_LABELS, classifyMove, clubbingGroups, windowsOverlap } from "@/lib/amc/ppm";
 import { ACCESS_STATUS_LABELS } from "@/lib/amc/visits";
 import {
@@ -56,9 +61,9 @@ import {
 } from "@/modules/amc-contracts/schedule-service";
 import type { BoardVisit } from "@/modules/amc-contracts/visits-service";
 
-import { formatContractDate, formatDateTime } from "./contract-status";
+import { formatContractDate } from "./contract-status";
+import type { HistoryEntry } from "./history-card";
 import { StaffSelect } from "./people-pickers";
-import { VisitDetailDialog } from "./visit-detail-dialog";
 import {
   ACCESS_TONE,
   CHANNEL_LABELS,
@@ -117,8 +122,6 @@ const isPlannable = (v: VisitRecord) => PLANNABLE_STATUSES.includes(v.status);
 */
 type ScheduleVisit = VisitRecord & Partial<Pick<BoardVisit, "scheduledStart" | "technicianIds" | "clientConfirmation" | "accessStatus">>;
 
-/* The visit dialog opens straight from a link (the board's ?visit=<id>). */
-const visitInUrl = () => (typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("visit"));
 
 const toDate = (iso: string) => new Date(`${iso.slice(0, 10)}T00:00:00`);
 /** "4 Nov", for windows inside a month heading that already says the year. */
@@ -131,16 +134,13 @@ const sharesService = (a: VisitRecord, b: VisitRecord) => a.lines.some((l) => b.
 type DialogKind = "move" | "add" | "remove" | "club" | "rules";
 
 export function ContractSchedulePanel({ contractId, schedule }: { contractId: string; schedule: ContractScheduleState }) {
+  const router = useRouter();
   const { data, error, loading, reload } = schedule;
   const { confirm, dialog: confirmDialog } = useConfirm();
   const [showCancelled, setShowCancelled] = useState(false);
   /* The visit is kept after a dialog closes, so it animates out with its content. */
   const [target, setTarget] = useState<VisitRecord | null>(null);
   const [openKind, setOpenKind] = useState<DialogKind | null>(null);
-  const [historyPage, setHistoryPage] = useState(0);
-  /* The visit dialog: any visit, any user (it shows only what they may change). */
-  const [visitId, setVisitId] = useState<string | null>(visitInUrl);
-  const [visitOpen, setVisitOpen] = useState(() => visitInUrl() !== null);
 
   const visits = useMemo(() => data?.visits ?? [], [data]);
   const plannable = useMemo(() => visits.filter(isPlannable), [visits]);
@@ -152,6 +152,12 @@ export function ContractSchedulePanel({ contractId, schedule }: { contractId: st
       ),
     [plannable],
   );
+
+  /* Older links (notifications, bookmarks) opened the visit here with ?visit=<id>: send them to its page. */
+  useEffect(() => {
+    const asked = new URLSearchParams(window.location.search).get("visit");
+    if (asked) router.replace(visitPageHref(asked));
+  }, [router]);
 
   if (!data && loading) {
     return (
@@ -177,7 +183,7 @@ export function ContractSchedulePanel({ contractId, schedule }: { contractId: st
     );
   }
 
-  const { progress, confirmed, lines, rules, changes } = data;
+  const { progress, confirmed, lines, rules } = data;
   /* The route lets the contract's operators change it; only while the contract is active or on hold. */
   const canEdit = data.permissions.canEdit && data.open;
 
@@ -192,20 +198,8 @@ export function ContractSchedulePanel({ contractId, schedule }: { contractId: st
     setOpenKind(kind);
   };
   const closeDialog = (next: boolean) => !next && setOpenKind(null);
-  const openVisit = (id: string) => {
-    setVisitId(id);
-    setVisitOpen(true);
-  };
-  const closeVisit = (next: boolean) => {
-    if (next) return;
-    setVisitOpen(false);
-    /* Drop ?visit= so a refresh does not open it again. */
-    const query = new URLSearchParams(window.location.search);
-    if (query.has("visit")) {
-      query.delete("visit");
-      window.history.replaceState(window.history.state, "", `?${query.toString()}`);
-    }
-  };
+  /* A visit opens on its own page (AMC -> Visits). */
+  const openVisit = (id: string) => router.push(visitPageHref(id));
   /* The dialog keeps its own pending state and shows a failure as a toast; this posts, reloads and closes. */
   const submit = async (action: ScheduleActionInput, success: string) => {
     await post(action);
@@ -295,7 +289,6 @@ export function ContractSchedulePanel({ contractId, schedule }: { contractId: st
   const shown = showCancelled ? visits : visits.filter((v) => v.status !== "cancelled");
   const months = groupByMonth(shown);
   const next = progress.nextVisit ? visits.find((v) => v.id === progress.nextVisit?.id) : null;
-  const visitNo = new Map(visits.map((v) => [v.id, v.visitNo]));
 
   /* Visits that could share a trip with this one: still to plan, windows meet, no service in common. */
   const clubCandidates = (visit: VisitRecord) =>
@@ -411,12 +404,16 @@ export function ContractSchedulePanel({ contractId, schedule }: { contractId: st
       >
         {months.map(([month, rows]) => (
           <div key={month}>
-            <div className="bg-muted/40 text-muted-foreground border-y px-5 py-1.5 text-xs font-medium">{month}</div>
+            <div className="bg-muted/40 text-muted-foreground flex items-center justify-between border-y px-5 py-2 text-xs font-semibold tracking-wide uppercase">
+              <span>{month}</span>
+              <span className="font-normal normal-case">{rows.length === 1 ? "1 visit" : `${rows.length} visits`}</span>
+            </div>
             <ul className="divide-y">
               {rows.map((v) => (
                 <VisitRow
                   key={v.id}
                   visit={v}
+                  onOpen={() => openVisit(v.id)}
                   actions={
                     <VisitMenu
                       visit={v}
@@ -436,8 +433,6 @@ export function ContractSchedulePanel({ contractId, schedule }: { contractId: st
         ))}
       </SectionCard>
 
-      <ScheduleHistory changes={changes} visitNo={visitNo} page={historyPage} onPageChange={setHistoryPage} />
-
       <MoveDialog open={openKind === "move"} onOpenChange={closeDialog} visit={target} confirmed={Boolean(confirmed)} submit={submit} />
       <AddVisitDialog open={openKind === "add"} onOpenChange={closeDialog} lines={lines} windowDays={rules.windowDays} submit={submit} />
       <RemoveDialog open={openKind === "remove"} onOpenChange={closeDialog} visit={target} submit={submit} />
@@ -449,7 +444,6 @@ export function ContractSchedulePanel({ contractId, schedule }: { contractId: st
         submit={submit}
       />
       <RulesDialog open={openKind === "rules"} onOpenChange={closeDialog} rules={rules} submit={submit} />
-      <VisitDetailDialog visitId={visitId} open={visitOpen} onOpenChange={closeVisit} onChanged={reload} />
       {confirmDialog}
     </>
   );
@@ -466,74 +460,88 @@ function groupByMonth(visits: VisitRecord[]): Array<[string, VisitRecord[]]> {
   return [...groups.entries()];
 }
 
-function VisitRow({ visit, actions }: { visit: ScheduleVisit; actions: ReactNode }) {
+/**
+ * One visit on the schedule (11 Nov 2026): its day in a tile, "Visit N" with
+ * its services, one short line (window, slot and crew), and where it stands
+ * on the right. The whole row opens the visit; the menu holds the changes.
+ */
+function VisitRow({ visit, actions, onOpen }: { visit: ScheduleVisit; actions: ReactNode; onOpen: () => void }) {
   const cancelled = visit.status === "cancelled";
-  const struck = cancelled ? "text-muted-foreground line-through" : "";
   const confirmation = visit.clientConfirmation && visit.clientConfirmation in CONFIRMATION_SHORT ? (visit.clientConfirmation as ConfirmationState) : null;
   const access = visit.accessStatus && visit.accessStatus !== "not_required" ? visit.accessStatus : null;
   const crew = visit.technicianIds?.length ?? 0;
+  const day = toDate(visit.targetDate);
+  const moved = visit.originalTargetDate && visit.originalTargetDate !== visit.targetDate;
+  const line = [
+    `Window ${windowLabel(visit)}`,
+    visit.scheduledStart ? `${slotDay(visit.scheduledStart)}, ${slotTime(visit.scheduledStart)}${crew ? ` · ${plural(crew, "technician")}` : ""}` : "No time set",
+    moved ? `was ${dayMonth(visit.originalTargetDate!)}` : null,
+    visit.source === "added" ? "Added" : null,
+    visit.statusReason,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
   return (
-    <li className="flex flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3">
-      <div className={`w-16 shrink-0 text-sm font-medium tabular-nums ${struck}`}>Visit {visit.visitNo}</div>
-      <div className="min-w-0 flex-1 space-y-1">
-        <div className="flex flex-wrap items-center gap-1.5">
-          {visit.lines.map((l) => (
-            <Badge key={l.id} variant="outline" className={`font-normal ${struck}`}>
-              {l.serviceLabel}
-            </Badge>
-          ))}
+    <li
+      className={cn("hover:bg-muted/40 flex cursor-pointer items-center gap-4 px-5 py-3 transition-colors", cancelled && "opacity-60")}
+      onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") onOpen();
+      }}
+      tabIndex={0}
+      role="link"
+      aria-label={`Open visit ${visit.visitNo}`}
+    >
+      <div
+        className={cn(
+          "flex w-12 shrink-0 flex-col items-center rounded-lg border py-1 leading-tight",
+          visit.overdue ? "border-danger/40 bg-danger/5 text-danger" : visit.scheduledStart ? "border-brand/30 bg-brand-50 text-brand" : "bg-muted/40",
+        )}
+      >
+        <span className="text-[10px] font-semibold tracking-wide uppercase">{format(day, "MMM")}</span>
+        <span className="text-lg font-semibold tabular-nums">{format(day, "d")}</span>
+      </div>
+
+      <div className="min-w-0 flex-1">
+        <div className={cn("flex flex-wrap items-center gap-x-2 gap-y-1", cancelled && "line-through")}>
+          <span className="text-sm font-semibold">Visit {visit.visitNo}</span>
+          <span className="text-muted-foreground text-sm">·</span>
+          <span className="truncate text-sm font-medium">{visit.lines.map((l) => l.serviceLabel).join(", ") || "No services"}</span>
           {visit.lines.length > 1 ? (
-            <span className="text-muted-foreground inline-flex items-center gap-1 text-xs">
+            <Badge variant="outline" className="gap-1 font-normal">
               <Combine className="size-3" />
               Clubbed
-            </span>
+            </Badge>
           ) : null}
         </div>
-        <p className="text-muted-foreground text-xs">
-          {[`Window ${windowLabel(visit)}`, visit.source === "added" ? "Added" : null, visit.statusReason].filter(Boolean).join(" · ")}
-        </p>
-        {visit.scheduledStart || confirmation || access ? (
-          <div className="flex flex-wrap items-center gap-1.5">
-            {visit.scheduledStart ? (
-              <Badge variant="secondary" className="bg-brand-50 text-brand border-0 font-medium">
-                <CalendarClock className="size-3" />
-                {slotDay(visit.scheduledStart)} {slotTime(visit.scheduledStart)}
-                {crew ? ` · ${plural(crew, "technician")}` : ""}
-              </Badge>
-            ) : null}
-            {confirmation ? (
-              <Badge variant="secondary" className={`border-0 font-medium ${CONFIRMATION_TONE[confirmation]}`}>
-                {CONFIRMATION_SHORT[confirmation]}
-              </Badge>
-            ) : null}
-            {access ? (
-              <Badge variant="secondary" className={`border-0 font-medium ${ACCESS_TONE[access]}`}>
-                Pass {ACCESS_STATUS_LABELS[access].toLowerCase()}
-              </Badge>
-            ) : null}
-          </div>
-        ) : null}
+        <p className="text-muted-foreground mt-0.5 truncate text-xs">{line}</p>
       </div>
-      <div className="text-right">
-        <div className={`text-sm font-semibold tabular-nums ${struck}`}>{formatContractDate(visit.targetDate)}</div>
-        {visit.originalTargetDate && visit.originalTargetDate !== visit.targetDate ? (
-          <div className="text-muted-foreground text-xs tabular-nums">
-            <span className="sr-only">Originally </span>
-            <s>{formatContractDate(visit.originalTargetDate)}</s>
-          </div>
+
+      <div className="hidden flex-wrap items-center justify-end gap-1.5 sm:flex">
+        {confirmation ? (
+          <Badge variant="secondary" className={`border-0 font-medium ${CONFIRMATION_TONE[confirmation]}`}>
+            {CONFIRMATION_SHORT[confirmation]}
+          </Badge>
         ) : null}
-      </div>
-      <div className="flex flex-wrap items-center justify-end gap-1.5">
-        <Badge variant="secondary" className={`border-0 font-medium ${visitStatusTone(visit.status)}`}>
-          {VISIT_STATUS_LABELS[visit.status] ?? visit.status}
-        </Badge>
+        {access ? (
+          <Badge variant="secondary" className={`border-0 font-medium ${ACCESS_TONE[access]}`}>
+            Pass {ACCESS_STATUS_LABELS[access].toLowerCase()}
+          </Badge>
+        ) : null}
         {visit.overdue ? (
           <Badge variant="secondary" className="bg-danger/10 text-danger border-0 font-medium">
             Overdue
           </Badge>
         ) : null}
+        <Badge variant="secondary" className={`border-0 font-medium ${visitStatusTone(visit.status)}`}>
+          {VISIT_STATUS_LABELS[visit.status] ?? visit.status}
+        </Badge>
       </div>
-      <div className="flex w-8 justify-end">{actions}</div>
+      {/* The menu acts on its own: a click there does not open the visit. */}
+      <div className="flex w-8 justify-end" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+        {actions}
+      </div>
     </li>
   );
 }
@@ -608,8 +616,6 @@ function VisitMenu({
 /* History                                                             */
 /* ------------------------------------------------------------------ */
 
-const HISTORY_PAGE = 10;
-
 /** The extra a change carries in its detail, in words: which visits were clubbed, which trade left which visit. */
 function changeDetail(c: VisitChangeRecord): string | null {
   const d = c.detail as Record<string, unknown>;
@@ -627,61 +633,47 @@ function changeDetail(c: VisitChangeRecord): string | null {
   }
 }
 
-function ScheduleHistory({
-  changes,
-  visitNo,
-  page,
-  onPageChange,
-}: {
-  changes: VisitChangeRecord[];
-  visitNo: Map<string, number>;
-  page: number;
-  onPageChange: (page: number) => void;
-}) {
-  const rows = changes.slice(page * HISTORY_PAGE, (page + 1) * HISTORY_PAGE);
-  return (
-    <SectionCard
-      title="Schedule history"
-      description="Every change to the schedule, newest first."
-      icon={<History />}
-      bodyClassName={changes.length ? "pb-2" : "px-5 pb-5"}
-    >
-      {changes.length === 0 ? (
-        <p className="text-muted-foreground text-sm">No changes yet.</p>
-      ) : (
-        <>
-          <ol className="divide-y">
-            {rows.map((c) => {
-              const no = c.visitId ? visitNo.get(c.visitId) : undefined;
-              const dates =
-                c.fromDate && c.toDate
-                  ? `${formatContractDate(c.fromDate)} → ${formatContractDate(c.toDate)}`
-                  : c.toDate
-                    ? formatContractDate(c.toDate)
-                    : c.fromDate
-                      ? `was ${formatContractDate(c.fromDate)}`
-                      : null;
-              return (
-                <li key={c.id} className="px-5 py-3">
-                  <div className="flex flex-wrap items-baseline justify-between gap-x-3">
-                    <span className="text-sm font-medium">
-                      {no ? `Visit ${no}: ` : ""}
-                      {VISIT_CHANGE_LABELS[c.changeType] ?? c.changeType.replace(/_/g, " ")}
-                    </span>
-                    <span className="text-muted-foreground text-xs">{formatDateTime(c.createdAt)}</span>
-                  </div>
-                  <div className="text-muted-foreground text-sm">
-                    {[dates, changeDetail(c), c.reason ? `Reason: ${c.reason}` : null, c.actorLabel ?? "System"].filter(Boolean).join(" · ")}
-                  </div>
-                </li>
-              );
-            })}
-          </ol>
-          <ListPager page={page} pageSize={HISTORY_PAGE} total={changes.length} onPageChange={onPageChange} noun="changes" />
-        </>
-      )}
-    </SectionCard>
-  );
+const CHANGE_ICONS: Record<string, typeof History> = {
+  generated: CalendarPlus,
+  confirmed: CheckCircle2,
+  adjusted: CalendarClock,
+  moved_in_window: CalendarClock,
+  rescheduled: CalendarClock,
+  clubbed: Combine,
+  separated: Split,
+  added: Plus,
+  removed: Trash2,
+  rules_changed: Settings2,
+};
+
+/**
+ * The schedule's changes as History entries (11 Nov 2026): they show on the
+ * contract's History tab with everything else done to it, not in a card of
+ * their own on the Schedule tab.
+ */
+export function scheduleHistoryEntries(data: ContractScheduleResponse | null): HistoryEntry[] {
+  if (!data?.migrated) return [];
+  const visitNo = new Map(data.visits.map((v) => [v.id, v.visitNo]));
+  return data.changes.map((c) => {
+    const no = c.visitId ? visitNo.get(c.visitId) : undefined;
+    const dates =
+      c.fromDate && c.toDate
+        ? `${formatContractDate(c.fromDate)} → ${formatContractDate(c.toDate)}`
+        : c.toDate
+          ? formatContractDate(c.toDate)
+          : c.fromDate
+            ? `was ${formatContractDate(c.fromDate)}`
+            : null;
+    const Icon = CHANGE_ICONS[c.changeType] ?? History;
+    return {
+      key: `schedule-${c.id}`,
+      icon: <Icon aria-hidden />,
+      title: `${no ? `Visit ${no}: ` : ""}${VISIT_CHANGE_LABELS[c.changeType] ?? c.changeType.replace(/_/g, " ")}`,
+      actor: c.actorLabel ?? null,
+      detail: [dates, changeDetail(c), c.reason ? `"${c.reason}"` : null].filter(Boolean).join(" · ") || null,
+      at: c.createdAt,
+    };
+  });
 }
 
 /* ------------------------------------------------------------------ */

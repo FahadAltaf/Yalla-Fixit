@@ -137,6 +137,7 @@ function JobsCard({ canRun }: { canRun: boolean }) {
   const [data, setData] = useState<{ jobs: Array<{ key: string; label: string }>; runs: AmcJobRun[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
+  const { confirm, dialog: confirmDialog } = useConfirm();
 
   const load = useCallback(async () => {
     setError(null);
@@ -148,7 +149,12 @@ function JobsCard({ canRun }: { canRun: boolean }) {
   }, []);
   useEffect(() => void load(), [load]);
 
-  const run = async () => {
+  /* Asked first (11 Nov 2026): it acts at once, so it is confirmed like every other step. */
+  const run = () =>
+    void confirm({ title: "Run the AMC jobs now?", description: "Runs every escalation and reminder at once, as the scheduler does: overdue to-dos escalate and due reminders go out. Each job is safe to run twice.", confirmText: "Run now" }).then((ok) => {
+      if (ok) void runNow();
+    });
+  const runNow = async () => {
     setRunning(true);
     try {
       const result = await amcPlatformService.runJobs();
@@ -224,6 +230,7 @@ function JobsCard({ canRun }: { canRun: boolean }) {
           )}
         </div>
       )}
+      {confirmDialog}
     </SectionCard>
   );
 }

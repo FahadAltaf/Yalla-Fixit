@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { UNIT_TYPE_LABELS, UNIT_TYPES } from "./client-profile";
 import { MAX_BASE_PRICE, MAX_FREQUENCY, MAX_UNITS, roundAed } from "./pricing";
 
 /**
@@ -23,10 +24,38 @@ import { MAX_BASE_PRICE, MAX_FREQUENCY, MAX_UNITS, roundAed } from "./pricing";
  * latest published one whose date has come.
  */
 
-/** The property models rates are set for: what `property.unitType` holds on a proposal. */
-export const PROPERTY_MODELS = ["villa", "apartment", "office"] as const;
+/**
+ * The property models rates are set for: every property type the property
+ * form offers (11 Nov 2026; it was Villa, Apartment and Office only).
+ */
+export const PROPERTY_MODELS = UNIT_TYPES;
 export type PropertyModel = (typeof PROPERTY_MODELS)[number];
-export const MODEL_LABELS: Record<PropertyModel | "any", string> = { villa: "Villa", apartment: "Apartment", office: "Office", any: "Any property" };
+export const MODEL_LABELS: Record<PropertyModel | "any", string> = { ...UNIT_TYPE_LABELS, any: "Any property" };
+
+/**
+ * The model a type is priced on when the card has nothing of its own for
+ * it, so cards set before every type was listed still price them: a
+ * townhouse as a villa, a restaurant, clinic, shop or warehouse as an office.
+ */
+export const MODEL_FALLBACK: Partial<Record<PropertyModel, PropertyModel>> = {
+  townhouse: "villa",
+  restaurant: "office",
+  clinic: "office",
+  shop: "office",
+  warehouse: "office",
+};
+
+/** A model, or the models to try in order (a proposal's property type, then its rate model). */
+export type ModelChain = string | readonly (string | null | undefined)[];
+
+/** The models to try, in order, each followed by its fallback; "any" is tried after them all. */
+export function modelChain(model: ModelChain): string[] {
+  const out: string[] = [];
+  for (const m of typeof model === "string" ? [model] : model) {
+    for (let cur: string | undefined = m ?? undefined; cur && !out.includes(cur); cur = MODEL_FALLBACK[cur as PropertyModel]) out.push(cur);
+  }
+  return out;
+}
 
 /** How a rate is counted; the line is rate × units × frequency either way. */
 export const RATE_BASES = ["per_unit", "per_property", "per_visit", "per_hour"] as const;
@@ -64,7 +93,7 @@ export const packageSchema = z
     name: z.string().trim().min(1, "Name the package").max(80),
     description: z.string().trim().max(500).default(""),
     /* Empty: every model. */
-    models: z.array(z.enum(PROPERTY_MODELS)).max(3).default([]),
+    models: z.array(z.enum(PROPERTY_MODELS)).max(PROPERTY_MODELS.length).default([]),
     lines: z
       .array(
         z
@@ -91,7 +120,7 @@ export const promotionSchema = z
     /* Empty: every service. */
     serviceIds: z.array(z.string().trim().min(1).max(100)).max(50).default([]),
     /* Empty: every model. */
-    models: z.array(z.enum(PROPERTY_MODELS)).max(3).default([]),
+    models: z.array(z.enum(PROPERTY_MODELS)).max(PROPERTY_MODELS.length).default([]),
     active: z.boolean().default(true),
   })
   .strict()
@@ -145,10 +174,14 @@ export function versionInForce<T extends { effectiveFrom: string; versionNo: num
   return best;
 }
 
-/** The active rate for a service on a property model: the model's own, else the "any property" one. */
-export function rateItemFor(card: RateCard, serviceId: string, model: string): RateItem | null {
+/** The active rate for a service on a property model: the model's own, else its fallback's, else the "any property" one. */
+export function rateItemFor(card: RateCard, serviceId: string, model: ModelChain): RateItem | null {
   const live = card.items.filter((i) => !i.retired && i.serviceId === serviceId);
-  return live.find((i) => i.model === model) ?? live.find((i) => i.model === "any") ?? null;
+  for (const m of modelChain(model)) {
+    const own = live.find((i) => i.model === m);
+    if (own) return own;
+  }
+  return live.find((i) => i.model === "any") ?? null;
 }
 
 /**
@@ -169,7 +202,7 @@ export function nearestAllowedFrequency(allowed: readonly number[], wanted: numb
 export function snapToCardFrequencies<R extends { serviceId: string; frequency: number; included?: boolean }>(
   rows: readonly R[],
   card: RateCard | null,
-  model: string,
+  model: ModelChain,
   /** Whether a service is counted in visits; one that is not (a hotline) keeps its once a year whatever the card lists. */
   countsVisits: (serviceId: string) => boolean = () => true,
 ): R[] {
@@ -183,21 +216,23 @@ export function snapToCardFrequencies<R extends { serviceId: string; frequency: 
 }
 
 const appliesTo = (list: readonly string[], value: string) => list.length === 0 || list.includes(value);
+/* A promotion or package set for a model also covers the types that fall back to it. */
+const appliesToModel = (list: readonly string[], model: ModelChain) => list.length === 0 || modelChain(model).some((m) => list.includes(m));
 
 /** The best promotion in date for a service on a model, or null. */
-export function promotionFor(card: RateCard, serviceId: string, model: string, day: string): RatePromotion | null {
+export function promotionFor(card: RateCard, serviceId: string, model: ModelChain, day: string): RatePromotion | null {
   let best: RatePromotion | null = null;
   for (const p of card.promotions) {
     if (!p.active || p.startDate > day || p.endDate < day) continue;
-    if (!appliesTo(p.serviceIds, serviceId) || !appliesTo(p.models, model)) continue;
+    if (!appliesTo(p.serviceIds, serviceId) || !appliesToModel(p.models, model)) continue;
     if (!best || p.percentOff > best.percentOff) best = p;
   }
   return best;
 }
 
 /** The packages offered on a model. */
-export function packagesFor(card: RateCard, model: string): RatePackage[] {
-  return card.packages.filter((p) => p.active && appliesTo(p.models, model));
+export function packagesFor(card: RateCard, model: ModelChain): RatePackage[] {
+  return card.packages.filter((p) => p.active && appliesToModel(p.models, model));
 }
 
 /* ------------------------------------------------------------------ */
@@ -250,7 +285,7 @@ export interface CardPricing<R extends CardRow> {
 export function applyRateCard<R extends CardRow>(
   rows: readonly R[],
   card: RateCard,
-  model: string,
+  model: ModelChain,
   day: string,
   discountPercent: number,
   labelOf: (serviceId: string) => string = (s) => s,

@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Building2, ChevronRight, ClipboardCheck, Layers, Pencil, Plus, Receipt, ScrollText, TriangleAlert, UserRound, UserX } from "lucide-react";
 import { toast } from "sonner";
+import type { ColumnDef } from "@tanstack/react-table";
 
+import { DataTable } from "@/components/data-table";
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -56,6 +58,7 @@ type AssessmentItem = CustomerOverview["assessments"][number];
 type QuoteItem = CustomerOverview["quotes"][number];
 
 const CLIENTS_HREF = "/extensions/amc-contracts/customers";
+const noop = () => undefined;
 const unitTypeLabel = (t: string | null) => (t ? (UNIT_TYPE_LABELS[t as keyof typeof UNIT_TYPE_LABELS] ?? t) : null);
 
 /* ------------------------------------------------------------------ */
@@ -109,75 +112,118 @@ const TABS_LIST = "h-auto w-full flex-wrap justify-start gap-1 group-data-horizo
 /* Shared lists                                                        */
 /* ------------------------------------------------------------------ */
 
+/* The contract list's columns; Property only where the list spans properties. */
+function contractColumns(showProperty: boolean): ColumnDef<ContractItem>[] {
+  return [
+    {
+      id: "contract",
+      header: "Contract",
+      cell: ({ row }) => (
+        <div className="font-medium">
+          <Link href={`/extensions/amc-contracts/${row.original.id}`} className="hover:underline" onClick={(e) => e.stopPropagation()}>
+            {row.original.proposalNumber}
+          </Link>
+          <div className="text-muted-foreground text-xs">
+            <Money value={row.original.grandTotal} className="text-xs" />
+          </div>
+        </div>
+      ),
+    },
+    ...(showProperty
+      ? [
+          {
+            id: "property",
+            header: "Property",
+            cell: ({ row }) => (
+              <div className="max-w-[320px]">
+                {/* One line with "…"; the whole address on hover. */}
+                <TruncatedText>
+                  {row.original.propertyId ? (
+                    <Link href={`/extensions/amc-contracts/properties/${row.original.propertyId}`} className="hover:underline" onClick={(e) => e.stopPropagation()}>
+                      {row.original.propertyLabel || "Property"}
+                    </Link>
+                  ) : (
+                    row.original.propertyLabel || "—"
+                  )}
+                </TruncatedText>
+              </div>
+            ),
+          } satisfies ColumnDef<ContractItem>,
+        ]
+      : []),
+    {
+      id: "start",
+      header: "Start",
+      cell: ({ row }) => <span className="whitespace-nowrap tabular-nums">{formatContractDate(row.original.startDate)}</span>,
+    },
+    {
+      id: "end",
+      header: "End",
+      cell: ({ row }) => (
+        <div className="whitespace-nowrap tabular-nums">
+          {formatContractDate(row.original.endDate)}
+          <div className="text-muted-foreground text-xs">{row.original.expiryLabel}</div>
+        </div>
+      ),
+    },
+    {
+      id: "status",
+      header: "Status",
+      cell: ({ row }) => (
+        <Badge variant="secondary" className={`border-0 font-medium ${contractStatusTone(row.original.displayStatus)}`}>
+          {CONTRACT_STATUS_LABELS[row.original.displayStatus]}
+        </Badge>
+      ),
+    },
+    {
+      id: "accountManager",
+      header: "Account manager",
+      cell: ({ row }) => (
+        <div className="max-w-[200px]">
+          <TruncatedText text={row.original.accountManagers.join(", ") || "—"} />
+        </div>
+      ),
+    },
+    {
+      id: "coverage",
+      header: "Coverage",
+      cell: ({ row }) => (
+        <div>
+          {row.original.coverage.totalServices} services
+          {row.original.coverage.exhausted ? <div className="text-danger text-xs">{row.original.coverage.exhausted} exhausted</div> : null}
+        </div>
+      ),
+    },
+    {
+      id: "renewal",
+      header: "Renewal",
+      cell: ({ row }) => (
+        <div>
+          {row.original.renewalStage ? RENEWAL_STAGE_LABELS[row.original.renewalStage as RenewalStage] : "—"}
+          {row.original.renewalOverdue ? <div className="text-danger text-xs">past the end date</div> : null}
+        </div>
+      ),
+    },
+  ];
+}
+
 function ContractsTable({ contracts, showProperty = true }: { contracts: ContractItem[]; showProperty?: boolean }) {
   const router = useRouter();
-  if (contracts.length === 0) return <EmptyState icon={<ScrollText className="size-5" />} title="No contracts" description="Contracts signed with this client appear here, each one separately." />;
+  const columns = useMemo(() => contractColumns(showProperty), [showProperty]);
   return (
-    <div className="overflow-x-auto">
-      <Table className="min-w-[820px]">
-        <TableHeader className="[&_th]:text-muted-foreground">
-          <TableRow className="hover:bg-transparent">
-            <TableHead className="pl-5">Contract</TableHead>
-            {showProperty ? <TableHead>Property</TableHead> : null}
-            <TableHead>Start</TableHead>
-            <TableHead>End</TableHead>
-            <TableHead>Status</TableHead>
-            <TableHead>Account manager</TableHead>
-            <TableHead>Coverage</TableHead>
-            <TableHead className="pr-5">Renewal</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {contracts.map((c) => (
-            <TableRow key={c.id} className="hover:bg-muted/50 h-14 cursor-pointer" onClick={() => router.push(`/extensions/amc-contracts/${c.id}`)}>
-              <TableCell className="pl-5 font-medium">
-                <Link href={`/extensions/amc-contracts/${c.id}`} className="hover:underline" onClick={(e) => e.stopPropagation()}>
-                  {c.proposalNumber}
-                </Link>
-                <div className="text-muted-foreground text-xs">
-                  <Money value={c.grandTotal} className="text-xs" />
-                </div>
-              </TableCell>
-              {showProperty ? (
-                <TableCell className="max-w-[320px]">
-                  {/* One line with "…"; the whole address on hover. */}
-                  <TruncatedText>
-                    {c.propertyId ? (
-                      <Link href={`/extensions/amc-contracts/properties/${c.propertyId}`} className="hover:underline" onClick={(e) => e.stopPropagation()}>
-                        {c.propertyLabel || "Property"}
-                      </Link>
-                    ) : (
-                      c.propertyLabel || "—"
-                    )}
-                  </TruncatedText>
-                </TableCell>
-              ) : null}
-              <TableCell className="whitespace-nowrap tabular-nums">{formatContractDate(c.startDate)}</TableCell>
-              <TableCell className="whitespace-nowrap tabular-nums">
-                {formatContractDate(c.endDate)}
-                <div className="text-muted-foreground text-xs">{c.expiryLabel}</div>
-              </TableCell>
-              <TableCell>
-                <Badge variant="secondary" className={`border-0 font-medium ${contractStatusTone(c.displayStatus)}`}>
-                  {CONTRACT_STATUS_LABELS[c.displayStatus]}
-                </Badge>
-              </TableCell>
-              <TableCell className="max-w-[200px]">
-                <TruncatedText text={c.accountManagers.join(", ") || "—"} />
-              </TableCell>
-              <TableCell>
-                {c.coverage.totalServices} services
-                {c.coverage.exhausted ? <div className="text-danger text-xs">{c.coverage.exhausted} exhausted</div> : null}
-              </TableCell>
-              <TableCell className="pr-5">
-                {c.renewalStage ? RENEWAL_STAGE_LABELS[c.renewalStage as RenewalStage] : "—"}
-                {c.renewalOverdue ? <div className="text-danger text-xs">past the end date</div> : null}
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </div>
+    <DataTable
+      columns={columns}
+      data={contracts}
+      loading={false}
+      rowCount={contracts.length}
+      pageSize={500}
+      currentPage={0}
+      onPageChange={noop}
+      onPageSizeChange={noop}
+      onGlobalFilterChange={noop}
+      handleRowClick={(c) => router.push(`/extensions/amc-contracts/${c.id}`)}
+      emptyState={<EmptyState icon={<ScrollText className="size-5" />} title="No contracts" description="Contracts signed with this client appear here, each one separately." />}
+    />
   );
 }
 

@@ -57,13 +57,14 @@ import { ATTENDANCE_LABELS, SITE_VISIT_ATTENDANCE, type SiteVisitAttendance } fr
 import { cn } from "@/lib/utils";
 import { useDebounce } from "@/hooks/use-debounce";
 import { amcContractsService, type AssessmentRecord, type CustomerRecord } from "@/modules/amc-contracts/amc-contracts-service";
+import { fieldVisitsService } from "@/modules/amc-contracts/field-visits-service";
 
 import { AssessmentPhotos } from "./assessment-photos";
 import { CustomerSearch, UNIT_TYPE_LABELS } from "./customer-pickers";
 import { UNIT_TYPE_CATEGORY } from "@/lib/amc/client-profile";
 import { formatContractDate, formatDateTime } from "./contract-status";
 import { AddressDialog, useAddressFormAccess } from "./address-dialog";
-import { DetailHeaderCard, DetailHeaderSkeleton, DetailToolbar } from "./detail-header";
+import { DetailHeaderCard, DetailHeaderSkeleton, DetailToolbar, shortPlace } from "./detail-header";
 import { EditClientDialog } from "./edit-client-dialog";
 import { EnquiryPropertySelect } from "./enquiries/enquiry-property-select";
 import { PropertyPickerField } from "./property-picker-field";
@@ -71,6 +72,7 @@ import { DetailList, HeadingIconButton, HeadingWithActions, PersonSelect, SiteVi
 import { ListToolbar } from "./enquiries/list-toolbar";
 import { useUrlTab } from "./profile/use-url-tab";
 import { useAmcData } from "./use-amc-data";
+import { HistoryPanel } from "./visit-page";
 import { ModuleGuide } from "@/components/dashboard/extensions/amc-contracts/module-guide";
 
 const RESULT_LABELS: Record<AssessmentResult, string> = {
@@ -341,8 +343,8 @@ function SiteVisitRowActions({ visit }: { visit: AssessmentRecord }) {
   );
 }
 
-/** Always mounted and controlled; the form renders inside the content, so it starts fresh on each open. */
-function NewSiteVisitDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+/** Always mounted and controlled; the form renders inside the content, so it starts fresh on each open. Also on AMC -> Visits. */
+export function NewSiteVisitDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const [working, setWorking] = useState(false);
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -437,7 +439,7 @@ function toDraft(a: AssessmentRecord): Draft {
   };
 }
 
-const TABS = ["details", "checklist", "findings", "photos"] as const;
+const TABS = ["details", "checklist", "findings", "photos", "history"] as const;
 
 export function AssessmentDetail({ id }: { id: string }) {
   const router = useRouter();
@@ -463,6 +465,8 @@ export function AssessmentDetail({ id }: { id: string }) {
   useBreadcrumbLabel(id, data?.assessment.assessmentNumber ?? "Site visit");
   const { confirm, dialog } = useConfirm();
   const { tab, setTab, isOpened } = useUrlTab(TABS, "details");
+  /* What happened to the visit (booked, moved, attended, completed …), read when its tab first opens. */
+  const history = useAmcData(() => (isOpened("history") ? fieldVisitsService.history(id) : Promise.resolve(null)), isOpened("history") ? `site-visit-history:${id}` : "history:none");
   const addressForm = useAddressFormAccess();
   const [addingAddress, setAddingAddress] = useState(false);
   /* The shared client or address record, edited in place as on the job's Setup tab. */
@@ -488,6 +492,7 @@ export function AssessmentDetail({ id }: { id: string }) {
   const refresh = () => {
     setRefreshing(true);
     reload();
+    history.reload();
   };
 
   if (error && /not found/i.test(error)) {
@@ -573,7 +578,12 @@ export function AssessmentDetail({ id }: { id: string }) {
         reload();
       },
     });
-  const createProposal = async () => {
+  /* Asked first (11 Nov 2026): it acts at once, so it is confirmed like every other step. */
+  const createProposal = () =>
+    void confirm({ title: "Create an AMC proposal from this site visit?", description: "Starts a draft proposal with this visit's client, property and recommended services, then opens it to enter the prices. Nothing is sent to the client.", confirmText: "Create proposal" }).then((ok) => {
+      if (ok) void createProposalNow();
+    });
+  const createProposalNow = async () => {
     setPending("proposal");
     try {
       const result = await amcContractsService.proposalFromAssessment(id);
@@ -602,7 +612,12 @@ export function AssessmentDetail({ id }: { id: string }) {
    * also fills in "Visited on" when it is empty (the booked day once it has
    * passed, today otherwise), so the visit can be completed.
    */
-  const recordAttendance = async (attendance: SiteVisitAttendance) => {
+  /* Asked first (11 Nov 2026): it acts at once, so it is confirmed like every other step. */
+  const recordAttendance = (attendance: SiteVisitAttendance) =>
+    void confirm({ title: `Record the visit as ${ATTENDANCE_LABELS[attendance].toLowerCase()}?`, description: attendance === "attended" ? "The site visit took place. Visited on is set to the booked day (or today) if it is empty, so the visit can be completed." : "The site visit is recorded as not taking place this way. It can be changed later.", confirmText: "Record attendance" }).then((ok) => {
+      if (ok) void recordAttendanceNow(attendance);
+    });
+  const recordAttendanceNow = async (attendance: SiteVisitAttendance) => {
     if (!draft || pending) return;
     const visitedOn = attendance === "attended" && !draft.assessedOn ? visitDay(draft.scheduledAt) : null;
     setPending("attendance");
@@ -655,7 +670,7 @@ export function AssessmentDetail({ id }: { id: string }) {
     <div className="flex w-full flex-1 flex-col gap-6">
       {dialog}
       {/* As the client page: the way back and Refresh, then the visit's card with what it can do. */}
-      <DetailToolbar backHref="/extensions/amc-contracts/assessments" backLabel="Site visits" fetchedAt={fetchedAt} refreshing={refreshing || loading} onRefresh={refresh} />
+      <DetailToolbar backHref="/extensions/amc-contracts/visits?kind=site_visit" backLabel="Visits" fetchedAt={fetchedAt} refreshing={refreshing || loading} onRefresh={refresh} />
 
       {!ready || !a ? (
         error ? null : (
@@ -675,9 +690,9 @@ export function AssessmentDetail({ id }: { id: string }) {
           title={a.customer?.name || "Site visit"}
           status={<SiteVisitStatusBadge status={a.status} />}
           subline={[
-            a.property?.label ?? "No property linked yet",
-            a.scheduledAt ? `booked for ${formatDateTime(a.scheduledAt)}` : "not booked for a time",
-            a.assessorName ? `assessor ${a.assessorName}` : null,
+            shortPlace(a.property?.label) ?? "No property yet",
+            a.scheduledAt ? formatDateTime(a.scheduledAt) : "Not booked yet",
+            a.assessorName ?? null,
           ]
             .filter(Boolean)
             .join(" · ")}
@@ -790,6 +805,7 @@ export function AssessmentDetail({ id }: { id: string }) {
               <TabsTrigger value="checklist">Checklist</TabsTrigger>
               <TabsTrigger value="findings">Findings and services</TabsTrigger>
               <TabsTrigger value="photos">Photos</TabsTrigger>
+              <TabsTrigger value="history">History</TabsTrigger>
             </TabsList>
 
             {panel(
@@ -1141,6 +1157,7 @@ export function AssessmentDetail({ id }: { id: string }) {
             )}
 
             {panel("photos", <AssessmentPhotos assessmentId={a.id} editable={editable} completed={a.status === "completed"} />)}
+            {panel("history", <HistoryPanel data={history} description="Everything that happened to this site visit, newest first: when it was created, booked, attended and completed." />)}
           </Tabs>
         </div>
       )}

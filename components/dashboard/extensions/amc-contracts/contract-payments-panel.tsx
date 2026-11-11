@@ -1,19 +1,22 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import type { ColumnDef } from "@tanstack/react-table";
 import { Banknote, CalendarClock, Database, Landmark, Play, ReceiptText, Wallet } from "lucide-react";
 import { toast } from "sonner";
 
+import { DataTable } from "@/components/data-table";
 import { SectionCard, StatCard, StatCardGrid } from "@/components/dashboard/shared/kaizen";
 import { ErrorState, SectionSkeleton, StatGridSkeleton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
+import { IdentityCell } from "@/components/ui/entity-avatar";
 import { Money } from "@/components/ui/money";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { PAYMENT_MODE_LABELS, PAYMENT_MODES, type PaymentMode } from "@/lib/amc/payments";
+import { cn } from "@/lib/utils";
 import { paymentsService, type ContractPaymentsResponse, type InstalmentRecord } from "@/modules/amc-contracts/payments-service";
 
 import { formatContractDate, formatDateTime } from "./contract-status";
@@ -123,6 +126,201 @@ function ExpectedModeCell({
     </Select>
   );
 }
+
+type ChequeRecord = ContractPaymentsResponse["cheques"][number];
+type ReceiptRecord = ContractPaymentsResponse["payments"][number];
+
+type PanelContext = {
+  contractId: string;
+  permissions: ContractPaymentsResponse["permissions"];
+  dialogs: PaymentDialogs;
+  reload: () => unknown;
+  instalmentNo: (id: string) => InstalmentRecord["instalmentNo"] | undefined;
+};
+
+/*
+ * What the table cells need from the panel. Read from a context rather than
+ * closed over, so the columns below never change: a new column list would
+ * remount every cell, closing an open row menu or a saving mode select
+ * whenever the panel re-renders.
+ */
+const PanelCtx = createContext<PanelContext | null>(null);
+
+function usePanel() {
+  const ctx = useContext(PanelCtx);
+  if (!ctx) throw new Error("A payments table cell must sit inside ContractPaymentsPanel.");
+  return ctx;
+}
+
+function InstalmentModeCell({ instalment }: { instalment: InstalmentRecord }) {
+  const { contractId, permissions, reload } = usePanel();
+  return <ExpectedModeCell contractId={contractId} instalment={instalment} editable={permissions.canRecord} onSaved={reload} />;
+}
+
+function InstalmentActionsCell({ instalment }: { instalment: InstalmentRecord }) {
+  const { contractId, permissions, dialogs } = usePanel();
+  return <InstalmentActions contractId={contractId} instalment={instalment} permissions={permissions} dialogs={dialogs} />;
+}
+
+function ChequeInstalmentCell({ cheque }: { cheque: ChequeRecord }) {
+  const { instalmentNo } = usePanel();
+  return <span className="text-sm tabular-nums">{instalmentNo(cheque.instalmentId) ?? "—"}</span>;
+}
+
+function ChequeActionsCell({ cheque }: { cheque: ChequeRecord }) {
+  const { contractId, permissions, dialogs } = usePanel();
+  return <ChequeActions contractId={contractId} cheque={cheque} permissions={permissions} dialogs={dialogs} />;
+}
+
+/* A voided receipt stays on the list, struck through. */
+const struckClass = (p: ReceiptRecord) => (p.voidedAt ? "text-muted-foreground line-through" : "");
+
+function ReceiptReceivedCell({ payment: p }: { payment: ReceiptRecord }) {
+  const { instalmentNo } = usePanel();
+  return (
+    <div className="text-sm">
+      <div className={cn("tabular-nums", struckClass(p))}>{formatContractDate(p.receivedOn)}</div>
+      <div className="text-muted-foreground text-xs">
+        {p.voidedAt ? `Void: ${p.voidReason ?? "no reason given"}` : `Instalment ${instalmentNo(p.instalmentId) ?? "—"}`}
+      </div>
+    </div>
+  );
+}
+
+function ReceiptActionsCell({ payment }: { payment: ReceiptRecord }) {
+  const { contractId, permissions, dialogs } = usePanel();
+  return <ReceiptActions contractId={contractId} payment={payment} permissions={permissions} dialogs={dialogs} />;
+}
+
+const actionsHeader = () => <span className="sr-only">Actions</span>;
+
+const INSTALMENT_COLUMNS: ColumnDef<InstalmentRecord>[] = [
+  { id: "no", header: "#", size: 48, cell: ({ row }) => <span className="tabular-nums">{row.original.instalmentNo}</span> },
+  {
+    id: "instalment",
+    header: "Instalment",
+    cell: ({ row }) => {
+      const i = row.original;
+      /* A write-off or waiver says why; otherwise how often the client was reminded. */
+      const subtitle =
+        i.statusReason && (i.status === "written_off" || i.status === "waived")
+          ? i.statusReason
+          : i.reminderCount
+            ? `Reminded ${i.reminderCount === 1 ? "once" : `${i.reminderCount} times`}${i.lastReminderAt ? `, last ${formatDateTime(i.lastReminderAt)}` : ""}`
+            : null;
+      return <IdentityCell title={i.label} subtitle={subtitle} icon={CalendarClock} />;
+    },
+  },
+  { id: "due", header: "Due", cell: ({ row }) => <span className="text-sm tabular-nums">{formatContractDate(row.original.dueDate)}</span> },
+  { id: "mode", header: "Expected mode", cell: ({ row }) => <InstalmentModeCell instalment={row.original} /> },
+  { id: "total", header: "Total", cell: ({ row }) => <Money value={row.original.total} className="text-sm" /> },
+  { id: "received", header: "Received", cell: ({ row }) => <Money value={row.original.receivedAmount} className="text-sm" /> },
+  { id: "outstanding", header: "Outstanding", cell: ({ row }) => <Money value={row.original.outstanding} className="text-sm font-medium" /> },
+  { id: "status", header: "Status", cell: ({ row }) => <InstalmentStatusBadge status={row.original.status} /> },
+  {
+    id: "overdue",
+    header: "Overdue",
+    cell: ({ row }) => (
+      <span className="text-sm">
+        <DaysOverdue days={row.original.daysOverdue} />
+      </span>
+    ),
+  },
+  { id: "actions", header: actionsHeader, cell: ({ row }) => <InstalmentActionsCell instalment={row.original} /> },
+];
+
+const CHEQUE_COLUMNS: ColumnDef<ChequeRecord>[] = [
+  { id: "no", header: "Cheque no.", cell: ({ row }) => <IdentityCell title={row.original.chequeNo} icon={Landmark} /> },
+  { id: "bank", header: "Bank", cell: ({ row }) => <span className="text-sm">{row.original.bank}</span> },
+  { id: "date", header: "Date", cell: ({ row }) => <span className="text-sm tabular-nums">{formatContractDate(row.original.chequeDate)}</span> },
+  { id: "amount", header: "Amount", cell: ({ row }) => <Money value={row.original.amount} className="text-sm" /> },
+  { id: "instalment", header: "Instalment", cell: ({ row }) => <ChequeInstalmentCell cheque={row.original} /> },
+  { id: "status", header: "Status", cell: ({ row }) => <ChequeStatusBadge status={row.original.status} /> },
+  {
+    id: "bounce",
+    header: "Bounce reason",
+    cell: ({ row }) => {
+      const c = row.original;
+      return (
+        <div className="max-w-[220px] text-sm">
+          {c.bounceReason ? (
+            <>
+              <TruncatedText>{c.bounceReason}</TruncatedText>
+              {c.bounceCharges ? (
+                <span className="text-muted-foreground text-xs">
+                  Charges <Money value={c.bounceCharges} />
+                </span>
+              ) : null}
+            </>
+          ) : (
+            <span className="text-muted-foreground">—</span>
+          )}
+        </div>
+      );
+    },
+  },
+  { id: "actions", header: actionsHeader, cell: ({ row }) => <ChequeActionsCell cheque={row.original} /> },
+];
+
+const RECEIPT_COLUMNS: ColumnDef<ReceiptRecord>[] = [
+  { id: "received", header: "Received", cell: ({ row }) => <ReceiptReceivedCell payment={row.original} /> },
+  {
+    id: "mode",
+    header: "Mode",
+    cell: ({ row }) => <span className={cn("text-sm", struckClass(row.original))}>{PAYMENT_MODE_LABELS[row.original.mode] ?? row.original.mode}</span>,
+  },
+  {
+    id: "amount",
+    header: "Amount",
+    cell: ({ row }) => <Money value={row.original.amount} className={cn("text-sm font-medium", struckClass(row.original))} />,
+  },
+  {
+    id: "reference",
+    header: "Reference / receipt",
+    cell: ({ row }) => {
+      const p = row.original;
+      return (
+        <span className={cn("text-sm", struckClass(p))}>
+          {[p.reference, p.receiptNo ? `Receipt ${p.receiptNo}` : null].filter(Boolean).join(" · ") || "—"}
+        </span>
+      );
+    },
+  },
+  {
+    id: "collector",
+    header: "Collected by",
+    cell: ({ row }) => <span className={cn("text-sm", struckClass(row.original))}>{row.original.collectorName ?? "—"}</span>,
+  },
+  {
+    id: "handover",
+    header: "Handed over",
+    cell: ({ row }) => {
+      const p = row.original;
+      return (
+        <div className={cn("text-sm", struckClass(p))}>
+          {p.handedOverAt ? (
+            <>
+              <div>{p.handedOverTo ?? "Handed over"}</div>
+              <div className="text-muted-foreground text-xs">{formatDateTime(p.handedOverAt)}</div>
+            </>
+          ) : p.mode === "cash" ? (
+            <span className="text-warning">Not yet</span>
+          ) : (
+            <span className="text-muted-foreground">—</span>
+          )}
+        </div>
+      );
+    },
+  },
+  {
+    id: "recorder",
+    header: "Recorded by",
+    cell: ({ row }) => <span className={cn("text-sm", struckClass(row.original))}>{row.original.recordedByName ?? "—"}</span>,
+  },
+  { id: "actions", header: actionsHeader, cell: ({ row }) => <ReceiptActionsCell payment={row.original} /> },
+];
+
+const noop = () => undefined;
 
 export function ContractPaymentsPanel({
   contractId,
@@ -267,206 +465,74 @@ export function ContractPaymentsPanel({
         </div>
       ) : null}
 
-      <SectionCard
-        title="Instalments"
-        description="The schedule made on activation. Status follows what is received and the due date."
-        icon={<CalendarClock />}
-        bodyClassName="pb-2"
-      >
-        <div className="overflow-x-auto">
-          <Table className="min-w-[1000px]">
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-12 pl-5">#</TableHead>
-                <TableHead>Instalment</TableHead>
-                <TableHead>Due</TableHead>
-                <TableHead>Expected mode</TableHead>
-                <TableHead>Total</TableHead>
-                <TableHead>Received</TableHead>
-                <TableHead>Outstanding</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Overdue</TableHead>
-                <TableHead className="pr-5 text-right">
-                  <span className="sr-only">Actions</span>
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {instalments.map((i) => (
-                <TableRow key={i.id}>
-                  <TableCell className="pl-5 tabular-nums">{i.instalmentNo}</TableCell>
-                  <TableCell>
-                    <div className="text-sm font-medium">{i.label}</div>
-                    {i.statusReason && (i.status === "written_off" || i.status === "waived") ? (
-                      <TruncatedText className="text-muted-foreground max-w-[260px] text-xs">{i.statusReason}</TruncatedText>
-                    ) : i.reminderCount ? (
-                      <div className="text-muted-foreground text-xs">
-                        Reminded {i.reminderCount === 1 ? "once" : `${i.reminderCount} times`}
-                        {i.lastReminderAt ? `, last ${formatDateTime(i.lastReminderAt)}` : ""}
-                      </div>
-                    ) : null}
-                  </TableCell>
-                  <TableCell className="text-sm tabular-nums">{formatContractDate(i.dueDate)}</TableCell>
-                  <TableCell>
-                    <ExpectedModeCell contractId={contractId} instalment={i} editable={permissions.canRecord} onSaved={reload} />
-                  </TableCell>
-                  <TableCell>
-                    <Money value={i.total} className="text-sm" />
-                  </TableCell>
-                  <TableCell>
-                    <Money value={i.receivedAmount} className="text-sm" />
-                  </TableCell>
-                  <TableCell>
-                    <Money value={i.outstanding} className="text-sm font-medium" />
-                  </TableCell>
-                  <TableCell>
-                    <InstalmentStatusBadge status={i.status} />
-                  </TableCell>
-                  <TableCell className="text-sm">
-                    <DaysOverdue days={i.daysOverdue} />
-                  </TableCell>
-                  <TableCell className="pr-5">
-                    <InstalmentActions contractId={contractId} instalment={i} permissions={permissions} dialogs={dialogs} />
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-      </SectionCard>
+      <PanelCtx.Provider value={{ contractId, permissions, dialogs, reload, instalmentNo }}>
+        <SectionCard
+          title="Instalments"
+          description="The schedule made on activation. Status follows what is received and the due date."
+          icon={<CalendarClock />}
+          bodyClassName="border-t"
+        >
+          <DataTable
+            columns={INSTALMENT_COLUMNS}
+            data={instalments}
+            loading={false}
+            rowCount={instalments.length}
+            pageSize={500}
+            currentPage={0}
+            onPageChange={noop}
+            onPageSizeChange={noop}
+            onGlobalFilterChange={noop}
+          />
+        </SectionCard>
 
-      <SectionCard
-        title="Cheques"
-        description="Held until deposited, then cleared into the instalment or bounced."
-        icon={<Landmark />}
-        bodyClassName={cheques.length ? "pb-2" : "px-5 pb-5"}
-      >
-        {cheques.length === 0 ? (
-          <p className="text-muted-foreground text-sm">No cheques recorded.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <Table className="min-w-[760px]">
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="pl-5">Cheque no.</TableHead>
-                  <TableHead>Bank</TableHead>
-                  <TableHead>Date</TableHead>
-                  <TableHead>Amount</TableHead>
-                  <TableHead>Instalment</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Bounce reason</TableHead>
-                  <TableHead className="pr-5 text-right">
-                    <span className="sr-only">Actions</span>
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {cheques.map((c) => (
-                  <TableRow key={c.id}>
-                    <TableCell className="pl-5 text-sm font-medium tabular-nums">{c.chequeNo}</TableCell>
-                    <TableCell className="text-sm">{c.bank}</TableCell>
-                    <TableCell className="text-sm tabular-nums">{formatContractDate(c.chequeDate)}</TableCell>
-                    <TableCell>
-                      <Money value={c.amount} className="text-sm" />
-                    </TableCell>
-                    <TableCell className="text-sm tabular-nums">{instalmentNo(c.instalmentId) ?? "—"}</TableCell>
-                    <TableCell>
-                      <ChequeStatusBadge status={c.status} />
-                    </TableCell>
-                    <TableCell className="max-w-[220px] text-sm">
-                      {c.bounceReason ? (
-                        <>
-                          <TruncatedText>{c.bounceReason}</TruncatedText>
-                          {c.bounceCharges ? (
-                            <span className="text-muted-foreground text-xs">
-                              Charges <Money value={c.bounceCharges} />
-                            </span>
-                          ) : null}
-                        </>
-                      ) : (
-                        <span className="text-muted-foreground">—</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="pr-5">
-                      <ChequeActions contractId={contractId} cheque={c} permissions={permissions} dialogs={dialogs} />
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-      </SectionCard>
+        <SectionCard
+          title="Cheques"
+          description="Held until deposited, then cleared into the instalment or bounced."
+          icon={<Landmark />}
+          bodyClassName="border-t"
+        >
+          <DataTable
+            columns={CHEQUE_COLUMNS}
+            data={cheques}
+            loading={false}
+            rowCount={cheques.length}
+            pageSize={500}
+            currentPage={0}
+            onPageChange={noop}
+            onPageSizeChange={noop}
+            onGlobalFilterChange={noop}
+            emptyState={
+              <EmptyState
+                icon={<Landmark />}
+                title="No cheques recorded"
+                description="Cheques recorded against this contract's instalments appear here."
+              />
+            }
+          />
+        </SectionCard>
 
-      <SectionCard
-        title="Receipts"
-        description="Every payment received, newest first. A voided one stays on record with its reason."
-        icon={<ReceiptText />}
-        bodyClassName={receipts.length ? "pb-2" : "px-5 pb-5"}
-      >
-        {receipts.length === 0 ? (
-          <p className="text-muted-foreground text-sm">Nothing received yet.</p>
-        ) : (
-          <div className="overflow-x-auto">
-            <Table className="min-w-[900px]">
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="pl-5">Received</TableHead>
-                  <TableHead>Mode</TableHead>
-                  <TableHead>Amount</TableHead>
-                  <TableHead>Reference / receipt</TableHead>
-                  <TableHead>Collected by</TableHead>
-                  <TableHead>Handed over</TableHead>
-                  <TableHead>Recorded by</TableHead>
-                  <TableHead className="pr-5 text-right">
-                    <span className="sr-only">Actions</span>
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {receipts.map((p) => {
-                  const voided = Boolean(p.voidedAt);
-                  const struck = voided ? "text-muted-foreground line-through" : "";
-                  return (
-                    <TableRow key={p.id}>
-                      <TableCell className="pl-5 text-sm">
-                        <div className={`tabular-nums ${struck}`}>{formatContractDate(p.receivedOn)}</div>
-                        <div className="text-muted-foreground text-xs">
-                          {voided ? `Void: ${p.voidReason ?? "no reason given"}` : `Instalment ${instalmentNo(p.instalmentId) ?? "—"}`}
-                        </div>
-                      </TableCell>
-                      <TableCell className={`text-sm ${struck}`}>{PAYMENT_MODE_LABELS[p.mode] ?? p.mode}</TableCell>
-                      <TableCell>
-                        <Money value={p.amount} className={`text-sm font-medium ${struck}`} />
-                      </TableCell>
-                      <TableCell className={`text-sm ${struck}`}>
-                        {[p.reference, p.receiptNo ? `Receipt ${p.receiptNo}` : null].filter(Boolean).join(" · ") || "—"}
-                      </TableCell>
-                      <TableCell className={`text-sm ${struck}`}>{p.collectorName ?? "—"}</TableCell>
-                      <TableCell className={`text-sm ${struck}`}>
-                        {p.handedOverAt ? (
-                          <>
-                            <div>{p.handedOverTo ?? "Handed over"}</div>
-                            <div className="text-muted-foreground text-xs">{formatDateTime(p.handedOverAt)}</div>
-                          </>
-                        ) : p.mode === "cash" ? (
-                          <span className="text-warning">Not yet</span>
-                        ) : (
-                          <span className="text-muted-foreground">—</span>
-                        )}
-                      </TableCell>
-                      <TableCell className={`text-sm ${struck}`}>{p.recordedByName ?? "—"}</TableCell>
-                      <TableCell className="pr-5">
-                        <ReceiptActions contractId={contractId} payment={p} permissions={permissions} dialogs={dialogs} />
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-      </SectionCard>
+        <SectionCard
+          title="Receipts"
+          description="Every payment received, newest first. A voided one stays on record with its reason."
+          icon={<ReceiptText />}
+          bodyClassName="border-t"
+        >
+          <DataTable
+            columns={RECEIPT_COLUMNS}
+            data={receipts}
+            loading={false}
+            rowCount={receipts.length}
+            pageSize={500}
+            currentPage={0}
+            onPageChange={noop}
+            onPageSizeChange={noop}
+            onGlobalFilterChange={noop}
+            emptyState={
+              <EmptyState icon={<ReceiptText />} title="Nothing received yet" description="Payments recorded on this contract appear here." />
+            }
+          />
+        </SectionCard>
+      </PanelCtx.Provider>
       {confirmDialog}
     </>
   );

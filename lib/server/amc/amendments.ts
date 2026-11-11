@@ -366,7 +366,7 @@ async function draftForScopeChange(admin: Admin, contractId: string, mode: "add_
   const { contract, entitlements } = await loadContract(admin, contractId);
   const settings = await readAmcSettings(admin);
   const unitType = String(contract.property.unitType ?? contract.unitType ?? "");
-  const offered = servicesForProperty(settings, unitType);
+  const offered = servicesForProperty(settings, [typeof contract.property.propertyType === "string" ? contract.property.propertyType : null, unitType]);
   const ticked =
     mode === "replace_contract"
       ? entitlements

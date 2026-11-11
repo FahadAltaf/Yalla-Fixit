@@ -340,12 +340,23 @@ export const baseSectionsItems: MenuItem[] = [
         match: ["/extensions/amc-contracts/properties"],
         resource: ResourceType.AMC_CLIENTS,
       },
-      { title: "Site visits", url: "/extensions/amc-contracts/assessments", resource: ResourceType.AMC_SITE_VISITS },
+      /*
+        Every AMC visit in one list (planned visits, call outs, additional work,
+        site visits), with a Type to tell them apart. Site visits moved in here
+        (11 Nov 2026): whoever may see either list sees it, and a site visit or
+        an additional work page lights it up.
+      */
+      {
+        title: "Visits",
+        url: "/extensions/amc-contracts/visits",
+        canSee: (user: User) => canViewAmcVisits(user) || hasResourceAction(user, ResourceType.AMC_SITE_VISITS, ActionType.VIEW),
+        match: ["/extensions/amc-contracts/assessments", "/extensions/amc-contracts/additional-works"],
+      },
       // { title: "Visit board", url: "/extensions/amc-contracts/board", canSee: canViewAmcVisits },
       // { title: "Job reviews", url: "/extensions/amc-contracts/job-reviews", canSee: canViewAmcVisits },
       // { title: "Call outs", url: "/extensions/amc-contracts/call-outs", resource: ResourceType.AMC_CALL_OUTS },
       // { title: "Additional work", url: "/extensions/amc-contracts/additional-works", resource: ResourceType.AMC_ADDITIONAL_WORKS },
-      { title: "Technicians", url: "/extensions/amc-contracts/technicians", resource: ResourceType.AMC_TECHNICIANS },
+      /* Technicians left the AMC menu (11 Nov 2026): a technician's AMC skills are edited from Workforce -> People (row menu, AMC skills). */
       // { title: "Reports", url: "/extensions/amc-contracts/reports", resource: ResourceType.AMC_REPORTS },
       { title: "Rate card", url: "/extensions/amc-contracts/rate-card", canSee: canViewAmcRateCard },
       // { title: "FSM mapping", url: "/extensions/amc-contracts/fsm-services", resource: ResourceType.AMC_FSM_MAPPING },

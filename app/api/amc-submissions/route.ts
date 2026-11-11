@@ -601,6 +601,7 @@ export async function POST(req: NextRequest) {
     services: payload.services,
     discountPercent: payload.discount_percent,
     unitType: payload.property.unitType,
+    propertyType: payload.property.propertyType ?? null,
     settings: settings.value,
     rateCard: card,
     day: todayInDubai(),
@@ -731,7 +732,7 @@ export async function PUT(req: NextRequest) {
     updates.discount_percent !== undefined ||
     updates.property !== undefined
   ) {
-    const existingProperty = existingRow.property as { unitType?: string } | null;
+    const existingProperty = existingRow.property as { unitType?: string; propertyType?: string } | null;
     const settings = await readSettingsOr503(admin);
     if ("error" in settings) return settings.error;
     /* A draft is priced on today's card each time it is saved; a shared
@@ -743,6 +744,7 @@ export async function PUT(req: NextRequest) {
       >[0]["services"],
       discountPercent: updates.discount_percent ?? Number(existingRow.discount_percent ?? 0),
       unitType: updates.property?.unitType ?? existingProperty?.unitType ?? "",
+      propertyType: updates.property?.propertyType ?? existingProperty?.propertyType ?? null,
       settings: settings.value,
       rateCard: card,
       day: todayInDubai(),

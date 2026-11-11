@@ -747,7 +747,9 @@ export async function createRenewalProposal(
 
   const settings = await readAmcSettings(admin);
   const unitType = String(contract.property.unitType ?? contract.unitType ?? "");
-  const offered = servicesForProperty(settings, unitType).map((s) => s.id);
+  /* The full property type first (a townhouse), then the rate model. */
+  const types = [typeof contract.property.propertyType === "string" ? contract.property.propertyType : null, unitType];
+  const offered = servicesForProperty(settings, types).map((s) => s.id);
   const draft = buildRenewalDraft(
     {
       id: contract.id,
@@ -775,7 +777,7 @@ export async function createRenewalProposal(
   const rowIds = new Set(priced.services.map((s) => s.serviceId));
   const allRows = [
     ...priced.services,
-    ...servicesForProperty(settings, unitType)
+    ...servicesForProperty(settings, types)
       .filter((s) => !rowIds.has(s.id))
       .map((s) => ({
         serviceId: s.id,

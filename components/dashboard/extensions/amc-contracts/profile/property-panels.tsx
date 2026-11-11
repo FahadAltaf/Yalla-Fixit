@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Archive, ClipboardList, EllipsisVerticalIcon, History, KeyRound, Pencil, Plus, Power, Wrench } from "lucide-react";
 import { toast } from "sonner";
+import type { ColumnDef } from "@tanstack/react-table";
 
+import { DataTable } from "@/components/data-table";
 import { SectionCard } from "@/components/dashboard/shared/kaizen";
 import { ActionDialogContent, ErrorState, ListSkeleton, SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
 import { Badge } from "@/components/ui/badge";
@@ -12,10 +14,10 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { EmptyState } from "@/components/ui/empty-state";
+import { IdentityCell } from "@/components/ui/entity-avatar";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import DateSelect from "@/components/ui/date-select";
 import TimeSelect from "@/components/ui/time-select";
@@ -48,6 +50,7 @@ import { formatPhone } from "@/lib/phone/format-phone";
 import { AmcPhoneInput } from "@/components/dashboard/extensions/amc/components/amc-phone-input";
 import { TruncatedText } from "@/components/ui/truncated-text";
 
+const noop = () => undefined;
 const nul = (v: string | null | undefined) => (v && v.trim() ? v.trim() : null);
 const CONDITION_TONE: Record<string, string> = {
   good: "bg-success/10 text-success",
@@ -89,6 +92,122 @@ async function runSave(setBusy: (busy: boolean) => void, work: () => Promise<voi
 /* Asset register (DEV-361)                                            */
 /* ------------------------------------------------------------------ */
 
+/* A retired asset's row stays on the list, greyed out. */
+function Faded({ asset, children }: { asset: AssetRecord; children: React.ReactNode }) {
+  return asset.status === "retired" ? <div className="opacity-60">{children}</div> : <>{children}</>;
+}
+
+/* The asset register's columns; the row menu opens history, edit and retire. */
+function assetColumns({
+  canEdit,
+  onHistory,
+  onEdit,
+  onRetire,
+}: {
+  canEdit: boolean;
+  onHistory: (a: AssetRecord) => void;
+  onEdit: (a: AssetRecord) => void;
+  onRetire: (a: AssetRecord) => void;
+}): ColumnDef<AssetRecord>[] {
+  return [
+    {
+      id: "asset",
+      header: "Asset",
+      cell: ({ row }) => {
+        const a = row.original;
+        return (
+          <Faded asset={a}>
+            <IdentityCell
+              title={a.assetType}
+              subtitle={
+                a.status === "retired"
+                  ? `Retired ${a.retiredAt ? formatContractDate(a.retiredAt.slice(0, 10)) : ""}: ${a.retiredReason ?? ""}`
+                  : a.installedOn
+                    ? `Installed ${formatContractDate(a.installedOn)}`
+                    : null
+              }
+              icon={Wrench}
+            />
+          </Faded>
+        );
+      },
+    },
+    {
+      id: "trade",
+      header: "Trade",
+      cell: ({ row }) => <Faded asset={row.original}>{TRADE_LABELS[row.original.trade as keyof typeof TRADE_LABELS] ?? row.original.trade}</Faded>,
+    },
+    {
+      id: "quantity",
+      header: "Qty",
+      cell: ({ row }) => (
+        <Faded asset={row.original}>
+          <span className="tabular-nums">{row.original.quantity}</span>
+        </Faded>
+      ),
+    },
+    {
+      id: "location",
+      header: "Location",
+      cell: ({ row }) => <Faded asset={row.original}>{row.original.location ?? "—"}</Faded>,
+    },
+    {
+      id: "makeModel",
+      header: "Make / model",
+      cell: ({ row }) => <Faded asset={row.original}>{[row.original.make, row.original.model].filter(Boolean).join(" ") || "—"}</Faded>,
+    },
+    {
+      id: "serial",
+      header: "Serial",
+      cell: ({ row }) => (
+        <Faded asset={row.original}>
+          <span className="font-mono text-xs">{row.original.serialNo ?? "—"}</span>
+        </Faded>
+      ),
+    },
+    {
+      id: "condition",
+      header: "Condition",
+      cell: ({ row }) => (
+        <Faded asset={row.original}>
+          <Badge variant="secondary" className={`border-0 font-medium capitalize ${CONDITION_TONE[row.original.condition] ?? ""}`}>
+            {row.original.condition}
+          </Badge>
+        </Faded>
+      ),
+    },
+    {
+      id: "actions",
+      header: "",
+      cell: ({ row }) => {
+        const a = row.original;
+        return (
+          <Faded asset={a}>
+            <RowMenu label={`Actions for ${a.assetType}`}>
+              <DropdownMenuItem onClick={() => onHistory(a)}>
+                <History className="size-4" />
+                History
+              </DropdownMenuItem>
+              {canEdit && a.status === "active" ? (
+                <>
+                  <DropdownMenuItem onClick={() => onEdit(a)}>
+                    <Pencil className="size-4" />
+                    Edit
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => onRetire(a)} className="text-destructive focus:text-destructive">
+                    <Archive className="size-4" />
+                    Retire
+                  </DropdownMenuItem>
+                </>
+              ) : null}
+            </RowMenu>
+          </Faded>
+        );
+      },
+    },
+  ];
+}
+
 export function AssetsPanel({ propertyId, canEdit }: { propertyId: string; canEdit: boolean }) {
   const { data, error, loading, reload } = useAmcData(() => clientProfileService.assets(propertyId), `assets|${propertyId}`);
   const editing = useDialog<AssetRecord | "new">();
@@ -96,6 +215,10 @@ export function AssetsPanel({ propertyId, canEdit }: { propertyId: string; canEd
   const history = useDialog<AssetRecord>();
   const [showRetired, setShowRetired] = useState(false);
   const canAdd = canEdit && data?.migrated !== false;
+  const columns = useMemo(
+    () => assetColumns({ canEdit, onHistory: history.show, onEdit: editing.show, onRetire: retiring.show }),
+    [canEdit, history.show, editing.show, retiring.show],
+  );
 
   const all = data?.assets ?? [];
   const assets = all.filter((a) => showRetired || a.status === "active");
@@ -131,76 +254,26 @@ export function AssetsPanel({ propertyId, canEdit }: { propertyId: string; canEd
         <ListSkeleton rows={4} />
       ) : data?.migrated === false ? (
         <p className="text-muted-foreground px-5 py-4 text-sm">The asset register arrives with the Phase 2 database update (20261007120000).</p>
-      ) : assets.length === 0 ? (
-        <EmptyState
-          icon={<Wrench className="size-5" />}
-          title="No assets yet"
-          description="List the AC units by type and count, water heaters, pumps and boards. Visits and call outs build each asset's history."
-          action={canAdd ? { label: "Add asset", onClick: () => editing.show("new") } : undefined}
-        />
       ) : (
-        <div className="overflow-x-auto">
-          <Table className="min-w-[760px]">
-            <TableHeader className="[&_th]:text-muted-foreground">
-              <TableRow className="hover:bg-transparent">
-                <TableHead className="pl-5">Asset</TableHead>
-                <TableHead>Trade</TableHead>
-                <TableHead>Qty</TableHead>
-                <TableHead>Location</TableHead>
-                <TableHead>Make / model</TableHead>
-                <TableHead>Serial</TableHead>
-                <TableHead>Condition</TableHead>
-                <TableHead className="w-12 pr-5" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {assets.map((a) => (
-                <TableRow key={a.id} className={`h-14 ${a.status === "retired" ? "opacity-60" : ""}`}>
-                  <TableCell className="pl-5">
-                    <div className="font-medium">{a.assetType}</div>
-                    {a.status === "retired" ? (
-                      <div className="text-muted-foreground text-xs">
-                        Retired {a.retiredAt ? formatContractDate(a.retiredAt.slice(0, 10)) : ""}: {a.retiredReason}
-                      </div>
-                    ) : a.installedOn ? (
-                      <div className="text-muted-foreground text-xs">Installed {formatContractDate(a.installedOn)}</div>
-                    ) : null}
-                  </TableCell>
-                  <TableCell>{TRADE_LABELS[a.trade as keyof typeof TRADE_LABELS] ?? a.trade}</TableCell>
-                  <TableCell className="tabular-nums">{a.quantity}</TableCell>
-                  <TableCell>{a.location ?? "—"}</TableCell>
-                  <TableCell>{[a.make, a.model].filter(Boolean).join(" ") || "—"}</TableCell>
-                  <TableCell className="font-mono text-xs">{a.serialNo ?? "—"}</TableCell>
-                  <TableCell>
-                    <Badge variant="secondary" className={`border-0 font-medium capitalize ${CONDITION_TONE[a.condition] ?? ""}`}>
-                      {a.condition}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="pr-5">
-                    <RowMenu label={`Actions for ${a.assetType}`}>
-                      <DropdownMenuItem onClick={() => history.show(a)}>
-                        <History className="size-4" />
-                        History
-                      </DropdownMenuItem>
-                      {canEdit && a.status === "active" ? (
-                        <>
-                          <DropdownMenuItem onClick={() => editing.show(a)}>
-                            <Pencil className="size-4" />
-                            Edit
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => retiring.show(a)} className="text-destructive focus:text-destructive">
-                            <Archive className="size-4" />
-                            Retire
-                          </DropdownMenuItem>
-                        </>
-                      ) : null}
-                    </RowMenu>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+        <DataTable
+          columns={columns}
+          data={assets}
+          loading={false}
+          rowCount={assets.length}
+          pageSize={500}
+          currentPage={0}
+          onPageChange={noop}
+          onPageSizeChange={noop}
+          onGlobalFilterChange={noop}
+          emptyState={
+            <EmptyState
+              icon={<Wrench className="size-5" />}
+              title="No assets yet"
+              description="List the AC units by type and count, water heaters, pumps and boards. Visits and call outs build each asset's history."
+              action={canAdd ? { label: "Add asset", onClick: () => editing.show("new") } : undefined}
+            />
+          }
+        />
       )}
       <AssetDialog
         key={editing.key}
@@ -726,6 +799,105 @@ function useCatalogue(): CatalogueService[] {
   return services;
 }
 
+/* The scope's columns; the row menu edits or removes an item. */
+function scopeColumns({
+  canEdit,
+  label,
+  assetFor,
+  onEdit,
+  onRemove,
+}: {
+  canEdit: boolean;
+  label: (serviceId: string) => string;
+  assetFor: (assetId: string | null) => AssetRecord | undefined;
+  onEdit: (i: ScopeItemRecord) => void;
+  onRemove: (i: ScopeItemRecord) => void;
+}): ColumnDef<ScopeItemRecord>[] {
+  return [
+    {
+      id: "service",
+      header: "Service",
+      cell: ({ row }) => {
+        const asset = assetFor(row.original.assetId);
+        return (
+          <IdentityCell
+            title={label(row.original.serviceId)}
+            subtitle={asset ? `For ${asset.assetType}${asset.location ? `, ${asset.location}` : ""}` : null}
+            icon={ClipboardList}
+          />
+        );
+      },
+    },
+    {
+      id: "trade",
+      header: "Trade",
+      cell: ({ row }) => TRADE_LABELS[row.original.trade as keyof typeof TRADE_LABELS] ?? row.original.trade,
+    },
+    {
+      id: "quantity",
+      header: "Qty",
+      cell: ({ row }) => <span className="tabular-nums">{row.original.quantity}</span>,
+    },
+    {
+      id: "frequency",
+      header: "Visits / year",
+      cell: ({ row }) => <span className="tabular-nums">{row.original.frequencyPerYear ?? "—"}</span>,
+    },
+    {
+      id: "duration",
+      header: "Per visit",
+      cell: ({ row }) => {
+        const minutes = row.original.durationMinutes;
+        return (
+          <span className="tabular-nums">
+            {minutes ? (minutes >= 60 ? `${Math.floor(minutes / 60)} h${minutes % 60 ? ` ${minutes % 60} min` : ""}` : `${minutes} min`) : "—"}
+          </span>
+        );
+      },
+    },
+    {
+      id: "preferred",
+      header: "Preferred",
+      cell: ({ row }) => {
+        const i = row.original;
+        return (
+          <span className="text-sm">
+            {[i.preferredMonths.length ? i.preferredMonths.map((m) => MONTHS[m - 1]).join(", ") : null, i.preferredDays.length ? i.preferredDays.map((d) => WEEKDAY_SHORT[d]).join(", ") : null]
+              .filter(Boolean)
+              .join(" · ") || "—"}
+          </span>
+        );
+      },
+    },
+    {
+      id: "exclusions",
+      header: "Exclusions",
+      cell: ({ row }) => (
+        <div className="text-muted-foreground max-w-56 text-sm">
+          <TruncatedText>{row.original.exclusions ?? "—"}</TruncatedText>
+        </div>
+      ),
+    },
+    {
+      id: "actions",
+      header: "",
+      cell: ({ row }) =>
+        canEdit ? (
+          <RowMenu label={`Actions for ${label(row.original.serviceId)}`}>
+            <DropdownMenuItem onClick={() => onEdit(row.original)}>
+              <Pencil className="size-4" />
+              Edit
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => onRemove(row.original)} className="text-destructive focus:text-destructive">
+              <Archive className="size-4" />
+              Remove
+            </DropdownMenuItem>
+          </RowMenu>
+        ) : null,
+    },
+  ];
+}
+
 export function ScopePanel({ propertyId, canEdit }: { propertyId: string; canEdit: boolean }) {
   const { data, error, loading, reload } = useAmcData(() => clientProfileService.scope(propertyId), `scope|${propertyId}`);
   const assets = useAmcData(() => clientProfileService.assets(propertyId), `assets|${propertyId}`);
@@ -771,73 +943,32 @@ export function ScopePanel({ propertyId, canEdit }: { propertyId: string; canEdi
         <ListSkeleton rows={3} />
       ) : data?.migrated === false ? (
         <p className="text-muted-foreground px-5 py-4 text-sm">Scope capture arrives with the Phase 2 database update (20261007120000).</p>
-      ) : items.length === 0 ? (
-        <EmptyState
-          icon={<ClipboardList className="size-5" />}
-          title="No scope yet"
-          description="Add the services this property needs; the proposal starts from this list."
-          action={canAdd ? { label: "Add to scope", onClick: () => editing.show("new") } : undefined}
-        />
       ) : (
-        <div className="overflow-x-auto">
-          <Table className="min-w-[840px]">
-            <TableHeader className="[&_th]:text-muted-foreground">
-              <TableRow className="hover:bg-transparent">
-                <TableHead className="pl-5">Service</TableHead>
-                <TableHead>Trade</TableHead>
-                <TableHead>Qty</TableHead>
-                <TableHead>Visits / year</TableHead>
-                <TableHead>Per visit</TableHead>
-                <TableHead>Preferred</TableHead>
-                <TableHead>Exclusions</TableHead>
-                <TableHead className="w-12 pr-5" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {items.map((i) => {
-                const asset = assets.data?.assets.find((a) => a.id === i.assetId);
-                return (
-                  <TableRow key={i.id} className="h-14">
-                    <TableCell className="pl-5">
-                      <div className="font-medium">{label(i.serviceId)}</div>
-                      {asset ? <div className="text-muted-foreground text-xs">For {asset.assetType}{asset.location ? `, ${asset.location}` : ""}</div> : null}
-                    </TableCell>
-                    <TableCell>{TRADE_LABELS[i.trade as keyof typeof TRADE_LABELS] ?? i.trade}</TableCell>
-                    <TableCell className="tabular-nums">{i.quantity}</TableCell>
-                    <TableCell className="tabular-nums">{i.frequencyPerYear ?? "—"}</TableCell>
-                    <TableCell className="tabular-nums">
-                      {i.durationMinutes
-                        ? i.durationMinutes >= 60
-                          ? `${Math.floor(i.durationMinutes / 60)} h${i.durationMinutes % 60 ? ` ${i.durationMinutes % 60} min` : ""}`
-                          : `${i.durationMinutes} min`
-                        : "—"}
-                    </TableCell>
-                    <TableCell className="text-sm">
-                      {[i.preferredMonths.length ? i.preferredMonths.map((m) => MONTHS[m - 1]).join(", ") : null, i.preferredDays.length ? i.preferredDays.map((d) => WEEKDAY_SHORT[d]).join(", ") : null]
-                        .filter(Boolean)
-                        .join(" · ") || "—"}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground max-w-56 text-sm"><TruncatedText>{i.exclusions ?? "—"}</TruncatedText></TableCell>
-                    <TableCell className="pr-5">
-                      {canEdit ? (
-                        <RowMenu label={`Actions for ${label(i.serviceId)}`}>
-                          <DropdownMenuItem onClick={() => editing.show(i)}>
-                            <Pencil className="size-4" />
-                            Edit
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => void remove(i)} className="text-destructive focus:text-destructive">
-                            <Archive className="size-4" />
-                            Remove
-                          </DropdownMenuItem>
-                        </RowMenu>
-                      ) : null}
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </div>
+        <DataTable
+          columns={scopeColumns({
+            canEdit,
+            label,
+            assetFor: (assetId) => assets.data?.assets.find((a) => a.id === assetId),
+            onEdit: editing.show,
+            onRemove: (i) => void remove(i),
+          })}
+          data={items}
+          loading={false}
+          rowCount={items.length}
+          pageSize={500}
+          currentPage={0}
+          onPageChange={noop}
+          onPageSizeChange={noop}
+          onGlobalFilterChange={noop}
+          emptyState={
+            <EmptyState
+              icon={<ClipboardList className="size-5" />}
+              title="No scope yet"
+              description="Add the services this property needs; the proposal starts from this list."
+              action={canAdd ? { label: "Add to scope", onClick: () => editing.show("new") } : undefined}
+            />
+          }
+        />
       )}
       <ScopeDialog
         key={editing.key}

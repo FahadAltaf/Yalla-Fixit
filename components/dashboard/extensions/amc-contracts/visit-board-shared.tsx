@@ -76,7 +76,8 @@ export function durationLabel(minutes: number): string {
 }
 
 /** The visit's dialog lives on its contract's Schedule tab. */
-export const visitHref = (v: Pick<BoardVisit, "contractId" | "id">) => `/extensions/amc-contracts/${v.contractId}?tab=schedule&visit=${v.id}`;
+/* The visit's own page (AMC -> Visits). */
+export const visitHref = (v: Pick<BoardVisit, "contractId" | "id">) => `/extensions/amc-contracts/visits/${v.id}`;
 
 /**
  * The two 400s that ask for a reason rather than refuse: a day outside the

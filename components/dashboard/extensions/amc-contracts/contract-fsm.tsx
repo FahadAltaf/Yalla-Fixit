@@ -1,21 +1,24 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { CalendarClock, Check, CheckCircle2, Link2, PlugZap, RefreshCw, Unlink } from "lucide-react";
 import { toast } from "sonner";
+import type { ColumnDef } from "@tanstack/react-table";
+
+import { DataTable } from "@/components/data-table";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import DateTimeSelect from "@/components/ui/date-time-select";
 import { SectionCard } from "@/components/dashboard/shared/kaizen";
-import { ActionDialogContent, ErrorState, ListSkeleton, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
+import { ActionDialogContent, ErrorState, ListSkeleton, SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
 import { formatQuantity } from "@/lib/amc/contracts";
 import {
   amcContractsService,
@@ -48,6 +51,8 @@ function usageSourceLabel(source: string): string {
   return source === "fsm" ? "FSM" : source === "manual" ? "Manual" : source;
 }
 
+const noop = () => undefined;
+
 /**
  * Zoho FSM on the contract: how far the contract is connected (customer,
  * service mappings, linked work, automation), the work linked to it,
@@ -69,6 +74,7 @@ export function ContractFsm({
   const [error, setError] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [linkCustomer, setLinkCustomer] = useState(false);
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const [linkWork, setLinkWork] = useState(false);
   /* Kept after the dialog closes, so it can animate out with its content. */
   const [reviewing, setReviewing] = useState<Visit | null>(null);
@@ -88,7 +94,12 @@ export function ContractFsm({
     void load();
   }, [load]);
 
-  const checkFsm = async () => {
+  /* Asked first (11 Nov 2026): it acts at once, so it is confirmed like every other step. */
+  const checkFsm = () =>
+    void confirm({ title: "Check Zoho FSM now?", description: "Reads every linked work order and appointment from Zoho FSM and records the visits done since the last check against the contract's usage. Zoho FSM itself is not changed.", confirmText: "Check FSM" }).then((ok) => {
+      if (ok) void checkFsmNow();
+    });
+  const checkFsmNow = async () => {
     setChecking(true);
     try {
       const result = await amcContractsService.checkFsm(contractId);
@@ -226,37 +237,48 @@ export function ContractFsm({
             title="Upcoming visits"
             description="Appointments of linked FSM work on the scheduling board, still to happen."
             icon={<CalendarClock />}
-            bodyClassName="px-5 pb-5"
           >
-            {data.upcoming.length === 0 ? (
-              <p className="text-muted-foreground text-sm">
-                {s.linkedWork === 0
-                  ? "No FSM work is linked yet. Upcoming visits appear once work is linked and placed on the board."
-                  : "No upcoming appointments of the linked work are on the scheduling board."}
-              </p>
-            ) : (
-              <VisitTable visits={data.upcoming} upcoming />
-            )}
+            <VisitTable
+              visits={data.upcoming}
+              upcoming
+              emptyState={
+                s.linkedWork === 0 ? (
+                  <EmptyState
+                    icon={<CalendarClock />}
+                    title="No FSM work is linked yet"
+                    description="Upcoming visits appear once work is linked and placed on the board."
+                  />
+                ) : (
+                  <EmptyState
+                    icon={<CalendarClock />}
+                    title="No upcoming visits"
+                    description="No upcoming appointments of the linked work are on the scheduling board."
+                  />
+                )
+              }
+            />
           </SectionCard>
 
           <SectionCard
             title="Visit history"
             description="Linked FSM appointments and usage recorded by hand. Usage from FSM is recorded only when confirmed."
             icon={<CheckCircle2 />}
-            bodyClassName="px-5 pb-5"
           >
-            {data.visits.length === 0 ? (
-              <p className="text-muted-foreground text-sm">No visits yet.</p>
-            ) : (
-              <VisitTable
-                visits={data.visits}
-                canManage={canManage}
-                onReview={(visit) => {
-                  setReviewing(visit);
-                  setReviewOpen(true);
-                }}
-              />
-            )}
+            <VisitTable
+              visits={data.visits}
+              canManage={canManage}
+              onReview={(visit) => {
+                setReviewing(visit);
+                setReviewOpen(true);
+              }}
+              emptyState={
+                <EmptyState
+                  icon={<CheckCircle2 />}
+                  title="No visits yet"
+                  description="Linked FSM appointments and usage recorded by hand show here."
+                />
+              }
+            />
           </SectionCard>
 
           {data.links.length ? (
@@ -289,6 +311,7 @@ export function ContractFsm({
         </>
       ) : null}
 
+      {confirmDialog}
       <LinkCustomerDialog
         open={linkCustomer}
         onOpenChange={setLinkCustomer}
@@ -363,107 +386,142 @@ function StatusItem({
   );
 }
 
+/* Upcoming visits leave out Usage, SLA and the Review action. */
 function VisitTable({
   visits,
   upcoming,
   canManage,
   onReview,
+  emptyState,
 }: {
   visits: Visit[];
   upcoming?: boolean;
   canManage?: boolean;
   onReview?: (visit: Visit) => void;
+  emptyState: React.ReactNode;
 }) {
-  return (
-    <div className="-mx-5 overflow-x-auto">
-      <Table className="min-w-[900px]">
-        <TableHeader>
-          <TableRow>
-            <TableHead className="pl-5">Date</TableHead>
-            <TableHead>Service</TableHead>
-            <TableHead>Work order</TableHead>
-            <TableHead>Appointment</TableHead>
-            <TableHead>Technician</TableHead>
-            <TableHead>FSM status</TableHead>
-            {upcoming ? null : <TableHead>Usage</TableHead>}
-            <TableHead>Coverage</TableHead>
-            {upcoming ? null : <TableHead>SLA</TableHead>}
-            {upcoming ? null : (
-              <TableHead className="pr-5 text-right">
-                <span className="sr-only">Actions</span>
-              </TableHead>
-            )}
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {visits.map((v) => (
-            <TableRow key={v.key}>
-              <TableCell className="pl-5 align-top tabular-nums">
-                {v.date ? (upcoming ? formatDateTime(v.date) : formatContractDate(v.date.slice(0, 10))) : "—"}
-              </TableCell>
-              <TableCell className="align-top font-medium">{v.serviceLabel}</TableCell>
-              <TableCell className="align-top">{v.workOrder ?? "—"}</TableCell>
-              <TableCell className="align-top">
-                {v.manual ? <span className="text-muted-foreground">Recorded by hand</span> : v.appointment ?? v.appointmentId ?? "—"}
-              </TableCell>
-              <TableCell className="align-top">{v.technicians.length ? v.technicians.join(", ") : "—"}</TableCell>
-              <TableCell className="align-top">
-                {v.fsmStatus ? (
-                  <div>
-                    {v.fsmStatus}
-                    {v.checkedAt ? <div className="text-muted-foreground text-xs">as of {formatDateTime(v.checkedAt)}</div> : null}
+  const columns = useMemo<ColumnDef<Visit>[]>(() => {
+    const cols: (ColumnDef<Visit> | null)[] = [
+      {
+        id: "date",
+        header: "Date",
+        cell: ({ row: { original: v } }) => (
+          <span className="tabular-nums">
+            {v.date ? (upcoming ? formatDateTime(v.date) : formatContractDate(v.date.slice(0, 10))) : "—"}
+          </span>
+        ),
+      },
+      {
+        id: "service",
+        header: "Service",
+        cell: ({ row: { original: v } }) => <span className="font-medium">{v.serviceLabel}</span>,
+      },
+      {
+        id: "workOrder",
+        header: "Work order",
+        cell: ({ row: { original: v } }) => v.workOrder ?? "—",
+      },
+      {
+        id: "appointment",
+        header: "Appointment",
+        cell: ({ row: { original: v } }) =>
+          v.manual ? <span className="text-muted-foreground">Recorded by hand</span> : (v.appointment ?? v.appointmentId ?? "—"),
+      },
+      {
+        id: "technician",
+        header: "Technician",
+        cell: ({ row: { original: v } }) => (v.technicians.length ? v.technicians.join(", ") : "—"),
+      },
+      {
+        id: "fsmStatus",
+        header: "FSM status",
+        cell: ({ row: { original: v } }) =>
+          v.fsmStatus ? (
+            <div>
+              {v.fsmStatus}
+              {v.checkedAt ? <div className="text-muted-foreground text-xs">as of {formatDateTime(v.checkedAt)}</div> : null}
+            </div>
+          ) : (
+            "—"
+          ),
+      },
+      upcoming
+        ? null
+        : {
+            id: "usage",
+            header: "Usage",
+            cell: ({ row: { original: v } }) =>
+              v.usage ? (
+                <div>
+                  {formatQuantity(v.usage.quantity)}{" "}
+                  <Badge variant="secondary" className="bg-mist text-ink-soft ml-1 border-0 font-medium">
+                    {usageSourceLabel(v.usage.source)}
+                  </Badge>
+                </div>
+              ) : v.syncStatus ? (
+                <span className={v.syncStatus === "needs_review" ? "text-warning" : "text-muted-foreground"}>
+                  {SYNC_LABELS[v.syncStatus] ?? v.syncStatus}
+                </span>
+              ) : (
+                <span className="text-muted-foreground">Not checked</span>
+              ),
+          },
+      {
+        id: "coverage",
+        header: "Coverage",
+        cell: ({ row: { original: v } }) => v.coverage ?? (v.manual ? "—" : "Not recorded"),
+      },
+      upcoming
+        ? null
+        : {
+            id: "sla",
+            header: "SLA",
+            cell: ({ row: { original: v } }) =>
+              v.sla ? (
+                <div title={v.sla.missing ?? undefined}>
+                  <div>{v.sla.label}</div>
+                  <div className="text-muted-foreground text-xs">
+                    {v.sla.actualMinutes !== null ? `Actual ${v.sla.actualMinutes} min · ` : "Actual: unavailable · "}
+                    {SLA_LABELS[v.sla.state] ?? v.sla.state}
                   </div>
-                ) : (
-                  "—"
-                )}
-              </TableCell>
-              {upcoming ? null : (
-                <TableCell className="align-top">
-                  {v.usage ? (
-                    <div>
-                      {formatQuantity(v.usage.quantity)}{" "}
-                      <Badge variant="secondary" className="bg-mist text-ink-soft ml-1 border-0 font-medium">
-                        {usageSourceLabel(v.usage.source)}
-                      </Badge>
-                    </div>
-                  ) : v.syncStatus ? (
-                    <span className={v.syncStatus === "needs_review" ? "text-warning" : "text-muted-foreground"}>
-                      {SYNC_LABELS[v.syncStatus] ?? v.syncStatus}
-                    </span>
-                  ) : (
-                    <span className="text-muted-foreground">Not checked</span>
-                  )}
-                </TableCell>
-              )}
-              <TableCell className="align-top">{v.coverage ?? (v.manual ? "—" : "Not recorded")}</TableCell>
-              {upcoming ? null : (
-                <TableCell className="align-top">
-                  {v.sla ? (
-                    <div title={v.sla.missing ?? undefined}>
-                      <div>{v.sla.label}</div>
-                      <div className="text-muted-foreground text-xs">
-                        {v.sla.actualMinutes !== null ? `Actual ${v.sla.actualMinutes} min · ` : "Actual: unavailable · "}
-                        {SLA_LABELS[v.sla.state] ?? v.sla.state}
-                      </div>
-                    </div>
-                  ) : (
-                    "—"
-                  )}
-                </TableCell>
-              )}
-              {upcoming ? null : (
-                <TableCell className="pr-5 text-right align-top">
-                  {canManage && !v.manual && v.appointmentId && v.syncStatus === "needs_review" ? (
-                    <Button size="sm" variant="outline" onClick={() => onReview?.(v)}>
-                      Review
-                    </Button>
-                  ) : null}
-                </TableCell>
-              )}
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
+                </div>
+              ) : (
+                "—"
+              ),
+          },
+      upcoming
+        ? null
+        : {
+            id: "actions",
+            header: () => <span className="sr-only">Actions</span>,
+            cell: ({ row: { original: v } }) => (
+              <div className="text-right">
+                {canManage && !v.manual && v.appointmentId && v.syncStatus === "needs_review" ? (
+                  <Button size="sm" variant="outline" onClick={() => onReview?.(v)}>
+                    Review
+                  </Button>
+                ) : null}
+              </div>
+            ),
+          },
+    ];
+    return cols.filter((c): c is ColumnDef<Visit> => c !== null);
+  }, [upcoming, canManage, onReview]);
+
+  return (
+    <div className="border-t">
+      <DataTable
+        columns={columns}
+        data={visits}
+        loading={false}
+        rowCount={visits.length}
+        pageSize={500}
+        currentPage={0}
+        onPageChange={noop}
+        onPageSizeChange={noop}
+        onGlobalFilterChange={noop}
+        emptyState={emptyState}
+      />
     </div>
   );
 }

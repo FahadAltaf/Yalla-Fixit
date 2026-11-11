@@ -5,7 +5,6 @@ import { CalendarCheck, CalendarClock, Search, UserCheck, Users } from "lucide-r
 import { toast } from "sonner";
 
 import { ActionDialogContent, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -21,7 +20,7 @@ import { cn } from "@/lib/utils";
 import { visitsService, type BoardActionInput, type BoardVisit, type VisitSuggestion } from "@/modules/amc-contracts/visits-service";
 
 import { durationLabel, errorText, inWindow, reasonAsked, shortDate, windowLabel, type BoardTechnician } from "./visit-board-shared";
-import { crewGapMessages } from "./crew-gap";
+import { CrewPicker, crewOptions } from "./crew-picker";
 
 /**
  * The board's dialogs: place a visit (with the suggested crew), move
@@ -311,11 +310,6 @@ export function PlaceDialog({ open, onOpenChange, onDone, reload, request, techn
       ) : suggestion ? (
         <div className="grid gap-2">
           {stale ? <p className="text-warning text-xs">The date, time or duration changed: find technicians again for this slot.</p> : null}
-          {crewGapMessages(suggestion).map((message) => (
-            <p key={message} className="text-warning text-xs">
-              {message}
-            </p>
-          ))}
           {pinnedBlocked ? (
             <p className="text-warning text-xs">
               {pinnedBlocked.name} cannot take it: {pinnedBlocked.blockers.join("; ").toLowerCase()}. The suggested crew is picked instead.
@@ -323,51 +317,7 @@ export function PlaceDialog({ open, onOpenChange, onDone, reload, request, techn
           ) : pinnedMissing ? (
             <p className="text-warning text-xs">{technicianName(pinned)} is not confirmed for this visit&apos;s trades. The suggested crew is picked instead.</p>
           ) : null}
-          {candidates.length === 0 && suggestion.blocked.length === 0 ? (
-            <p className="text-muted-foreground rounded-lg border border-dashed px-3 py-4 text-center text-sm">
-              No technician is confirmed for these trades. Add skills under AMC technicians.
-            </p>
-          ) : null}
-          {candidates.map((c) => {
-            const checked = selected.includes(c.fsmId);
-            return (
-              <label key={c.fsmId} className="hover:bg-muted/40 flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2.5 text-sm">
-                <Checkbox
-                  checked={checked}
-                  className="mt-0.5"
-                  onCheckedChange={(v) => setSelected((cur) => (v === true ? [...cur, c.fsmId] : cur.filter((id) => id !== c.fsmId)))}
-                />
-                <span className="min-w-0 flex-1">
-                  <span className="flex flex-wrap items-center gap-1.5">
-                    <span className="font-medium">{c.name}</span>
-                    {suggested.includes(c.fsmId) ? (
-                      <Badge variant="secondary" className="bg-brand-50 text-brand border-0 font-medium">
-                        Suggested
-                      </Badge>
-                    ) : null}
-                    {c.covers.map((t) => (
-                      <Badge key={t} variant="outline" className="font-normal">
-                        {TRADE_LABELS[t]}
-                      </Badge>
-                    ))}
-                  </span>
-                  <span className="text-muted-foreground block text-xs">
-                    {c.workloadMinutes ? `${durationLabel(c.workloadMinutes)} booked that day` : "Nothing booked that day"}
-                    {c.notes.length ? ` · ${c.notes.join(" · ")}` : ""}
-                  </span>
-                </span>
-              </label>
-            );
-          })}
-          {suggestion.blocked.map((b) => (
-            <div key={b.fsmId} className="flex items-start gap-3 rounded-lg border px-3 py-2.5 text-sm opacity-60">
-              <Checkbox checked={false} disabled className="mt-0.5" aria-label={`${b.name} cannot be chosen`} />
-              <span className="min-w-0 flex-1">
-                <span className="font-medium">{b.name}</span>
-                <span className="text-danger block text-xs">{b.blockers.join(" · ")}</span>
-              </span>
-            </div>
-          ))}
+          <CrewPicker options={crewOptions(suggestion)} picked={selected} onPickedChange={setSelected} leadId={leadId || null} disabled={busy} />
           {selected.length > 0 && uncovered.length > 0 ? (
             <p className="text-danger text-xs">Nobody chosen covers {uncovered.map((t) => TRADE_LABELS[t]).join(", ")}.</p>
           ) : null}

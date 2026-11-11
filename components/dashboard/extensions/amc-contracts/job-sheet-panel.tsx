@@ -1,14 +1,16 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useContext, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { format } from "date-fns";
-import { CheckCircle2, ClipboardCheck, Copy, Database, ExternalLink, FileText, Hammer, ImagePlus, Plus, Save, Send, Trash2, Undo2 } from "lucide-react";
+import { AlertTriangle, CheckCircle2, CircleDashed, LogIn, Package, Timer, ClipboardCheck, Copy, Database, ExternalLink, FileText, Hammer, ImagePlus, Plus, Save, Send, Trash2, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 
+import { PillTabs, StatCard, StatCardGrid } from "@/components/dashboard/shared/kaizen";
 import { ActionDialogContent, ErrorState, FieldsSkeleton, SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -16,6 +18,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import DateTimeSelect from "@/components/ui/date-time-select";
+import { EmptyState } from "@/components/ui/empty-state";
 import { TRADE_LABELS, TRADES } from "@/lib/amc/client-profile";
 import {
   LINE_OUTCOME_LABELS,
@@ -31,6 +34,7 @@ import {
 } from "@/lib/amc/job-sheets";
 import { AMC_PHOTO_MAX_BYTES } from "@/lib/amc/photos";
 import { PLANNABLE_STATUSES, type VisitStatus } from "@/lib/amc/ppm";
+import { cn } from "@/lib/utils";
 import {
   jobSheetsService,
   type JobSheetInput,
@@ -40,6 +44,7 @@ import {
   type ReportState,
 } from "@/modules/amc-contracts/job-sheets-service";
 
+import { Panel, PanelEmpty, PanelSurface } from "./call-out-shared";
 import { formatDateTime } from "./contract-status";
 import { useDialog } from "./profile/use-dialog";
 import { RaiseAdditionalWorkDialog } from "./raise-additional-work-dialog";
@@ -223,7 +228,23 @@ type Prepared = { message: string; whatsapp: string | null };
  * report. Loads its own data; `canEdit` and `canReview` from the route
  * decide what is offered, and the route checks again.
  */
-export function JobSheetPanel({ visitId, onChanged }: { visitId: string; onChanged?: () => unknown }) {
+export function JobSheetPanel({
+  visitId,
+  onChanged,
+  readOnly = false,
+  refreshKey = 0,
+}: {
+  visitId: string;
+  onChanged?: () => unknown;
+  /** Bumped by the page (Refresh, a change elsewhere on it): the sheet is read again. */
+  refreshKey?: number;
+  /**
+   * The visit page (11 Nov 2026): the crew fills the sheet in on the mobile
+   * app, as a Snagging inspection, so the portal only shows it, as a summary
+   * and rows, and keeps the supervisor's review (return, close, the report).
+   */
+  readOnly?: boolean;
+}) {
   const [state, setState] = useState<{ id: string | null; data: JobSheetResponse | null; error: string | null; formKey: number }>({
     id: null,
     data: null,
@@ -250,7 +271,7 @@ export function JobSheetPanel({ visitId, onChanged }: { visitId: string; onChang
     return () => {
       stale = true;
     };
-  }, [visitId, attempt]);
+  }, [visitId, attempt, refreshKey]);
 
   /* After a change: the sheet again (a fresh form only when the sheet itself changed), then the screen behind. */
   const refresh = async (resetForm: boolean) => {
@@ -287,6 +308,7 @@ export function JobSheetPanel({ visitId, onChanged }: { visitId: string; onChang
   return (
     <SheetBody
       key={current.formKey}
+      readOnly={readOnly}
       visitId={visitId}
       data={current.data}
       refresh={refresh}
@@ -299,12 +321,14 @@ export function JobSheetPanel({ visitId, onChanged }: { visitId: string; onChang
 type Working = "save" | "photo" | "resend" | null;
 
 function SheetBody({
+  readOnly,
   visitId,
   data,
   refresh,
   prepared,
   setPrepared,
 }: {
+  readOnly: boolean;
   visitId: string;
   data: JobSheetResponse;
   refresh: (resetForm: boolean) => Promise<void>;
@@ -322,7 +346,7 @@ function SheetBody({
   const { visit: v, sheet } = data;
   const status = sheet.status;
   const editableStatus = status === null || status === "draft" || status === "returned";
-  const editable = data.canEdit && editableStatus && EDITABLE_VISIT.includes(v.status);
+  const editable = !readOnly && data.canEdit && editableStatus && EDITABLE_VISIT.includes(v.status);
   const busy = working !== null;
   const checks = editable ? sheetChecks(form, data) : null;
 
@@ -382,7 +406,12 @@ function SheetBody({
     setPrepared(report.message || report.whatsapp ? { message: report.message, whatsapp: report.whatsapp } : null);
   };
 
+  /* Asked first (11 Nov 2026): it acts at once, so it is confirmed like every other step. */
   const resend = () =>
+    void confirm({ title: v.reportDocumentId ? "Send the service report again?" : "Send the service report?", description: "Emails the service report PDF to the client and prepares a WhatsApp message to send yourself.", confirmText: v.reportDocumentId ? "Resend report" : "Send report" }).then((ok) => {
+      if (ok) void resendNow();
+    });
+  const resendNow = () =>
     void run(
       "resend",
       async () => {
@@ -395,7 +424,8 @@ function SheetBody({
 
   return (
     <div className="grid gap-4">
-      <SheetHeader data={data} />
+      {readOnly ? <SheetStats data={data} /> : null}
+      {!readOnly || status === "submitted" || status === "closed" || status === "returned" ? <SheetHeader data={data} /> : null}
 
       {status === "returned" && sheet.reviewComment ? (
         <Alert className="border-warning/30 bg-warning/5 items-start p-4">
@@ -415,7 +445,15 @@ function SheetBody({
 
       {prepared ? <PreparedReport prepared={prepared} onDismiss={() => setPrepared(null)} /> : null}
 
-      {!editable && status === null ? (
+      {readOnly && status === null ? (
+        <Card className="p-0">
+          <EmptyState
+            icon={<ClipboardCheck className="size-6" />}
+            title="No job sheet yet"
+            description="The crew fills it in on the mobile app during the visit: arrival and finish, how each service went, the checklist, photos and the client's sign-off. It shows here as they go, and comes to the supervisor for review when they submit it."
+          />
+        </Card>
+      ) : !editable && status === null ? (
         <p className="text-muted-foreground rounded-lg border px-4 py-6 text-center text-sm">
           {data.canEdit
             ? "No job sheet was filled in, and this visit can no longer take one."
@@ -434,10 +472,7 @@ function SheetBody({
                 </Field>
               </div>
             ) : (
-              <dl className="grid gap-2 text-sm sm:grid-cols-2">
-                <Fact label="Arrived">{sheet.arrivedAt ? formatDateTime(sheet.arrivedAt) : <Muted>—</Muted>}</Fact>
-                <Fact label="Completed">{sheet.completedAt ? formatDateTime(sheet.completedAt) : <Muted>—</Muted>}</Fact>
-              </dl>
+              <TimeTiles arrivedAt={sheet.arrivedAt} completedAt={sheet.completedAt} />
             )}
           </Panel>
 
@@ -623,9 +658,16 @@ function SheetHeader({ data }: { data: JobSheetResponse }) {
   const status = SHEET_STATUS[sheet.status ?? "none"];
   const report = v.reportState ? REPORT_STATE[v.reportState] : null;
   const showReasons = sheet.status === "submitted" || sheet.status === "closed";
+  /* A card of its own on the visit page, a box inside a dialog (as each Panel). */
+  const onPage = useContext(PanelSurface) === "card";
 
   return (
-    <div className="flex flex-wrap items-start justify-between gap-3 rounded-lg border px-4 py-3">
+    <div
+      className={cn(
+        "flex flex-wrap items-start justify-between gap-3 border",
+        onPage ? "bg-card text-card-foreground rounded-xl p-5 shadow-sm" : "rounded-lg px-4 py-3",
+      )}
+    >
       <div className="min-w-0 space-y-1.5">
         <div className="flex flex-wrap items-center gap-1.5">
           <Badge variant="secondary" className={`border-0 font-medium ${status.tone}`}>
@@ -662,6 +704,166 @@ function SheetHeader({ data }: { data: JobSheetResponse }) {
         </Button>
       ) : null}
     </div>
+  );
+}
+
+/** The sheet at a glance, as a Snagging job's figures: where it stands, services done, the checklist, the photos. */
+function SheetStats({ data }: { data: JobSheetResponse }) {
+  const { sheet, lines, checklist, photos } = data;
+  const status = SHEET_STATUS[sheet.status ?? "none"];
+  const done = lines.filter((l) => l.outcome === "completed").length;
+  const partly = lines.filter((l) => l.outcome === "partially_completed").length;
+  const notDone = lines.filter((l) => l.outcome === "not_completed").length;
+  const recorded = done + partly + notDone;
+  const ok = checklist.filter((c) => c.result === "ok").length;
+  const flagged = checklist.filter((c) => c.result === "fault" || c.result === "attention").length;
+  const before = photos.filter((p) => p.kind === "before").length;
+  const after = photos.filter((p) => p.kind === "after").length;
+  return (
+    <StatCardGrid columns={4}>
+      <StatCard
+        label="Job sheet"
+        value={status.label}
+        headline={sheet.submittedAt ? `Submitted ${formatDateTime(sheet.submittedAt)}` : sheet.status ? "Being filled in" : "Not started on the app"}
+        caption={sheet.returnCount ? `Returned ${sheet.returnCount} ${sheet.returnCount === 1 ? "time" : "times"}` : "Filled in by the crew on the mobile app"}
+        tone={sheet.status === "closed" ? "good" : sheet.status === "returned" ? "bad" : sheet.status === "submitted" ? "review" : "neutral"}
+      />
+      <StatCard
+        label="Services done"
+        value={`${done} / ${lines.length}`}
+        headline={!recorded ? "Nothing recorded yet" : partly || notDone ? [partly ? `${partly} partly` : null, notDone ? `${notDone} not done` : null].filter(Boolean).join(", ") : "All completed"}
+        tone={!lines.length || !recorded ? "neutral" : done === lines.length ? "good" : notDone ? "bad" : "progress"}
+      />
+      <StatCard
+        label="Checklist"
+        value={checklist.length ? `${ok} / ${checklist.length}` : "0"}
+        headline={!checklist.length ? "No checks yet" : flagged ? `${flagged} need attention` : "All OK"}
+        tone={!checklist.length ? "neutral" : flagged ? "bad" : "good"}
+      />
+      <StatCard
+        label="Photos"
+        value={photos.length}
+        headline={!photos.length ? "None yet" : before && after ? "Before and after" : before ? "No after photo" : after ? "No before photo" : "No before or after"}
+        caption={photos.length ? `${before} before · ${after} after` : undefined}
+        tone={!photos.length ? "neutral" : before && after ? "good" : "review"}
+      />
+    </StatCardGrid>
+  );
+}
+
+/* Times and dates in Dubai, whatever the viewer's computer is set to. */
+const dubaiTime = (iso: string) => new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Dubai" }).format(new Date(iso));
+const dubaiDay = (iso: string) => new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Dubai" }).format(new Date(iso));
+const dubaiShort = (iso: string) =>
+  new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Dubai" }).format(new Date(iso));
+
+/** When the crew arrived and finished, and how long they were on site: three tiles, the time large and the day under it. */
+function TimeTiles({ arrivedAt, completedAt }: { arrivedAt: string | null; completedAt: string | null }) {
+  const minutes = arrivedAt && completedAt ? Math.round((Date.parse(completedAt) - Date.parse(arrivedAt)) / 60_000) : null;
+  const duration = minutes !== null && minutes >= 0 ? `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, "0")} min` : null;
+  const tiles: Array<{ label: string; icon: ReactNode; value: string | null; sub: string | null; empty: string }> = [
+    { label: "Arrived", icon: <LogIn />, value: arrivedAt ? dubaiTime(arrivedAt) : null, sub: arrivedAt ? dubaiDay(arrivedAt) : null, empty: "Not yet" },
+    { label: "Completed", icon: <CheckCircle2 />, value: completedAt ? dubaiTime(completedAt) : null, sub: completedAt ? dubaiDay(completedAt) : null, empty: "Not yet" },
+    {
+      label: "Time on site",
+      icon: <Timer />,
+      value: duration,
+      sub: completedAt ? "The 48-hour report clock runs from completion" : "Counted once the crew finishes",
+      empty: "—",
+    },
+  ];
+  return (
+    <div className="grid gap-3 sm:grid-cols-3">
+      {tiles.map((tile) => (
+        <div key={tile.label} className="bg-muted/30 flex items-start gap-3 rounded-lg border px-4 py-3">
+          <span className="bg-background text-muted-foreground flex size-9 shrink-0 items-center justify-center rounded-md border [&_svg]:size-4">{tile.icon}</span>
+          <div className="min-w-0">
+            <div className="text-muted-foreground text-xs">{tile.label}</div>
+            <div className={cn("text-xl font-semibold tabular-nums", !tile.value && "text-muted-foreground text-base font-medium")}>{tile.value ?? tile.empty}</div>
+            {tile.sub ? <div className="text-muted-foreground text-xs">{tile.sub}</div> : null}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+const PHOTO_GROUP_ORDER = ["before", "after", "fault", "other"] as const;
+const PHOTO_KIND_TONE: Record<string, string> = {
+  before: "bg-background/90 text-foreground",
+  after: "bg-success text-white",
+  fault: "bg-danger text-white",
+  other: "bg-background/90 text-foreground",
+};
+
+/**
+ * The visit's photos in one grid, each a card with its kind on the photo,
+ * its caption and when it was taken; the pills above narrow it to one kind
+ * (Before, After, Fault), with how many of each.
+ */
+function PhotoGroups({ photos }: { photos: JobSheetResponse["photos"] }) {
+  const [kind, setKind] = useState<"all" | (typeof PHOTO_GROUP_ORDER)[number]>("all");
+  const kindOf = (p: JobSheetResponse["photos"][number]) => (isPhotoKind(p.kind) ? p.kind : "other");
+  const counts = Object.fromEntries(PHOTO_GROUP_ORDER.map((k) => [k, photos.filter((p) => kindOf(p) === k).length])) as Record<(typeof PHOTO_GROUP_ORDER)[number], number>;
+  const shown = kind === "all" ? photos : photos.filter((p) => kindOf(p) === kind);
+  return (
+    <div className="grid gap-4">
+      <PillTabs
+        value={kind}
+        onChange={setKind}
+        tabs={[{ value: "all" as const, label: "All", count: photos.length }, ...PHOTO_GROUP_ORDER.filter((k) => counts[k]).map((k) => ({ value: k, label: PHOTO_LABELS[k], count: counts[k] }))]}
+      />
+      <ul className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
+        {shown.map((p) => {
+          const k = kindOf(p);
+          return (
+            <li key={p.id} className="group bg-card overflow-hidden rounded-xl border shadow-xs">
+              {p.url ? (
+                <a href={p.url} target="_blank" rel="noopener noreferrer" className="relative block overflow-hidden" title="Open the full photo">
+                  {/* eslint-disable-next-line @next/next/no-img-element -- short-lived signed URL, not optimisable */}
+                  <img
+                    src={p.url}
+                    alt={p.caption ?? `${PHOTO_LABELS[k]} photo`}
+                    className="aspect-[4/3] w-full object-cover transition-transform duration-200 group-hover:scale-[1.03]"
+                    loading="lazy"
+                  />
+                  <span className={cn("absolute top-2 left-2 rounded-md px-2 py-0.5 text-xs font-medium shadow-sm", PHOTO_KIND_TONE[k])}>{PHOTO_LABELS[k]}</span>
+                  <span className="bg-background/90 text-foreground absolute top-2 right-2 rounded-md p-1 opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
+                    <ExternalLink className="size-3.5" />
+                  </span>
+                </a>
+              ) : (
+                <div className="bg-muted text-muted-foreground flex aspect-[4/3] items-center justify-center text-xs">Unavailable</div>
+              )}
+              <div className="grid gap-0.5 px-3 py-2.5">
+                <p className="truncate text-sm font-medium" title={p.caption ?? undefined}>
+                  {p.caption || `${PHOTO_LABELS[k]} photo`}
+                </p>
+                <p className="text-muted-foreground text-xs">{dubaiShort(p.createdAt)}</p>
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+/** Rows with an icon, a title, a line under it and a status on the right (as Snagging's areas). */
+function RowList({ children }: { children: ReactNode }) {
+  return <ul className="divide-y overflow-hidden rounded-lg border">{children}</ul>;
+}
+
+function Row({ icon, title, subtitle, trailing }: { icon: ReactNode; title: ReactNode; subtitle?: ReactNode; trailing?: ReactNode }) {
+  return (
+    <li className="flex items-center gap-3 px-4 py-3">
+      <span className="bg-muted/50 text-muted-foreground flex size-9 shrink-0 items-center justify-center rounded-md border [&_svg]:size-4">{icon}</span>
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm font-medium">{title}</div>
+        {subtitle ? <div className="text-muted-foreground truncate text-sm">{subtitle}</div> : null}
+      </div>
+      {trailing ? <div className="shrink-0">{trailing}</div> : null}
+    </li>
   );
 }
 
@@ -750,9 +952,30 @@ function TradesSection({
 }) {
   const base = useId();
   return (
-    <Panel title="Trades" description="Each service on this visit and how it went. Not completed, or only partly, needs its reason.">
+    <Panel title="Services" description="Each service on this visit and how it went. Not completed, or only partly, needs its reason.">
       {data.lines.length === 0 ? (
-        <p className="text-muted-foreground text-sm">This visit has no services.</p>
+        <PanelEmpty icon={<ClipboardCheck />} title="No services on this visit" description="The contract's services for this visit show here, with how each one went." />
+      ) : !editable ? (
+        <RowList>
+          {data.lines.map((l) => (
+            <Row
+              key={l.id}
+              icon={l.outcome === "completed" ? <CheckCircle2 className="text-success" /> : l.outcome ? <AlertTriangle className="text-warning" /> : <CircleDashed />}
+              title={
+                <>
+                  {l.serviceLabel}
+                  {l.retry ? <span className="text-muted-foreground font-normal"> · retry</span> : null}
+                </>
+              }
+              subtitle={l.outcomeGroup ? `${OUTCOME_GROUPS[l.outcomeGroup]?.label ?? l.outcomeGroup}${l.outcomeReason ? `: ${l.outcomeReason}` : ""}` : l.outcome ? null : "Not recorded yet"}
+              trailing={
+                <Badge variant="secondary" className={`border-0 font-medium ${l.outcome ? OUTCOME_TONE[l.outcome] : "bg-mist text-ink-soft"}`}>
+                  {l.outcome ? LINE_OUTCOME_LABELS[l.outcome] : "Waiting"}
+                </Badge>
+              }
+            />
+          ))}
+        </RowList>
       ) : (
         <div className="grid gap-3">
           {data.lines.map((l) => {
@@ -895,25 +1118,26 @@ function ChecklistSection({
     return (
       <Panel title="Checklist" description="What the crew checked, item by item.">
         {data.checklist.length === 0 ? (
-          <p className="text-muted-foreground text-sm">No checklist items.</p>
+          <PanelEmpty icon={<ClipboardCheck />} title="No checks yet" description="The crew goes through the checklist on the mobile app, item by item, and each result shows here." />
         ) : (
-          <ul className="divide-y text-sm">
+          <RowList>
             {data.checklist.map((c) => {
               const result = isCheckResult(c.result) ? c.result : null;
               return (
-                <li key={c.id} className="flex flex-wrap items-start justify-between gap-2 py-2">
-                  <span className="min-w-0">
-                    <span className="font-medium">{c.label}</span>
-                    {assetLabel(c.assetId) ? <span className="text-muted-foreground"> · {assetLabel(c.assetId)}</span> : null}
-                    {c.note ? <span className="text-muted-foreground block text-xs">{c.note}</span> : null}
-                  </span>
-                  <Badge variant="secondary" className={`border-0 font-medium ${result ? CHECK_TONE[result] : "bg-mist text-ink-soft"}`}>
-                    {result ? CHECK_LABELS[result] : c.result}
-                  </Badge>
-                </li>
+                <Row
+                  key={c.id}
+                  icon={result === "ok" ? <CheckCircle2 className="text-success" /> : result === "fault" || result === "attention" ? <AlertTriangle className="text-warning" /> : <CircleDashed />}
+                  title={c.label}
+                  subtitle={[assetLabel(c.assetId), c.note].filter(Boolean).join(" · ") || null}
+                  trailing={
+                    <Badge variant="secondary" className={`border-0 font-medium ${result ? CHECK_TONE[result] : "bg-mist text-ink-soft"}`}>
+                      {result ? CHECK_LABELS[result] : c.result}
+                    </Badge>
+                  }
+                />
               );
             })}
-          </ul>
+          </RowList>
         )}
       </Panel>
     );
@@ -1070,7 +1294,9 @@ function PhotosSection({
         </p>
       ) : null}
       {data.photos.length === 0 ? (
-        <p className="text-muted-foreground text-sm">No photos yet.</p>
+        <PanelEmpty icon={<ImagePlus />} title="No photos yet" description="The crew takes before and after photos on the mobile app; they show here." />
+      ) : !editable ? (
+        <PhotoGroups photos={data.photos} />
       ) : (
         <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
           {data.photos.map((p) => (
@@ -1159,7 +1385,25 @@ function ConsumablesSection({
   return (
     <Panel title="Consumables" description="Materials used on the visit.">
       {!editable ? (
-        <ReadList items={saved.map((c) => `${c.item} × ${c.quantity}${c.unit ? ` ${c.unit}` : ""}`)} empty="None used." />
+        saved.length ? (
+          <RowList>
+            {saved.map((c, i) => (
+              <Row
+                key={i}
+                icon={<Package />}
+                title={c.item}
+                trailing={
+                  <span className="text-sm font-medium tabular-nums">
+                    {c.quantity}
+                    {c.unit ? <span className="text-muted-foreground font-normal"> {c.unit}</span> : null}
+                  </span>
+                }
+              />
+            ))}
+          </RowList>
+        ) : (
+          <ReadList items={[]} empty="No materials used." />
+        )
       ) : (
         <>
           {rows.map((r, i) => (
@@ -1209,23 +1453,31 @@ function AdditionalWorkSection({
   const update = (key: string, next: Partial<FormState["additionalWork"][number]>) => setRows(rows.map((r) => (r.key === key ? { ...r, ...next } : r)));
   return (
     <Panel title="Additional work found" description="Work outside the contract the crew noticed. It is quoted to the client separately.">
-      {!editable && onRaise && saved.length ? (
-        <ul className="grid gap-1.5 text-sm">
+      {!editable && saved.length ? (
+        <RowList>
           {saved.map((a, i) => (
-            <li key={i} className="flex items-start justify-between gap-3">
-              <span className="min-w-0">
-                {a.description}
-                {a.trade ? <span className="text-muted-foreground"> ({tradeLabel(a.trade)})</span> : null}
-              </span>
-              <Button size="sm" variant="ghost" className="h-7 shrink-0 px-2" onClick={() => onRaise(a)}>
-                <Hammer className="size-3.5" />
-                Raise as additional work
-              </Button>
-            </li>
+            <Row
+              key={i}
+              icon={<Hammer />}
+              title={a.description}
+              subtitle={a.trade ? tradeLabel(a.trade) : null}
+              trailing={
+                onRaise ? (
+                  <Button size="sm" variant="outline" onClick={() => onRaise(a)}>
+                    <Hammer className="size-3.5" />
+                    Raise as additional work
+                  </Button>
+                ) : (
+                  <Badge variant="secondary" className="bg-warning/10 text-warning border-0 font-medium">
+                    To quote
+                  </Badge>
+                )
+              }
+            />
           ))}
-        </ul>
+        </RowList>
       ) : !editable ? (
-        <ReadList items={saved.map((a) => `${a.description}${a.trade ? ` (${tradeLabel(a.trade)})` : ""}`)} empty="None found." />
+        <ReadList items={[]} empty="Nothing outside the contract was found." />
       ) : (
         <>
           {rows.map((r, i) => (
@@ -1275,7 +1527,15 @@ function PendingWorksSection({
   return (
     <Panel title="Pending works" description="Contract work left to do, each with its reason. Pending works always go to the supervisor for a close look.">
       {!editable ? (
-        <ReadList items={saved.map((p) => `${p.description}${p.reason ? ` (${p.reason})` : ""}`)} empty="Nothing pending." />
+        saved.length ? (
+          <RowList>
+            {saved.map((p, i) => (
+              <Row key={i} icon={<CircleDashed />} title={p.description} subtitle={p.reason || null} />
+            ))}
+          </RowList>
+        ) : (
+          <ReadList items={[]} empty="Nothing pending." />
+        )
       ) : (
         <>
           {rows.map((r, i) => (
@@ -1413,17 +1673,6 @@ function CloseDialog({
 /* Pieces                                                              */
 /* ------------------------------------------------------------------ */
 
-function Panel({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
-  return (
-    <div className="grid gap-3 rounded-lg border px-4 py-4">
-      <div>
-        <p className="text-sm font-medium">{title}</p>
-        {description ? <p className="text-muted-foreground mt-0.5 text-xs">{description}</p> : null}
-      </div>
-      {children}
-    </div>
-  );
-}
 
 function Field({ id, label, hint, children }: { id: string; label: string; hint?: ReactNode; children: ReactNode }) {
   return (
@@ -1449,11 +1698,11 @@ function Muted({ children }: { children: ReactNode }) {
 }
 
 function ReadText({ value }: { value: string | null }) {
-  return value ? <p className="text-sm whitespace-pre-wrap">{value}</p> : <p className="text-muted-foreground text-sm">None.</p>;
+  return value ? <p className="text-sm whitespace-pre-wrap">{value}</p> : <p className="text-muted-foreground rounded-lg border border-dashed px-4 py-3 text-center text-sm">None recorded.</p>;
 }
 
 function ReadList({ items, empty }: { items: string[]; empty: string }) {
-  if (!items.length) return <p className="text-muted-foreground text-sm">{empty}</p>;
+  if (!items.length) return <p className="text-muted-foreground rounded-lg border border-dashed px-4 py-3 text-center text-sm">{empty}</p>;
   return (
     <ul className="list-disc space-y-1 pl-5 text-sm">
       {items.map((item, i) => (

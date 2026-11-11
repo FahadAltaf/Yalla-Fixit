@@ -82,17 +82,21 @@ export interface TechnicianRecord extends TechnicianFacts {
   skills: Array<{ trade: Trade; level: SkillLevel; certificate: string | null; certificateExpires: string | null }>;
 }
 
-async function technicianFacts(admin: Admin, onlyActive = true): Promise<TechnicianRecord[]> {
+async function technicianFacts(admin: Admin, onlyActive = true, onlyId?: string): Promise<TechnicianRecord[]> {
   let q = admin
     .from("technician_reference")
     .select("fsm_resource_id, display_name, is_active, shift, role:lookup_options!technician_reference_role_id_fkey(name)")
     .order("display_name");
   if (onlyActive) q = q.eq("is_active", true);
-  const [{ data: techs, error }, { data: profiles, error: profileError }, { data: skills, error: skillError }] = await Promise.all([
-    q,
-    admin.from("amc_technician_profiles").select("fsm_resource_id, areas, has_vehicle, is_driver, tools, access_permissions, notes"),
-    admin.from("amc_technician_skills").select("fsm_resource_id, trade, level, certificate, certificate_expires"),
-  ]);
+  let profileQ = admin.from("amc_technician_profiles").select("fsm_resource_id, areas, has_vehicle, is_driver, tools, access_permissions, notes");
+  let skillQ = admin.from("amc_technician_skills").select("fsm_resource_id, trade, level, certificate, certificate_expires");
+  /* One technician (Workforce -> People, AMC skills): three small reads instead of the whole roster. */
+  if (onlyId) {
+    q = q.eq("fsm_resource_id", onlyId);
+    profileQ = profileQ.eq("fsm_resource_id", onlyId);
+    skillQ = skillQ.eq("fsm_resource_id", onlyId);
+  }
+  const [{ data: techs, error }, { data: profiles, error: profileError }, { data: skills, error: skillError }] = await Promise.all([q, profileQ, skillQ]);
   if (error) throw fail(error);
   if (profileError) throw fail(profileError);
   if (skillError) throw fail(skillError);
@@ -128,6 +132,17 @@ export async function listTechnicianDirectory(admin: Admin): Promise<{ migrated:
     return { migrated: true, technicians: await technicianFacts(admin, false) };
   } catch (error) {
     if (error instanceof ContractError && error.status === 503) return { migrated: false, technicians: [] };
+    throw error;
+  }
+}
+
+/** One technician's AMC record (null when not on the roster); migrated false before the AMC tables exist. */
+export async function getTechnicianRecord(admin: Admin, fsmId: string): Promise<{ migrated: boolean; technician: TechnicianRecord | null }> {
+  try {
+    const [technician] = await technicianFacts(admin, false, fsmId);
+    return { migrated: true, technician: technician ?? null };
+  } catch (error) {
+    if (error instanceof ContractError && error.status === 503) return { migrated: false, technician: null };
     throw error;
   }
 }
@@ -320,6 +335,14 @@ async function busyOn(admin: Admin, date: string, technicianIds: string[] | null
     .gt("scheduled_end", start)
     .not("status", "in", "(cancelled,closed,resolved)");
   if (technicianIds?.length) calls = calls.overlaps("technician_ids", technicianIds);
+  /* Additional work with a slot and a crew (20261112100000; before it the read fails and adds nothing). */
+  let works = admin
+    .from("amc_additional_works")
+    .select("id, work_no, scheduled_start, scheduled_end, technician_ids, contract:amc_contracts!amc_additional_works_contract_id_fkey(customer_name)")
+    .eq("status", "scheduled")
+    .lt("scheduled_start", end)
+    .gt("scheduled_end", start);
+  if (technicianIds?.length) works = works.overlaps("technician_ids", technicianIds);
   let leave = admin.from("leave_records").select("technician_fsm_id, leave_type, start_at, end_at").eq("status", "active").lt("start_at", end).gt("end_at", start);
   if (technicianIds?.length) leave = leave.in("technician_fsm_id", technicianIds);
   /* The live board's current version for the day, then its entries (read only). */
@@ -334,7 +357,7 @@ async function busyOn(admin: Admin, date: string, technicianIds: string[] | null
       .not("start_at", "is", null);
     return (entries ?? []) as unknown as Row[];
   })();
-  const [visitsRead, callsRead, entries, leavesRead] = await Promise.all([options.skipAmc ? null : amc, options.skipAmc ? null : calls, jobs, leave]);
+  const [visitsRead, callsRead, worksRead, entries, leavesRead] = await Promise.all([options.skipAmc ? null : amc, options.skipAmc ? null : calls, options.skipAmc ? null : works, jobs, leave]);
   const visits = visitsRead?.data;
   if (visitsRead?.error) throw fail(visitsRead.error);
   for (const v of (visits ?? []) as unknown as Row[]) {
@@ -362,6 +385,19 @@ async function busyOn(admin: Admin, date: string, technicianIds: string[] | null
         kind: "amc",
         title: `AMC call out ${String(c.call_out_no)}${c.priority === "emergency" ? " (emergency)" : ""}: ${String(one(c.contract)?.customer_name ?? "")}`,
         visitId: String(c.id),
+      });
+    }
+  }
+
+  for (const w of (worksRead?.error ? [] : (worksRead?.data ?? [])) as unknown as Row[]) {
+    for (const t of strings(w.technician_ids)) {
+      blocks.push({
+        technicianId: t,
+        start: String(w.scheduled_start),
+        end: String(w.scheduled_end),
+        kind: "amc",
+        title: `AMC additional work ${String(w.work_no)}: ${String(one(w.contract)?.customer_name ?? "")}`,
+        visitId: String(w.id),
       });
     }
   }

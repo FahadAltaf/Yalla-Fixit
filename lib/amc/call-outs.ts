@@ -441,7 +441,22 @@ export const additionalWorkActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("share") }).strict(),
   z.object({ action: z.literal("approve"), evidence: text(1000).min(3, "Say how the client approved (email, signed quotation, WhatsApp)") , approvedBy: optionalText(160) }).strict(),
   z.object({ action: z.literal("reject"), reason }).strict(),
-  z.object({ action: z.literal("schedule"), date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/) }).strict(),
+  /*
+    The day, and (11 Nov 2026, with 20261112100000) the slot and the crew, as a call out
+    is scheduled: time, duration and technicians come together or not at all (checked
+    by the server, which also refuses a blocked technician and asks why when the crew
+    is not the suggested one).
+  */
+  z
+    .object({
+      action: z.literal("schedule"),
+      date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+      time: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+      durationMinutes: z.number().int().min(15).max(1440).optional(),
+      technicianIds: z.array(z.string().trim().min(1).max(40)).min(1).max(10).optional(),
+      overrideReason: optionalText(500),
+    })
+    .strict(),
   z.object({ action: z.literal("complete"), completedAt: iso.optional() }).strict(),
   z.object({ action: z.literal("invoice"), invoiceNumber: text(60).min(1), invoicedAt: iso.optional() }).strict(),
   z.object({ action: z.literal("pay"), paidAt: iso.optional(), reference: optionalText(120) }).strict(),

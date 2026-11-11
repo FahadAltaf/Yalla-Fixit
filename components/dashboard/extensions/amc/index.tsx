@@ -203,6 +203,8 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
   });
 
   const unitType = form.watch("unitType");
+  /* The full property type (a townhouse); services offered on it are read with its rate model as the fallback. */
+  const propertyType = form.watch("propertyType");
   const watchedValues = form.watch();
 
   /*
@@ -241,7 +243,7 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
     const cardable = rows.filter((row) => !isCustomServiceRow(row));
     /* The card's frequencies bind only services counted in visits (a hotline is once a year). */
     const types = new Map((liveSettings ?? getAmcSettingsDefaults()).services.map((s) => [s.id, s.frequencyType]));
-    const { rows: carded } = applyRateCard(cardable, card.card, form.getValues("unitType"), rules.today, Number(form.getValues("discountPercent")) || 0, undefined, (id) =>
+    const { rows: carded } = applyRateCard(cardable, card.card, [form.getValues("propertyType"), form.getValues("unitType")], rules.today, Number(form.getValues("discountPercent")) || 0, undefined, (id) =>
       isFrequencyEditable(types.get(id)),
     );
     const cardedById = new Map(carded.map((row) => [row.serviceId, row]));
@@ -377,7 +379,7 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
     const currentRows = form.getValues("serviceRows");
     const { rows: synced, removedIncluded } = syncServiceRowsForUnitType(
       currentRows,
-      unitType,
+      [propertyType, unitType],
       liveSettings.services,
     );
     if (JSON.stringify(currentRows) !== JSON.stringify(synced)) {
@@ -393,7 +395,7 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
         } on this kind of property any more.`,
       );
     }
-  }, [unitType, form, liveSettings, loadedTick]);
+  }, [unitType, propertyType, form, liveSettings, loadedTick]);
 
   const persistDraft = useCallback(
     (generatedDocument?: AmcDocumentType) => {

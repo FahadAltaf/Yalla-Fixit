@@ -156,7 +156,9 @@ export async function submissionRateProblem(admin: Admin, submissionId: string):
   const rows = ((Array.isArray(data.services) ? data.services : []) as Parameters<typeof applyRateCard>[0]).filter(
     (row) => !isCustomServiceRow(row),
   );
-  const model = String((data.property as Row | null)?.unitType ?? "");
+  const property = data.property as Row | null;
+  /* The property type's own rates first (a townhouse), then the unit type's (villa). */
+  const model = [property?.propertyType ? String(property.propertyType) : null, String(property?.unitType ?? "")];
   const { problems } = applyRateCard(rows, version.card, model, todayInDubai(), Number(data.discount_percent ?? 0), undefined, (id) =>
     isFrequencyEditable(types.get(id)),
   );

@@ -348,7 +348,7 @@ function contractBlocks(
   /* Whether this service prints as a scope section of its own under clause 2. */
   const asScopeSection = (serviceId: string): boolean =>
     selectedIds.includes(serviceId) &&
-    servicesForProperty(settings, formData.unitType).some(
+    servicesForProperty(settings, [formData.propertyType, formData.unitType]).some(
       (service) => service.id === serviceId && service.hasScopeSection !== false,
     );
 
@@ -416,7 +416,7 @@ function contractBlocks(
   const shipped = new Map(
     getSelectedScopeSections(selectedIds).map((section) => [section.serviceId, section]),
   );
-  const sections = servicesForProperty(settings, formData.unitType)
+  const sections = servicesForProperty(settings, [formData.propertyType, formData.unitType])
     .filter(
       (service) =>
         service.hasScopeSection !== false && selectedIds.includes(service.id),
@@ -661,7 +661,7 @@ function contractBlocks(
   ].filter((id, index, all) => all.indexOf(id) === index);
   const serviceLabelOf = (serviceId: string) =>
     frequencyRows.find((row) => row.serviceId === serviceId)?.scope ??
-    servicesForProperty(settings, formData.unitType).find((service) => service.id === serviceId)?.label ??
+    servicesForProperty(settings, [formData.propertyType, formData.unitType]).find((service) => service.id === serviceId)?.label ??
     serviceId;
   const coverageBlocks: Block[] = coverageServiceIds.length
     ? [

@@ -20,6 +20,22 @@ export function formatClock(at: number): string {
 }
 
 /** Back link on the left; when it was read and Refresh on the right. It never waits on the record. */
+/**
+ * A property short enough for a header's line (11 Nov 2026): the part before
+ * " — " (the building or street), else its first part before a comma, and
+ * never more than about 45 characters. The full address is on the page.
+ */
+export function shortPlace(label: string | null | undefined): string | null {
+  if (!label?.trim()) return null;
+  let s = label.split(" — ")[0].trim();
+  if (s.length > 40) s = s.split(",")[0].trim();
+  if (s.length > 48) s = `${s.slice(0, 45).trimEnd()}…`;
+  return s;
+}
+
+/** "10 Nov 2026" from a YYYY-MM-DD day, for a header's line. */
+export const shortDay = (day: string) => new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(`${day.slice(0, 10)}T00:00:00Z`));
+
 export function DetailToolbar({
   backHref,
   backLabel,

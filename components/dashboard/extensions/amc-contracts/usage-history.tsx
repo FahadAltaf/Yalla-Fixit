@@ -1,14 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ClipboardList, Undo2 } from "lucide-react";
+import type { ColumnDef } from "@tanstack/react-table";
+
+import { DataTable } from "@/components/data-table";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { ListPager, SectionCard } from "@/components/dashboard/shared/kaizen";
-import { ErrorState, ListSkeleton } from "@/components/dashboard/shared/kaizen-states";
+import { EmptyState } from "@/components/ui/empty-state";
+import { SectionCard } from "@/components/dashboard/shared/kaizen";
+import { ErrorState } from "@/components/dashboard/shared/kaizen-states";
 import { formatQuantity, unitWord } from "@/lib/amc/contracts";
 import {
   amcContractsService,
@@ -40,6 +43,8 @@ const KIND_TONE: Record<UsageEntry["kind"], string> = {
   adjustment: "bg-mist text-ink-soft",
 };
 
+const noop = () => undefined;
+
 /**
  * The contract's usage ledger, newest first, a page at a time. Read-only:
  * entries are never edited or deleted. A mistaken entry gets a Correct
@@ -69,7 +74,7 @@ export function UsageHistory({
   /* Kept after the dialog closes, so it can animate out with its content. */
   const [correcting, setCorrecting] = useState<UsageEntry | null>(null);
   const [correctOpen, setCorrectOpen] = useState(false);
-  const byId = new Map(entitlements.map((e) => [e.id, e]));
+  const byId = useMemo(() => new Map(entitlements.map((e) => [e.id, e])), [entitlements]);
 
   const ticket = useRef(0);
   const load = useCallback(async () => {
@@ -97,19 +102,129 @@ export function UsageHistory({
     void load();
   }, [load, refreshKey]);
 
-  const amountOf = (u: UsageEntry) => {
-    const e = byId.get(u.entitlementId);
-    const word = e ? unitWord(e.entitlementType, Math.abs(u.quantity)) || (Math.abs(u.quantity) === 1 ? "call-out" : "call-outs") : "";
-    return `${u.quantity > 0 && u.kind !== "consumption" ? "+" : ""}${formatQuantity(u.quantity)} ${word}`.trim();
-  };
-  const correctedEntry = (id: string | null) => rows.find((r) => r.id === id);
+  /* The ledger columns; the Correct action opens the dialog below. */
+  const columns = useMemo<ColumnDef<UsageEntry>[]>(() => {
+    const amountOf = (u: UsageEntry) => {
+      const e = byId.get(u.entitlementId);
+      const word = e ? unitWord(e.entitlementType, Math.abs(u.quantity)) || (Math.abs(u.quantity) === 1 ? "call-out" : "call-outs") : "";
+      return `${u.quantity > 0 && u.kind !== "consumption" ? "+" : ""}${formatQuantity(u.quantity)} ${word}`.trim();
+    };
+    const correctedEntry = (id: string | null) => rows.find((r) => r.id === id);
+    return [
+      {
+        id: "date",
+        header: "Date",
+        cell: ({ row: { original: u } }) => (
+          <div>
+            <div className="tabular-nums">{formatContractDate(u.occurredAt.slice(0, 10))}</div>
+            <div className="text-muted-foreground text-xs" title="When the entry was made">
+              Entered {formatDateTime(u.createdAt)}
+            </div>
+          </div>
+        ),
+      },
+      {
+        id: "service",
+        header: "Service",
+        cell: ({ row: { original: u } }) => (
+          <div>
+            <div className="font-medium">{byId.get(u.entitlementId)?.serviceLabel ?? "Service"}</div>
+            <Badge variant="secondary" className={`mt-1 border-0 font-medium ${KIND_TONE[u.kind]}`}>
+              {KIND_LABELS[u.kind]}
+            </Badge>
+          </div>
+        ),
+      },
+      {
+        id: "quantity",
+        header: "Quantity",
+        cell: ({ row: { original: u } }) => (
+          <div className="tabular-nums">
+            <div className={u.kind === "correction" ? "text-warning" : undefined}>{amountOf(u)}</div>
+            {u.kind === "consumption" && u.correctedQuantity !== 0 ? (
+              <div className="text-muted-foreground text-xs">
+                {formatQuantity(u.netQuantity)} after corrections
+              </div>
+            ) : null}
+          </div>
+        ),
+      },
+      {
+        id: "source",
+        header: "Source",
+        cell: ({ row: { original: u } }) => (
+          <div>
+            <div>{usageSourceLabel(u)}</div>
+            {u.fsmSyncedAt ? (
+              <div className="text-muted-foreground text-xs">Read {formatDateTime(u.fsmSyncedAt)}</div>
+            ) : null}
+          </div>
+        ),
+      },
+      {
+        id: "fsmReference",
+        header: "FSM reference",
+        cell: ({ row: { original: u } }) => (
+          <div>
+            {u.externalReference ? `${externalRefLabel(u.externalType)} ${u.externalReference}` : "—"}
+            {u.fsmWorkOrderId ? (
+              <div className="text-muted-foreground text-xs">Work order {u.fsmWorkOrderId}</div>
+            ) : null}
+          </div>
+        ),
+      },
+      {
+        id: "recordedBy",
+        header: "Recorded by",
+        cell: ({ row: { original: u } }) => u.createdBy ?? "—",
+      },
+      {
+        id: "notes",
+        header: "Notes",
+        cell: ({ row: { original: u } }) => {
+          const isCorrection = u.kind === "correction";
+          const original = isCorrection ? correctedEntry(u.correctsUsageId) : undefined;
+          return (
+            <div className="max-w-[240px] whitespace-normal">
+              {isCorrection ? (
+                <div className="text-muted-foreground text-xs">
+                  Corrects {original ? `the entry of ${formatContractDate(original.occurredAt.slice(0, 10))}` : "an earlier entry"}
+                </div>
+              ) : null}
+              <div className="break-words">{u.notes || (isCorrection ? "" : "—")}</div>
+            </div>
+          );
+        },
+      },
+      {
+        id: "actions",
+        header: () => <span className="sr-only">Actions</span>,
+        cell: ({ row: { original: u } }) => (
+          <div className="text-right">
+            {canCorrect && u.kind === "consumption" && u.netQuantity > 0 ? (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setCorrecting(u);
+                  setCorrectOpen(true);
+                }}
+              >
+                <Undo2 className="size-4" />
+                Correct
+              </Button>
+            ) : null}
+          </div>
+        ),
+      },
+    ];
+  }, [byId, rows, canCorrect]);
 
   return (
     <SectionCard
       title="Usage history"
       description="Every entry against this contract. Entries are never edited or deleted; mistakes are corrected."
       icon={<ClipboardList />}
-      bodyClassName="px-5 pb-5"
       action={
         <Select
           value={service}
@@ -135,113 +250,34 @@ export function UsageHistory({
       }
     >
       {error ? (
-        <ErrorState title="Could not load the usage history" message={error} onRetry={() => void load()} retrying={loading} />
-      ) : loading && rows.length === 0 ? (
-        <ListSkeleton rows={4} />
-      ) : rows.length === 0 ? (
-        <p className="text-muted-foreground text-sm">
-          {service === "all" ? "Nothing recorded against this contract yet." : "Nothing recorded for this service yet."}
-        </p>
+        <div className="px-5 pb-5">
+          <ErrorState title="Could not load the usage history" message={error} onRetry={() => void load()} retrying={loading} />
+        </div>
       ) : (
-        <>
-          <div className="-mx-5 overflow-x-auto">
-            <Table className="min-w-[860px]">
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="pl-5">Date</TableHead>
-                  <TableHead>Service</TableHead>
-                  <TableHead>Quantity</TableHead>
-                  <TableHead>Source</TableHead>
-                  <TableHead>FSM reference</TableHead>
-                  <TableHead>Recorded by</TableHead>
-                  <TableHead>Notes</TableHead>
-                  <TableHead className="pr-5 text-right">
-                    <span className="sr-only">Actions</span>
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {rows.map((u) => {
-                  const e = byId.get(u.entitlementId);
-                  const isCorrection = u.kind === "correction";
-                  const original = isCorrection ? correctedEntry(u.correctsUsageId) : undefined;
-                  return (
-                    <TableRow key={u.id} className={isCorrection ? "bg-warning/5" : undefined}>
-                      <TableCell className="pl-5 align-top">
-                        <div className="tabular-nums">{formatContractDate(u.occurredAt.slice(0, 10))}</div>
-                        <div className="text-muted-foreground text-xs" title="When the entry was made">
-                          Entered {formatDateTime(u.createdAt)}
-                        </div>
-                      </TableCell>
-                      <TableCell className="align-top">
-                        <div className="font-medium">{e?.serviceLabel ?? "Service"}</div>
-                        <Badge variant="secondary" className={`mt-1 border-0 font-medium ${KIND_TONE[u.kind]}`}>
-                          {KIND_LABELS[u.kind]}
-                        </Badge>
-                      </TableCell>
-                      <TableCell className="align-top tabular-nums">
-                        <div className={isCorrection ? "text-warning" : undefined}>{amountOf(u)}</div>
-                        {u.kind === "consumption" && u.correctedQuantity !== 0 ? (
-                          <div className="text-muted-foreground text-xs">
-                            {formatQuantity(u.netQuantity)} after corrections
-                          </div>
-                        ) : null}
-                      </TableCell>
-                      <TableCell className="align-top">
-                        <div>{usageSourceLabel(u)}</div>
-                        {u.fsmSyncedAt ? (
-                          <div className="text-muted-foreground text-xs">Read {formatDateTime(u.fsmSyncedAt)}</div>
-                        ) : null}
-                      </TableCell>
-                      <TableCell className="align-top">
-                        {u.externalReference ? `${externalRefLabel(u.externalType)} ${u.externalReference}` : "—"}
-                        {u.fsmWorkOrderId ? (
-                          <div className="text-muted-foreground text-xs">Work order {u.fsmWorkOrderId}</div>
-                        ) : null}
-                      </TableCell>
-                      <TableCell className="align-top">{u.createdBy ?? "—"}</TableCell>
-                      <TableCell className="max-w-[240px] align-top">
-                        {isCorrection ? (
-                          <div className="text-muted-foreground text-xs">
-                            Corrects {original ? `the entry of ${formatContractDate(original.occurredAt.slice(0, 10))}` : "an earlier entry"}
-                          </div>
-                        ) : null}
-                        <div className="break-words">{u.notes || (isCorrection ? "" : "—")}</div>
-                      </TableCell>
-                      <TableCell className="pr-5 text-right align-top">
-                        {canCorrect && u.kind === "consumption" && u.netQuantity > 0 ? (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => {
-                              setCorrecting(u);
-                              setCorrectOpen(true);
-                            }}
-                          >
-                            <Undo2 className="size-4" />
-                            Correct
-                          </Button>
-                        ) : null}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-              </TableBody>
-            </Table>
-          </div>
-          <ListPager
-            className="mt-4"
-            page={page}
+        <div className="border-t">
+          {/* Server-paginated: the footer pages through `total` entries. */}
+          <DataTable
+            columns={columns}
+            data={rows}
+            loading={loading}
+            rowCount={total}
             pageSize={pageSize}
-            total={total}
-            noun="entries"
+            currentPage={page}
             onPageChange={setPage}
             onPageSizeChange={(size) => {
               setPageSize(size);
               setPage(0);
             }}
+            onGlobalFilterChange={noop}
+            emptyState={
+              <EmptyState
+                icon={<ClipboardList />}
+                title={service === "all" ? "Nothing recorded against this contract yet" : "Nothing recorded for this service yet"}
+                description="Usage typed in or read from Zoho FSM shows here, newest first."
+              />
+            }
           />
-        </>
+        </div>
       )}
 
       {correcting ? (

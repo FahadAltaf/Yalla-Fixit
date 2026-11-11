@@ -13,7 +13,6 @@ import { amcSubmissionsService } from "@/modules/amc-submissions";
 
 import { formatDateTime } from "./contract-status";
 import { DocumentsPanel } from "./profile/documents-panel";
-import { SignedArchiveRow } from "./signed-archive-row";
 
 /**
  * The contract's documents: the proposal (the client's brochure with
@@ -77,12 +76,11 @@ export function ContractDocuments({
     <>
       <SectionCard
         title="Documents"
-        description="The archived signed contract, and the proposal and contract rebuilt from what was signed."
+        description="The proposal and the contract, rebuilt from what was signed."
         icon={<FileText />}
         bodyClassName="px-5 pb-5 space-y-3"
       >
         {actions.dialogs}
-        <SignedArchiveRow submissionId={submissionId} />
         {docs.map((doc) => (
           <div key={doc.type} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border p-3">
             <div className="min-w-0">

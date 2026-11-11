@@ -73,6 +73,7 @@ export function priceSubmission({
   services,
   discountPercent,
   unitType,
+  propertyType = null,
   settings,
   rateCard = null,
   day,
@@ -80,6 +81,8 @@ export function priceSubmission({
   services: ReadonlyArray<AmcServiceRowInput>;
   discountPercent: number;
   unitType: string;
+  /** The proposal's full property type (a townhouse, a clinic); its own rates come first, then the unit type's. */
+  propertyType?: string | null;
   settings: Pick<AmcSettings, "services">;
   /** The card in force (lib/server/amc/rate-card.ts), or null to price as entered. */
   rateCard?: { id: string; card: RateCard } | null;
@@ -87,7 +90,7 @@ export function priceSubmission({
   day?: string;
 }): PricedSubmission {
   const offered = new Map(
-    servicesForProperty(settings, unitType).map((service) => [service.id, service]),
+    servicesForProperty(settings, [propertyType, unitType]).map((service) => [service.id, service]),
   );
   const notOffered = services
     /* A service added to this proposal alone is offered wherever it is added (DEV-260). */
@@ -109,7 +112,7 @@ export function priceSubmission({
   */
   const cardable = services.filter((row) => !isCustomServiceRow(row));
   const carded = rateCard
-    ? applyRateCard(cardable, rateCard.card, unitType, day ?? new Date().toISOString().slice(0, 10), discountPercent, label, (id) =>
+    ? applyRateCard(cardable, rateCard.card, [propertyType, unitType], day ?? new Date().toISOString().slice(0, 10), discountPercent, label, (id) =>
         isFrequencyEditable(offered.get(id)?.frequencyType),
       )
     : null;

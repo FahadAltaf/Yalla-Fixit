@@ -259,3 +259,18 @@ test("the card's frequencies bind only services counted in visits (a hotline is 
   const asHotline = applyRateCard([row("ac-ppm", true, 1, 1)], card, "villa", "2026-10-07", 0, undefined, () => false);
   assert.equal(asHotline.problems.length, 0);
 });
+
+/* 11 Nov 2026: every property type from the property form is on the card; a type with no rate of its own uses its family's. */
+test("every property type: its own rate, else its family's, else any", () => {
+  const withTownhouse: RateCard = structuredClone(card);
+  withTownhouse.items.push({ id: "ac-townhouse", serviceId: "ac-ppm", model: "townhouse", unit: "per AC unit", basis: "per_unit", standardRate: 120, floorRate: 100, allowedFrequencies: [], retired: false });
+  assert.equal(rateCardSchema.safeParse(withTownhouse).success, true, "townhouse is a model the card accepts");
+  assert.equal(rateItemFor(withTownhouse, "ac-ppm", "townhouse")?.id, "ac-townhouse", "its own rate first");
+  assert.equal(rateItemFor(card, "ac-ppm", "clinic")?.id, "ac-office", "a clinic falls back to office");
+  assert.equal(rateItemFor(card, "ac-ppm", ["clinic", "office"])?.id, "ac-office");
+  assert.equal(rateItemFor(card, "ac-ppm", "townhouse")?.id, "ac-any", "a townhouse with no villa rate: any");
+  assert.equal(rateItemFor(card, "ac-ppm", ["other", "office"])?.id, "ac-office", "other follows the unit type given after it");
+  assert.equal(promotionFor(card, "ac-ppm", "townhouse", "2026-10-07")?.id, "autumn", "a villa promotion covers townhouses");
+  assert.deepEqual(packagesFor(card, "warehouse").map((p) => p.id), ["office-pack"], "an office package covers warehouses");
+  assert.deepEqual(packagesFor(card, "apartment"), [], "apartments are not villas");
+});

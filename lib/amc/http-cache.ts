@@ -37,6 +37,7 @@ const STABLE_READS: readonly RegExp[] = [
   /^\/api\/amc-proposal-rules(\?|$)/,
   /^\/api\/amc-rate-card(\/|\?|$)/,
   /^\/api\/amc-technicians(\?|$)/,
+  /^\/api\/amc-field-visits\/technicians(\?|$)/,
 ];
 
 /* Writes here can change any stable list (a settings change reaches the catalogue, the rules, the people's roles). */

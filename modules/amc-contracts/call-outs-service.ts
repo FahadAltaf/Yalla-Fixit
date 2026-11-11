@@ -87,8 +87,13 @@ export interface CallOutDetailResponse {
 }
 
 export interface CallOutSuggestion {
+  /** Technicians with the call out's trade (or an expired certificate for it): free, or blocked with why. */
   fits: TechnicianFit[];
   suggested: { technicianIds: string[]; uncovered: Trade[] };
+  /** Active technicians confirmed for each trade, free or not. */
+  skilledByTrade: Record<string, number>;
+  /** Active technicians on the FSM roster. */
+  rosterSize: number;
 }
 
 export interface CallOutActionResult {

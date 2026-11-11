@@ -1,15 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import { CalendarClock, CalendarDays, ExternalLink, FileText, History, Receipt, Siren, Wrench } from "lucide-react";
+import { CalendarClock, CalendarDays, ExternalLink, FileText, History, Receipt, Siren, Wrench, type LucideIcon } from "lucide-react";
+import type { ColumnDef } from "@tanstack/react-table";
 
+import { DataTable } from "@/components/data-table";
 import { SectionCard, StatCard, StatCardGrid } from "@/components/dashboard/shared/kaizen";
 import { ErrorState, ListSkeleton, StatGridSkeleton } from "@/components/dashboard/shared/kaizen-states";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
+import { IdentityCell } from "@/components/ui/entity-avatar";
 import { Money } from "@/components/ui/money";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import type { AdditionalWorkStatus, CallOutStatus } from "@/lib/amc/call-outs";
 import { VISIT_STATUS_LABELS, type VisitStatus } from "@/lib/amc/ppm";
 import { clientHistoryService, type ClientScheduleVisit, type ServiceHistoryEntry } from "@/modules/amc-contracts/client-history-service";
@@ -29,6 +31,7 @@ import { TruncatedText } from "@/components/ui/truncated-text";
 const contractHref = (contractId: string, tab?: string) => `/extensions/amc-contracts/${contractId}${tab ? `?tab=${tab}` : ""}`;
 /* A visit that is over: delivered, partly delivered or closed as not done. */
 const PAST_STATUSES = ["completed", "completed_with_additional_work", "partially_completed", "not_completed"];
+const noop = () => undefined;
 
 function VisitStatusBadge({ status }: { status: string }) {
   return (
@@ -53,49 +56,65 @@ function ContractCell({ contractId, contractNumber, propertyLabel, tab }: { cont
 /* Schedule                                                            */
 /* ------------------------------------------------------------------ */
 
-function ScheduleTable({ visits }: { visits: ClientScheduleVisit[] }) {
+/* The schedule list: what the visit covers, its contract, window, booking and status. */
+const SCHEDULE_COLUMNS: ColumnDef<ClientScheduleVisit>[] = [
+  {
+    id: "visit",
+    header: "Visit",
+    cell: ({ row }) => <IdentityCell title={`PPM visit ${row.original.visitNo}`} subtitle={row.original.services.join(", ") || null} icon={CalendarDays} />,
+  },
+  {
+    id: "contract",
+    header: "Contract",
+    cell: ({ row }) => <ContractCell contractId={row.original.contractId} contractNumber={row.original.contractNumber} propertyLabel={row.original.propertyLabel} tab="schedule" />,
+  },
+  {
+    id: "window",
+    header: "Window",
+    cell: ({ row }) => (
+      <div className="tabular-nums">
+        {formatContractDate(row.original.windowStart)} to {formatContractDate(row.original.windowEnd)}
+        <div className="text-muted-foreground text-xs">Target {formatContractDate(row.original.targetDate)}</div>
+      </div>
+    ),
+  },
+  {
+    id: "bookedFor",
+    header: "Booked for",
+    cell: ({ row }) => (
+      <span className="tabular-nums">{row.original.scheduledStart ? slotLabel(row.original.scheduledStart, null) : <span className="text-muted-foreground">Not booked</span>}</span>
+    ),
+  },
+  {
+    id: "status",
+    header: "Status",
+    cell: ({ row }) => (
+      <div className="flex flex-wrap items-center gap-1">
+        <VisitStatusBadge status={row.original.status} />
+        {row.original.overdue ? (
+          <Badge variant="secondary" className="bg-danger/10 text-danger border-0 font-medium">
+            Overdue
+          </Badge>
+        ) : null}
+      </div>
+    ),
+  },
+];
+
+function ScheduleTable({ visits, empty }: { visits: ClientScheduleVisit[]; empty: React.ReactNode }) {
   return (
-    <div className="overflow-x-auto">
-      <Table className="min-w-[860px]">
-        <TableHeader className="[&_th]:text-muted-foreground">
-          <TableRow className="hover:bg-transparent">
-            <TableHead className="pl-5">Visit</TableHead>
-            <TableHead>Contract</TableHead>
-            <TableHead>Window</TableHead>
-            <TableHead>Booked for</TableHead>
-            <TableHead className="pr-5">Status</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {visits.map((v) => (
-            <TableRow key={v.id} className="h-14">
-              <TableCell className="pl-5">
-                <div className="font-medium">PPM visit {v.visitNo}</div>
-                {v.services.length ? <TruncatedText className="text-muted-foreground max-w-[260px] text-xs">{v.services.join(", ")}</TruncatedText> : null}
-              </TableCell>
-              <TableCell>
-                <ContractCell contractId={v.contractId} contractNumber={v.contractNumber} propertyLabel={v.propertyLabel} tab="schedule" />
-              </TableCell>
-              <TableCell className="tabular-nums">
-                {formatContractDate(v.windowStart)} to {formatContractDate(v.windowEnd)}
-                <div className="text-muted-foreground text-xs">Target {formatContractDate(v.targetDate)}</div>
-              </TableCell>
-              <TableCell className="tabular-nums">{v.scheduledStart ? slotLabel(v.scheduledStart, null) : <span className="text-muted-foreground">Not booked</span>}</TableCell>
-              <TableCell className="pr-5">
-                <div className="flex flex-wrap items-center gap-1">
-                  <VisitStatusBadge status={v.status} />
-                  {v.overdue ? (
-                    <Badge variant="secondary" className="bg-danger/10 text-danger border-0 font-medium">
-                      Overdue
-                    </Badge>
-                  ) : null}
-                </div>
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </div>
+    <DataTable
+      columns={SCHEDULE_COLUMNS}
+      data={visits}
+      loading={false}
+      rowCount={visits.length}
+      pageSize={500}
+      currentPage={0}
+      onPageChange={noop}
+      onPageSizeChange={noop}
+      onGlobalFilterChange={noop}
+      emptyState={empty}
+    />
   );
 }
 
@@ -114,10 +133,8 @@ export function ClientSchedulePanel({ customerId }: { customerId: string }) {
       </div>
     ) : loading ? (
       <ListSkeleton rows={3} />
-    ) : list.length === 0 ? (
-      empty
     ) : (
-      <ScheduleTable visits={list} />
+      <ScheduleTable visits={list} empty={empty} />
     );
 
   return (
@@ -145,10 +162,10 @@ export function ClientSchedulePanel({ customerId }: { customerId: string }) {
 /* Service history                                                     */
 /* ------------------------------------------------------------------ */
 
-const KIND: Record<ServiceHistoryEntry["kind"], { label: string; icon: React.ReactNode }> = {
-  visit: { label: "PPM visit", icon: <CalendarDays className="size-4" aria-hidden /> },
-  call_out: { label: "Call out", icon: <Siren className="size-4" aria-hidden /> },
-  additional_work: { label: "Additional work", icon: <Wrench className="size-4" aria-hidden /> },
+const KIND: Record<ServiceHistoryEntry["kind"], { label: string; icon: LucideIcon }> = {
+  visit: { label: "PPM visit", icon: CalendarDays },
+  call_out: { label: "Call out", icon: Siren },
+  additional_work: { label: "Additional work", icon: Wrench },
 };
 
 function entryHref(e: ServiceHistoryEntry): string {
@@ -162,6 +179,58 @@ function EntryStatus({ entry }: { entry: ServiceHistoryEntry }) {
   if (entry.kind === "additional_work") return <WorkStatusBadge status={entry.status as AdditionalWorkStatus} />;
   return <VisitStatusBadge status={entry.status} />;
 }
+
+/* The service list; the title still links to the visit, call out or work. */
+const SERVICE_COLUMNS: ColumnDef<ServiceHistoryEntry>[] = [
+  {
+    id: "what",
+    header: "What",
+    cell: ({ row }) => (
+      <Link href={entryHref(row.original)} className="inline-block [&:hover_.font-medium]:underline">
+        <IdentityCell title={row.original.title} subtitle={KIND[row.original.kind].label} icon={KIND[row.original.kind].icon} />
+      </Link>
+    ),
+  },
+  {
+    id: "date",
+    header: "Date",
+    cell: ({ row }) => <span className="tabular-nums">{formatContractDate(row.original.date)}</span>,
+  },
+  {
+    id: "contract",
+    header: "Contract",
+    cell: ({ row }) => <ContractCell contractId={row.original.contractId} contractNumber={row.original.contractNumber} propertyLabel={row.original.propertyLabel} />,
+  },
+  {
+    id: "detail",
+    header: "Detail",
+    cell: ({ row }) => <TruncatedText text={row.original.detail || "—"} className="text-muted-foreground max-w-[300px] text-sm" />,
+  },
+  {
+    id: "status",
+    header: "Status",
+    cell: ({ row }) => <EntryStatus entry={row.original} />,
+  },
+  {
+    id: "amount",
+    header: "Amount",
+    cell: ({ row }) => (row.original.amount !== null ? <Money value={row.original.amount} className="text-sm" /> : <span className="text-muted-foreground">—</span>),
+  },
+  {
+    id: "report",
+    header: "",
+    cell: ({ row }) =>
+      row.original.kind === "visit" && row.original.hasReport ? (
+        <Button asChild variant="ghost" size="sm">
+          <a href={clientHistoryService.visitReportUrl(row.original.id)} target="_blank" rel="noopener noreferrer">
+            <FileText className="size-4" />
+            Report
+            <ExternalLink className="size-3" aria-hidden />
+          </a>
+        </Button>
+      ) : null,
+  },
+];
 
 /** Visits done, call outs and additional work across the client's contracts, newest first. */
 export function ServiceHistoryPanel({ customerId }: { customerId: string }) {
@@ -181,65 +250,19 @@ export function ServiceHistoryPanel({ customerId }: { customerId: string }) {
         </div>
       ) : loading ? (
         <ListSkeleton rows={4} />
-      ) : entries.length === 0 ? (
-        <EmptyState icon={<History className="size-5" />} title="No service yet" description="Completed visits, call outs and additional work for this client appear here." />
       ) : (
-        <div className="overflow-x-auto">
-          <Table className="min-w-[920px]">
-            <TableHeader className="[&_th]:text-muted-foreground">
-              <TableRow className="hover:bg-transparent">
-                <TableHead className="pl-5">What</TableHead>
-                <TableHead>Date</TableHead>
-                <TableHead>Contract</TableHead>
-                <TableHead>Detail</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Amount</TableHead>
-                <TableHead className="w-12 pr-5" />
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {entries.map((e) => (
-                <TableRow key={`${e.kind}-${e.id}`} className="h-14">
-                  <TableCell className="pl-5">
-                    <div className="flex items-center gap-3">
-                      <span className="bg-muted/50 text-muted-foreground flex size-8 shrink-0 items-center justify-center rounded-md border" title={KIND[e.kind].label}>
-                        {KIND[e.kind].icon}
-                      </span>
-                      <div className="min-w-0">
-                        <Link href={entryHref(e)} className="font-medium hover:underline">
-                          {e.title}
-                        </Link>
-                        <div className="text-muted-foreground text-xs">{KIND[e.kind].label}</div>
-                      </div>
-                    </div>
-                  </TableCell>
-                  <TableCell className="tabular-nums">{formatContractDate(e.date)}</TableCell>
-                  <TableCell>
-                    <ContractCell contractId={e.contractId} contractNumber={e.contractNumber} propertyLabel={e.propertyLabel} />
-                  </TableCell>
-                  <TableCell>
-                    <TruncatedText text={e.detail || "—"} className="text-muted-foreground max-w-[300px] text-sm" />
-                  </TableCell>
-                  <TableCell>
-                    <EntryStatus entry={e} />
-                  </TableCell>
-                  <TableCell>{e.amount !== null ? <Money value={e.amount} className="text-sm" /> : <span className="text-muted-foreground">—</span>}</TableCell>
-                  <TableCell className="pr-5">
-                    {e.kind === "visit" && e.hasReport ? (
-                      <Button asChild variant="ghost" size="sm">
-                        <a href={clientHistoryService.visitReportUrl(e.id)} target="_blank" rel="noopener noreferrer">
-                          <FileText className="size-4" />
-                          Report
-                          <ExternalLink className="size-3" aria-hidden />
-                        </a>
-                      </Button>
-                    ) : null}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+        <DataTable
+          columns={SERVICE_COLUMNS}
+          data={entries}
+          loading={false}
+          rowCount={entries.length}
+          pageSize={500}
+          currentPage={0}
+          onPageChange={noop}
+          onPageSizeChange={noop}
+          onGlobalFilterChange={noop}
+          emptyState={<EmptyState icon={<History className="size-5" />} title="No service yet" description="Completed visits, call outs and additional work for this client appear here." />}
+        />
       )}
     </SectionCard>
   );

@@ -6,7 +6,7 @@ import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { SubmitButton } from "@/components/dashboard/shared/kaizen-states";
+import { SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
 import { amcContractsService, type SignedArchiveRecord } from "@/modules/amc-contracts/amc-contracts-service";
 
 import { formatDateTime } from "./contract-status";
@@ -21,6 +21,7 @@ export function SignedArchiveRow({ submissionId }: { submissionId: string }) {
   const [signed, setSigned] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
+  const { confirm, dialog: confirmDialog } = useConfirm();
 
   const load = useCallback(async () => {
     try {
@@ -50,7 +51,12 @@ export function SignedArchiveRow({ submissionId }: { submissionId: string }) {
     }
   };
 
-  const archiveNow = async () => {
+  /* Asked first (11 Nov 2026): it acts at once, so it is confirmed like every other step. */
+  const askArchive = () =>
+    void confirm({ title: "Archive the signed contract now?", description: "Makes the signed contract PDF and keeps it in the contract's documents. Nothing is sent to the client.", confirmText: "Archive" }).then((ok) => {
+      if (ok) void archiveSigned();
+    });
+  const archiveSigned = async () => {
     setBusy(true);
     try {
       const data = await amcContractsService.archiveSignedDocument(submissionId);
@@ -98,7 +104,7 @@ export function SignedArchiveRow({ submissionId }: { submissionId: string }) {
         <SubmitButton
           size="sm"
           variant="outline"
-          onClick={() => void archiveNow()}
+          onClick={() => askArchive()}
           pending={busy}
           pendingLabel="Archiving…"
           icon={<ArchiveRestore className="size-4" />}
@@ -106,6 +112,7 @@ export function SignedArchiveRow({ submissionId }: { submissionId: string }) {
           Archive now
         </SubmitButton>
       )}
+      {confirmDialog}
     </div>
   );
 }

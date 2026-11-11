@@ -19,9 +19,10 @@ import {
   type WorkRisk,
 } from "@/lib/amc/call-outs";
 import type { AmcConfig } from "@/lib/amc/config";
+import type { Trade } from "@/lib/amc/visits";
 import { clientEmailHtml, escapeEmailHtml } from "@/lib/email-brand";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
-import { fail, notMigrated, one, str, workPhotos } from "@/lib/server/amc/call-outs";
+import { checkCrewForSlot, fail, notMigrated, one, str, workPhotos } from "@/lib/server/amc/call-outs";
 import { ContractError } from "@/lib/server/amc/contracts";
 import { notifyUsers } from "@/lib/server/amc/notifications";
 import { recordSend } from "@/lib/server/amc/proposal-share";
@@ -209,7 +210,18 @@ export async function createAdditionalWork(admin: Admin, input: AdditionalWorkCr
 /* ------------------------------------------------------------------ */
 
 export async function listAdditionalWorks(admin: Admin, filter: { contractId?: string | null; callOutId?: string | null; visitId?: string | null; ownerId?: string | null }) {
-  let q = admin.from("amc_additional_works").select(WORK_COLUMNS).order("created_at", { ascending: false }).limit(500);
+  /*
+    Someone who sees only their own contracts: filtered in the query (through the contract's proposal owner),
+    not after the 500 newest of everyone's, which left out their older work (as call outs, 10 Nov).
+  */
+  const columns = filter.ownerId
+    ? WORK_COLUMNS.replace("contract:amc_contracts!amc_additional_works_contract_id_fkey(", "contract:amc_contracts!amc_additional_works_contract_id_fkey!inner(").replace(
+        "submission:amc_submissions!amc_contracts_submission_id_fkey(id, owner_id)",
+        "submission:amc_submissions!amc_contracts_submission_id_fkey!inner(id, owner_id)",
+      )
+    : WORK_COLUMNS;
+  let q = admin.from("amc_additional_works").select(columns).order("created_at", { ascending: false }).limit(500);
+  if (filter.ownerId) q = q.eq("contract.submission.owner_id", filter.ownerId);
   if (filter.contractId) q = q.eq("contract_id", filter.contractId);
   if (filter.callOutId) q = q.eq("call_out_id", filter.callOutId);
   if (filter.visitId) q = q.eq("visit_id", filter.visitId);
@@ -240,9 +252,43 @@ export async function additionalWorkOwner(admin: Admin, id: string): Promise<{ f
   return { found: true, ownerId: str(one(one(data.contract)?.submission)?.owner_id) };
 }
 
+/** When and who does the work, once scheduled with a slot (20261112100000). */
+export interface WorkSlot {
+  /** False before the migration: the work can only be scheduled for a day. */
+  migrated: boolean;
+  scheduledStart: string | null;
+  scheduledEnd: string | null;
+  /** The crew (FSM ids), first = lead. */
+  technicianIds: string[];
+  leadTechnicianId: string | null;
+  /** Why this crew, when it is not the suggested one. */
+  assignmentNote: string | null;
+}
+
+/* Read apart from the work's other columns, so the Additional work pages keep working before the migration. */
+export async function workSlot(admin: Admin, id: string): Promise<WorkSlot> {
+  const { data, error } = await admin
+    .from("amc_additional_works")
+    .select("scheduled_start, scheduled_end, technician_ids, lead_technician_id, assignment_note")
+    .eq("id", id)
+    .maybeSingle<Row>();
+  if (error) {
+    if (notMigrated(error)) return { migrated: false, scheduledStart: null, scheduledEnd: null, technicianIds: [], leadTechnicianId: null, assignmentNote: null };
+    throw fail(error);
+  }
+  return {
+    migrated: true,
+    scheduledStart: str(data?.scheduled_start),
+    scheduledEnd: str(data?.scheduled_end),
+    technicianIds: Array.isArray(data?.technician_ids) ? (data.technician_ids as unknown[]).map(String) : [],
+    leadTechnicianId: str(data?.lead_technician_id),
+    assignmentNote: str(data?.assignment_note),
+  };
+}
+
 export async function additionalWorkDetail(admin: Admin, id: string) {
-  const work = mapWork(await loadWork(admin, id));
-  return { work, photos: await workPhotos(admin, { additionalWorkId: id }) };
+  const [row, photos, slot] = await Promise.all([loadWork(admin, id), workPhotos(admin, { additionalWorkId: id }), workSlot(admin, id)]);
+  return { work: mapWork(row), photos, slot };
 }
 
 /** Totals per stage for contracts (DEV-407 roll-up to the contract and the client). */
@@ -371,7 +417,7 @@ export async function performWorkAction(admin: Admin, id: string, action: Additi
           userIds: [owner],
           title: `Quotation awaiting client approval: ${String(row.work_no)}`,
           body: `${String(one(row.contract)?.customer_name ?? "")}: AED ${money(Number(row.total ?? 0))}.`,
-          link: `/extensions/amc-contracts/additional-works?open=${id}`,
+          link: `/extensions/amc-contracts/additional-works/${id}`,
           entityType: "additional_work",
           entityId: id,
           contractId: String(row.contract_id),
@@ -386,9 +432,46 @@ export async function performWorkAction(admin: Admin, id: string, action: Additi
     case "reject":
       await moveTo(admin, row, "rejected", { rejected_at: now, rejection_reason: action.reason }, actor, action.reason);
       return { ok: true as const };
-    case "schedule":
-      await moveTo(admin, row, "scheduled", { scheduled_for: action.date }, actor);
+    case "schedule": {
+      const withCrew = Boolean(action.time || action.durationMinutes || action.technicianIds?.length);
+      if (!withCrew) {
+        await moveTo(admin, row, "scheduled", { scheduled_for: action.date }, actor);
+        return { ok: true as const };
+      }
+      if (!action.time || !action.durationMinutes || !action.technicianIds?.length) {
+        throw new ContractError("Give the start time, the duration and at least one technician, or only the day.", 400);
+      }
+      if (!canMoveWork(status, "scheduled")) {
+        throw new ContractError(`${String(row.work_no)} is ${ADDITIONAL_WORK_STATUS_LABELS[status].toLowerCase()}: it cannot be scheduled now.`, 409);
+      }
+      if (!(await workSlot(admin, id)).migrated) throw new ContractError("Scheduling a crew needs the database update 20261112100000. Schedule the day only until it is applied.", 503);
+      /* The same checks as a call out: nobody blocked, and why when it is not the suggested crew. */
+      const slot = await checkCrewForSlot(admin, {
+        contractId: String(row.contract_id),
+        trade: (str(row.trade) as Trade | null) ?? null,
+        date: action.date,
+        time: action.time,
+        durationMinutes: action.durationMinutes,
+        technicianIds: action.technicianIds,
+        overrideReason: action.overrideReason ?? null,
+        ignoreIds: [id],
+      });
+      await moveTo(
+        admin,
+        row,
+        "scheduled",
+        {
+          scheduled_for: action.date,
+          scheduled_start: slot.start,
+          scheduled_end: slot.end,
+          technician_ids: action.technicianIds,
+          lead_technician_id: action.technicianIds[0],
+          assignment_note: action.overrideReason ?? null,
+        },
+        actor,
+      );
       return { ok: true as const };
+    }
     case "complete":
       await moveTo(admin, row, "completed", { completed_at: action.completedAt ?? now }, actor);
       await followCallOut(admin, str(row.call_out_id), actor);
