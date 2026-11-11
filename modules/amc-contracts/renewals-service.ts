@@ -5,6 +5,7 @@ import type { RenewalOutcome, renewalOutcomeSchema } from "@/lib/amc/renewal-out
 import type { AmendmentRecord } from "@/lib/server/amc/amendments";
 import type { PastYearSummary, RenewalDueRow } from "@/lib/server/amc/renewals";
 import type { RenewalOverview } from "@/lib/server/amc/contract-operations";
+import { amcRequest } from "@/lib/amc/http-cache";
 
 /**
  * Browser calls for AMC renewals and amendments (Phase 13: DEV-415, 416,
@@ -60,13 +61,7 @@ export interface AmendmentActionResult {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(typeof body?.error === "string" ? body.error : "Something went wrong");
-  return body as T;
+  return amcRequest<T>(url, init);
 }
 
 const contractUrl = (id: string) => `/api/amc-contracts/${encodeURIComponent(id)}`;

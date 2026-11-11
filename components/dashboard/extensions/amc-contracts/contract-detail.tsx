@@ -65,10 +65,10 @@ import { CONTRACT_STATUS_NAMES, type ContractStatus } from "@/lib/amc/contract-l
 import { formatQuantity, unitWord } from "@/lib/amc/contracts";
 import { AMC_VAT_PERCENT } from "@/lib/amc/pricing";
 import { amcContractsService, type ContractDetail as Detail } from "@/modules/amc-contracts/amc-contracts-service";
-import { insightsService } from "@/modules/amc-contracts/insights-service";
 
 import { CancelContractDialog } from "./cancel-contract-dialog";
 import { SendClientReportDialog } from "./client-report-dialog";
+import { ClientReportViewer } from "./client-report-viewer";
 import { ContractAmendmentsPanel } from "./contract-amendments-panel";
 import { ContractCallOutsPanel } from "./contract-call-outs-panel";
 import { ContractCommercial } from "./contract-commercial";
@@ -97,11 +97,20 @@ import { RecordUsageDialog } from "./record-usage-dialog";
 import { UsageHistory } from "./usage-history";
 import { TruncateIfText, TruncatedText } from "@/components/ui/truncated-text";
 import { Fact } from "@/components/dashboard/extensions/amc/steps/review-step";
+import { amcRefresh } from "@/lib/amc/http-cache";
+import { Hint } from "@/components/ui/hint";
+import { useAmcData } from "./use-amc-data";
+import { callOutsService } from "@/modules/amc-contracts/call-outs-service";
+
+/* "What each service covers" on the Coverage tab: hidden for now. The terms still apply to call outs and print in the contract. */
+const SHOW_ENTITLEMENT_TERMS = false;
 
 const LIST = "/extensions/amc-contracts";
 
 const TABS = ["overview", "coverage", "schedule", "call-outs", "usage", "fsm", "payments", "renewal", "amendments", "documents", "history"] as const;
 type Tab = (typeof TABS)[number];
+/* Hidden for now (10 Nov 2026): Usage (Coverage shows used and left per service) and FSM. Remove from this set to bring a tab back. */
+const HIDDEN_TABS: ReadonlySet<Tab> = new Set<Tab>(["usage", "fsm"]);
 
 /**
  * One operational AMC contract, laid out like a Snagging job: the way back
@@ -146,7 +155,7 @@ export function ContractDetail({ id }: { id: string }) {
         {fetchedAt ? (
           <span className="text-muted-foreground hidden text-xs sm:inline">Updated {formatClock(fetchedAt)}</span>
         ) : null}
-        <Button variant="outline" size="sm" onClick={onRefresh} disabled={loading} aria-label="Refresh this contract">
+        <Button variant="outline" size="sm" onClick={() => amcRefresh(onRefresh)} disabled={loading} aria-label="Refresh this contract">
           <RefreshCw className={loading ? "size-4 animate-spin" : "size-4"} />
           <span className="hidden sm:inline">Refresh</span>
         </Button>
@@ -198,10 +207,14 @@ function ContractView({
   const [cancelling, setCancelling] = useState(false);
   const [checking, setChecking] = useState(false);
   const [reporting, setReporting] = useState(false);
+  const [viewingReport, setViewingReport] = useState(false);
   const [usageVersion, setUsageVersion] = useState(0);
   /* Payments (Phase 7) for Finance and the owner; the tab is not offered to anyone else. */
   const canViewPayments = data.permissions.payments?.canView === true;
-  const { tab, setTab, isOpened } = useUrlTab<Tab>(canViewPayments ? TABS : TABS.filter((t) => t !== "payments"), "overview");
+  const { tab, setTab, isOpened } = useUrlTab<Tab>(
+    TABS.filter((t) => !HIDDEN_TABS.has(t) && (canViewPayments || t !== "payments")),
+    "overview",
+  );
   const payments = useContractPayments(data.contract.id, canViewPayments);
   /* The PPM schedule (Phase 8), loaded here so the tab can show what is left or overdue. */
   const schedule = useContractSchedule(data.contract.id);
@@ -233,6 +246,10 @@ function ContractView({
   };
 
   const { contract, entitlements, summary, audit, source, permissions, sla, commitments } = data;
+  /* Booked by open call outs and nearly used up, per service, for the Coverage tab (the call-out ledger; cached, shared with the Call outs tab). */
+  const allowances = useAmcData(() => callOutsService.allowances(contract.id), `allowances:${contract.id}`);
+  const bookedFor = new Map((allowances.data?.allowances ?? []).map((a) => [a.entitlementId, a.reserved]));
+  const nearZeroFor = new Set((allowances.data?.allowances ?? []).filter((a) => a.nearZero).map((a) => a.entitlementId));
   const status = contract.status as ContractStatus;
   const canRecord = permissions.canRecordUsage && entitlements.some((e) => e.consumable);
   const counted = summary.withRemaining + summary.exhausted;
@@ -253,13 +270,13 @@ function ContractView({
       ? { label: "Activate", icon: <Play className="size-4" />, onClick: () => lifecycleDialogs.open("activate") }
       : firstInstalment && firstInstalment.outstanding > 0 && paymentPerms?.canRecord
         ? {
-            label: "Record payment",
-            icon: <Banknote className="size-4" />,
-            onClick: () => paymentDialogs.open(contract.id, { kind: "record_payment", instalment: firstInstalment }),
-          }
+          label: "Record payment",
+          icon: <Banknote className="size-4" />,
+          onClick: () => paymentDialogs.open(contract.id, { kind: "record_payment", instalment: firstInstalment }),
+        }
         : permissions.canHold && status === "on_hold"
           ? /* The one thing to do with a held contract, beside its reason. */
-            { label: "Resume", icon: <Play className="size-4" />, onClick: () => lifecycleDialogs.openStatus("active") }
+          { label: "Resume", icon: <Play className="size-4" />, onClick: () => lifecycleDialogs.openStatus("active") }
           : canRecord
             ? { label: "Record usage", icon: <Plus className="size-4" />, onClick: () => recordUsage(null) }
             : null;
@@ -316,42 +333,42 @@ function ContractView({
   const attention: { tone: "danger" | "warning" | "info"; title: string; body: string } | null =
     contract.status === "cancelled"
       ? {
-          tone: "danger",
-          title: `Cancelled ${formatDateTime(contract.cancelledAt)}`,
-          body: `${contract.cancellationReason ? `${contract.cancellationReason}. ` : ""}Coverage has stopped and no new usage can be recorded. Usage already recorded stays on the Usage tab.`,
-        }
+        tone: "danger",
+        title: `Cancelled ${formatDateTime(contract.cancelledAt)}`,
+        body: `${contract.cancellationReason ? `${contract.cancellationReason}. ` : ""}Coverage has stopped and no new usage can be recorded. Usage already recorded stays on the Usage tab.`,
+      }
       : contract.displayStatus === "expired"
         ? {
-            tone: "danger",
-            title: `Ended ${formatContractDate(contract.endDate)}`,
-            body: "Work after that date is chargeable unless the contract is renewed.",
-          }
+          tone: "danger",
+          title: `Ended ${formatContractDate(contract.endDate)}`,
+          body: "Work after that date is chargeable unless the contract is renewed.",
+        }
         : awaitingFirst
           ? {
-              tone: "warning",
-              title: "Waiting for its first payment",
-              body: firstInstalment
-                ? `Instalment 1 (AED ${firstInstalment.outstanding.toLocaleString("en-AE", { minimumFractionDigits: 2 })}) is due ${formatContractDate(firstInstalment.dueDate)}. No visits are released until it is received.`
-                : "No visits are released until the first instalment is received.",
-            }
-            : contract.lifecycle?.statusReason
+            tone: "warning",
+            title: "Waiting for its first payment",
+            body: firstInstalment
+              ? `Instalment 1 (AED ${firstInstalment.outstanding.toLocaleString("en-AE", { minimumFractionDigits: 2 })}) is due ${formatContractDate(firstInstalment.dueDate)}. No visits are released until it is received.`
+              : "No visits are released until the first instalment is received.",
+          }
+          : contract.lifecycle?.statusReason
             ? {
-                tone: status === "terminated" ? "danger" : "warning",
-                title: CONTRACT_STATUS_NAMES[status] ?? status,
-                body: contract.lifecycle.statusReason,
-              }
+              tone: status === "terminated" ? "danger" : "warning",
+              title: CONTRACT_STATUS_NAMES[status] ?? status,
+              body: contract.lifecycle.statusReason,
+            }
             : status === "signed"
               ? {
-                  tone: "info",
-                  title: `Signed ${contract.signedAt ? formatDateTime(contract.signedAt) : ""}`.trim(),
-                  body: `${contract.lifecycle?.signatureRoute === "scan" && contract.lifecycle.signedScanDate ? `Scan dated ${formatContractDate(contract.lifecycle.signedScanDate)}. ` : ""}Activate it with the commencement date: visits and coverage start from then.`,
-                }
+                tone: "info",
+                title: `Signed ${contract.signedAt ? formatDateTime(contract.signedAt) : ""}`.trim(),
+                body: `${contract.lifecycle?.signatureRoute === "scan" && contract.lifecycle.signedScanDate ? `Scan dated ${formatContractDate(contract.lifecycle.signedScanDate)}. ` : ""}Activate it with the commencement date: visits and coverage start from then.`,
+              }
               : contract.displayStatus === "not_started"
                 ? {
-                    tone: "info",
-                    title: `Coverage starts on ${formatContractDate(contract.startDate)}`,
-                    body: "Usage can be recorded from then.",
-                  }
+                  tone: "info",
+                  title: `Coverage starts on ${formatContractDate(contract.startDate)}`,
+                  body: "Usage can be recorded from then.",
+                }
                 : null;
 
   /* A tab's body, mounted on first open and kept after. */
@@ -397,10 +414,15 @@ function ContractView({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" onClick={() => setChecking(true)}>
-              <ShieldCheck className="size-4" />
-              Check coverage
-            </Button>
+            {/* Only an active contract covers anything: before activation (or on hold) every check would answer No active AMC. */}
+            <Hint label={contract.status === "active" ? undefined : "Coverage can be checked once the contract is active."}>
+              <span className="inline-flex" tabIndex={contract.status === "active" ? -1 : 0}>
+                <Button variant="outline" onClick={() => setChecking(true)} disabled={contract.status !== "active"}>
+                  <ShieldCheck className="size-4" />
+                  Check coverage
+                </Button>
+              </span>
+            </Hint>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="icon" aria-label="More actions">
@@ -422,11 +444,9 @@ function ContractView({
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
-                <DropdownMenuItem asChild>
-                  <a href={insightsService.clientReportHref(contract.id)} target="_blank" rel="noopener noreferrer">
-                    <FileText className="size-4" />
-                    Preview client report
-                  </a>
+                <DropdownMenuItem onClick={() => setViewingReport(true)}>
+                  <FileText className="size-4" />
+                  View client report
                 </DropdownMenuItem>
                 {canOperate ? (
                   <DropdownMenuItem onClick={() => setReporting(true)}>
@@ -449,18 +469,16 @@ function ContractView({
 
         {attention ? (
           <div
-            className={`border-t px-5 py-3 ${
-              attention.tone === "danger"
-                ? "border-danger/30 bg-danger/5"
-                : attention.tone === "warning"
-                  ? "border-warning/30 bg-warning/5"
-                  : "border-brand/30 bg-brand-50"
-            }`}
+            className={`border-t px-5 py-3 ${attention.tone === "danger"
+              ? "border-danger/30 bg-danger/5"
+              : attention.tone === "warning"
+                ? "border-warning/30 bg-warning/5"
+                : "border-brand/30 bg-brand-50"
+              }`}
           >
             <p
-              className={`text-sm font-medium ${
-                attention.tone === "danger" ? "text-danger" : attention.tone === "warning" ? "text-warning" : "text-brand"
-              }`}
+              className={`text-sm font-medium ${attention.tone === "danger" ? "text-danger" : attention.tone === "warning" ? "text-warning" : "text-brand"
+                }`}
             >
               {attention.title}
             </p>
@@ -513,8 +531,8 @@ function ContractView({
               .join(" · ") || "No visit or hour allowances"
           }
           caption={summary.lastUsageDate ? `Last used ${formatContractDate(summary.lastUsageDate.slice(0, 10))}` : "Nothing used yet"}
-          onSelect={() => setTab("usage")}
-          selectLabel="Open the usage tab"
+          onSelect={() => setTab(HIDDEN_TABS.has("usage") ? "coverage" : "usage")}
+          selectLabel={HIDDEN_TABS.has("usage") ? "Open the coverage tab" : "Open the usage tab"}
         />
       </StatCardGrid>
 
@@ -538,11 +556,13 @@ function ContractView({
             )}
           </TabsTrigger>
           <TabsTrigger value="call-outs">Call outs</TabsTrigger>
-          <TabsTrigger value="usage">
-            Usage
-            <TabCount value={summary.usageEvents} />
-          </TabsTrigger>
-          <TabsTrigger value="fsm">FSM</TabsTrigger>
+          {!HIDDEN_TABS.has("usage") ? (
+            <TabsTrigger value="usage">
+              Usage
+              <TabCount value={summary.usageEvents} />
+            </TabsTrigger>
+          ) : null}
+          {!HIDDEN_TABS.has("fsm") ? <TabsTrigger value="fsm">FSM</TabsTrigger> : null}
           {canViewPayments ? (
             <TabsTrigger value="payments">
               Payments
@@ -607,22 +627,19 @@ function ContractView({
           "coverage",
           <>
             <SectionCard
-              title="Coverage"
-              description="Every service on the contract, as signed, and how much of each is used."
+              title="Coverage and allowances"
+              description="Every service on the contract as signed: what it includes, how much is used, booked by open call outs, and what is left."
               icon={<ListChecks />}
               bodyClassName="pb-2"
             >
               <div className="overflow-x-auto">
-                <Table className="min-w-[860px]">
+                <Table className="min-w-[760px]">
                   <TableHeader>
                     <TableRow>
                       <TableHead className="pl-5">Service</TableHead>
-                      <TableHead>Type</TableHead>
-                      <TableHead>Included</TableHead>
-                      <TableHead>Used</TableHead>
-                      <TableHead>Remaining</TableHead>
-                      <TableHead>Frequency</TableHead>
-                      <TableHead>Call-out class</TableHead>
+                      <TableHead className="w-[30%]">Used</TableHead>
+                      <TableHead className="text-right">Booked</TableHead>
+                      <TableHead className="text-right">Left</TableHead>
                       <TableHead>State</TableHead>
                       <TableHead className="pr-5 text-right">
                         <span className="sr-only">Actions</span>
@@ -632,37 +649,68 @@ function ContractView({
                   <TableBody>
                     {entitlements.map((e) => {
                       const counts = e.entitlementType === "visits" || e.entitlementType === "hours";
+                      const unit = (n: number) => unitWord(e.entitlementType, n);
+                      /* Booked by open call outs (the allowance ledger), when it has loaded. */
+                      const booked = bookedFor.get(e.id) ?? 0;
+                      const near = nearZeroFor.has(e.id);
                       return (
                         <TableRow key={e.id}>
-                          <TableCell className="pl-5 font-medium">
-                            {e.serviceLabel}
-                            {counts && e.usagePercent !== null ? (
-                              <Progress value={e.usagePercent} className="mt-1.5 h-1 w-32" aria-label={`${e.serviceLabel} usage`} />
-                            ) : null}
+                          <TableCell className="pl-5">
+                            <div className="font-medium">{e.serviceLabel}</div>
+                            <div className="text-muted-foreground text-xs">
+                              {[
+                                ENTITLEMENT_TYPE_LABELS[e.entitlementType],
+                                counts || e.entitlementType === "unlimited"
+                                  ? `${e.units} ${e.units === 1 ? "unit" : "units"} × ${e.entitlementType === "hours" ? `${e.frequency} h` : e.frequency} a year`
+                                  : null,
+                                e.callOutClass ? CALL_OUT_LABELS[e.callOutClass] : null,
+                              ]
+                                .filter(Boolean)
+                                .join(" · ")}
+                            </div>
                           </TableCell>
-                          <TableCell>{ENTITLEMENT_TYPE_LABELS[e.entitlementType]}</TableCell>
-                          <TableCell className="tabular-nums">
-                            {e.includedQuantity !== null ? formatQuantity(e.includedQuantity) : e.entitlementType === "unlimited" ? "Unlimited" : "—"}
+                          <TableCell>
+                            {counts && e.includedQuantity !== null ? (
+                              <div className="grid gap-1.5">
+                                <span className="text-sm tabular-nums">
+                                  <span className="font-medium">{formatQuantity(e.usedQuantity)}</span>
+                                  <span className="text-muted-foreground">
+                                    {" "}
+                                    of {formatQuantity(e.includedQuantity)} {unit(e.includedQuantity)} used
+                                  </span>
+                                </span>
+                                <Progress value={e.usagePercent ?? 0} className="h-1.5 w-full max-w-48" aria-label={`${e.serviceLabel} usage`} />
+                              </div>
+                            ) : e.entitlementType === "unlimited" ? (
+                              <span className="text-sm">
+                                <span className="font-medium tabular-nums">{formatQuantity(e.usedQuantity)}</span>
+                                <span className="text-muted-foreground"> used · no limit</span>
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground text-sm">Included, not counted</span>
+                            )}
                           </TableCell>
-                          <TableCell className="tabular-nums">
-                            {e.entitlementType === "informational" ? "—" : formatQuantity(e.usedQuantity)}
+                          <TableCell className="text-right text-sm tabular-nums">{booked ? formatQuantity(booked) : <span className="text-muted-foreground">—</span>}</TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            {e.remainingQuantity !== null ? (
+                              <span className={`font-semibold ${e.remainingQuantity === 0 ? "text-danger" : near ? "text-warning" : ""}`}>
+                                {formatQuantity(e.remainingQuantity)} <span className="text-muted-foreground text-xs font-normal">{unit(e.remainingQuantity)}</span>
+                              </span>
+                            ) : e.entitlementType === "unlimited" ? (
+                              <span className="font-semibold">Unlimited</span>
+                            ) : (
+                              <span className="text-muted-foreground">—</span>
+                            )}
                           </TableCell>
-                          <TableCell className="tabular-nums">
-                            {e.remainingQuantity !== null
-                              ? `${formatQuantity(e.remainingQuantity)} ${unitWord(e.entitlementType, e.remainingQuantity)}`
-                              : e.entitlementType === "unlimited"
-                                ? "Unlimited"
-                                : "Not counted"}
-                          </TableCell>
-                          <TableCell className="text-muted-foreground">
-                            {e.units} {e.units === 1 ? "unit" : "units"} ×{" "}
-                            {e.entitlementType === "hours" ? `${e.frequency} h a year` : `${e.frequency} a year`}
-                          </TableCell>
-                          <TableCell>{e.callOutClass ? CALL_OUT_LABELS[e.callOutClass] : "—"}</TableCell>
                           <TableCell>
                             <Badge variant="secondary" className={`border-0 font-medium ${entitlementStateTone(e.state)}`}>
                               {ENTITLEMENT_STATE_LABELS[e.state]}
                             </Badge>
+                            {near && e.remainingQuantity !== 0 ? (
+                              <Badge variant="secondary" className="bg-warning/10 text-warning ml-1.5 border-0 font-medium">
+                                Nearly used up
+                              </Badge>
+                            ) : null}
                           </TableCell>
                           <TableCell className="pr-5 text-right">
                             {permissions.canRecordUsage && e.consumable ? (
@@ -679,7 +727,8 @@ function ContractView({
               </div>
             </SectionCard>
 
-            <EntitlementTermsCard data={data} onChanged={() => void load()} />
+            {/* Hidden for now (10 Nov 2026, Danish): set SHOW_ENTITLEMENT_TERMS to bring the card back. */}
+            {SHOW_ENTITLEMENT_TERMS ? <EntitlementTermsCard data={data} onChanged={() => void load()} /> : null}
 
             <SectionCard title="Service levels" icon={<Gauge />} bodyClassName="px-5 pb-5 space-y-3">
               {commitments?.fromSnapshot ? (
@@ -700,13 +749,14 @@ function ContractView({
                       ]}
                     />
                   </div>
-                  <p className="text-muted-foreground text-xs">
+                  {/* <p className="text-muted-foreground text-xs">
                     Read from the wording frozen with this contract, so later settings changes do not alter it.
-                  </p>
+                  </p> */}
                 </>
               ) : null}
               {commitments?.fromSnapshot ? null : sla.length === 0 ? (
-                <p className="text-muted-foreground text-sm">No call-out services on this contract, so no response targets.</p>
+                <></>
+                // <p className="text-muted-foreground text-sm">No call-out services on this contract, so no response targets.</p>
               ) : (
                 <div>
                   <SubHeading>Response targets</SubHeading>
@@ -719,10 +769,10 @@ function ContractView({
                   />
                 </div>
               )}
-              <p className="text-muted-foreground text-xs">
+              {/* <p className="text-muted-foreground text-xs">
                 Whether a call-out met its target needs the request and arrival times from FSM, which the
                 portal does not receive yet.
-              </p>
+              </p> */}
             </SectionCard>
           </>,
         )}
@@ -754,15 +804,15 @@ function ContractView({
 
         {canViewPayments
           ? panel(
-              "payments",
-              <ContractPaymentsPanel
-                contractId={contract.id}
-                contractStatus={status}
-                payments={payments}
-                dialogs={paymentDialogs}
-                onChanged={reloadWithPayments}
-              />,
-            )
+            "payments",
+            <ContractPaymentsPanel
+              contractId={contract.id}
+              contractStatus={status}
+              payments={payments}
+              dialogs={paymentDialogs}
+              onChanged={reloadWithPayments}
+            />,
+          )
           : null}
 
         {panel(
@@ -845,7 +895,14 @@ function ContractView({
         open={checking}
         onOpenChange={setChecking}
         /* Named by the contract number the team and the client know it by. */
-        contract={{ id: contract.id, proposalNumber: contract.lifecycle?.contractNumber ?? contract.proposalNumber, customerName: contract.customerName }}
+        contract={{
+          id: contract.id,
+          proposalNumber: contract.lifecycle?.contractNumber ?? contract.proposalNumber,
+          customerName: contract.customerName,
+          serviceIds: entitlements.map((e) => e.serviceId),
+          active: contract.status === "active",
+          statusLabel: CONTRACT_STATUS_LABELS[contract.displayStatus as keyof typeof CONTRACT_STATUS_LABELS] ?? contract.status,
+        }}
       />
       <SendClientReportDialog
         open={reporting}
@@ -854,6 +911,24 @@ function ContractView({
         contractLabel={`AMC ${contract.lifecycle?.contractNumber ?? contract.proposalNumber}`}
         customerName={contract.customerName}
         defaultEmail={(contract.customer as Record<string, string | undefined>).customerEmail?.trim() || null}
+        onPreview={() => {
+          setReporting(false);
+          setViewingReport(true);
+        }}
+      />
+      <ClientReportViewer
+        open={viewingReport}
+        onOpenChange={setViewingReport}
+        contractId={contract.id}
+        title={`${contract.customerName || "Client"} · service report ${contract.lifecycle?.contractNumber ?? contract.proposalNumber}`}
+        onSend={
+          canOperate
+            ? () => {
+                setViewingReport(false);
+                setReporting(true);
+              }
+            : undefined
+        }
       />
       {lifecycleDialogs.dialogs}
       {paymentDialogs.dialogs}

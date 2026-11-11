@@ -2,22 +2,7 @@
 
 import { useState } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
-import {
-  Archive,
-  ArchiveRestore,
-  BadgePercent,
-  Building2,
-  CalendarRange,
-  History,
-  Info,
-  Package,
-  Pencil,
-  Plus,
-  Send,
-  Tags,
-  Trash2,
-  Undo2,
-} from "lucide-react";
+import { Archive, ArchiveRestore, BadgePercent, Building2, CalendarRange, History, Info, Package, Pencil, Plus, Send, Tags, Trash2, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
@@ -56,6 +41,7 @@ import {
 } from "@/lib/amc/rate-card";
 import { describeRateCardField } from "@/lib/amc/rate-card-history";
 import { cn } from "@/lib/utils";
+import { isFrequencyEditable } from "@/components/dashboard/extensions/amc/amc-constants";
 import { proposalRulesService, type RateCardResponse, type RateCardVersion } from "@/modules/amc-submissions";
 import { formatCurrencyAED } from "@/utils/format-currency";
 
@@ -64,6 +50,7 @@ import { useUrlTab } from "../profile/use-url-tab";
 import { useAmcData } from "../use-amc-data";
 import { TruncatedText } from "@/components/ui/truncated-text";
 import { ModuleGuide } from "@/components/dashboard/extensions/amc-contracts/module-guide";
+import { standardFrequency, standardUnit } from "@/lib/amc/scope-defaults";
 
 const TABS = ["rates", "packages", "promotions", "history"] as const;
 const dmy = (iso: string) => iso.split("-").reverse().join("/");
@@ -79,8 +66,7 @@ const uniqueId = (base: string, taken: string[]) => {
   while (taken.includes(id)) id = `${slug(base)}-${n++}`;
   return id;
 };
-const firstIssue = (result: { success: boolean; error?: { issues: Array<{ message: string }> } }) =>
-  result.success ? null : (result.error?.issues[0]?.message ?? "Check the values");
+const firstIssue = (result: { success: boolean; error?: { issues: Array<{ message: string }> } }) => (result.success ? null : (result.error?.issues[0]?.message ?? "Check the values"));
 
 /* Status badges in the theme's tones, as Snagging's are. */
 const TONE = {
@@ -117,11 +103,7 @@ export function RateCardPage() {
       title="Rate card"
       info={<ModuleGuide module="rateCard" />}
       description="The rates every proposal is priced from: per service and property model, with a floor, the frequencies allowed, packages and promotions."
-      actions={
-        <>
-          {actions}
-        </>
-      }
+      actions={<>{actions}</>}
     />
   );
 
@@ -185,9 +167,7 @@ export function RateCardPage() {
         <Alert>
           <Info />
           <AlertTitle>The rate card has not been loaded yet</AlertTitle>
-          <AlertDescription>
-            It arrives with the AMC database update 20261007140000. Until then proposals are priced with the base prices entered on them.
-          </AlertDescription>
+          <AlertDescription>It arrives with the AMC database update 20261007140000. Until then proposals are priced with the base prices entered on them.</AlertDescription>
         </Alert>
       ) : (
         <>
@@ -277,16 +257,13 @@ function RatesTab({ card, editing, services, onChange }: { card: RateCard; editi
   const label = (id: string) => services.find((s) => s.id === id)?.label ?? id;
   const items = [...card.items].sort((a, b) => label(a.serviceId).localeCompare(label(b.serviceId)) || a.model.localeCompare(b.model));
   const term = search.trim().toLowerCase();
-  const shown = term
-    ? items.filter((i) => `${label(i.serviceId)} ${MODEL_LABELS[i.model]} ${i.unit}`.toLowerCase().includes(term))
-    : items;
+  const shown = term ? items.filter((i) => `${label(i.serviceId)} ${MODEL_LABELS[i.model]} ${i.unit}`.toLowerCase().includes(term)) : items;
 
   const open = (item: RateItem | "new") => {
     setEditingItem(item);
     setDialogOpen(true);
   };
-  const toggleRetired = (item: RateItem) =>
-    onChange({ ...card, items: card.items.map((i) => (i.id === item.id ? { ...i, retired: !i.retired } : i)) });
+  const toggleRetired = (item: RateItem) => onChange({ ...card, items: card.items.map((i) => (i.id === item.id ? { ...i, retired: !i.retired } : i)) });
   const save = (item: RateItem) => {
     const exists = card.items.some((i) => i.id === item.id);
     onChange({ ...card, items: exists ? card.items.map((i) => (i.id === item.id ? item : i)) : [...card.items, item] });
@@ -327,9 +304,7 @@ function RatesTab({ card, editing, services, onChange }: { card: RateCard; editi
     {
       id: "frequencies",
       header: "Frequencies",
-      cell: ({ row }) => (
-        <span className="text-sm">{row.original.allowedFrequencies.length ? `${row.original.allowedFrequencies.join(", ")} a year` : "Any"}</span>
-      ),
+      cell: ({ row }) => <span className="text-sm">{row.original.allowedFrequencies.length ? `${row.original.allowedFrequencies.join(", ")} a year` : "Any"}</span>,
     },
     {
       id: "status",
@@ -400,14 +375,7 @@ function RatesTab({ card, editing, services, onChange }: { card: RateCard; editi
           )
         }
       />
-      <RateDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        item={editingItem === "new" ? null : editingItem}
-        services={services}
-        takenIds={card.items.map((i) => i.id)}
-        onSave={save}
-      />
+      <RateDialog open={dialogOpen} onOpenChange={setDialogOpen} item={editingItem === "new" ? null : editingItem} services={services} takenIds={card.items.map((i) => i.id)} onSave={save} />
     </SectionCard>
   );
 }
@@ -430,7 +398,8 @@ function RateDialog({
   const initial = () => ({
     serviceId: item?.serviceId ?? services[0]?.id ?? "",
     model: item?.model ?? ("any" as RateItem["model"]),
-    unit: item?.unit ?? "per property",
+    /* A new rate reads as the library words its unit ("Per AC unit per visit"). */
+    unit: item?.unit ?? (standardUnit(item?.serviceId ?? services[0]?.id ?? "")?.toLowerCase() || "per property"),
     basis: item?.basis ?? ("per_property" as RateItem["basis"]),
     standardRate: item ? String(item.standardRate) : "",
     floorRate: item ? String(item.floorRate) : "",
@@ -449,7 +418,24 @@ function RateDialog({
   }
   const set = (patch: Partial<ReturnType<typeof initial>>) => setValue((v) => ({ ...v, ...patch }));
 
+  /*
+    Only a service counted in visits (PPM, handyman, fixed, weekly, manpower) has a frequency a proposal can change.
+    A hotline or a covered service is always once a year there, so a list here would refuse every proposal with it.
+  */
+  const frequencyType = services.find((s) => s.id === value.serviceId)?.frequencyType;
+  const countsVisits = isFrequencyEditable(frequencyType as Parameters<typeof isFrequencyEditable>[0]);
+  /* The frequencies as typed: whole numbers a year, any separator; anything else is said, not silently dropped. */
+  const freqTokens = countsVisits ? value.frequencies.split(/[,;\s]+/).filter(Boolean) : [];
+  const freqBad = freqTokens.filter((x) => !/^\d+$/.test(x) || Number(x) < 1);
+  const freqList = [...new Set(freqTokens.filter((x) => /^\d+$/.test(x) && Number(x) >= 1).map(Number))].sort((a, b) => a - b);
+  const freqHint = freqBad.length
+    ? `Not a number of visits: ${freqBad.join(", ")}. Use whole numbers, e.g. 2, 4.`
+    : freqList.length
+      ? `Proposals can use ${freqList.length === 1 ? freqList[0] : `${freqList.slice(0, -1).join(", ")} or ${freqList[freqList.length - 1]}`} visits a year; any other number is refused.`
+      : "Blank: any number of visits a year.";
+
   const save = () => {
+    if (freqBad.length) return setError(freqHint);
     const candidate = {
       id: item?.id ?? uniqueId(`${value.serviceId}-${value.model}`, takenIds),
       serviceId: value.serviceId,
@@ -458,10 +444,7 @@ function RateDialog({
       basis: value.basis,
       standardRate: Number(value.standardRate),
       floorRate: Number(value.floorRate),
-      allowedFrequencies: value.frequencies
-        .split(/[,\s]+/)
-        .filter(Boolean)
-        .map(Number),
+      allowedFrequencies: freqList,
       retired: item?.retired ?? false,
     };
     const parsed = rateItemSchema.safeParse(candidate);
@@ -479,7 +462,18 @@ function RateDialog({
         <div className="grid gap-4 py-2">
           <div className="grid gap-1.5">
             <Label>Service</Label>
-            <Select value={value.serviceId} onValueChange={(serviceId) => set({ serviceId })} disabled={!!item}>
+            <Select
+              value={value.serviceId}
+              onValueChange={(serviceId) =>
+                setValue((v) => ({
+                  ...v,
+                  serviceId,
+                  /* The unit follows the library's wording for the service, unless it was typed over. */
+                  unit: v.unit === (standardUnit(v.serviceId)?.toLowerCase() || "per property") ? standardUnit(serviceId)?.toLowerCase() || v.unit : v.unit,
+                }))
+              }
+              disabled={!!item}
+            >
               <SelectTrigger aria-label="Service" className="w-full">
                 <SelectValue />
               </SelectTrigger>
@@ -538,10 +532,32 @@ function RateDialog({
               <Input id="rate-floor" type="number" min={0} step="0.01" value={value.floorRate} onChange={(e) => set({ floorRate: e.target.value })} />
             </div>
           </div>
-          <div className="grid gap-1.5">
-            <Label htmlFor="rate-freq">Frequencies allowed a year (blank: any)</Label>
-            <Input id="rate-freq" value={value.frequencies} onChange={(e) => set({ frequencies: e.target.value })} placeholder="2, 4, 6" />
-          </div>
+          {countsVisits ? (
+            <div className="grid gap-1.5">
+              <Label htmlFor="rate-freq">Frequencies allowed a year (blank: any)</Label>
+              {/* A list, not one number: the browser's own suggestions (one past entry each) made it look like one. */}
+              <Input
+                id="rate-freq"
+                autoComplete="off"
+                inputMode="numeric"
+                value={value.frequencies}
+                onChange={(e) => set({ frequencies: e.target.value })}
+                placeholder="e.g. 2, 4, 6"
+                aria-describedby="rate-freq-hint"
+              />
+              <p id="rate-freq-hint" className={cn("text-xs", freqBad.length ? "text-destructive" : "text-muted-foreground")}>
+                {freqHint}
+              </p>
+              {standardFrequency(value.serviceId) ? (
+                <p className="text-muted-foreground text-xs">Scope of Works Library default: {standardFrequency(value.serviceId)?.toLowerCase()}.</p>
+              ) : null}
+            </div>
+          ) : (
+            <p className="text-muted-foreground text-xs">
+              Not counted in visits: proposals carry this service once a year, so it has no frequencies to set.
+              {value.frequencies.trim() ? " Saving clears the frequencies it had." : ""}
+            </p>
+          )}
           {error ? (
             <p className="text-destructive text-xs" role="alert">
               {error}
@@ -626,7 +642,10 @@ function PackagesTab({ card, editing, services, onChange }: { card: RateCard; ed
               <ul className="mt-2 space-y-0.5 text-sm">
                 {p.lines.map((l) => (
                   <li key={l.serviceId}>
-                    {label(l.serviceId)} <span className="text-muted-foreground">· {l.units} unit(s) × {l.frequency} a year</span>
+                    {label(l.serviceId)}{" "}
+                    <span className="text-muted-foreground">
+                      · {l.units} unit(s) × {l.frequency} a year
+                    </span>
                   </li>
                 ))}
               </ul>
@@ -665,8 +684,7 @@ function PackageDialog({
   takenIds: string[];
   onSave: (pkg: RatePackage) => void;
 }) {
-  const initial = (): RatePackage =>
-    pkg ?? { id: "", name: "", description: "", models: [], lines: [{ serviceId: services[0]?.id ?? "", units: 1, frequency: 1 }], active: true };
+  const initial = (): RatePackage => pkg ?? { id: "", name: "", description: "", models: [], lines: [{ serviceId: services[0]?.id ?? "", units: 1, frequency: 1 }], active: true };
   const [value, setValue] = useState<RatePackage>(initial);
   const [error, setError] = useState<string | null>(null);
   /* Seeded on the way open, during render (see RateDialog). */
@@ -678,8 +696,7 @@ function PackageDialog({
       setError(null);
     }
   }
-  const setLine = (index: number, patch: Partial<RatePackage["lines"][number]>) =>
-    setValue((v) => ({ ...v, lines: v.lines.map((l, i) => (i === index ? { ...l, ...patch } : l)) }));
+  const setLine = (index: number, patch: Partial<RatePackage["lines"][number]>) => setValue((v) => ({ ...v, lines: v.lines.map((l, i) => (i === index ? { ...l, ...patch } : l)) }));
   const save = () => {
     const parsed = packageSchema.safeParse({ ...value, id: pkg?.id ?? uniqueId(value.name, takenIds) });
     if (!parsed.success) return setError(firstIssue(parsed));
@@ -708,9 +725,7 @@ function PackageDialog({
                 <label key={m} className="flex items-center gap-2 text-sm">
                   <Checkbox
                     checked={value.models.includes(m)}
-                    onCheckedChange={(checked) =>
-                      setValue((v) => ({ ...v, models: checked === true ? [...v.models, m] : v.models.filter((x: PropertyModel) => x !== m) }))
-                    }
+                    onCheckedChange={(checked) => setValue((v) => ({ ...v, models: checked === true ? [...v.models, m] : v.models.filter((x: PropertyModel) => x !== m) }))}
                   />
                   {MODEL_LABELS[m]}
                 </label>
@@ -734,18 +749,27 @@ function PackageDialog({
                   </SelectContent>
                 </Select>
                 <Input className="w-16" type="number" min={1} value={line.units} onChange={(e) => setLine(index, { units: Math.max(1, Number(e.target.value) || 1) })} aria-label="Units" />
-                <Input className="w-16" type="number" min={1} value={line.frequency} onChange={(e) => setLine(index, { frequency: Math.max(1, Number(e.target.value) || 1) })} aria-label="Visits a year" />
-                <Button size="icon" variant="ghost" className="size-8" disabled={value.lines.length <= 1} onClick={() => setValue((v) => ({ ...v, lines: v.lines.filter((_, i) => i !== index) }))} aria-label="Remove service">
+                <Input
+                  className="w-16"
+                  type="number"
+                  min={1}
+                  value={line.frequency}
+                  onChange={(e) => setLine(index, { frequency: Math.max(1, Number(e.target.value) || 1) })}
+                  aria-label="Visits a year"
+                />
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="size-8"
+                  disabled={value.lines.length <= 1}
+                  onClick={() => setValue((v) => ({ ...v, lines: v.lines.filter((_, i) => i !== index) }))}
+                  aria-label="Remove service"
+                >
                   <Trash2 className="size-4" />
                 </Button>
               </div>
             ))}
-            <Button
-              size="sm"
-              variant="outline"
-              className="w-fit"
-              onClick={() => setValue((v) => ({ ...v, lines: [...v.lines, { serviceId: services[0]?.id ?? "", units: 1, frequency: 1 }] }))}
-            >
+            <Button size="sm" variant="outline" className="w-fit" onClick={() => setValue((v) => ({ ...v, lines: [...v.lines, { serviceId: services[0]?.id ?? "", units: 1, frequency: 1 }] }))}>
               <Plus className="size-4" />
               Add a service
             </Button>
@@ -778,19 +802,7 @@ function PackageDialog({
 /* Promotions                                                          */
 /* ------------------------------------------------------------------ */
 
-function PromotionsTab({
-  card,
-  editing,
-  services,
-  today,
-  onChange,
-}: {
-  card: RateCard;
-  editing: boolean;
-  services: Services;
-  today: string;
-  onChange: (card: RateCard) => void;
-}) {
+function PromotionsTab({ card, editing, services, today, onChange }: { card: RateCard; editing: boolean; services: Services; today: string; onChange: (card: RateCard) => void }) {
   const [editingPromo, setEditingPromo] = useState<RatePromotion | "new" | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const label = (id: string) => services.find((s) => s.id === id)?.label ?? id;
@@ -827,9 +839,7 @@ function PromotionsTab({
       cell: ({ row }) => (
         <div className="flex min-w-0 flex-col text-sm">
           <TruncatedText text={row.original.serviceIds.length ? row.original.serviceIds.map(label).join(", ") : "Every service"} />
-          <TruncatedText className="text-muted-foreground text-xs">
-            {row.original.models.length ? row.original.models.map((m) => MODEL_LABELS[m]).join(", ") : "Every model"}
-          </TruncatedText>
+          <TruncatedText className="text-muted-foreground text-xs">{row.original.models.length ? row.original.models.map((m) => MODEL_LABELS[m]).join(", ") : "Every model"}</TruncatedText>
         </div>
       ),
     },
@@ -926,8 +936,7 @@ function PromotionDialog({
   takenIds: string[];
   onSave: (promo: RatePromotion) => void;
 }) {
-  const initial = (): RatePromotion =>
-    promo ?? { id: "", name: "", startDate: today, endDate: today, percentOff: 10, serviceIds: [], models: [], active: true };
+  const initial = (): RatePromotion => promo ?? { id: "", name: "", startDate: today, endDate: today, percentOff: 10, serviceIds: [], models: [], active: true };
   const [value, setValue] = useState<RatePromotion>(initial);
   const [error, setError] = useState<string | null>(null);
   /* Seeded on the way open, during render (see RateDialog). */
@@ -983,9 +992,7 @@ function PromotionDialog({
                 <label key={s.id} className="flex items-center gap-2 text-sm">
                   <Checkbox
                     checked={value.serviceIds.includes(s.id)}
-                    onCheckedChange={(checked) =>
-                      setValue((v) => ({ ...v, serviceIds: checked === true ? [...v.serviceIds, s.id] : v.serviceIds.filter((x) => x !== s.id) }))
-                    }
+                    onCheckedChange={(checked) => setValue((v) => ({ ...v, serviceIds: checked === true ? [...v.serviceIds, s.id] : v.serviceIds.filter((x) => x !== s.id) }))}
                   />
                   {s.label}
                 </label>
@@ -999,9 +1006,7 @@ function PromotionDialog({
                 <label key={m} className="flex items-center gap-2 text-sm">
                   <Checkbox
                     checked={value.models.includes(m)}
-                    onCheckedChange={(checked) =>
-                      setValue((v) => ({ ...v, models: checked === true ? [...v.models, m] : v.models.filter((x: PropertyModel) => x !== m) }))
-                    }
+                    onCheckedChange={(checked) => setValue((v) => ({ ...v, models: checked === true ? [...v.models, m] : v.models.filter((x: PropertyModel) => x !== m) }))}
                   />
                   {MODEL_LABELS[m]}
                 </label>
@@ -1030,7 +1035,6 @@ function PromotionDialog({
 /* ------------------------------------------------------------------ */
 /* History and publishing                                              */
 /* ------------------------------------------------------------------ */
-
 
 function HistoryTab({ versions, label }: { versions: RateCardVersion[]; label: (id: string) => string }) {
   /* Newest first; each compared with the one published before it. */
@@ -1126,8 +1130,7 @@ function PublishDialog({
         <DialogHeader>
           <DialogTitle>Publish the rate card</DialogTitle>
           <DialogDescription>
-            {changes} change{changes === 1 ? "" : "s"} become a new version. Proposals already shared keep the rates they were priced at; drafts take the new rates
-            from the effective date.
+            {changes} change{changes === 1 ? "" : "s"} become a new version. Proposals already shared keep the rates they were priced at; drafts take the new rates from the effective date.
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-2">

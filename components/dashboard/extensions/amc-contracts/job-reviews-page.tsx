@@ -26,6 +26,7 @@ import { useDialog } from "./profile/use-dialog";
 import { VisitDetailDialog } from "./visit-detail-dialog";
 import { TruncatedText } from "@/components/ui/truncated-text";
 import { ModuleGuide } from "@/components/dashboard/extensions/amc-contracts/module-guide";
+import { amcRefresh } from "@/lib/amc/http-cache";
 
 const FILTER_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: "any", label: "All job sheets" },
@@ -303,7 +304,7 @@ function JobReviewsToolbar({
             </Select>
           </div>
 
-          <Button onClick={onRefresh} variant="outline" disabled={loading}>
+          <Button onClick={() => amcRefresh(onRefresh)} variant="outline" disabled={loading}>
             <RefreshCwIcon className="size-4 sm:mr-1" />
             <span className="hidden sm:inline">Refresh</span>
           </Button>

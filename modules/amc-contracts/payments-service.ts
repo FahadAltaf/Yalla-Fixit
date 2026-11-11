@@ -9,6 +9,7 @@ import type {
   InstalmentRecord,
   PaymentRecord,
 } from "@/lib/server/amc/payments";
+import { amcErrorMessage, amcFetchJson } from "@/lib/amc/http-cache";
 
 /**
  * Browser calls for AMC payments (Phase 7). A contract's schedule, cheques
@@ -55,14 +56,8 @@ export class PaymentsRequestError extends Error {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new PaymentsRequestError(typeof body?.error === "string" ? body.error : "Something went wrong", response.status);
-  }
+  const { ok, status, body } = await amcFetchJson(url, init);
+  if (!ok) throw new PaymentsRequestError(amcErrorMessage(body), status);
   return body as T;
 }
 

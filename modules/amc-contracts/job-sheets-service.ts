@@ -2,6 +2,7 @@ import type { z } from "zod";
 
 import type { jobSheetSchema, reportState, ReviewReason } from "@/lib/amc/job-sheets";
 import type { JobSheetView } from "@/lib/server/amc/job-sheets";
+import { amcRequest } from "@/lib/amc/http-cache";
 
 /**
  * Browser calls for an AMC visit's job sheet (Phase 10: DEV-402, 403,
@@ -64,18 +65,8 @@ export interface JobReviewsResponse {
   canReview: boolean;
 }
 
-async function parse<T>(response: Response): Promise<T> {
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(typeof body?.error === "string" ? body.error : "Something went wrong");
-  return body as T;
-}
-
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
-  });
-  return parse<T>(response);
+  return amcRequest<T>(url, init);
 }
 
 const sheetUrl = (visitId: string) => `/api/amc-visits/${encodeURIComponent(visitId)}/job-sheet`;
@@ -107,8 +98,7 @@ export const jobSheetsService = {
     if (input.lineId) form.append("lineId", input.lineId);
     if (input.assetId) form.append("assetId", input.assetId);
     if (input.caption?.trim()) form.append("caption", input.caption.trim());
-    const response = await fetch(`${sheetUrl(visitId)}/photos`, { method: "POST", body: form });
-    return parse<{ photo: { id: string } }>(response);
+    return request<{ photo: { id: string } }>(`${sheetUrl(visitId)}/photos`, { method: "POST", body: form });
   },
   removePhoto(visitId: string, photoId: string) {
     return request<{ ok: true }>(`${sheetUrl(visitId)}/photos/${encodeURIComponent(photoId)}`, { method: "DELETE" });

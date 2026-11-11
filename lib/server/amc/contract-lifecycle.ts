@@ -437,7 +437,7 @@ export async function recordSignedScan(
 export async function activateSignedContract(
   admin: Admin,
   contractId: string,
-  input: { commencementDate: string; termMonths: number; startWithoutPayment?: { reason: string } | null },
+  requested: { commencementDate: string; termMonths: number; startWithoutPayment?: { reason: string } | null },
   actor: { id: string; label: string | null },
   config: AmcConfig,
 ) {
@@ -446,6 +446,9 @@ export async function activateSignedContract(
   if (!["signed", "pending_initial_payment"].includes(String(c.status))) {
     throw new ContractError(`A contract that is ${CONTRACT_STATUS_NAMES[String(c.status) as ContractStatus]?.toLowerCase() ?? c.status} cannot be activated.`, 409);
   }
+  /* The term is what the client signed (its stored term, else its signed dates): activation sets only when service starts. */
+  const signedTerm = Number(c.term_months) || termMonthsBetween(String(c.start_date ?? ""), String(c.end_date ?? "")) || null;
+  const input = { ...requested, termMonths: signedTerm ?? requested.termMonths };
   const termProblem = checkTerm(input.termMonths, config.contracts);
   if (termProblem) throw new ContractError(termProblem, 400);
   const endDate = expiryFromCommencement(input.commencementDate, input.termMonths);

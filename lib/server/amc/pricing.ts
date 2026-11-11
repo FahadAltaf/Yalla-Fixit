@@ -7,7 +7,7 @@ import {
   servicesForProperty,
   type AmcSettings,
 } from "@/components/dashboard/extensions/amc/amc-settings";
-import { chargeFrequencyType } from "@/components/dashboard/extensions/amc/amc-constants";
+import { chargeFrequencyType, isFrequencyEditable } from "@/components/dashboard/extensions/amc/amc-constants";
 import { isCustomServiceRow } from "@/components/dashboard/extensions/amc/amc-types";
 
 /**
@@ -109,7 +109,9 @@ export function priceSubmission({
   */
   const cardable = services.filter((row) => !isCustomServiceRow(row));
   const carded = rateCard
-    ? applyRateCard(cardable, rateCard.card, unitType, day ?? new Date().toISOString().slice(0, 10), discountPercent, label)
+    ? applyRateCard(cardable, rateCard.card, unitType, day ?? new Date().toISOString().slice(0, 10), discountPercent, label, (id) =>
+        isFrequencyEditable(offered.get(id)?.frequencyType),
+      )
     : null;
   const cardedById = new Map((carded?.rows ?? []).map((row) => [row.serviceId, row]));
   const rows = services.map((row) => cardedById.get(row.serviceId) ?? row);

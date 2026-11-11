@@ -170,10 +170,12 @@ export function snapToCardFrequencies<R extends { serviceId: string; frequency: 
   rows: readonly R[],
   card: RateCard | null,
   model: string,
+  /** Whether a service is counted in visits; one that is not (a hotline) keeps its once a year whatever the card lists. */
+  countsVisits: (serviceId: string) => boolean = () => true,
 ): R[] {
   if (!card) return [...rows];
   return rows.map((row) => {
-    if (!row.included) return row;
+    if (!row.included || !countsVisits(row.serviceId)) return row;
     const allowed = rateItemFor(card, row.serviceId, model)?.allowedFrequencies ?? [];
     const frequency = nearestAllowedFrequency(allowed, row.frequency);
     return frequency === row.frequency ? row : { ...row, frequency };
@@ -252,6 +254,8 @@ export function applyRateCard<R extends CardRow>(
   day: string,
   discountPercent: number,
   labelOf: (serviceId: string) => string = (s) => s,
+  /** Whether a service is counted in visits: the card's frequencies bind only those (a hotline is once a year). */
+  countsVisits: (serviceId: string) => boolean = () => true,
 ): CardPricing<R> {
   const problems: string[] = [];
   let belowFloor = false;
@@ -263,7 +267,7 @@ export function applyRateCard<R extends CardRow>(
       /* No rate, no price: a ticked line cannot be submitted until the card has one. */
       return { ...row, ...none, basePrice: null };
     }
-    if (row.included && item.allowedFrequencies.length > 0 && !item.allowedFrequencies.includes(Math.trunc(row.frequency))) {
+    if (row.included && countsVisits(row.serviceId) && item.allowedFrequencies.length > 0 && !item.allowedFrequencies.includes(Math.trunc(row.frequency))) {
       problems.push(`${labelOf(row.serviceId)} can be ${item.allowedFrequencies.join(", ")} times a year on the card, not ${row.frequency}.`);
     }
     const promo = promotionFor(card, row.serviceId, model, day);

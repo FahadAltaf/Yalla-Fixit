@@ -15,6 +15,7 @@ import { priceSubmission } from "@/lib/server/amc/pricing";
 import { rateCardInForce } from "@/lib/server/amc/rate-card";
 import { snapToCardFrequencies } from "@/lib/amc/rate-card";
 import { readAmcSettings } from "@/lib/server/amc/settings";
+import { isFrequencyEditable } from "@/components/dashboard/extensions/amc/amc-constants";
 
 /**
  * "Create proposal" from an enquiry (BRD 5.4, DEV-365): a draft in AMC
@@ -132,7 +133,7 @@ export async function createProposalFromEnquiry(admin: Admin, enquiryId: string,
   });
   const priced = priceSubmission({
     /* Each line at a frequency the card allows (the scope or the default may say 1). */
-    services: card ? snapToCardFrequencies(rows, card.card, model) : rows,
+    services: card ? snapToCardFrequencies(rows, card.card, model, (id) => isFrequencyEditable(offered.find((s) => s.id === id)?.frequencyType)) : rows,
     discountPercent: 0,
     unitType: model,
     settings,

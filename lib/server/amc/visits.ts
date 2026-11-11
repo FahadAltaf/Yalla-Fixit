@@ -302,9 +302,10 @@ interface BusyBlock {
  * Everything that occupies technicians on a day: their AMC visits, the
  * jobs on the current scheduling board (read only), and their leave.
  */
-async function busyOn(admin: Admin, date: string, technicianIds: string[] | null): Promise<BusyBlock[]> {
+async function busyOn(admin: Admin, date: string, technicianIds: string[] | null, options: { skipAmc?: boolean } = {}): Promise<BusyBlock[]> {
   const { start, end } = dayBounds(date);
   const blocks: BusyBlock[] = [];
+  /* The four sources are independent: read together, not one after another. The board skips the AMC ones (it shows them itself). */
   let amc = admin
     .from("amc_visits")
     .select("id, visit_no, scheduled_start, scheduled_end, technician_ids, contract:amc_contracts!amc_visits_contract_id_fkey(customer_name, contract_number)")
@@ -312,8 +313,30 @@ async function busyOn(admin: Admin, date: string, technicianIds: string[] | null
     .gt("scheduled_end", start)
     .not("status", "in", "(cancelled,completed,completed_with_additional_work,not_completed)");
   if (technicianIds?.length) amc = amc.overlaps("technician_ids", technicianIds);
-  const { data: visits, error } = await amc;
-  if (error) throw fail(error);
+  let calls = admin
+    .from("amc_call_outs")
+    .select("id, call_out_no, priority, scheduled_start, scheduled_end, technician_ids, contract:amc_contracts!amc_call_outs_contract_id_fkey(customer_name)")
+    .lt("scheduled_start", end)
+    .gt("scheduled_end", start)
+    .not("status", "in", "(cancelled,closed,resolved)");
+  if (technicianIds?.length) calls = calls.overlaps("technician_ids", technicianIds);
+  let leave = admin.from("leave_records").select("technician_fsm_id, leave_type, start_at, end_at").eq("status", "active").lt("start_at", end).gt("end_at", start);
+  if (technicianIds?.length) leave = leave.in("technician_fsm_id", technicianIds);
+  /* The live board's current version for the day, then its entries (read only). */
+  const jobs = (async () => {
+    const { data: versions } = await admin.from("schedule_versions").select("id").eq("schedule_date", date).eq("is_current", true);
+    const versionIds = ((versions ?? []) as Row[]).map((v) => String(v.id));
+    if (!versionIds.length) return [] as Row[];
+    const { data: entries } = await admin
+      .from("schedule_entries")
+      .select("id, start_at, end_at, title, client_name, assignments:schedule_entry_assignments(technician_fsm_id)")
+      .in("schedule_version_id", versionIds)
+      .not("start_at", "is", null);
+    return (entries ?? []) as unknown as Row[];
+  })();
+  const [visitsRead, callsRead, entries, leavesRead] = await Promise.all([options.skipAmc ? null : amc, options.skipAmc ? null : calls, jobs, leave]);
+  const visits = visitsRead?.data;
+  if (visitsRead?.error) throw fail(visitsRead.error);
   for (const v of (visits ?? []) as unknown as Row[]) {
     const c = one(v.contract);
     for (const t of strings(v.technician_ids)) {
@@ -328,15 +351,8 @@ async function busyOn(admin: Admin, date: string, technicianIds: string[] | null
     }
   }
 
-  /* AMC call outs with a slot (Phase 11; absent before 20261012120000). */
-  let calls = admin
-    .from("amc_call_outs")
-    .select("id, call_out_no, priority, scheduled_start, scheduled_end, technician_ids, contract:amc_contracts!amc_call_outs_contract_id_fkey(customer_name)")
-    .lt("scheduled_start", end)
-    .gt("scheduled_end", start)
-    .not("status", "in", "(cancelled,closed,resolved)");
-  if (technicianIds?.length) calls = calls.overlaps("technician_ids", technicianIds);
-  const { data: callOuts } = await calls;
+  /* AMC call outs with a slot (Phase 11; absent before 20261012120000: no rows). */
+  const callOuts = callsRead?.data;
   for (const c of (callOuts ?? []) as unknown as Row[]) {
     for (const t of strings(c.technician_ids)) {
       blocks.push({
@@ -350,28 +366,16 @@ async function busyOn(admin: Admin, date: string, technicianIds: string[] | null
     }
   }
 
-  /* The live board's current version for the day, read only. */
-  const { data: versions } = await admin.from("schedule_versions").select("id").eq("schedule_date", date).eq("is_current", true);
-  const versionIds = ((versions ?? []) as Row[]).map((v) => String(v.id));
-  if (versionIds.length) {
-    const { data: entries } = await admin
-      .from("schedule_entries")
-      .select("id, start_at, end_at, title, client_name, assignments:schedule_entry_assignments(technician_fsm_id)")
-      .in("schedule_version_id", versionIds)
-      .not("start_at", "is", null);
-    for (const e of (entries ?? []) as unknown as Row[]) {
-      if (!e.start_at || !e.end_at) continue;
-      for (const a of (e.assignments ?? []) as Row[]) {
-        const t = String(a.technician_fsm_id);
-        if (technicianIds?.length && !technicianIds.includes(t)) continue;
-        blocks.push({ technicianId: t, start: String(e.start_at), end: String(e.end_at), kind: "job", title: str(e.title) ?? str(e.client_name) ?? "Scheduled job" });
-      }
+  for (const e of entries) {
+    if (!e.start_at || !e.end_at) continue;
+    for (const a of (e.assignments ?? []) as Row[]) {
+      const t = String(a.technician_fsm_id);
+      if (technicianIds?.length && !technicianIds.includes(t)) continue;
+      blocks.push({ technicianId: t, start: String(e.start_at), end: String(e.end_at), kind: "job", title: str(e.title) ?? str(e.client_name) ?? "Scheduled job" });
     }
   }
 
-  let leave = admin.from("leave_records").select("technician_fsm_id, leave_type, start_at, end_at").eq("status", "active").lt("start_at", end).gt("end_at", start);
-  if (technicianIds?.length) leave = leave.in("technician_fsm_id", technicianIds);
-  const { data: leaves } = await leave;
+  const leaves = leavesRead.data;
   for (const l of (leaves ?? []) as Row[]) {
     blocks.push({ technicianId: String(l.technician_fsm_id), start: String(l.start_at), end: String(l.end_at), kind: "leave", title: str(l.leave_type) ?? "Leave" });
   }
@@ -426,6 +430,10 @@ export interface VisitSuggestion {
   /** Competent for a trade but blocked (on leave, booked, no access), so the coordinator sees why. */
   blocked: TechnicianFit[];
   suggested: { technicianIds: string[]; uncovered: Trade[] };
+  /** Active technicians confirmed for each trade, free or not: 0 means nobody has it on their AMC profile. */
+  skilledByTrade: Record<string, number>;
+  /** Active technicians on the FSM roster. */
+  rosterSize: number;
 }
 
 export async function suggestForVisit(admin: Admin, visitId: string, date: string, startTime: string, config: AmcConfig, durationMinutes?: number | null): Promise<VisitSuggestion> {
@@ -445,6 +453,10 @@ export async function suggestForVisit(admin: Admin, visitId: string, date: strin
     candidates: relevant.filter((f) => f.blockers.length === 0).sort((a, b) => b.score - a.score),
     blocked: relevant.filter((f) => f.blockers.length > 0),
     suggested: suggestCrew(fits, ctx.need.trades),
+    skilledByTrade: Object.fromEntries(
+      ctx.need.trades.map((trade) => [trade, techs.filter((t) => t.skills.some((s) => s.trade === trade && s.level !== "trainee" && (!s.certificateExpires || s.certificateExpires >= date))).length]),
+    ),
+    rosterSize: techs.length,
   };
 }
 
@@ -552,14 +564,16 @@ async function openCallOuts(admin: Admin): Promise<BoardCallOut[]> {
 export async function boardData(admin: Admin, date: string, now = new Date()): Promise<BoardData> {
   const today = todayInDubai(now);
   const { start, end } = dayBounds(date);
-  let techs: TechnicianRecord[];
-  try {
-    techs = await technicianFacts(admin);
-  } catch (error) {
-    if (error instanceof ContractError && error.status === 503) return { migrated: false, date, technicians: [], placed: [], busy: [], toPlace: [], callOuts: [] };
-    throw error;
-  }
-  const [placedResult, toPlaceResult, blocks, callOuts] = await Promise.all([
+  /* Everything at once; a database without the technician tables (503) shows the board as not set up. */
+  let notSetUp = false;
+  const [techs, placedResult, toPlaceResult, blocks, callOuts] = await Promise.all([
+    technicianFacts(admin).catch((error: unknown): TechnicianRecord[] => {
+      if (error instanceof ContractError && error.status === 503) {
+        notSetUp = true;
+        return [];
+      }
+      throw error;
+    }),
     admin.from("amc_visits").select(VISIT_COLUMNS).gte("scheduled_start", start).lt("scheduled_start", end).neq("status", "cancelled").order("scheduled_start"),
     admin
       .from("amc_visits")
@@ -569,9 +583,11 @@ export async function boardData(admin: Admin, date: string, now = new Date()): P
       .gte("window_end", today)
       .order("window_start")
       .limit(200),
-    busyOn(admin, date, null),
+    /* The board draws its own AMC visits and call outs; only jobs and leave are needed here. */
+    busyOn(admin, date, null, { skipAmc: true }),
     openCallOuts(admin),
   ]);
+  if (notSetUp) return { migrated: false, date, technicians: [], placed: [], busy: [], toPlace: [], callOuts: [] };
   if (placedResult.error) throw fail(placedResult.error);
   if (toPlaceResult.error) throw fail(toPlaceResult.error);
   const live = (r: Row) => ["active", "on_hold"].includes(String(one(r.contract)?.status));

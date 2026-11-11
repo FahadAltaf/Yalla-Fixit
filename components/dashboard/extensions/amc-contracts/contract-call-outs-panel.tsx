@@ -38,6 +38,11 @@ const MOVEMENT_LABELS: Record<AllowanceMovementKind, { label: string; tone: stri
 
 const noop = () => undefined;
 
+/* The allowance card on this tab: off, the Coverage tab shows the same per service. */
+const SHOW_ALLOWANCES_HERE = false;
+/* The additional-work money cards (quoted, approved, invoiced, paid): off for now. */
+const SHOW_WORK_TOTALS = false;
+
 /**
  * A contract's Call outs tab (Phase 11: DEV-405, 407, 409): the allowance
  * per service (used, booked, remaining, near zero), the additional-work
@@ -80,8 +85,8 @@ export function ContractCallOutsPanel({ contractId, contractOpen }: { contractId
 
   return (
     <>
-      {/* Allowances */}
-      {allowances.loading ? (
+      {/* Allowances: shown on the Coverage tab (used, booked and left per service); hidden here (10 Nov 2026). */}
+      {!SHOW_ALLOWANCES_HERE ? null : allowances.loading ? (
         <SectionSkeleton />
       ) : allowances.error ? (
         <ErrorState title="Could not load the allowances" message={allowances.error} onRetry={allowances.reload} />
@@ -131,8 +136,8 @@ export function ContractCallOutsPanel({ contractId, contractOpen }: { contractId
         </SectionCard>
       ) : null}
 
-      {/* Additional-work money by stage */}
-      {allowances.loading ? (
+      {/* Additional-work money by stage: hidden for now (10 Nov 2026). */}
+      {!SHOW_WORK_TOTALS ? null : allowances.loading ? (
         <StatGridSkeleton count={4} />
       ) : rollup ? (
         <StatCardGrid columns={4}>

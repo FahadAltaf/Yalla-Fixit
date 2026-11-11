@@ -3,14 +3,12 @@ import type { RateCard } from "@/lib/amc/rate-card";
 import type { VersionReason } from "@/lib/amc/proposal-rules";
 import type { ProposalVersion } from "@/lib/server/amc/proposal-versions";
 import type { RateCardVersion } from "@/lib/server/amc/rate-card";
+import { amcRequest } from "@/lib/amc/http-cache";
 
 /** Browser calls for Phase 4: the rate card, the wizard's rules, versions, proposals from enquiries. */
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, { ...init, headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) } });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(typeof body?.error === "string" ? body.error : "Something went wrong");
-  return body as T;
+  return amcRequest<T>(url, init);
 }
 
 export type { ProposalVersion, RateCardVersion };

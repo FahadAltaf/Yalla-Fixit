@@ -1,4 +1,11 @@
-import { executeRESTBackend } from "@/lib/rest-server";
+import { clearAmcCache } from "@/lib/amc/http-cache";
+import { executeRESTBackend as rest } from "@/lib/rest-server";
+
+/* A proposal or AMC settings save can change what the AMC pages show (a site visit's proposal, the catalogue): their cached reads go. */
+function executeRESTBackend<T = unknown>(endpoint: string, options: Parameters<typeof rest>[1] = {}): Promise<T> {
+  const call = rest<T>(endpoint, options);
+  return options?.method && options.method !== "GET" ? call.finally(() => clearAmcCache()) : call;
+}
 
 import type {
   AmcDocumentType,

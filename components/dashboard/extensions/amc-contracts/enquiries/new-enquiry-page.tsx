@@ -212,9 +212,9 @@ function EnquiryForm({ meta, initialClientId }: { meta: EnquiryMeta; initialClie
     }
     setLoadingProperty(true);
     try {
-      const { overview } = await amcContractsService.property(id);
-      setProperty(overview.property);
-      applyAddress(overview.property);
+      const { property } = await amcContractsService.propertyCard(id);
+      setProperty(property);
+      applyAddress(property);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not read the property.");
     } finally {

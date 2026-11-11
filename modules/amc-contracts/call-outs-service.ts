@@ -3,6 +3,7 @@ import type { z } from "zod";
 import type { callOutActionSchema, callOutCreateSchema, CallOutPriority } from "@/lib/amc/call-outs";
 import type { TechnicianFit, Trade } from "@/lib/amc/visits";
 import type { AllowanceRow, CallOutRecord, CoveragePreview, WorkPhoto } from "@/lib/server/amc/call-outs";
+import { amcRequest } from "@/lib/amc/http-cache";
 
 /**
  * Browser calls for AMC call outs and allowances (Phase 11: DEV-405, 406,
@@ -126,18 +127,8 @@ export interface AllowancesResponse {
   additionalWork: WorkRollup;
 }
 
-async function parse<T>(response: Response): Promise<T> {
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(typeof body?.error === "string" ? body.error : "Something went wrong");
-  return body as T;
-}
-
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
-  });
-  return parse<T>(response);
+  return amcRequest<T>(url, init);
 }
 
 const callOutUrl = (id: string) => `/api/amc-call-outs/${encodeURIComponent(id)}`;
@@ -173,8 +164,7 @@ export const callOutsService = {
     form.append("file", input.file);
     form.append("kind", input.kind);
     if (input.caption?.trim()) form.append("caption", input.caption.trim());
-    const response = await fetch(`${callOutUrl(id)}/photos`, { method: "POST", body: form });
-    return parse<{ photo: { id: string } }>(response);
+    return request<{ photo: { id: string } }>(`${callOutUrl(id)}/photos`, { method: "POST", body: form });
   },
   removePhoto(id: string, photoId: string) {
     return request<{ ok: true }>(`${callOutUrl(id)}/photos?photoId=${encodeURIComponent(photoId)}`, { method: "DELETE" });

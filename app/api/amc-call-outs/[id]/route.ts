@@ -23,10 +23,9 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   const { id } = await ctx.params;
   if (!UUID.test(id)) return notFound();
   try {
-    const scope = await callOutOwner(gate.admin, id);
+    const [scope, config] = await Promise.all([callOutOwner(gate.admin, id), readAmcConfig(gate.admin)]);
     const rights = fieldWorkRights(gate, "call_outs", scope.ownerId);
     if (!scope.found || !rights.view) return notFound();
-    const config = await readAmcConfig(gate.admin);
     const detail = await callOutDetail(gate.admin, id, config);
     const params = req.nextUrl.searchParams;
     if (params.has("suggest")) {

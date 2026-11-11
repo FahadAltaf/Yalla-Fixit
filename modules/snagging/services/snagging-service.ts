@@ -1072,6 +1072,13 @@ export const snaggingService = {
       params: { client_id: clientId },
     }).then((result) => ({ data: result.data ?? [], fsmError: result.fsmError ?? null })),
 
+  /** One address by id (with its document links): opening a form on it without reading the client's whole list and Zoho FSM. */
+  getClientAddress: async (id: string): Promise<SnaggingProperty | null> =>
+    executeRESTBackend<{ data: SnaggingProperty | null }>("/api/snagging/properties", {
+      method: "GET",
+      params: { id },
+    }).then((result) => result.data ?? null),
+
   createProperty: async (
     input: SnaggingPropertyInput,
   ): Promise<SnaggingProperty> =>

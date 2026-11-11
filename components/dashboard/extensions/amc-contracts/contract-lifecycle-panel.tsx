@@ -17,22 +17,17 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Textarea } from "@/components/ui/textarea";
 import DateSelect from "@/components/ui/date-select";
 import { CONTRACT_STATUS_NAMES, MATERIAL_LABELS, expiryFromCommencement, type ContractStatus, type LifecycleAction } from "@/lib/amc/contract-lifecycle";
-import { todayInDubai } from "@/lib/amc/contracts";
+import { termMonthsBetween, todayInDubai } from "@/lib/amc/contracts";
 import type { ContractDetail } from "@/modules/amc-contracts/amc-contracts-service";
 import { clientProfileService } from "@/modules/amc-contracts/client-profile-service";
 
 import { formatContractDate, formatDateTime } from "./contract-status";
 import { TruncatedText } from "@/components/ui/truncated-text";
+import { amcRequest } from "@/lib/amc/http-cache";
+import { effectiveExclusions, libraryEntry, standardExclusions } from "@/lib/amc/scope-defaults";
 
-async function lifecycle(contractId: string, action: LifecycleAction) {
-  const response = await fetch(`/api/amc-contracts/${contractId}/lifecycle`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(action),
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(typeof body?.error === "string" ? body.error : "Something went wrong");
-  return body;
+function lifecycle(contractId: string, action: LifecycleAction) {
+  return amcRequest<Record<string, unknown>>(`/api/amc-contracts/${contractId}/lifecycle`, { method: "POST", body: JSON.stringify(action) });
 }
 
 const METHOD_LABELS: Record<string, string> = { link: "Signed on the link", portal: "Signed in the portal", scan: "Signed scan", zoho_sign: "Zoho Sign" };
@@ -321,9 +316,9 @@ function ScanDialog({ open, onOpenChange, data, onDone }: DialogProps & { data: 
 
 function ActivateDialog({ open, onOpenChange, data, onDone }: DialogProps & { data: ContractDetail }) {
   const initialStart = () => (data.contract.startDate >= todayInDubai() ? data.contract.startDate : todayInDubai());
-  const initialTerm = () => String(data.contract.termMonths && data.contract.termMonths >= 12 ? data.contract.termMonths : 12);
+  /* The term the client signed: fixed here (activation sets only when service starts); the server keeps it too. */
+  const signedTerm = data.contract.termMonths || termMonthsBetween(data.contract.startDate, data.contract.endDate) || 12;
   const [start, setStart] = useState(initialStart);
-  const [term, setTerm] = useState(initialTerm);
   /* Phase 7 (DEV-386): starting before the first instalment needs AMC Payments (Approve) and a reason. */
   const canStartEarly = data.permissions.payments?.canApprove === true;
   const [startEarly, setStartEarly] = useState(false);
@@ -332,12 +327,11 @@ function ActivateDialog({ open, onOpenChange, data, onDone }: DialogProps & { da
 
   useResetOnOpen(open, () => {
     setStart(initialStart());
-    setTerm(initialTerm());
     setStartEarly(false);
     setEarlyReason("");
   });
 
-  const months = Number(term);
+  const months = signedTerm;
   const end = start && months >= 1 ? expiryFromCommencement(start, months) : null;
   const early = canStartEarly && startEarly;
   const activate = async () =>
@@ -352,7 +346,7 @@ function ActivateDialog({ open, onOpenChange, data, onDone }: DialogProps & { da
       open={open}
       onOpenChange={onOpenChange}
       title="Activate the contract"
-      description="The commencement date is when service starts, separate from the signing date. With the term it sets the expiry, the PPM schedule and the renewal reminder."
+      description="The commencement date is when service starts, separate from the signing date. With the signed term it sets the expiry, the PPM schedule and the renewal reminder."
       busy={busy}
       footer={
         <SubmitButton
@@ -381,8 +375,11 @@ function ActivateDialog({ open, onOpenChange, data, onDone }: DialogProps & { da
           <DateSelect id="act-start" value={start} onChange={setStart} />
         </div>
         <div className="grid gap-2">
-          <Label htmlFor="act-term">Term (months)</Label>
-          <Input id="act-term" type="number" min={1} max={120} value={term} onChange={(e) => setTerm(e.target.value)} />
+          <Label htmlFor="act-term">Term</Label>
+          <Input id="act-term" value={`${signedTerm} ${signedTerm === 1 ? "month" : "months"}`} readOnly disabled aria-describedby="act-term-hint" />
+          <p id="act-term-hint" className="text-muted-foreground text-xs">
+            As signed by the client. A different term needs an amendment.
+          </p>
         </div>
       </div>
       {end ? <p className="text-muted-foreground text-sm">Runs to {formatContractDate(end)}.</p> : null}
@@ -528,7 +525,7 @@ export function EntitlementTermsCard({ data, onChanged }: { data: ContractDetail
     <SectionCard
       icon={<ScrollText />}
       title="What each service covers"
-      description="Labour, materials, value limits and exclusions per service. Set before activation; checked when a call out or extra work is assessed."
+      description="Labour, materials, value limits and exclusions per service. Set before activation; checked when a call out or extra work is assessed. Exclusions start from the Scope of Works Library until changed here."
       bodyClassName="pb-2"
     >
       <div className="overflow-x-auto">
@@ -554,8 +551,19 @@ export function EntitlementTermsCard({ data, onChanged }: { data: ContractDetail
                 <TableCell className="text-sm">{e.labourCovered ? "Covered" : "Chargeable"}</TableCell>
                 <TableCell className="text-sm">{MATERIAL_LABELS[e.materialCoverage ?? "consumables"]}</TableCell>
                 <TableCell className="text-sm tabular-nums">{e.valueLimitAed != null ? `AED ${e.valueLimitAed.toLocaleString("en-AE")}` : "—"}</TableCell>
-                <TableCell className="max-w-[240px] text-sm">
-                  <TruncatedText>{e.exclusions || "—"}</TruncatedText>
+                <TableCell className="max-w-[280px] text-sm">
+                  {(() => {
+                    /* The contract's own text, else the library's standard exclusions for the service (marked). */
+                    const ex = effectiveExclusions(e.serviceId, e.exclusions);
+                    return ex.text ? (
+                      <div className="grid gap-0.5">
+                        <TruncatedText>{ex.text}</TruncatedText>
+                        {ex.standard ? <span className="text-muted-foreground text-xs">Standard (Scope of Works Library {libraryEntry(e.serviceId)?.ref})</span> : null}
+                      </div>
+                    ) : (
+                      "—"
+                    );
+                  })()}
                 </TableCell>
                 {canEdit ? (
                   <TableCell className="pr-5 text-right">
@@ -596,7 +604,10 @@ function TermsDialog({ open, onOpenChange, contractId, entitlement, onDone }: Di
   const [labour, setLabour] = useState(entitlement.labourCovered !== false);
   const [material, setMaterial] = useState<keyof typeof MATERIAL_LABELS>(entitlement.materialCoverage ?? "consumables");
   const [limit, setLimit] = useState(entitlement.valueLimitAed != null ? String(entitlement.valueLimitAed) : "");
-  const [exclusions, setExclusions] = useState(entitlement.exclusions ?? "");
+  /* Starts from the contract's own text, else the library's standard exclusions for the service. */
+  const startingExclusions = () => effectiveExclusions(entitlement.serviceId, entitlement.exclusions).text ?? "";
+  const [exclusions, setExclusions] = useState(startingExclusions);
+  const standard = standardExclusions(entitlement.serviceId);
   const { busy, run } = useAction();
 
   /* Each opening starts from the service being edited. */
@@ -604,7 +615,7 @@ function TermsDialog({ open, onOpenChange, contractId, entitlement, onDone }: Di
     setLabour(entitlement.labourCovered !== false);
     setMaterial(entitlement.materialCoverage ?? "consumables");
     setLimit(entitlement.valueLimitAed != null ? String(entitlement.valueLimitAed) : "");
-    setExclusions(entitlement.exclusions ?? "");
+    setExclusions(startingExclusions());
   });
 
   return (
@@ -667,7 +678,19 @@ function TermsDialog({ open, onOpenChange, contractId, entitlement, onDone }: Di
       </div>
       <div className="grid gap-2">
         <Label htmlFor="terms-excl">Exclusions</Label>
-        <Textarea id="terms-excl" rows={3} value={exclusions} onChange={(e) => setExclusions(e.target.value)} maxLength={1000} />
+        <Textarea id="terms-excl" rows={4} value={exclusions} onChange={(e) => setExclusions(e.target.value)} maxLength={1000} />
+        {standard ? (
+          <div className="text-muted-foreground flex flex-wrap items-center gap-x-2 text-xs">
+            <span>
+              {exclusions.trim() === standard ? "The standard text from the Scope of Works Library" : "Changed for this contract"} ({libraryEntry(entitlement.serviceId)?.ref}).
+            </span>
+            {exclusions.trim() !== standard ? (
+              <Button type="button" variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => setExclusions(standard)}>
+                Use the standard text
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </DialogShell>
   );

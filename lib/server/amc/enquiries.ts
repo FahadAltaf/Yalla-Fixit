@@ -16,6 +16,7 @@ import {
   type CreateEnquiryInput,
   type FollowUpInput,
   type IdleState,
+  type BookSiteVisitInput,
   type SiteVisitInput,
   type StageChangeInput,
   type UpdateEnquiryInput,
@@ -507,6 +508,10 @@ export async function updateEnquiry(admin: Admin, id: string, patch: UpdateEnqui
   };
   const missing = enquiryRequiredErrors(merged);
   if (missing.length) throw new ContractError(missing.join(" "), 400);
+  /* The property set on the enquiry stays: its details are edited on the address, not swapped for another. */
+  if (patch.propertyId !== undefined && current.property && patch.propertyId !== current.property.id) {
+    throw new ContractError("This enquiry's property is set. Edit the property instead of choosing another.", 409);
+  }
   if (patch.propertyId) await propertyOfCustomer(admin, patch.propertyId, current.customer.id);
   const ownerChanged = patch.ownerId !== undefined && patch.ownerId !== (current.owner?.id ?? null);
   if (ownerChanged && patch.ownerId) await personName(admin, patch.ownerId);
@@ -670,6 +675,10 @@ export async function scheduleSiteVisit(
 ): Promise<{ assessmentId: string; enquiry: EnquiryRecord }> {
   const current = await getEnquiry(admin, id, config);
   if (CLOSED_STAGES.includes(current.stage)) throw new ContractError(`The enquiry is ${current.stage}. Reopen it first.`, 409);
+  /* The visit is for the enquiry's property when it has one. */
+  if (current.property && input.propertyId !== current.property.id) {
+    throw new ContractError("The site visit is for the enquiry's property. Edit the property instead of choosing another.", 409);
+  }
   const property = await propertyOfCustomer(admin, input.propertyId, current.customer.id);
   const assessorName = await personName(admin, input.assessorId);
 
@@ -737,6 +746,49 @@ export async function scheduleSiteVisit(
     });
   }
   return { assessmentId: assessment.id, enquiry: await getEnquiry(admin, id, config) };
+}
+
+/**
+ * Books a site visit from a client or property page, as from an enquiry
+ * but without one: an assessment of the client's property, dated and
+ * assigned. The assessor is told in the portal.
+ */
+export async function bookSiteVisit(admin: Admin, input: BookSiteVisitInput, actor: Actor): Promise<{ assessmentId: string; assessmentNumber: string }> {
+  const property = await propertyOfCustomer(admin, input.propertyId, input.customerId);
+  const assessorName = await personName(admin, input.assessorId);
+  const assessment = await createAssessment(admin, { customerId: input.customerId, propertyId: input.propertyId, assessorName }, actor);
+  const { error } = await admin
+    .from("amc_assessments")
+    .update({
+      scheduled_at: input.scheduledAt,
+      assessor_id: input.assessorId,
+      assessor_name: assessorName,
+      access_notes: property.accessConstraints ?? null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", assessment.id);
+  if (error) throw fail(error);
+  await recordAmcAudit(admin, {
+    entityType: "assessment",
+    entityId: assessment.id,
+    eventType: "site_visit_scheduled",
+    actorId: actor.id,
+    actorLabel: actor.label,
+    payload: { scheduledAt: input.scheduledAt, assessorId: input.assessorId },
+  });
+  if (input.assessorId !== actor.id) {
+    await notifyUsers(admin, {
+      event: "site_visit_assigned",
+      userIds: [input.assessorId],
+      title: `Site visit ${assessment.assessmentNumber} assigned to you`,
+      body: `${assessment.customer?.name ?? "Client"} · ${new Date(input.scheduledAt).toLocaleString("en-GB", { timeZone: "Asia/Dubai", dateStyle: "medium", timeStyle: "short" })}`,
+      link: `/extensions/amc-contracts/assessments/${assessment.id}`,
+      entityType: "assessment",
+      entityId: assessment.id,
+      dedupeKey: `site_visit_assigned:${assessment.id}:${input.assessorId}`,
+    });
+  }
+  return { assessmentId: assessment.id, assessmentNumber: assessment.assessmentNumber };
 }
 
 /**

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ExternalLink, Send } from "lucide-react";
+import { Eye, Send } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,15 @@ import { ActionDialogContent, SubmitButton } from "@/components/dashboard/shared
 import { insightsService, type ClientReportSendResult } from "@/modules/amc-contracts/insights-service";
 
 import { PreparedMessage, errorText } from "./call-out-shared";
+import { clientReportPdf } from "./client-report-viewer";
+
+/* A Blob as base64, for the JSON body. */
+async function toBase64(blob: Blob): Promise<string> {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(binary);
+}
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -30,6 +39,7 @@ export function SendClientReportDialog({
   contractLabel,
   customerName,
   defaultEmail,
+  onPreview,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -37,9 +47,12 @@ export function SendClientReportDialog({
   contractLabel: string;
   customerName: string;
   defaultEmail: string | null;
+  /** Opens the report in the viewer. */
+  onPreview?: () => void;
 }) {
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
+  const [stage, setStage] = useState<"pdf" | "send">("pdf");
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ClientReportSendResult | null>(null);
 
@@ -62,7 +75,15 @@ export function SendClientReportDialog({
     setBusy(true);
     setError(null);
     try {
-      const sent = await insightsService.sendClientReport(contractId, to || null);
+      /* The branded PDF, as the viewer shows it; if it cannot be built here the server prints its own. */
+      setStage("pdf");
+      const pdf = await insightsService
+        .clientReport(contractId)
+        .then(({ report }) => clientReportPdf(report))
+        .then(toBase64)
+        .catch(() => null);
+      setStage("send");
+      const sent = await insightsService.sendClientReport(contractId, to || null, pdf);
       if (sent.outcome === "sent") toast.success("Client report emailed to the client");
       else if (sent.outcome === "no_recipient") toast.warning("The client has no email address on file: send the report by WhatsApp.");
       else toast.error("The client report email could not be sent. Try again, or send it by WhatsApp.");
@@ -123,13 +144,19 @@ export function SendClientReportDialog({
             <Button onClick={() => onOpenChange(false)}>Done</Button>
           ) : (
             <>
-              <Button variant="outline" asChild>
-                <a href={insightsService.clientReportHref(contractId)} target="_blank" rel="noopener noreferrer">
-                  <ExternalLink className="size-4" />
-                  Preview
-                </a>
-              </Button>
-              <SubmitButton onClick={() => void send()} disabled={!valid} pending={busy} pendingLabel="Sending…" icon={<Send className="size-4" />}>
+              {onPreview ? (
+                <Button variant="outline" onClick={onPreview} disabled={busy}>
+                  <Eye className="size-4" />
+                  View report
+                </Button>
+              ) : null}
+              <SubmitButton
+                onClick={() => void send()}
+                disabled={!valid}
+                pending={busy}
+                pendingLabel={stage === "pdf" ? "Preparing the PDF…" : "Sending…"}
+                icon={<Send className="size-4" />}
+              >
                 Send to client
               </SubmitButton>
             </>

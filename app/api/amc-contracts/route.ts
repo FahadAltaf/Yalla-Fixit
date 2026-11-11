@@ -157,7 +157,7 @@ export async function GET(req: NextRequest) {
       .filter((row) => {
         const c = (row.customer ?? {}) as Row;
         const p = (row.property ?? {}) as Row;
-        const managers = managerNames((row.document_options as Row | null)?.accountManagers);
+        const managers = managerNames(row.account_managers);
         if (managerNeedle && !managers.some((m) => m.toLowerCase().includes(managerNeedle))) return false;
         if (!needle) return true;
         return [c.customerName, c.customerId, row.proposal_number, p.propertyAddress, p.propertyDetail, ...managers]
@@ -175,7 +175,7 @@ export async function GET(req: NextRequest) {
           proposalNumber: String(row.proposal_number ?? ""),
           customerName: String(c.customerName ?? ""),
           propertyLabel: [p.propertyDetail, p.propertyAddress].filter(Boolean).join(" — "),
-          accountManagers: managerNames((row.document_options as Row | null)?.accountManagers),
+          accountManagers: managerNames(row.account_managers),
           startDate: start,
           endDate: end,
           displayStatus: "pending_activation" as const,

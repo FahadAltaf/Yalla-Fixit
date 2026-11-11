@@ -548,7 +548,10 @@ export type CoverageOutcome =
   | "no_contract";
 
 /** Where the customer's AMC stands on the requested date. */
-export type AmcCoverageStatus = "active" | "not_started" | "expired" | "cancelled" | "none";
+export type AmcCoverageStatus = "active" | "not_activated" | "on_hold" | "terminated" | "not_started" | "expired" | "cancelled" | "none";
+
+/* A contract signed or being signed, not yet active: it will cover its dates once activated. */
+const AWAITING_ACTIVATION: ReadonlyArray<StoredContractStatus> = ["draft", "pending_client_signature", "pending_internal_signature", "signed", "pending_initial_payment"];
 
 export interface CoverageResult {
   outcome: CoverageOutcome;
@@ -598,15 +601,25 @@ export function checkCoverage(
       const e = parseDate(c.endDate)?.getTime() ?? 0;
       return d >= s && d <= e;
     };
-    const amcStatus: AmcCoverageStatus = contracts.some((c) => c.status === "cancelled" && covering(c))
-      ? "cancelled"
-      : contracts.some((c) => c.status === "active" && (parseDate(c.startDate)?.getTime() ?? 0) > d)
-        ? "not_started"
-        : contracts.some((c) => c.status === "active" && (parseDate(c.endDate)?.getTime() ?? 0) < d)
-          ? "expired"
-          : "none";
+    const spanning = (status: ReadonlyArray<StoredContractStatus>) => contracts.some((c) => status.includes(c.status) && covering(c));
+    const amcStatus: AmcCoverageStatus = spanning(["on_hold"])
+      ? "on_hold"
+      : spanning(AWAITING_ACTIVATION)
+        ? "not_activated"
+        : spanning(["cancelled"])
+          ? "cancelled"
+          : spanning(["terminated"])
+            ? "terminated"
+            : contracts.some((c) => c.status === "active" && (parseDate(c.startDate)?.getTime() ?? 0) > d)
+              ? "not_started"
+              : contracts.some((c) => (c.status === "active" || c.status === "expired" || c.status === "renewed") && (parseDate(c.endDate)?.getTime() ?? 0) < d)
+                ? "expired"
+                : "none";
     const reasons: Record<AmcCoverageStatus, string> = {
+      not_activated: "The AMC for that date is not active yet (it is still being signed or waits for activation). Nothing is covered until it is activated.",
+      on_hold: "The AMC is on hold: nothing is covered until it is resumed.",
       cancelled: "The AMC was cancelled.",
+      terminated: "The AMC was terminated.",
       not_started: "The AMC has not started on that date.",
       expired: "The AMC had expired by that date.",
       none: "No AMC is in force on that date.",

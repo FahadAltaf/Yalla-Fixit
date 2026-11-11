@@ -51,8 +51,8 @@ export function EditClientDialog({
   useEffect(() => {
     if (!open) return;
     let stale = false;
-    amcContractsService.customer(customerId).then(
-      ({ overview }) => !stale && setState({ customer: overview.customer }),
+    amcContractsService.customerRecord(customerId).then(
+      ({ customer }) => !stale && setState({ customer }),
       (e) => !stale && setState({ error: e instanceof Error ? e.message : "Could not load the client." }),
     );
     return () => {

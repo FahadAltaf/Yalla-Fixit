@@ -148,8 +148,7 @@ function EnquiryForm({ meta, enquiry, onSaved, work, onCancel }: EnquiryFormProp
   const loadProperty = async (id: string, apply: boolean) => {
     setLoadingProperty(true);
     try {
-      const { overview } = await amcContractsService.property(id);
-      const p = overview.property;
+      const { property: p } = await amcContractsService.propertyCard(id);
       setProperty(p);
       if (apply) {
         const unit = (UNIT_TYPES as readonly string[]).includes(p.unitType ?? "") ? (p.unitType as EnquiryDraft["unitType"]) : null;
@@ -262,7 +261,9 @@ function EnquiryForm({ meta, enquiry, onSaved, work, onCancel }: EnquiryFormProp
         <section className="grid gap-4">
           <div>
             <h3 className="text-sm font-medium">Property</h3>
-            <p className="text-muted-foreground text-xs">Pick one of the client&apos;s properties, or add a new one.</p>
+            <p className="text-muted-foreground text-xs">
+              {enquiry.property ? "Set on the enquiry: edit its details here." : "Pick one of the client’s properties, or add a new one."}
+            </p>
           </div>
           {draft.propertyId ? (
             <LinkedCard
@@ -278,7 +279,8 @@ function EnquiryForm({ meta, enquiry, onSaved, work, onCancel }: EnquiryFormProp
               }
               onEdit={addressForm ? () => setPropertyDialog("edit") : undefined}
               editLabel="Edit property"
-              onChange={() => pickProperty(null)}
+              /* Set when the enquiry was created: edited, never swapped. */
+              onChange={enquiry.property ? undefined : () => pickProperty(null)}
               busy={loadingProperty}
             />
           ) : (
@@ -604,6 +606,8 @@ function SiteVisitForm({ meta, enquiry, onSave, work, onCancel }: SiteVisitProps
             propertyId={propertyId}
             onChange={(id) => setPropertyId(id)}
             defaults={{ unitType: enquiry.unitType, propertyCategory: enquiry.propertyCategory, community: enquiry.area }}
+            /* The enquiry's own property: the visit is for it. */
+            locked={Boolean(enquiry.property)}
           />
         </Field>
         <Field label="Date and time" htmlFor="sv-when">

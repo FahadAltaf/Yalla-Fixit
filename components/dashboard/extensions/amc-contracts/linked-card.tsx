@@ -8,6 +8,7 @@ import { TruncatedText } from "@/components/ui/truncated-text";
 /**
  * The client or property picked on a form (new proposal, new enquiry): its
  * name, one line of detail, then Edit and Change. One look for both forms.
+ * Without onChange the record is fixed (set on the enquiry): Edit only.
  */
 export function LinkedCard({
   title,
@@ -26,7 +27,8 @@ export function LinkedCard({
   noteTone?: "muted" | "warning";
   onEdit?: () => void;
   editLabel: string;
-  onChange: () => void;
+  /** Omitted when the record cannot be swapped for another. */
+  onChange?: () => void;
   busy?: boolean;
 }) {
   return (
@@ -43,9 +45,11 @@ export function LinkedCard({
             {editLabel}
           </Button>
         ) : null}
-        <Button type="button" variant="ghost" size="sm" onClick={onChange} disabled={busy}>
-          Change
-        </Button>
+        {onChange ? (
+          <Button type="button" variant="ghost" size="sm" onClick={onChange} disabled={busy}>
+            Change
+          </Button>
+        ) : null}
       </div>
     </div>
   );

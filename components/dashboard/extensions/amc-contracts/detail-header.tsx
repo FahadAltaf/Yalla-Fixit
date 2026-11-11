@@ -6,6 +6,7 @@ import { ArrowLeft, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { amcRefresh } from "@/lib/amc/http-cache";
 
 /**
  * The top of every AMC record page (client, property, enquiry, site visit,
@@ -43,7 +44,7 @@ export function DetailToolbar({
       {onRefresh ? (
         <div className="flex items-center gap-3">
           {fetchedAt ? <span className="text-muted-foreground hidden text-xs sm:inline">Updated {formatClock(fetchedAt)}</span> : null}
-          <Button variant="outline" size="sm" onClick={onRefresh} disabled={refreshing} aria-label="Refresh this page">
+          <Button variant="outline" size="sm" onClick={() => amcRefresh(onRefresh)} disabled={refreshing} aria-label="Refresh this page">
             <RefreshCw className={refreshing ? "size-4 animate-spin" : "size-4"} />
             <span className="hidden sm:inline">Refresh</span>
           </Button>

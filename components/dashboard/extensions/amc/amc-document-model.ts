@@ -21,6 +21,7 @@ import {
 } from "./amc-pricing";
 import type { AmcComputedData } from "./amc-types";
 import { AMC_SCOPE_LIBRARY } from "./amc-scope-library";
+import { libraryEntry } from "@/lib/amc/scope-defaults";
 
 /* A heading line in a library clause: short, and ending in a colon. */
 const isPartHeading = (block: string): boolean => /^[^.\n]{2,60}:$/.test(block.trim());
@@ -683,7 +684,8 @@ function contractBlocks(
                 cell(term.labourCovered ? "Yes" : "No", { align: "center" }),
                 cell(COVERAGE_MATERIAL_LABELS[term.materialCoverage] ?? term.materialCoverage),
                 cell(term.valueLimitAed != null ? amount(term.valueLimitAed) : "—", { align: "right" }),
-                cell(term.exclusions?.trim() || "—"),
+                /* None set on the contract: the scope clause above prints the library's exclusions for it. */
+                cell(term.exclusions?.trim() || (libraryEntry(serviceId) ? "As in its scope (Clause 2)" : "—")),
               ];
             }),
           ),

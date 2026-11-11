@@ -28,7 +28,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   }
 }
 
-const sendSchema = z.object({ to: z.string().trim().email().max(200).optional().nullable() }).strict();
+/* pdfBase64: the branded PDF the portal built from the report (as the viewer shows it), at most ~12 MB. */
+const sendSchema = z
+  .object({ to: z.string().trim().email().max(200).optional().nullable(), pdfBase64: z.string().max(16_000_000).optional() })
+  .strict();
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const gate = await requireContractAccess();
@@ -39,7 +42,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   try {
     const managed = await requireManagedContract(gate, id, "write");
     if (!managed.ok) return managed.response;
-    return NextResponse.json(await sendClientReport(gate.admin, id, { id: gate.userId, label: gate.label }, await readAmcConfig(gate.admin), parsed.data.to));
+    const pdf = parsed.data.pdfBase64 ? new Uint8Array(Buffer.from(parsed.data.pdfBase64, "base64")) : null;
+    /* Only a real PDF is kept as one; anything else falls back to the PDF printed here. */
+    const browserPdf = pdf && pdf.length > 4 && Buffer.from(pdf.subarray(0, 4)).toString("latin1") === "%PDF" ? pdf : null;
+    return NextResponse.json(await sendClientReport(gate.admin, id, { id: gate.userId, label: gate.label }, await readAmcConfig(gate.admin), parsed.data.to, browserPdf));
   } catch (error) {
     return contractErrorResponse(error, "Could not send the client report");
   }

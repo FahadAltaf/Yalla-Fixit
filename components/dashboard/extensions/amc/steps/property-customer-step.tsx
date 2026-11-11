@@ -163,6 +163,8 @@ export function PropertyCustomerStep({
     !propertyRecordId &&
     Boolean(propertyDetail?.trim() || propertyAddress?.trim());
   const addressForm = useAddressFormAccess();
+  /* From an enquiry or a site visit: its client and property stay; Edit corrects them, Change is not offered. */
+  const recordsLocked = Boolean(form.watch("recordsLocked"));
   const [addingClient, setAddingClient] = useState<{ typed: string; fromFsm: boolean } | null>(null);
   const [editingClient, setEditingClient] = useState(false);
   const [propertyDialog, setPropertyDialog] = useState<"add" | "edit" | null>(
@@ -230,8 +232,8 @@ export function PropertyCustomerStep({
   const reloadClient = async () => {
     if (!customerRecordId) return;
     try {
-      const { overview } = await amcContractsService.customer(customerRecordId);
-      fillClient(overview.customer);
+      const { customer } = await amcContractsService.customerRecord(customerRecordId);
+      fillClient(customer);
     } catch {
       toast.warning(
         "The client was saved; reopen the proposal to see the change here.",
@@ -243,8 +245,7 @@ export function PropertyCustomerStep({
     if (!id) return clearProperty();
     setLoadingProperty(true);
     try {
-      const { overview } = await amcContractsService.property(id);
-      const p = overview.property;
+      const { property: p } = await amcContractsService.propertyCard(id);
       set("propertyRecordId", p.id);
       set("propertyDetail", p.label);
       set("propertyAddress", printedAddress(p));
@@ -292,7 +293,7 @@ export function PropertyCustomerStep({
               }
               onEdit={() => setEditingClient(true)}
               editLabel="Edit client"
-              onChange={clearClient}
+              onChange={recordsLocked ? undefined : clearClient}
             />
             <MissingDetails
               form={form}
@@ -363,7 +364,7 @@ export function PropertyCustomerStep({
               note={`Priced on the ${MODEL_LABELS[unitType]} rates, which also decide the services offered.`}
               onEdit={addressForm ? () => setPropertyDialog("edit") : undefined}
               editLabel="Edit property"
-              onChange={clearProperty}
+              onChange={recordsLocked ? undefined : clearProperty}
               busy={loadingProperty}
             />
             <MissingDetails

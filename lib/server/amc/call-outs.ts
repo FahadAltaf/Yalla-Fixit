@@ -36,6 +36,7 @@ import { AMC_DOCUMENTS_BUCKET } from "@/lib/server/amc/signed-archive";
 import { recordStatusChange } from "@/lib/server/amc/status-history";
 import { closeAmcTodos, openAmcTodo } from "@/lib/server/amc/todos";
 import { crewFitsForSlot, dubaiSlot } from "@/lib/server/amc/visits";
+import { effectiveExclusions } from "@/lib/amc/scope-defaults";
 
 /**
  * Call outs on the server (Phase 11: DEV-405, 406, 408, 409, to-do 8).
@@ -106,10 +107,13 @@ export interface CallOutContract {
 }
 
 export async function loadCallOutContract(admin: Admin, contractId: string): Promise<CallOutContract> {
-  const { data: c, error } = await admin.from("amc_contracts").select(CONTRACT_FACTS).eq("id", contractId).maybeSingle<Row>();
+  /* The contract and its entitlements need only its id: read together. */
+  const [{ data: c, error }, { data: ents, error: entError }] = await Promise.all([
+    admin.from("amc_contracts").select(CONTRACT_FACTS).eq("id", contractId).maybeSingle<Row>(),
+    admin.from("amc_contract_entitlements").select(ENTITLEMENT_FACTS).eq("contract_id", contractId).order("sort_order"),
+  ]);
   if (error) throw fail(error);
   if (!c) throw new ContractError("Contract not found.", 404);
-  const { data: ents, error: entError } = await admin.from("amc_contract_entitlements").select(ENTITLEMENT_FACTS).eq("contract_id", contractId).order("sort_order");
   if (entError) throw fail(entError);
   const submission = one(c.submission);
   return {
@@ -136,7 +140,8 @@ export async function loadCallOutContract(admin: Admin, contractId: string): Pro
       labourCovered: e.labour_covered !== false,
       materialCoverage: (str(e.material_coverage) ?? "consumables") as CallOutContract["entitlements"][number]["materialCoverage"],
       valueLimitAed: e.value_limit_aed === null || e.value_limit_aed === undefined ? null : Number(e.value_limit_aed),
-      exclusions: str(e.exclusions),
+      /* The contract's own exclusions, else the library's standard ones for the service. */
+      exclusions: effectiveExclusions(String(e.service_id), str(e.exclusions)).text,
     })),
   };
 }
@@ -438,7 +443,18 @@ export async function listCallOuts(
   config: AmcConfig,
   now = new Date(),
 ): Promise<{ migrated: boolean; callOuts: CallOutRecord[] }> {
-  let q = admin.from("amc_call_outs").select(CALL_OUT_COLUMNS).order("reported_at", { ascending: false }).limit(500);
+  /*
+    Someone who sees only their own contracts: filtered in the query (through the contract's proposal owner),
+    not after the 500 newest of everyone's, which left out their older call outs.
+  */
+  const columns = filter.ownerId
+    ? CALL_OUT_COLUMNS.replace("contract:amc_contracts!amc_call_outs_contract_id_fkey(", "contract:amc_contracts!amc_call_outs_contract_id_fkey!inner(").replace(
+        "submission:amc_submissions!amc_contracts_submission_id_fkey(owner_id)",
+        "submission:amc_submissions!amc_contracts_submission_id_fkey!inner(owner_id)",
+      )
+    : CALL_OUT_COLUMNS;
+  let q = admin.from("amc_call_outs").select(columns).order("reported_at", { ascending: false }).limit(500);
+  if (filter.ownerId) q = q.eq("contract.submission.owner_id", filter.ownerId);
   if (filter.contractId) q = q.eq("contract_id", filter.contractId);
   if (filter.open) q = q.in("status", [...OPEN_CALL_OUT_STATUSES]);
   const { data, error } = await q;
@@ -490,14 +506,17 @@ export async function workPhotos(admin: Admin, owner: { callOutId?: string; addi
 }
 
 export async function callOutDetail(admin: Admin, id: string, config: AmcConfig, now = new Date()) {
+  /* The photos and the additional works need only the id: started with the call out, not after its contract. */
+  const sideReads = Promise.all([
+    workPhotos(admin, { callOutId: id }),
+    admin.from("amc_additional_works").select("id, work_no, status, finding, total, risk").eq("call_out_id", id).order("created_at"),
+  ]);
+  sideReads.catch(() => undefined);
   const row = await loadCallOut(admin, id);
   const record = mapCallOut(row, config, now);
   const contract = await loadCallOutContract(admin, record.contractId);
   const e = contract.entitlements.find((x) => x.id === str(row.entitlement_id)) ?? null;
-  const [photos, { data: works }] = await Promise.all([
-    workPhotos(admin, { callOutId: id }),
-    admin.from("amc_additional_works").select("id, work_no, status, finding, total, risk").eq("call_out_id", id).order("created_at"),
-  ]);
+  const [photos, { data: works }] = await sideReads;
   return {
     callOut: record,
     allowance: e ? { serviceLabel: e.serviceLabel, ...allowanceBalance(e), nearZero: nearZero(allowanceBalance(e), config.allowances.warningRemaining) } : null,

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { amcRefresh } from "@/lib/amc/http-cache";
 
 /**
  * The AMC clients table's toolbar, the same shape as Snagging's jobs
@@ -78,7 +79,7 @@ export function ClientsToolbar({
             </Select>
           </div>
 
-          <Button onClick={onRefresh} variant="outline" disabled={loading}>
+          <Button onClick={() => amcRefresh(onRefresh)} variant="outline" disabled={loading}>
             <RefreshCwIcon className="size-4 sm:mr-1" />
             <span className="hidden sm:inline">Refresh</span>
           </Button>

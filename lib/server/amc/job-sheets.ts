@@ -169,22 +169,33 @@ const outcomeOf = (status: unknown): LineOutcome | null =>
   status === "completed" || status === "partially_completed" || status === "not_completed" ? status : null;
 
 export async function jobSheetView(admin: Admin, visitId: string, now = new Date()): Promise<JobSheetView> {
-  const { visit, contract, lines } = await loadVisit(admin, visitId);
-  let sheet: Row | null;
-  try {
-    sheet = await loadSheet(admin, visitId);
-  } catch (error) {
-    if (error instanceof ContractError && error.status === 503) {
-      return emptyView(visit, contract, lines, false, now);
-    }
-    throw error;
-  }
-  const view = { ...emptyView(visit, contract, lines, true, now), assets: await propertyAssets(admin, str(contract.property_id)) };
-  if (!sheet) return view;
-  const [{ data: checklist }, { data: photos }] = await Promise.all([
-    admin.from("amc_visit_checklist_items").select("id, visit_line_id, asset_id, label, result, note, sort_order").eq("job_sheet_id", String(sheet.id)).order("sort_order"),
-    admin.from("amc_visit_photos").select("id, kind, visit_line_id, asset_id, caption, storage_path, created_at").eq("job_sheet_id", String(sheet.id)).order("created_at"),
+  /* The visit and its sheet need only the visit's id: read together. A database without job sheets (503) shows the empty sheet. */
+  let notSetUp = false;
+  const [{ visit, contract, lines }, sheet] = await Promise.all([
+    loadVisit(admin, visitId),
+    loadSheet(admin, visitId).catch((error: unknown) => {
+      if (error instanceof ContractError && error.status === 503) {
+        notSetUp = true;
+        return null;
+      }
+      throw error;
+    }),
   ]);
+  if (notSetUp) return emptyView(visit, contract, lines, false, now);
+  /* Then the property's assets, the checklist and the photos, at once. */
+  const [assets, checklistRead, photosRead] = await Promise.all([
+    propertyAssets(admin, str(contract.property_id)),
+    sheet
+      ? admin.from("amc_visit_checklist_items").select("id, visit_line_id, asset_id, label, result, note, sort_order").eq("job_sheet_id", String(sheet.id)).order("sort_order")
+      : null,
+    sheet
+      ? admin.from("amc_visit_photos").select("id, kind, visit_line_id, asset_id, caption, storage_path, created_at").eq("job_sheet_id", String(sheet.id)).order("created_at")
+      : null,
+  ]);
+  const view = { ...emptyView(visit, contract, lines, true, now), assets };
+  if (!sheet) return view;
+  const checklist = checklistRead?.data;
+  const photos = photosRead?.data;
   const photoRows = (photos ?? []) as Row[];
   const urls = new Map<string, string>();
   if (photoRows.length) {

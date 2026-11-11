@@ -31,6 +31,7 @@ import { amcContractsService, type CustomerOverview, type PropertyInput, type Pr
 import { ELIGIBILITY_LABELS } from "./contract-commercial";
 import { CONTRACT_STATUS_LABELS, contractStatusTone, formatContractDate } from "./contract-status";
 import { AddressDialog, useAddressFormAccess } from "./address-dialog";
+import { BookSiteVisitDialog } from "./book-site-visit-dialog";
 import { CustomerDialog } from "./customers-page";
 import { DetailHeaderCard, DetailHeaderSkeleton, DetailToolbar } from "./detail-header";
 import { customerInput } from "./edit-client-dialog";
@@ -237,23 +238,29 @@ function QuotesList({ quotes }: { quotes: QuoteItem[] }) {
   );
 }
 
-function StartAssessmentButton({ customerId, propertyId, size }: { customerId: string | null; propertyId: string | null; size?: "sm" }) {
-  const router = useRouter();
-  const [busy, setBusy] = useState(false);
-  const start = async () => {
-    setBusy(true);
-    try {
-      const { assessment } = await amcContractsService.createAssessment({ customerId, propertyId });
-      router.push(`/extensions/amc-contracts/assessments/${assessment.id}`);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not start the site visit.");
-      setBusy(false);
-    }
-  };
+/* New site visit: the Book site visit form, as on an enquiry (property, date and time, assessor). */
+function StartAssessmentButton({
+  client,
+  propertyId,
+  initialProperty,
+  size,
+}: {
+  client: { id: string; name: string } | null;
+  propertyId: string | null;
+  /** The page's own property record, handed to the form instead of read again. */
+  initialProperty?: { property: PropertyOverview["property"]; missing?: string[] };
+  size?: "sm";
+}) {
+  const [open, setOpen] = useState(false);
+  if (!client) return null;
   return (
-    <SubmitButton size={size} onClick={() => void start()} pending={busy} pendingLabel="Starting…" icon={<ClipboardCheck className="size-4" />}>
-      New site visit
-    </SubmitButton>
+    <>
+      <Button size={size} onClick={() => setOpen(true)}>
+        <ClipboardCheck className="size-4" />
+        New site visit
+      </Button>
+      <BookSiteVisitDialog open={open} onOpenChange={setOpen} client={client} propertyId={propertyId} initialProperty={initialProperty} />
+    </>
   );
 }
 
@@ -343,7 +350,7 @@ export function CustomerDetail({ id }: { id: string }) {
                 Edit
               </Button>
             ) : null}
-            <StartAssessmentButton customerId={customer.id} propertyId={null} />
+            <StartAssessmentButton client={customer} propertyId={null} />
           </div>
         </div>
         {licenceState ? (
@@ -657,7 +664,7 @@ export function PropertyDetail({ id }: { id: string }) {
                   Edit
                 </Button>
               ) : null}
-              <StartAssessmentButton customerId={customer?.id ?? null} propertyId={property.id} />
+              <StartAssessmentButton client={customer ?? null} propertyId={property.id} initialProperty={{ property, missing: data?.siteVisitMissing }} />
             </>
           }
         />

@@ -1,5 +1,6 @@
 import type { ClientReport } from "@/lib/server/amc/client-report";
 import type { commercialReport, managementDashboard, operationalReport } from "@/lib/server/amc/insights";
+import { amcRequest } from "@/lib/amc/http-cache";
 
 /**
  * Browser calls for the AMC management dashboard, the operational and
@@ -24,18 +25,8 @@ export interface ClientReportSendResult {
   whatsapp: string | null;
 }
 
-async function parse<T>(response: Response): Promise<T> {
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(typeof body?.error === "string" ? body.error : "Something went wrong");
-  return body as T;
-}
-
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
-  });
-  return parse<T>(response);
+  return amcRequest<T>(url, init);
 }
 
 const insightsUrl = (view: string, period?: { from: string; to: string }) => {
@@ -67,8 +58,9 @@ export const insightsService = {
     return request<{ report: ClientReport }>(`${reportUrl(contractId)}?format=json`);
   },
   /** Without `to`, the server sends to the client's email on file. */
-  sendClientReport(contractId: string, to?: string | null) {
-    return request<ClientReportSendResult>(reportUrl(contractId), { method: "POST", body: JSON.stringify(to ? { to } : {}) });
+  /** Without `to`, the server sends to the client's email on file. pdfBase64: the branded PDF built in the browser. */
+  sendClientReport(contractId: string, to?: string | null, pdfBase64?: string | null) {
+    return request<ClientReportSendResult>(reportUrl(contractId), { method: "POST", body: JSON.stringify({ ...(to ? { to } : {}), ...(pdfBase64 ? { pdfBase64 } : {}) }) });
   },
 };
 

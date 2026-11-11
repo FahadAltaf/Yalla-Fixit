@@ -161,6 +161,8 @@ export function clientReportHtml(r: ClientReport): string {
     .map((w) => `<tr><td>${esc(w.number)}</td><td>${esc(w.finding)}</td><td>${esc(w.status.replace(/_/g, " "))}</td><td class="n">${money(w.total)}</td></tr>`)
     .join("");
   const remaining = r.visitsRemaining.map((v) => `<li>Visit ${v.visitNo}: between ${esc(day(v.windowStart))} and ${esc(day(v.windowEnd))}</li>`).join("");
+  /* None to come: done only when some were done; otherwise none is scheduled yet. */
+  const noneToCome = r.visitsDone.length ? "All planned visits are done." : "No visits are scheduled yet.";
   const section = (title: string, body: string, empty: string) => `<h2>${esc(title)}</h2>${body || `<p class="muted">${esc(empty)}</p>`}`;
   return `<!doctype html><html><head><meta charset="utf-8"><title>Client report ${esc(r.contract.number)}</title><style>
     body{font-family:Arial,Helvetica,sans-serif;color:#1f2937;margin:32px;font-size:12px}
@@ -176,7 +178,7 @@ export function clientReportHtml(r: ClientReport): string {
     <p>${esc(r.intro)}</p>
     ${section("Your plan and allowances", scope ? `<table><tr><th>Service</th><th class="n">Included</th><th class="n">Used</th><th class="n">Booked</th><th class="n">Remaining</th></tr>${scope}</table>` : "", "No counted services on this contract.")}
     ${section(`Visits completed (${r.visitsDone.length})`, visits, "No planned visit completed yet.")}
-    ${section(`Visits remaining (${r.visitsRemaining.length})`, remaining ? `<ul>${remaining}</ul>` : "", "All planned visits are done.")}
+    ${section(`Visits remaining (${r.visitsRemaining.length})`, remaining ? `<ul>${remaining}</ul>` : "", noneToCome)}
     ${section(`Call outs attended (${r.callOuts.length})`, calls ? `<table><tr><th>No</th><th>Priority</th><th>Issue</th><th>Attended</th><th>Coverage</th></tr>${calls}</table>` : "", "No call outs so far.")}
     ${section(
       "Additional work",
@@ -190,10 +192,14 @@ export function clientReportHtml(r: ClientReport): string {
   </body></html>`;
 }
 
-/** Renders the report (PDF when this host can print, else HTML) and stores it as a contract document. */
-async function storeReport(admin: Admin, r: ClientReport, actor: Actor) {
+/**
+ * Stores the report as a contract document: the PDF the portal built in the
+ * browser (the branded document the viewer shows) when it sends one, else
+ * one printed here from the plain page (HTML when this host cannot print).
+ */
+async function storeReport(admin: Admin, r: ClientReport, actor: Actor, browserPdf?: Uint8Array | null) {
   const html = clientReportHtml(r);
-  const pdf = await renderPdf(html);
+  const pdf = browserPdf ?? (await renderPdf(html));
   const bytes = pdf ?? new TextEncoder().encode(html);
   const ext = pdf ? "pdf" : "html";
   const mime = pdf ? "application/pdf" : "text/html";
@@ -222,9 +228,9 @@ async function storeReport(admin: Admin, r: ClientReport, actor: Actor) {
 }
 
 /** Email (PDF attached) to the client, owner copied; the WhatsApp text with the link comes back prepared. */
-export async function sendClientReport(admin: Admin, contractId: string, actor: Actor, config: AmcConfig, to?: string | null) {
+export async function sendClientReport(admin: Admin, contractId: string, actor: Actor, config: AmcConfig, to?: string | null, browserPdf?: Uint8Array | null) {
   const r = await clientReportFacts(admin, contractId, config);
-  const stored = await storeReport(admin, r, actor);
+  const stored = await storeReport(admin, r, actor, browserPdf);
   const recipient = (to ?? r.contract.customerEmail ?? "").trim();
   const cc = [r.owner?.email].filter((e): e is string => Boolean(e) && e !== recipient);
   let outcome: "sent" | "failed" | "no_recipient" = "no_recipient";

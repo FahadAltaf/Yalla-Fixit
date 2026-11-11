@@ -42,6 +42,7 @@ import type {
   RenewalOverview,
   UsageEntry,
 } from "@/lib/server/amc/contract-operations";
+import { amcErrorMessage, amcFetchJson, amcRequest } from "@/lib/amc/http-cache";
 
 /**
  * Browser calls for AMC contracts. Everything goes through
@@ -278,15 +279,7 @@ export interface CoverageCatalogueItem {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(typeof body?.error === "string" ? body.error : "Something went wrong");
-  }
-  return body as T;
+  return amcRequest<T>(url, init);
 }
 
 export const amcContractsService = {
@@ -458,6 +451,10 @@ export const amcContractsService = {
   customer(id: string) {
     return request<{ overview: CustomerOverview; canEdit?: boolean }>(`/api/amc-contracts/customers/${id}`);
   },
+  /** The client's record alone, for a form or a card (not the whole profile). */
+  customerRecord(id: string) {
+    return request<{ customer: CustomerOverview["customer"] }>(`/api/amc-contracts/customers/${id}?view=record`);
+  },
   /** A client's addresses as Snagging's new quotation lists them: the portal's, then FSM's not yet used. */
   clientAddresses(customerId: string) {
     return request<{ addresses: ClientAddress[]; fsmError: string | null }>(`/api/amc-contracts/customers/${customerId}/addresses`);
@@ -510,7 +507,13 @@ export const amcContractsService = {
       /** The pin on the map, when the address has one. */
       location?: { lat: number; lng: number } | null;
       developer?: string | null;
+      /** What the address lacks for a site visit, by label (empty when complete). */
+      siteVisitMissing?: string[];
     }>(`/api/amc-contracts/properties/${id}`);
+  },
+  /** A property's record and what it lacks for a site visit, for a picker's card (not the whole page). */
+  propertyCard(id: string) {
+    return request<{ property: PropertyOverview["property"]; siteVisitMissing: string[] }>(`/api/amc-contracts/properties/${id}?view=card`);
   },
   links(contractId: string) {
     return request<{ links: LiveLinks }>(`/api/amc-contracts/${contractId}/links`);
@@ -549,11 +552,17 @@ export const amcContractsService = {
     );
   },
   assessment(id: string) {
-    /* people: who can be the assessor, given when the caller can edit the visit. */
-    return request<{ assessment: AssessmentRecord; canEdit: boolean; people?: Array<{ id: string; name: string; email: string | null }> }>(`/api/amc-contracts/assessments/${id}`);
+    return request<{ assessment: AssessmentRecord; canEdit: boolean }>(`/api/amc-contracts/assessments/${id}`);
   },
   createAssessment(input: { customerId: string | null; propertyId: string | null; contractId?: string | null }) {
     return request<{ assessment: AssessmentRecord }>("/api/amc-contracts/assessments", { method: "POST", body: JSON.stringify(input) });
+  },
+  /** Who can be the assessor, for Book site visit on a client or property page. */
+  siteVisitPeople() {
+    return request<{ people: Array<{ id: string; name: string; email: string | null }>; me: string }>("/api/amc-contracts/assessments/book");
+  },
+  bookSiteVisit(input: { customerId: string; propertyId: string; scheduledAt: string; assessorId: string }) {
+    return request<{ assessmentId: string; assessmentNumber: string }>("/api/amc-contracts/assessments/book", { method: "POST", body: JSON.stringify(input) });
   },
   updateAssessment(id: string, patch: Record<string, unknown>) {
     return request<{ assessment: AssessmentRecord }>(`/api/amc-contracts/assessments/${id}`, { method: "PATCH", body: JSON.stringify(patch) });
@@ -642,10 +651,9 @@ export const amcContractsService = {
     const form = new FormData();
     form.append("file", file);
     if (caption) form.append("caption", caption);
-    /* Not request(): the browser sets the multipart boundary itself. */
-    const response = await fetch(`/api/amc-contracts/assessments/${assessmentId}/photos`, { method: "POST", body: form });
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(typeof body?.error === "string" ? body.error : "Could not add the photo");
+    /* FormData: the browser sets the multipart boundary itself. */
+    const { ok, body } = await amcFetchJson(`/api/amc-contracts/assessments/${assessmentId}/photos`, { method: "POST", body: form });
+    if (!ok) throw new Error(amcErrorMessage(body, "Could not add the photo"));
     return body as { photo: AssessmentPhoto };
   },
   removeAssessmentPhoto(assessmentId: string, photoId: string) {

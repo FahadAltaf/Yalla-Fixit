@@ -19,16 +19,7 @@ import {
 } from "@/lib/server/snagging/fsm-clients";
 import { FsmConfigError } from "@/lib/server/zoho/fsm-client";
 import { FsmApiError } from "@/lib/server/zoho/fsm-contacts";
-import { requiredPropertyErrors, type RequiredPropertyKey } from "@/lib/snagging/quotation-required";
-
-/** What a quotation (and a site visit) needs of an address that this one lacks, by label. */
-const REQUIRED_LABELS: Record<RequiredPropertyKey, string> = {
-  unit_label: "Unit reference",
-  building_name: "Project / tower",
-  property_type: "Property type",
-  bedrooms: "Bedrooms",
-  built_up_area: "Built-up area",
-};
+import { siteVisitMissing } from "@/lib/amc/site-visit-address";
 
 /**
  * A client's addresses for a picker, as Snagging's new quotation lists
@@ -52,20 +43,7 @@ export async function GET(
       .from("snagging_properties")
       .select("id, unit_label, building_name, property_type, bedrooms, built_up_area_sqft")
       .eq("client_id", customerId);
-    const missingById = new Map(
-      ((snagRows ?? []) as Array<Record<string, unknown>>).map((r) => [
-        String(r.id),
-        (Object.keys(
-          requiredPropertyErrors({
-            unit_label: r.unit_label,
-            building_name: r.building_name,
-            property_type: r.property_type,
-            bedrooms: r.bedrooms,
-            built_up_area: r.built_up_area_sqft,
-          }),
-        ) as RequiredPropertyKey[]).map((k) => REQUIRED_LABELS[k]),
-      ]),
-    );
+    const missingById = new Map(((snagRows ?? []) as Array<Record<string, unknown>>).map((r) => [String(r.id), siteVisitMissing(r)]));
     let fsm: { rows: Record<string, unknown>[]; error: string | null } = {
       rows: [],
       error: null,
@@ -146,15 +124,7 @@ export async function POST(
       gate.userId,
     );
     // An address from FSM carries little more than its line: say what it still needs.
-    const missing = (Object.keys(
-      requiredPropertyErrors({
-        unit_label: row.unit_label,
-        building_name: row.building_name,
-        property_type: row.property_type,
-        bedrooms: row.bedrooms,
-        built_up_area: row.built_up_area_sqft,
-      }),
-    ) as RequiredPropertyKey[]).map((k) => REQUIRED_LABELS[k]);
+    const missing = siteVisitMissing(row);
     return NextResponse.json({
       property: await getProperty(gate.admin, String(row.id)),
       missing,

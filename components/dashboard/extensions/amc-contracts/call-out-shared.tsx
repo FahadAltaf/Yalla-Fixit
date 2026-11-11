@@ -30,6 +30,7 @@ import {
 import { AMC_PHOTO_MAX_BYTES } from "@/lib/amc/photos";
 import { cn } from "@/lib/utils";
 import { amcContractsService, type ContractListRow } from "@/modules/amc-contracts/amc-contracts-service";
+import { amcRefresh } from "@/lib/amc/http-cache";
 
 /**
  * Pieces the call-out and additional-work screens share (Phase 11): the
@@ -734,7 +735,7 @@ export function ListToolbar({
             </Select>
           </div>
 
-          <Button onClick={onRefresh} variant="outline" disabled={loading}>
+          <Button onClick={() => amcRefresh(onRefresh)} variant="outline" disabled={loading}>
             <RefreshCwIcon className="size-4 sm:mr-1" />
             <span className="hidden sm:inline">Refresh</span>
           </Button>

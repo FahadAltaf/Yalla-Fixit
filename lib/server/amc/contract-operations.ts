@@ -298,7 +298,8 @@ export async function loadPendingActivations(admin: Admin, who: Visibility): Pro
     let q = admin
       .from("amc_submissions")
       .select(
-        "id, owner_id, proposal_number, customer, property, document_options, final_price, signed_at, amc_contracts!amc_contracts_submission_id_fkey(id)",
+        /* Only the account managers from document_options (the wording overrides and price lists in it are large). */
+        "id, owner_id, proposal_number, customer, property, account_managers:document_options->accountManagers, final_price, signed_at, amc_contracts!amc_contracts_submission_id_fkey(id)",
       )
       .eq("status", "signed")
       .is("amc_contracts", null)

@@ -6,6 +6,7 @@ import type {
   clientServiceHistory,
 } from "@/lib/server/amc/client-history";
 import type { CustomerRecord } from "@/lib/server/amc/business";
+import { amcErrorMessage, amcFetchJson } from "@/lib/amc/http-cache";
 
 /**
  * Browser calls for a client's history across their contracts (BRD 5.9)
@@ -31,12 +32,8 @@ export class HistoryRequestError extends Error {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new HistoryRequestError(typeof body?.error === "string" ? body.error : "Something went wrong", response.status);
+  const { ok, status, body } = await amcFetchJson(url, init);
+  if (!ok) throw new HistoryRequestError(amcErrorMessage(body), status);
   return body as T;
 }
 

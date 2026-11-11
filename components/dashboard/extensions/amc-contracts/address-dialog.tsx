@@ -144,13 +144,20 @@ function CompleteBody({
 
   useEffect(() => {
     let stale = false;
-    Promise.all([snaggingService.listClientAddresses(clientId), amcContractsService.customerProperties(clientId)]).then(
-      ([{ data }, { properties }]) => {
+    /* The one address and its AMC record; the client's other properties only when editing ("part of"). Not the client's whole list and Zoho FSM. */
+    Promise.all([
+      snaggingService.getClientAddress(propertyId),
+      amcContractsService.propertyCard(propertyId).then(
+        ({ property }) => property,
+        () => null,
+      ),
+      editing ? amcContractsService.customerProperties(clientId).then(({ properties }) => properties) : Promise.resolve([] as PropertyRecord[]),
+    ]).then(
+      ([address, amc, properties]) => {
         if (stale) return;
-        const address = data.find((a) => a.id === propertyId);
         setState(
-          address
-            ? { address, amc: properties.find((p) => p.id === propertyId) ?? null, others: properties.filter((p) => p.id !== propertyId) }
+          address && address.client_id === clientId
+            ? { address, amc, others: properties.filter((p) => p.id !== propertyId) }
             : { error: "That address could not be found on the client." },
         );
       },
@@ -159,7 +166,7 @@ function CompleteBody({
     return () => {
       stale = true;
     };
-  }, [clientId, propertyId, attempt]);
+  }, [clientId, propertyId, editing, attempt]);
 
   if (!state) {
     return (

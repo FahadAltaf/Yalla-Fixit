@@ -3,6 +3,7 @@ import type { z } from "zod";
 import type { additionalWorkActionSchema, additionalWorkCreateSchema } from "@/lib/amc/call-outs";
 import type { AdditionalWorkRecord } from "@/lib/server/amc/additional-works";
 import type { WorkPhoto } from "@/lib/server/amc/call-outs";
+import { amcRequest } from "@/lib/amc/http-cache";
 
 /**
  * Browser calls for AMC additional works (Phase 11: DEV-407): the list,
@@ -42,18 +43,8 @@ export interface WorkActionResult {
   whatsapp?: string | null;
 }
 
-async function parse<T>(response: Response): Promise<T> {
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(typeof body?.error === "string" ? body.error : "Something went wrong");
-  return body as T;
-}
-
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
-  });
-  return parse<T>(response);
+  return amcRequest<T>(url, init);
 }
 
 const workUrl = (id: string) => `/api/amc-additional-works/${encodeURIComponent(id)}`;
@@ -82,8 +73,7 @@ export const additionalWorksService = {
     form.append("file", input.file);
     form.append("kind", input.kind);
     if (input.caption?.trim()) form.append("caption", input.caption.trim());
-    const response = await fetch(`${workUrl(id)}/photos`, { method: "POST", body: form });
-    return parse<{ photo: { id: string } }>(response);
+    return request<{ photo: { id: string } }>(`${workUrl(id)}/photos`, { method: "POST", body: form });
   },
   removePhoto(id: string, photoId: string) {
     return request<{ ok: true }>(`${workUrl(id)}/photos?photoId=${encodeURIComponent(photoId)}`, { method: "DELETE" });

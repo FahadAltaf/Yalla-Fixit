@@ -138,6 +138,7 @@ export function submissionToFormData(submission: AmcDocumentSource): AmcFormData
       : {}),
     customerRecordId: submission.customer_id ?? null,
     propertyRecordId: submission.property_id ?? null,
+    recordsLocked: Boolean(("enquiry_id" in submission && submission.enquiry_id) || ("from_site_visit" in submission && submission.from_site_visit)),
     customerName: submission.customer.customerName,
     customerId: submission.customer.customerId ?? "",
     customerPhone: submission.customer.customerPhone,

@@ -14,6 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { amcRefresh } from "@/lib/amc/http-cache";
 
 export type ProposalScope = "all" | "mine" | "others";
 
@@ -120,7 +121,7 @@ export function ProposalsToolbar({
             </Select>
           </div>
 
-          <Button onClick={onRefresh} variant="outline" disabled={isLoading}>
+          <Button onClick={() => amcRefresh(onRefresh)} variant="outline" disabled={isLoading}>
             <RefreshCwIcon className="size-4 sm:mr-1" />
             <span className="hidden sm:inline">Refresh</span>
           </Button>

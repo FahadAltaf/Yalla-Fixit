@@ -4,6 +4,8 @@ import { todayInDubai } from "@/lib/amc/contracts";
 import { applyRateCard, diffRateCards, emptyRateCard, parseRateCard, versionInForce, type RateCard } from "@/lib/amc/rate-card";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { isCustomServiceRow } from "@/components/dashboard/extensions/amc/amc-types";
+import { isFrequencyEditable } from "@/components/dashboard/extensions/amc/amc-constants";
+import { readAmcSettings } from "@/lib/server/amc/settings";
 import { ContractError, isMissingTable } from "@/lib/server/amc/contracts";
 
 /**
@@ -146,13 +148,17 @@ export async function submissionRateProblem(admin: Admin, submissionId: string):
     .eq("id", submissionId)
     .maybeSingle<Row>();
   if (error || !data?.rate_card_version_id) return null;
-  const version = await getRateCardVersion(admin, String(data.rate_card_version_id));
+  const [version, settings] = await Promise.all([getRateCardVersion(admin, String(data.rate_card_version_id)), readAmcSettings(admin)]);
   if (!version?.valid) return null;
+  /* Only a service counted in visits is held to the card's frequencies (a hotline is once a year on every proposal). */
+  const types = new Map(settings.services.map((s) => [s.id, s.frequencyType]));
   /* A service added to the proposal alone (DEV-260) is not on the card; it keeps its typed price. */
   const rows = ((Array.isArray(data.services) ? data.services : []) as Parameters<typeof applyRateCard>[0]).filter(
     (row) => !isCustomServiceRow(row),
   );
   const model = String((data.property as Row | null)?.unitType ?? "");
-  const { problems } = applyRateCard(rows, version.card, model, todayInDubai(), Number(data.discount_percent ?? 0));
+  const { problems } = applyRateCard(rows, version.card, model, todayInDubai(), Number(data.discount_percent ?? 0), undefined, (id) =>
+    isFrequencyEditable(types.get(id)),
+  );
   return problems.length ? `${problems.join(" ")} Correct the lines, or ask for the rate card to be updated.` : null;
 }

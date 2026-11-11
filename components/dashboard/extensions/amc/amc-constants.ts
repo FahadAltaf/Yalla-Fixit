@@ -148,7 +148,8 @@ export function chargeFrequencyType(serviceId: string): AmcService["frequencyTyp
   return AMC_SERVICES.find((service) => service.id === serviceId)?.frequencyType ?? null;
 }
 
-export function isFrequencyEditable(frequencyType: AmcService["frequencyType"]) {
+/** Whether a service is counted in visits, so its frequency can change (undefined: not a known service). */
+export function isFrequencyEditable(frequencyType: AmcService["frequencyType"] | null | undefined) {
   return (
     frequencyType === "ppm" ||
     frequencyType === "handyman" ||

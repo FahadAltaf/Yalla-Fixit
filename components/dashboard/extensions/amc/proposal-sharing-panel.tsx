@@ -23,6 +23,7 @@ import { CLIENT_ANSWERS, CLIENT_ANSWER_LABELS, TRIGGER_LABELS, type ApprovalTrig
 import { clientProfileService } from "@/modules/amc-contracts/client-profile-service";
 
 import type { AmcSubmission } from "./amc-types";
+import { amcRequest } from "@/lib/amc/http-cache";
 
 /* What GET /api/amc-submissions/sharing returns. */
 interface SharingData {
@@ -56,10 +57,7 @@ interface SharingData {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, { ...init, headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) } });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(typeof body?.error === "string" ? body.error : "Something went wrong");
-  return body as T;
+  return amcRequest<T>(url, init);
 }
 
 const when = (iso: string) =>

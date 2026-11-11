@@ -361,39 +361,36 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
-    const names = new Map<string, string>();
-    if (!isOwn) {
-      const { data: owner } = await admin
-        .from("user_profile")
-        .select("id, full_name, email")
-        .eq("id", row.owner_id)
-        .maybeSingle();
-      if (owner) {
-        names.set(
-          String(owner.id),
-          ((owner.full_name as string | null) ?? "").trim() ||
-            String(owner.email ?? ""),
-        );
-      }
-    }
+    /*
+      Three independent reads, at once: the owner's name (someone else's
+      proposal), the contract made from it (Active AMC; from the client's
+      approval, Phase 6) and whether a site visit started it (its client and
+      property are then fixed in the wizard).
+    */
+    const hasContract = row.status === "signed" || row.status === "proposal_approved" || row.status === "contract_sent";
+    const [ownerRead, contractRead, visitRead] = await Promise.all([
+      isOwn ? null : admin.from("user_profile").select("id, full_name, email").eq("id", row.owner_id).maybeSingle(),
+      hasContract ? admin.from("amc_contracts").select("id, contract_number").eq("submission_id", row.id).maybeSingle<{ id: string; contract_number: string | null }>() : null,
+      row.enquiry_id ? null : admin.from("amc_assessments").select("id").eq("submission_id", row.id).limit(1).maybeSingle(),
+    ]);
 
-    /* Active AMC: the contract made from this proposal, if any. A
-       database without the contracts table reports nothing. */
+    const names = new Map<string, string>();
+    const owner = ownerRead?.data;
+    if (owner) {
+      names.set(String(owner.id), ((owner.full_name as string | null) ?? "").trim() || String(owner.email ?? ""));
+    }
+    /* A database without the contracts table reports nothing. */
     let contractId: string | null | undefined;
     let contractNumber: string | null = null;
-    /* Phase 6: the contract exists from the client's approval. */
-    if (row.status === "signed" || row.status === "proposal_approved" || row.status === "contract_sent") {
-      const { data: contract, error: contractError } = await admin
-        .from("amc_contracts")
-        .select("id, contract_number")
-        .eq("submission_id", row.id)
-        .maybeSingle<{ id: string; contract_number: string | null }>();
-      contractId = contractError ? undefined : (contract?.id ?? null);
-      contractNumber = contract?.contract_number ?? null;
+    if (contractRead) {
+      contractId = contractRead.error ? undefined : (contractRead.data?.id ?? null);
+      contractNumber = contractRead.data?.contract_number ?? null;
     }
+    const fromSiteVisit = Boolean(visitRead?.data);
 
     return NextResponse.json({
       ...mapRow(row, { viewerId: profile.id, names }),
+      from_site_visit: fromSiteVisit,
       contract_id: contractId,
       contract_number: contractNumber,
       /* One rule for the API and the buttons (lib/amc/workflow.ts),

@@ -190,3 +190,22 @@ test("nothing in the new AMC migrations drops, renames or narrows what main uses
     assert.doesNotMatch(body, /ALTER TABLE public\.amc_submissions\s+(DROP|ALTER|RENAME)/i, f);
   }
 });
+
+test("a page too short to be a row cap is the last one: a client's few rows cost one request", async () => {
+  let calls = 0;
+  const few = ROWS.slice(0, 7);
+  const a = await fetchAllRows(async (from, to) => {
+    calls += 1;
+    return { data: few.slice(from, to + 1), error: null };
+  });
+  assert.equal(a.data.length, 7);
+  assert.equal(calls, 1);
+  calls = 0;
+  const b = await fetchAllRowsById(async (afterId, size) => {
+    calls += 1;
+    const start = afterId ? few.findIndex((r) => r.id > afterId) : 0;
+    return { data: start < 0 ? [] : few.slice(start, start + size), error: null };
+  });
+  assert.equal(b.data.length, 7);
+  assert.equal(calls, 1);
+});

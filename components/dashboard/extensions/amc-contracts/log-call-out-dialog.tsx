@@ -130,7 +130,7 @@ export function LogCallOutDialog({
     !reportedIso ? "Enter when the client called." : null,
     issue.trim().length < 3 ? "Describe the issue." : null,
     partsExpected && partsValue.trim() !== "" && !(Number(partsValue) >= 0) ? "Enter the parts estimate as a number." : null,
-    overriding && overrideReason.trim().length < 3 ? "Say why it is booked as covered." : null,
+    overriding && overrideReason.trim().length < 3 ? "Give the reason for not charging the client." : null,
     !fresh?.data ? "Wait for the coverage answer." : null,
   ].filter((x): x is string => Boolean(x));
 
@@ -191,7 +191,7 @@ export function LogCallOutDialog({
           <DialogDescription>
             {done
               ? "Send the client the acknowledgement, then mark it as sent."
-              : "What the client reported. The coverage answer below updates as you go; tell the client before the visit."}
+              : "What the client reported. The answer at the bottom says whether the client pays; tell them before the visit."}
           </DialogDescription>
         </DialogHeader>
 
@@ -304,25 +304,47 @@ export function LogCallOutDialog({
               </Field>
             </div>
 
-            <div className="grid gap-3 rounded-lg border px-4 py-3">
-              <div className="flex items-center gap-3">
-                <Checkbox id={ids.parts} checked={partsExpected} onCheckedChange={(on) => setPartsExpected(on === true)} />
-                <Label htmlFor={ids.parts} className="font-normal">
-                  Parts beyond consumables are expected
-                </Label>
+            {/* Two plain questions: each one, if ticked, makes part or all of the job chargeable. */}
+            <div className="grid gap-4 rounded-lg border px-4 py-3">
+              <div>
+                <p className="text-sm font-medium">Anything the client should pay for?</p>
+                <p className="text-muted-foreground text-xs">Tick only what applies. The answer below updates as you tick.</p>
               </div>
-              {partsExpected ? (
-                <Field id={ids.partsValue} label="Estimated parts value, AED (optional)">
-                  <Input id={ids.partsValue} type="number" min={0} step="any" className="sm:w-48" value={partsValue} onChange={(e) => setPartsValue(e.target.value)} />
-                </Field>
-              ) : null}
+              <div className="grid gap-2">
+                <div className="flex items-start gap-3">
+                  <Checkbox id={ids.parts} className="mt-0.5" checked={partsExpected} onCheckedChange={(on) => setPartsExpected(on === true)} />
+                  <div className="grid gap-1">
+                    <Label htmlFor={ids.parts} className="font-normal">
+                      Parts or materials will be needed
+                    </Label>
+                    <p className="text-muted-foreground text-xs">
+                      Small consumables (chemicals, tape, connectors) are included. Spare parts and materials are charged to the client on an approved quote.
+                    </p>
+                  </div>
+                </div>
+                {partsExpected ? (
+                  <div className="pl-7">
+                    <Field id={ids.partsValue} label="Rough value of the parts, AED (optional)" hint="Only an estimate for the client; the quote follows.">
+                      <Input id={ids.partsValue} type="number" min={0} step="any" className="sm:w-48" value={partsValue} onChange={(e) => setPartsValue(e.target.value)} />
+                    </Field>
+                  </div>
+                ) : null}
+              </div>
               <div className="flex items-start gap-3">
                 <Checkbox id={ids.excluded} className="mt-0.5" checked={excluded} onCheckedChange={(on) => setExcluded(on === true)} />
                 <div className="grid gap-1">
                   <Label htmlFor={ids.excluded} className="font-normal">
-                    Excluded by the contract
+                    The problem is something the contract does not cover
                   </Label>
-                  <p className="text-muted-foreground text-xs">{p?.exclusions ? `Exclusions: ${p.exclusions}` : "The contract lists no exclusions for this service."}</p>
+                  <p className="text-muted-foreground text-xs">
+                    {p?.exclusions ? (
+                      <>
+                        <span className="font-medium">Not covered by this contract:</span> {p.exclusions}
+                      </>
+                    ) : (
+                      "This contract lists no exclusions for this kind of call out. Tick it only if the problem is clearly outside the AMC (e.g. damage or a client modification)."
+                    )}
+                  </p>
                 </div>
               </div>
             </div>
@@ -337,16 +359,31 @@ export function LogCallOutDialog({
 
             {canBookCovered ? (
               <div className="border-warning/30 bg-warning/5 grid gap-3 rounded-lg border px-4 py-3">
-                <div className="flex items-center gap-3">
-                  <Checkbox id={ids.override} checked={override} onCheckedChange={(on) => setOverride(on === true)} />
-                  <Label htmlFor={ids.override} className="font-normal">
-                    Book as covered anyway
-                  </Label>
+                <div className="flex items-start gap-3">
+                  <Checkbox id={ids.override} className="mt-0.5" checked={override} onCheckedChange={(on) => setOverride(on === true)} />
+                  <div className="grid gap-1">
+                    <Label htmlFor={ids.override} className="font-normal">
+                      Don&apos;t charge the client: book it as covered
+                    </Label>
+                    <p className="text-muted-foreground text-xs">
+                      Only when there is a reason, such as goodwill or a manager&apos;s decision. It is treated as covered, uses the allowance when there is one, and is recorded
+                      with your name.
+                    </p>
+                  </div>
                 </div>
                 {override ? (
-                  <Field id={ids.overrideReason} label="Why" hint="Recorded with your name in the audit trail.">
-                    <Textarea id={ids.overrideReason} rows={2} maxLength={500} value={overrideReason} onChange={(e) => setOverrideReason(e.target.value)} />
-                  </Field>
+                  <div className="pl-7">
+                    <Field id={ids.overrideReason} label="Reason (required)" hint="Recorded with your name in the audit trail.">
+                      <Textarea
+                        id={ids.overrideReason}
+                        rows={2}
+                        maxLength={500}
+                        placeholder="e.g. Goodwill for a long-standing client, agreed with the manager"
+                        value={overrideReason}
+                        onChange={(e) => setOverrideReason(e.target.value)}
+                      />
+                    </Field>
+                  </div>
                 ) : null}
               </div>
             ) : null}
@@ -419,7 +456,6 @@ function CoveragePanel({
     return <p className="text-danger rounded-lg border px-4 py-3 text-sm">{preview.error ?? "Could not check the coverage."}</p>;
   }
   const c = preview.data;
-  const [headline, ...rest] = c.reasons;
   const b = c.balance;
   const covered = c.coverage === "covered";
 
@@ -437,17 +473,27 @@ function CoveragePanel({
         </Badge>
         {c.serviceLabel ? <span className="text-muted-foreground text-xs">{c.serviceLabel}</span> : null}
       </div>
-      {headline ? <p className="text-sm font-medium">{headline}</p> : null}
-      {rest.length ? (
-        <ul className="text-muted-foreground list-disc space-y-0.5 pl-5 text-sm">
-          {rest.map((r, i) => (
-            <li key={i}>{r}</li>
-          ))}
-        </ul>
+      {/* Who pays, in one line, then why. */}
+      <p className="text-sm font-semibold">
+        {covered
+          ? c.chargeableExtras.length
+            ? "The visit and labour are covered; the client pays only for the extras below."
+            : "No charge to the client for this call out."
+          : "The client pays for this call out."}
+      </p>
+      {c.reasons.length ? (
+        <div className="grid gap-1">
+          <p className="text-muted-foreground text-xs font-medium tracking-wide uppercase">Why</p>
+          <ul className="list-disc space-y-0.5 pl-5 text-sm">
+            {c.reasons.map((r, i) => (
+              <li key={i}>{r}</li>
+            ))}
+          </ul>
+        </div>
       ) : null}
       {c.chargeableExtras.length ? (
         <div className="bg-warning/5 rounded-md px-3 py-2 text-sm">
-          <p className="text-warning text-xs font-medium">Chargeable extras</p>
+          <p className="text-warning text-xs font-medium">The client also pays for</p>
           <ul className="mt-1 list-disc space-y-0.5 pl-5">
             {c.chargeableExtras.map((x, i) => (
               <li key={i}>{x}</li>
@@ -455,25 +501,25 @@ function CoveragePanel({
           </ul>
         </div>
       ) : null}
-      <dl className="grid gap-1.5 text-sm sm:grid-cols-2">
-        <div className="flex justify-between gap-3">
-          <dt className="text-muted-foreground">Allowance</dt>
-          <dd className="text-right font-medium">
+      <dl className="grid gap-2 border-t pt-3 text-sm sm:grid-cols-2">
+        <div className="grid gap-0.5">
+          <dt className="text-muted-foreground text-xs">Allowance for this kind of call out</dt>
+          <dd className="font-medium">
             {!b
-              ? "—"
+              ? "None on this contract"
               : b.unlimited
-                ? `Unlimited · ${b.used} used · ${b.reserved} booked`
+                ? `Unlimited (${b.used} used${b.reserved ? `, ${b.reserved} booked` : ""})`
                 : b.included === null
-                  ? "Not counted"
-                  : `${b.used} used · ${b.reserved} booked · ${b.remaining} of ${b.included} left`}
+                  ? "Included, not counted"
+                  : `${b.remaining} of ${b.included} left (${b.used} used${b.reserved ? `, ${b.reserved} booked` : ""})`}
           </dd>
         </div>
-        <div className="flex justify-between gap-3">
-          <dt className="text-muted-foreground">{priority === "emergency" ? "Attend by" : "Visit by"}</dt>
-          <dd className="text-right font-medium">{slaDue ? shortDateTime(slaDue) : "—"}</dd>
+        <div className="grid gap-0.5">
+          <dt className="text-muted-foreground text-xs">{priority === "emergency" ? "A technician must be there by" : "The visit must happen by"}</dt>
+          <dd className="font-medium">{slaDue ? shortDateTime(slaDue) : "—"}</dd>
         </div>
       </dl>
-      {c.reserves ? <p className="text-muted-foreground text-xs">Logging it books one unit of the allowance until the work is done.</p> : null}
+      {c.reserves ? <p className="text-muted-foreground text-xs">Logging it holds one call out of the allowance until the work is done.</p> : null}
       {c.nearZero ? (
         <p className="text-warning flex items-center gap-1.5 text-xs font-medium">
           <AlertTriangle className="size-3.5" />

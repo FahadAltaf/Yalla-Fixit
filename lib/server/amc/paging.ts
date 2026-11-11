@@ -9,9 +9,13 @@
  * pages neither overlap nor skip rows.
  *
  * A page shorter than requested may still be capped by max-rows, so the
- * loop advances by what came back and stops only on an empty page.
+ * loop advances by what came back and stops on an empty page, or on a page
+ * so short no max-rows setting could have cut it (SURELY_LAST): a client's
+ * or a property's handful of rows then costs one request, not two.
  */
 export const PAGE_SIZE = 1000;
+/* Fewer rows than this in a page cannot be a max-rows cut (no project caps a request this low), so it is the last page. */
+const SURELY_LAST = 100;
 /** Safety stop: far above any AMC volume we plan for (see docs/amc-database-architecture.md). */
 export const MAX_ROWS = 100_000;
 
@@ -30,6 +34,7 @@ export async function fetchAllRows<T>(
     const got = data ?? [];
     if (got.length === 0) return { data: rows, error: null, truncated: false };
     rows.push(...got);
+    if (got.length < Math.min(pageSize, SURELY_LAST)) return { data: rows, error: null, truncated: false };
     from += got.length;
   }
   return { data: rows, error: null, truncated: true };
@@ -57,6 +62,7 @@ export async function fetchAllRowsById<T extends { id?: unknown }>(
     const got = data ?? [];
     if (got.length === 0) return { data: rows, error: null, truncated: false };
     rows.push(...got);
+    if (got.length < Math.min(pageSize, SURELY_LAST)) return { data: rows, error: null, truncated: false };
     afterId = String(got[got.length - 1].id);
   }
   return { data: rows, error: null, truncated: true };

@@ -36,9 +36,8 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ visitId: s
   const { visitId } = await ctx.params;
   if (!UUID.test(visitId)) return notFound();
   try {
-    const scope = await visitOwner(gate.admin, visitId);
+    const [scope, config] = await Promise.all([visitOwner(gate.admin, visitId), readAmcConfig(gate.admin)]);
     if (!scope.found || (!gate.visits.view && !gate.seesAll && !canReadContract(gate.actor, scope.ownerId))) return notFound();
-    const config = await readAmcConfig(gate.admin);
     const view = await jobSheetView(gate.admin, visitId);
     return NextResponse.json(
       {

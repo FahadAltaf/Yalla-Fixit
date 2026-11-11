@@ -20,11 +20,11 @@ export async function GET(req: NextRequest) {
   const contractId = params.get("contractId");
   if (contractId && !UUID.test(contractId)) return NextResponse.json({ error: "Contract not found." }, { status: 404 });
   try {
-    const config = await readAmcConfig(gate.admin);
+    /* The configuration and the contract's owner at once. */
+    const [config, scope] = await Promise.all([readAmcConfig(gate.admin), contractId ? contractOwner(gate.admin, contractId) : null]);
     let ownerFilter: string | null = null;
     let canCreate = fieldWorkRights(gate, "call_outs", null).create;
-    if (contractId) {
-      const scope = await contractOwner(gate.admin, contractId);
+    if (contractId && scope) {
       canCreate = fieldWorkRights(gate, "call_outs", scope.ownerId).create;
       if (!scope.found || !fieldWorkRights(gate, "call_outs", scope.ownerId).view) return NextResponse.json({ error: "Contract not found." }, { status: 404 });
     } else if (!fieldWorkRights(gate, "call_outs", null).seesAll) {

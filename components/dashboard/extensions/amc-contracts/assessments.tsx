@@ -457,6 +457,8 @@ export function AssessmentDetail({ id }: { id: string }) {
     id,
   );
   const catalogue = useAmcData(() => amcContractsService.coverageCatalogue(), "catalogue");
+  /* Who can be the assessor: only for someone who can edit the visit, and from the shared (cached) list. */
+  const assessors = useAmcData(() => (data?.canEdit ? amcContractsService.siteVisitPeople() : Promise.resolve({ people: [], me: "" })), data?.canEdit ? "assessors" : "no-assessors");
   useBreadcrumbLabel("assessments", "Site visits");
   useBreadcrumbLabel(id, data?.assessment.assessmentNumber ?? "Site visit");
   const { confirm, dialog } = useConfirm();
@@ -637,7 +639,7 @@ export function AssessmentDetail({ id }: { id: string }) {
     }
   };
 
-  const people = data?.people ?? [];
+  const people = assessors.data?.people ?? [];
   const categories = draft ? [...new Map(draft.items.map((i) => [i.categoryKey, i.categoryLabel])).entries()] : [];
   const services = catalogue.data?.catalogue ?? [];
   const answered = summary ? summary.total - summary.unanswered : 0;

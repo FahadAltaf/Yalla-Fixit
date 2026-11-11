@@ -267,6 +267,33 @@ export function AmcSendDialog({
                 </label>
               ) : null}
             </div>
+          ) : request && deliver === "link" ? (
+            /* Link only: what will be made and what to do with it, in the place the contacts take on the other channels. */
+            <div className="bg-muted/30 grid gap-3 rounded-lg border border-dashed p-4">
+              <div className="flex items-center gap-3">
+                <span className="bg-brand/10 text-brand grid size-9 shrink-0 place-items-center rounded-full">
+                  <LinkIcon className="size-4" />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">{isProposal ? "A secure link to the proposal" : "A secure signing link"}</p>
+                  <p className="text-muted-foreground text-xs">Copied to your clipboard once created; nothing is sent by the portal.</p>
+                </div>
+              </div>
+              <ul className="text-muted-foreground grid gap-1.5 pl-1 text-xs">
+                <li className="flex gap-2">
+                  <span className="text-brand">•</span>
+                  {isProposal ? `${customer} can read the proposal, approve it, reject it or ask for a change.` : `${customer} can read the contract and sign it online.`}
+                </li>
+                <li className="flex gap-2">
+                  <span className="text-brand">•</span>
+                  Paste it into any message or chat you use with the client.
+                </li>
+                <li className="flex gap-2">
+                  <span className="text-brand">•</span>
+                  Anyone with the link can open it: share it only with the client.
+                </li>
+              </ul>
+            </div>
           ) : null}
 
           {sentAt ? (

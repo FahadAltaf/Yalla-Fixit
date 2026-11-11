@@ -7,18 +7,12 @@ import type {
   ScopeItemRecord,
 } from "@/lib/server/amc/client-profile";
 import type { DocumentLevel } from "@/lib/amc/client-profile";
+import { amcRequest } from "@/lib/amc/http-cache";
 
 /** Browser calls for the client profile, property extras and documents (Phase 2). */
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const isForm = typeof FormData !== "undefined" && init?.body instanceof FormData;
-  const response = await fetch(url, {
-    ...init,
-    headers: isForm ? init?.headers : { "Content-Type": "application/json", ...(init?.headers ?? {}) },
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(typeof body?.error === "string" ? body.error : "Something went wrong");
-  return body as T;
+  return amcRequest<T>(url, init);
 }
 
 export type { AccessRuleRecord, AssetRecord, CommunicationRecord, ContactRecord, DocumentRecord, ScopeItemRecord };

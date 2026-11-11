@@ -161,11 +161,22 @@ export const siteVisitSchema = z
   })
   .strict();
 
+/** A site visit booked from a client or property page: the client's property, dated and assigned (as from an enquiry). */
+export const bookSiteVisitSchema = z
+  .object({
+    customerId: z.string().uuid("Choose the client"),
+    propertyId: z.string().uuid("Choose the property"),
+    scheduledAt: instant,
+    assessorId: z.string().uuid("Choose the assessor"),
+  })
+  .strict();
+
 export type CreateEnquiryInput = z.infer<typeof createEnquirySchema>;
 export type UpdateEnquiryInput = z.infer<typeof updateEnquirySchema>;
 export type StageChangeInput = z.infer<typeof stageChangeSchema>;
 export type FollowUpInput = z.infer<typeof followUpSchema>;
 export type SiteVisitInput = z.infer<typeof siteVisitSchema>;
+export type BookSiteVisitInput = z.infer<typeof bookSiteVisitSchema>;
 
 /** What an enquiry still lacks after an edit (the create schema checks the same on logging). */
 export function enquiryRequiredErrors(e: {

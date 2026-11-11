@@ -202,6 +202,8 @@ export const amcFormSchema = z
     /* The client and property picked from the records; their details fill the fields that print. */
     customerRecordId: z.string().nullable().optional(),
     propertyRecordId: z.string().nullable().optional(),
+    /* Started from an enquiry or a site visit: the client and property are edited there, never swapped (not saved). */
+    recordsLocked: z.boolean().optional(),
     customerName: z.string().min(1, "Client name is required"),
     /* FR4.4 / §8.2: prints in the contract header, where it used to
        fall back to "XXX". Required now. */
@@ -640,6 +642,8 @@ export interface AmcSubmission {
   version_summary?: string | null;
   version_started_at?: string | null;
   enquiry_id?: string | null;
+  /* Started from a site visit (single read only). */
+  from_site_visit?: boolean;
   /* The client and property records the proposal is for, when it was linked to them. */
   customer_id?: string | null;
   property_id?: string | null;

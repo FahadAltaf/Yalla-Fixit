@@ -2,6 +2,7 @@ import type { z } from "zod";
 
 import type { boardActionSchema, technicianProfileSchema, visitActionSchema } from "@/lib/amc/visits";
 import type { BoardData, BoardVisit, TechnicianRecord, VisitDetail, VisitSuggestion } from "@/lib/server/amc/visits";
+import { amcRequest } from "@/lib/amc/http-cache";
 
 /**
  * Browser calls for AMC visits on the board (Phase 9): the technicians'
@@ -46,18 +47,16 @@ export interface BoardActionResult {
 export type BoardResponse = BoardData & { canEdit: boolean };
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(typeof body?.error === "string" ? body.error : "Something went wrong");
-  return body as T;
+  return amcRequest<T>(url, init);
 }
 
 export const visitsService = {
   technicians() {
     return request<TechniciansResponse>("/api/amc-technicians");
+  },
+  /** The roster from Zoho FSM (read only there); AMC skills are kept. */
+  syncTechnicians() {
+    return request<{ onRoster: number | null; removed: number }>("/api/amc-technicians", { method: "POST" });
   },
   saveTechnician(fsmId: string, input: TechnicianProfileInput) {
     return request<{ ok: true }>(`/api/amc-technicians/${encodeURIComponent(fsmId)}`, {

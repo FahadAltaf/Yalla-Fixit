@@ -28,6 +28,8 @@ export function PropertyPickerField({
   requireComplete = false,
   onCompleteChange,
   defaults,
+  locked = false,
+  initial,
 }: {
   clientId: string;
   clientName: string;
@@ -39,37 +41,42 @@ export function PropertyPickerField({
   onCompleteChange?: (complete: boolean) => void;
   /** What is already known about the property, for a new address. */
   defaults?: { unitType?: string | null; propertyCategory?: string | null; community?: string | null };
+  /** The property is fixed (set on the enquiry): it can be edited, not changed. */
+  locked?: boolean;
+  /** The property as the page already has it (and what it lacks for a site visit), so it is not read again. */
+  initial?: { property: PickedProperty; missing?: string[] };
 }) {
   const addressForm = useAddressFormAccess();
-  const [property, setProperty] = useState<PickedProperty | null>(null);
+  const [property, setProperty] = useState<PickedProperty | null>(initial && initial.property.id === propertyId ? initial.property : null);
   const [dialog, setDialog] = useState<"add" | "edit" | null>(null);
   const [listKey, setListKey] = useState(0);
   const [loading, setLoading] = useState(false);
   /* What the address on file lacks for a site visit, checked for the property shown. */
-  const [checked, setChecked] = useState<{ id: string; missing: string[] } | null>(null);
+  const [checked, setChecked] = useState<{ id: string; missing: string[] } | null>(
+    initial && initial.property.id === propertyId && initial.missing ? { id: initial.property.id, missing: initial.missing } : null,
+  );
 
-  const checkComplete = async (id: string) => {
-    if (!requireComplete) return;
-    try {
-      const { addresses } = await amcContractsService.clientAddresses(clientId);
-      setChecked({ id, missing: addresses.find((a) => a.id === id)?.missing ?? [] });
-    } catch {
-      /* Unknown: the server checks again when the visit is booked. */
-      setChecked({ id, missing: [] });
-    }
+  /* One read of the property: its card, and (for a site visit) what its address lacks. */
+  const read = async (id: string) => {
+    const { property, siteVisitMissing } = await amcContractsService.propertyCard(id);
+    if (requireComplete) setChecked({ id, missing: siteVisitMissing });
+    return property;
   };
 
-  /* The property already chosen, read for its card (and checked, for a site visit). */
+  /* The property already chosen, read for its card unless the page handed it over. */
   useEffect(() => {
-    if (!propertyId || property?.id === propertyId) return;
+    if (!propertyId || (property?.id === propertyId && (!requireComplete || checked?.id === propertyId))) return;
     let stale = false;
     setLoading(true);
-    void checkComplete(propertyId);
-    amcContractsService
-      .property(propertyId)
+    read(propertyId)
       .then(
-        ({ overview }) => !stale && setProperty(overview.property),
-        (e: unknown) => !stale && toast.error(e instanceof Error ? e.message : "Could not read the property."),
+        (p) => !stale && setProperty(p),
+        (e: unknown) => {
+          if (stale) return;
+          /* Unknown: the server checks again when the visit is booked. */
+          setChecked({ id: propertyId, missing: [] });
+          toast.error(e instanceof Error ? e.message : "Could not read the property.");
+        },
       )
       .finally(() => !stale && setLoading(false));
     return () => {
@@ -93,9 +100,9 @@ export function PropertyPickerField({
     }
     setLoading(true);
     try {
-      const [{ overview }] = await Promise.all([amcContractsService.property(id), checkComplete(id)]);
-      setProperty(overview.property);
-      onChange(id, overview.property);
+      const p = await read(id);
+      setProperty(p);
+      onChange(id, p);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not read the property.");
     } finally {
@@ -124,7 +131,7 @@ export function PropertyPickerField({
           noteTone="warning"
           onEdit={addressForm ? () => setDialog("edit") : undefined}
           editLabel="Edit property"
-          onChange={() => void pick(null)}
+          onChange={locked ? undefined : () => void pick(null)}
           busy={loading}
         />
       ) : (

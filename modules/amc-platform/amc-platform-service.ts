@@ -3,6 +3,7 @@ import type { AmcRoleTemplate } from "@/lib/amc/role-templates";
 import type { AmcConfigHistoryItem } from "@/lib/server/amc/config";
 import type { AmcJobRunSummary } from "@/lib/server/amc/jobs";
 import type { InAppNotification } from "@/lib/server/amc/notifications";
+import { amcRequest } from "@/lib/amc/http-cache";
 
 /**
  * Browser calls for the AMC platform screens (Phase 1): configuration,
@@ -10,13 +11,7 @@ import type { InAppNotification } from "@/lib/server/amc/notifications";
  */
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(typeof body?.error === "string" ? body.error : "Something went wrong");
-  return body as T;
+  return amcRequest<T>(url, init);
 }
 
 export interface AmcConfigUser {

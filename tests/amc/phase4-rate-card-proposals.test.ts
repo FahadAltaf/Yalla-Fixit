@@ -251,3 +251,11 @@ test("migration: additive on the live table, history locked, the lock only from 
   assert.ok(live.length > 0);
   for (const stmt of live) assert.doesNotMatch(stmt, /DROP|ALTER COLUMN|RENAME/, stmt.slice(0, 80));
 });
+
+test("the card's frequencies bind only services counted in visits (a hotline is once a year)", () => {
+  /* ac-ppm allows 2 or 4 a year; a hotline-like service carrying the same list must not refuse its once a year. */
+  const asVisits = applyRateCard([row("ac-ppm", true, 1, 1)], card, "villa", "2026-10-07", 0, undefined, () => true);
+  assert.match(asVisits.problems[0] ?? "", /2, 4 times a year/);
+  const asHotline = applyRateCard([row("ac-ppm", true, 1, 1)], card, "villa", "2026-10-07", 0, undefined, () => false);
+  assert.equal(asHotline.problems.length, 0);
+});

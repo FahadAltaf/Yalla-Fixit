@@ -9,6 +9,7 @@ import type {
   VisitLineRecord,
   VisitRecord,
 } from "@/lib/server/amc/ppm";
+import { amcRequest } from "@/lib/amc/http-cache";
 
 /**
  * Browser calls for a contract's PPM schedule (Phase 8), through
@@ -30,13 +31,7 @@ export interface ScheduleActionResult {
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    ...init,
-    headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(typeof body?.error === "string" ? body.error : "Something went wrong");
-  return body as T;
+  return amcRequest<T>(url, init);
 }
 
 export const scheduleService = {

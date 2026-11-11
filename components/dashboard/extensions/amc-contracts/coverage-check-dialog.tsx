@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ActionDialogContent, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
 import { DatePickerField } from "@/components/dashboard/extensions/amc/components/date-picker-field";
@@ -26,6 +26,9 @@ import { formatContractDate } from "./contract-status";
 
 const AMC_STATUS_LABELS: Record<AmcCoverageStatus, string> = {
   active: "Active",
+  not_activated: "Not activated yet",
+  on_hold: "On hold",
+  terminated: "Terminated",
   not_started: "Not started",
   expired: "Expired",
   cancelled: "Cancelled",
@@ -59,8 +62,8 @@ export function CoverageCheckDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Opened from a contract page: check against that contract. */
-  contract?: { id: string; proposalNumber: string; customerName: string };
+  /** Opened from a contract page: check against that contract (its services listed first, its status said). */
+  contract?: { id: string; proposalNumber: string; customerName: string; serviceIds?: string[]; statusLabel?: string; active?: boolean };
 }) {
   const [catalogue, setCatalogue] = useState<CoverageCatalogueItem[]>([]);
   const [lookup, setLookup] = useState<"customer" | "contract">("customer");
@@ -79,6 +82,8 @@ export function CoverageCheckDialog({
     if (!open) return;
     setResult(null);
     setDate(todayInDubai());
+    /* From a contract: start on its first planned service rather than an empty choice. */
+    setServiceId("");
     amcContractsService.coverageCatalogue().then(
       ({ catalogue: items }) => setCatalogue(items),
       (e) => toast.error(e instanceof Error ? e.message : "Could not load the services."),
@@ -102,9 +107,14 @@ export function CoverageCheckDialog({
   }, [search, lookup, contract]);
 
   const planned = catalogue.filter((s) => !s.callOutClass);
+  /* From a contract: its own services first, the rest under "Not on this contract" (they answer Chargeable). */
+  const onContract = new Set(contract?.serviceIds ?? []);
+  const plannedOn = planned.filter((s) => onContract.has(s.id));
+  const plannedOff = planned.filter((s) => !onContract.has(s.id));
+  const chosenServiceId = serviceId || (contract && plannedOn[0] ? plannedOn[0].id : "");
   const callOutService =
     requestType === "planned" ? null : catalogue.find((s) => s.callOutClass === requestType) ?? null;
-  const effectiveServiceId = requestType === "planned" ? serviceId : callOutService?.id ?? "";
+  const effectiveServiceId = requestType === "planned" ? chosenServiceId : callOutService?.id ?? "";
   const target = contract ? { contractId: contract.id } : lookup === "contract" ? (picked ? { contractId: picked.id } : null) : customerRef.trim() ? { customerRef: customerRef.trim() } : null;
 
   const check = async () => {
@@ -138,12 +148,17 @@ export function CoverageCheckDialog({
           <DialogTitle>Check AMC coverage</DialogTitle>
           <DialogDescription>
             {contract
-              ? `Checks a request against AMC ${contract.proposalNumber} (${contract.customerName || "client"}). Nothing is recorded.`
-              : "Find out whether a request is covered by the client's AMC. Nothing is recorded."}
+              ? `Is a request covered by contract ${contract.proposalNumber} (${contract.customerName || "client"})? Only checks: nothing is booked or used up.`
+              : "Is a request covered by the client's AMC? Only checks: nothing is booked or used up."}
           </DialogDescription>
         </DialogHeader>
 
         <div className="grid gap-4 py-2">
+          {contract && contract.active === false ? (
+            <p className="border-warning/30 bg-warning/5 text-warning rounded-md border px-3 py-2 text-xs">
+              This contract is not active yet ({contract.statusLabel ?? "not active"}): nothing is covered until it is activated.
+            </p>
+          ) : null}
           {!contract ? (
             <div className="grid gap-2">
               <Tabs
@@ -232,16 +247,44 @@ export function CoverageCheckDialog({
           {requestType === "planned" ? (
             <div className="grid gap-2">
               <Label htmlFor="amc-cov-service">Service</Label>
-              <Select value={serviceId} onValueChange={setServiceId}>
+              <Select
+                value={chosenServiceId}
+                onValueChange={(value) => {
+                  setServiceId(value);
+                  setResult(null);
+                }}
+              >
                 <SelectTrigger className="w-full" id="amc-cov-service">
                   <SelectValue placeholder="Choose a service" />
                 </SelectTrigger>
                 <SelectContent>
-                  {planned.map((s) => (
-                    <SelectItem key={s.id} value={s.id}>
-                      {s.label}
-                    </SelectItem>
-                  ))}
+                  {contract && plannedOn.length ? (
+                    <>
+                      <SelectGroup>
+                        <SelectLabel>On this contract</SelectLabel>
+                        {plannedOn.map((s) => (
+                          <SelectItem key={s.id} value={s.id}>
+                            {s.label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                      <SelectSeparator />
+                      <SelectGroup>
+                        <SelectLabel>Not on this contract (chargeable)</SelectLabel>
+                        {plannedOff.map((s) => (
+                          <SelectItem key={s.id} value={s.id}>
+                            {s.label}
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </>
+                  ) : (
+                    planned.map((s) => (
+                      <SelectItem key={s.id} value={s.id}>
+                        {s.label}
+                      </SelectItem>
+                    ))
+                  )}
                 </SelectContent>
               </Select>
             </div>
@@ -282,7 +325,7 @@ export function CoverageCheckDialog({
           </Button>
           <SubmitButton
             onClick={() => void check()}
-            disabled={!target || !effectiveServiceId || !date}
+            disabled={!target || !effectiveServiceId || !date || contract?.active === false}
             pending={busy}
             pendingLabel="Checking…"
             icon={<ShieldCheck className="size-4" />}

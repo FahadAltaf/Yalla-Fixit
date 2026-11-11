@@ -23,7 +23,7 @@ import { Card } from "@/components/ui/card";
 import { Form } from "@/components/ui/form";
 import { amcSubmissionsService } from "@/modules/amc-submissions";
 
-import { getDefaultFormValues } from "./amc-constants";
+import { getDefaultFormValues, isFrequencyEditable } from "./amc-constants";
 import {
   formDataToSubmissionPayload,
   submissionToFormData,
@@ -239,7 +239,11 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
     const rows = form.getValues("serviceRows");
     /* A custom service (DEV-260) is not on the card: it keeps the price typed for it. */
     const cardable = rows.filter((row) => !isCustomServiceRow(row));
-    const { rows: carded } = applyRateCard(cardable, card.card, form.getValues("unitType"), rules.today, Number(form.getValues("discountPercent")) || 0);
+    /* The card's frequencies bind only services counted in visits (a hotline is once a year). */
+    const types = new Map((liveSettings ?? getAmcSettingsDefaults()).services.map((s) => [s.id, s.frequencyType]));
+    const { rows: carded } = applyRateCard(cardable, card.card, form.getValues("unitType"), rules.today, Number(form.getValues("discountPercent")) || 0, undefined, (id) =>
+      isFrequencyEditable(types.get(id)),
+    );
     const cardedById = new Map(carded.map((row) => [row.serviceId, row]));
     const next = rows.map((row) => {
       const priced = cardedById.get(row.serviceId);
@@ -248,7 +252,7 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
     if (JSON.stringify(next) !== JSON.stringify(rows)) {
       form.setValue("serviceRows", next as AmcFormData["serviceRows"], { shouldValidate: true });
     }
-  }, [rules, cardInputs, form, loadedTick]);
+  }, [rules, cardInputs, form, loadedTick, liveSettings]);
   const computed = useMemo(
     () => computeAmcData(watchedValues, "proposal", liveSettings),
     [watchedValues, liveSettings],
@@ -511,31 +515,43 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
       );
       return;
     }
-    if (
-      !(await confirm({
-        title: "Submit this proposal?",
-        description:
-          "The approval rules are checked now (discount, value, payment plan, floor rates). Within them it is ready to share at once; otherwise it goes up the approval ladder, and nothing reaches the client until it is approved.",
-        confirmText: "Submit",
-      }))
-    ) {
-      return;
-    }
+    /*
+      The confirmation stays open, its Submit button busy, until the server
+      has answered; then it closes. A refusal (a rate-card rule, a missing
+      field) is said in a toast.
+    */
+    /* What the dialog's work got back (a holder: closures do not narrow locals). */
+    const done: { id?: string; reply?: Awaited<ReturnType<typeof amcSubmissionsService.decide>> } = {};
+    const submitted = await confirm({
+      title: "Submit this proposal?",
+      description:
+        "The approval rules are checked now (discount, value, payment plan, floor rates). Within them it is ready to share at once; otherwise it goes up the approval ladder, and nothing reaches the client until it is approved.",
+      confirmText: "Submit",
+      action: async () => {
+        /* A refusal closes the dialog and is said in a toast, as before; the proposal stays open to correct. */
+        // A failed save has said so already; submitting would send the approver the previous version.
+        if (!(await persistDraft())) return;
+        const id = form.getValues("submissionId");
+        if (!id) {
+          toast.error("The draft hasn't been saved yet.");
+          return;
+        }
+        try {
+          done.reply = await amcSubmissionsService.decide({ action: "submit", id });
+          done.id = id;
+        } catch (error) {
+          console.error(error);
+          toast.error(getErrorMessage(error, "Couldn't submit this proposal for approval."));
+        }
+      },
+    });
+    const submissionId = done.id;
+    if (!submitted || !done.reply || !submissionId) return;
 
     setIsSubmitting(true);
     let leaving = false;
     try {
-      // A failed save has already said so; submitting now would send the
-      // approver the previous version.
-      if (!(await persistDraft())) return;
-
-      const submissionId = form.getValues("submissionId");
-      if (!submissionId) throw new Error("The draft hasn't been saved yet.");
-
-      const { outcome, warning } = await amcSubmissionsService.decide({
-        action: "submit",
-        id: submissionId,
-      });
+      const { outcome, warning } = done.reply;
       /*
         This used to rebuild the form from the approval route's reply --
         which carries only the fields the transition changed, not a whole

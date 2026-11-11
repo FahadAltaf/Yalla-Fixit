@@ -18,9 +18,9 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ enquiryId:
   const { enquiryId } = await ctx.params;
   if (!UUID.test(enquiryId)) return notFound();
   try {
-    const config = await readAmcConfig(gate.admin);
-    const enquiry = await getEnquiry(gate.admin, enquiryId, config);
-    const [followUps, siteVisits, history] = await Promise.all([
+    /* The follow-ups, visits and history need only the id: read with the enquiry, not after it. */
+    const [enquiry, followUps, siteVisits, history] = await Promise.all([
+      readAmcConfig(gate.admin).then((config) => getEnquiry(gate.admin, enquiryId, config)),
       listFollowUps(gate.admin, enquiryId),
       listSiteVisits(gate.admin, enquiryId),
       listStatusHistory(gate.admin, "enquiry", enquiryId),

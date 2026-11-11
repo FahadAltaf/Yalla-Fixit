@@ -50,6 +50,7 @@ import { readAmcSettings } from "@/lib/server/amc/settings";
 import { fsmFetch, getFsmAccessToken, FsmConfigError } from "@/lib/server/zoho/fsm-client";
 import { servicesForProperty } from "@/components/dashboard/extensions/amc/amc-settings";
 import { listScope } from "@/lib/server/amc/client-profile";
+import { isFrequencyEditable } from "@/components/dashboard/extensions/amc/amc-constants";
 
 /**
  * AMC business operations on the server: shared customers and properties
@@ -895,11 +896,17 @@ export async function loadContractRows(
   for (const r of raw) if (r.renewed_from_contract_id) renewedBy.set(String(r.renewed_from_contract_id), String(r.id));
 
   const proposals = new Map<string, { id: string; proposalNumber: string; status: string }>();
-  for (let i = 0; i < ids.length; i += 200) {
-    const { data } = await admin
-      .from("amc_submissions")
-      .select("id, proposal_number, status, renewal_of_contract_id")
-      .in("renewal_of_contract_id", ids.slice(i, i + 200));
+  /* A successor outside the caller's view still means "renewed". */
+  const missing = ids.filter((id) => !renewedBy.has(id));
+  const chunks = (list: string[]) => Array.from({ length: Math.ceil(list.length / 200) }, (_, i) => list.slice(i * 200, i * 200 + 200));
+  /* The renewal proposals and the successors are independent: every batch of both at once, not one after another. */
+  const [proposalPages, successorPages] = await Promise.all([
+    Promise.all(
+      chunks(ids).map((part) => admin.from("amc_submissions").select("id, proposal_number, status, renewal_of_contract_id").in("renewal_of_contract_id", part)),
+    ),
+    Promise.all(chunks(missing).map((part) => admin.from("amc_contracts").select("id, renewed_from_contract_id").in("renewed_from_contract_id", part))),
+  ]);
+  for (const { data } of proposalPages) {
     for (const p of (data ?? []) as Row[]) {
       proposals.set(String(p.renewal_of_contract_id), {
         id: String(p.id),
@@ -908,10 +915,7 @@ export async function loadContractRows(
       });
     }
   }
-  /* A successor outside the caller's view still means "renewed". */
-  const missing = ids.filter((id) => !renewedBy.has(id));
-  for (let i = 0; i < missing.length; i += 200) {
-    const { data } = await admin.from("amc_contracts").select("id, renewed_from_contract_id").in("renewed_from_contract_id", missing.slice(i, i + 200));
+  for (const { data } of successorPages) {
     for (const r of (data ?? []) as Row[]) renewedBy.set(String(r.renewed_from_contract_id), String(r.id));
   }
 
@@ -1041,9 +1045,10 @@ export async function customerOverview(admin: Admin, who: Visibility, customerId
   };
 }
 
-export async function propertyOverview(admin: Admin, who: Visibility, propertyId: string) {
+/** `known`: the property already being read by the caller (so it is read once). */
+export async function propertyOverview(admin: Admin, who: Visibility, propertyId: string, known?: Promise<PropertyRecord>) {
   const today = todayInDubai();
-  const property = await getProperty(admin, propertyId);
+  const property = await (known ?? getProperty(admin, propertyId));
   const [customer, rows, assessments, quotes] = await Promise.all([
     property.customerId ? getCustomer(admin, property.customerId).catch(() => null) : Promise.resolve(null),
     loadContractRows(admin, who, { propertyId }),
@@ -1518,7 +1523,9 @@ export async function createProposalFromAssessment(admin: Admin, id: string, act
   const lines = prefill.services.map((s) => (s.included && scopeFrequency.has(s.serviceId) ? { ...s, frequency: Math.trunc(scopeFrequency.get(s.serviceId)!) } : s));
   const priced = priceSubmission({
     /* Each line at a frequency the card allows (the scope or the service default may say 1). */
-    services: card ? snapToCardFrequencies(lines, card.card, prefill.property.unitType) : lines,
+    services: card
+      ? snapToCardFrequencies(lines, card.card, prefill.property.unitType, (id) => isFrequencyEditable(offered.find((s) => s.id === id)?.frequencyType))
+      : lines,
     discountPercent: 0,
     unitType: prefill.property.unitType,
     settings,

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useState, type ReactNode } from "react";
-import { CalendarCheck, Copy, ExternalLink, FileText, FileUp, Mail, MessageCircle, PhoneCall, Save, Search, ShieldCheck, Star } from "lucide-react";
+import { CalendarCheck, Copy, ExternalLink, FileText, Mail, MessageCircle, PhoneCall, Save, Search, ShieldCheck, Star } from "lucide-react";
 import { toast } from "sonner";
 
 import { ActionDialogContent, ErrorState, FieldsSkeleton, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
@@ -49,6 +49,7 @@ import {
   type ConfirmationState,
 } from "./visit-status";
 import { formatPhone } from "@/lib/phone/format-phone";
+import { crewGapMessages } from "./crew-gap";
 
 type Working = "whatsapp" | "email" | "attempt" | "access" | "upload" | "suggest" | "assign" | "pass" | null;
 
@@ -546,48 +547,40 @@ function AccessSection({ visit: v, canEdit, working, setWorking, changed }: Body
       "Could not open the pass.",
     );
 
+  /*
+    One Save: a pass file chosen goes to the visit's documents first, then the
+    access is saved pointing at it (the pass on file stays when none is chosen).
+    It used to need its own Upload button, and a file chosen then saved with
+    Save access was silently left behind.
+  */
   const save = () =>
     void run(
       "access",
       async () => {
+        const uploaded = passFile
+          ? (
+              await clientProfileService.uploadDocument({
+                file: passFile,
+                level: "visit",
+                entityId: v.id,
+                category: "Gate pass",
+                title: `Gate pass, visit ${v.visitNo}`,
+              })
+            ).document
+          : null;
         await visitsService.visitAction(v.id, {
           action: "access",
           status,
           validUntil: status === "approved" && validUntil ? validUntil : null,
-          note: note.trim() || null,
-        });
-        toast.success("Access saved");
-        await changed();
-      },
-      "Could not save the access.",
-    );
-
-  /* The pass goes to the visit's documents first, then the access is saved pointing at it. */
-  const uploadPass = () =>
-    void run(
-      "upload",
-      async () => {
-        if (!passFile) return;
-        const { document } = await clientProfileService.uploadDocument({
-          file: passFile,
-          level: "visit",
-          entityId: v.id,
-          category: "Gate pass",
-          title: `Gate pass, visit ${v.visitNo}`,
-        });
-        await visitsService.visitAction(v.id, {
-          action: "access",
-          status,
-          validUntil: status === "approved" && validUntil ? validUntil : null,
-          documentId: document.id,
+          ...(uploaded ? { documentId: uploaded.id } : {}),
           note: note.trim() || null,
         });
         setPassFile(null);
         setFileKey((k) => k + 1);
-        toast.success("Pass uploaded");
+        toast.success(uploaded ? "Access saved with the pass" : "Access saved");
         await changed();
       },
-      "Could not upload the pass.",
+      "Could not save the access.",
     );
 
   /* A pass that runs out before the visit day is no pass for it. */
@@ -662,7 +655,11 @@ function AccessSection({ visit: v, canEdit, working, setWorking, changed }: Body
           <Field
             id={ids.file}
             label="Pass file (optional)"
-            hint={`${v.accessDocumentId ? "A new pass replaces the one on file. " : ""}Kept with the visit's documents; the status, date and note above are saved with it.`}
+            hint={
+              passFile
+                ? `${passFile.name} is uploaded when you save${v.accessDocumentId ? ", replacing the pass on file" : ""}.`
+                : `${v.accessDocumentId ? "A new file replaces the pass on file. " : ""}Saved with the visit's documents when you save the access.`
+            }
           >
             <Input
               key={fileKey}
@@ -675,16 +672,12 @@ function AccessSection({ visit: v, canEdit, working, setWorking, changed }: Body
           </Field>
           <div className="flex flex-wrap justify-end gap-2">
             <SubmitButton
-              variant="outline"
-              pending={working === "upload"}
-              pendingLabel="Uploading…"
-              disabled={working !== null || !passFile}
-              icon={<FileUp className="size-4" />}
-              onClick={uploadPass}
+              pending={working === "access"}
+              pendingLabel={passFile ? "Uploading and saving…" : "Saving…"}
+              disabled={working !== null}
+              icon={<ShieldCheck className="size-4" />}
+              onClick={save}
             >
-              Upload pass
-            </SubmitButton>
-            <SubmitButton pending={working === "access"} pendingLabel="Saving…" disabled={working !== null} icon={<ShieldCheck className="size-4" />} onClick={save}>
               Save access
             </SubmitButton>
           </div>
@@ -868,11 +861,11 @@ function AssignmentSection({ visit: v, canEdit, working, setWorking, changed }: 
 
           {fresh ? (
             <>
-              {fresh.suggested.uncovered.length ? (
-                <div className="border-warning/30 bg-warning/5 text-warning rounded-lg border px-3 py-2 text-sm">
-                  Nobody free covers {fresh.suggested.uncovered.map((t) => TRADE_LABELS[t] ?? t).join(", ")} at that time.
+              {crewGapMessages(fresh).map((message) => (
+                <div key={message} className="border-warning/30 bg-warning/5 text-warning rounded-lg border px-3 py-2 text-sm">
+                  {message}
                 </div>
-              ) : null}
+              ))}
               <div className="grid gap-2">
                 <p className="text-sm font-medium">Available</p>
                 {fresh.candidates.length === 0 ? (

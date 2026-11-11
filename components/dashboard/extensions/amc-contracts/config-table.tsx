@@ -10,6 +10,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { amcRefresh } from "@/lib/amc/http-cache";
 
 /**
  * Toolbar for the AMC settings and report tables: the same shape as the
@@ -94,7 +95,7 @@ export function ConfigTableToolbar({
             </div>
           ) : null}
           {onRefresh ? (
-            <Button onClick={onRefresh} variant="outline" disabled={loading}>
+            <Button onClick={() => amcRefresh(onRefresh)} variant="outline" disabled={loading}>
               <RefreshCwIcon className="size-4 sm:mr-1" />
               <span className="hidden sm:inline">Refresh</span>
             </Button>

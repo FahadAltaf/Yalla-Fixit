@@ -1,14 +1,12 @@
 import type { CreateEnquiryInput, FollowUpInput, SiteVisitInput, StageChangeInput, UpdateEnquiryInput } from "@/lib/amc/enquiries";
 import type { EnquiryRecord, FollowUpRecord, SiteVisitSummary } from "@/lib/server/amc/enquiries";
 import type { StatusHistoryItem } from "@/lib/server/amc/status-history";
+import { amcRequest } from "@/lib/amc/http-cache";
 
 /** Browser calls for the AMC enquiry pipeline (Phase 3). */
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, { ...init, headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) } });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(typeof body?.error === "string" ? body.error : "Something went wrong");
-  return body as T;
+  return amcRequest<T>(url, init);
 }
 
 export type { CreateEnquiryInput, EnquiryRecord, FollowUpInput, FollowUpRecord, SiteVisitInput, SiteVisitSummary, StageChangeInput, StatusHistoryItem, UpdateEnquiryInput };

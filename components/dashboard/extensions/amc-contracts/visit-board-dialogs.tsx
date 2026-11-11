@@ -21,6 +21,7 @@ import { cn } from "@/lib/utils";
 import { visitsService, type BoardActionInput, type BoardVisit, type VisitSuggestion } from "@/modules/amc-contracts/visits-service";
 
 import { durationLabel, errorText, inWindow, reasonAsked, shortDate, windowLabel, type BoardTechnician } from "./visit-board-shared";
+import { crewGapMessages } from "./crew-gap";
 
 /**
  * The board's dialogs: place a visit (with the suggested crew), move
@@ -310,11 +311,11 @@ export function PlaceDialog({ open, onOpenChange, onDone, reload, request, techn
       ) : suggestion ? (
         <div className="grid gap-2">
           {stale ? <p className="text-warning text-xs">The date, time or duration changed: find technicians again for this slot.</p> : null}
-          {suggestion.suggested.uncovered.length ? (
-            <p className="text-warning text-xs">
-              Nobody free covers {suggestion.suggested.uncovered.map((t) => TRADE_LABELS[t]).join(", ")} at this time. Try another time or day.
+          {crewGapMessages(suggestion).map((message) => (
+            <p key={message} className="text-warning text-xs">
+              {message}
             </p>
-          ) : null}
+          ))}
           {pinnedBlocked ? (
             <p className="text-warning text-xs">
               {pinnedBlocked.name} cannot take it: {pinnedBlocked.blockers.join("; ").toLowerCase()}. The suggested crew is picked instead.

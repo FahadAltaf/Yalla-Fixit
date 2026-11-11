@@ -34,6 +34,7 @@ import { useDialog } from "./profile/use-dialog";
 import { SKILL_TONE } from "./visit-status";
 import { TruncatedText } from "@/components/ui/truncated-text";
 import { ModuleGuide } from "@/components/dashboard/extensions/amc-contracts/module-guide";
+import { amcRefresh } from "@/lib/amc/http-cache";
 
 const TRADE_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: "any", label: "All trades" },
@@ -51,6 +52,31 @@ const isExpired = (expires: string | null, today: string) => Boolean(expires && 
  */
 export function TechniciansPage() {
   const { data, error, loading, reload } = useAmcData(() => visitsService.technicians(), "technicians");
+  /*
+    Refresh pulls the roster from Zoho FSM first (new technicians, ones who
+    left), then reloads the list; it used to re-read the list only, with
+    nothing on screen to show it had done anything.
+  */
+  const [refreshing, setRefreshing] = useState(false);
+  const refresh = async () => {
+    setRefreshing(true);
+    try {
+      const synced = await visitsService.syncTechnicians().catch((e: unknown) => {
+        toast.warning(e instanceof Error ? e.message : "Could not reach Zoho FSM; showing the list as it is.");
+        return null;
+      });
+      amcRefresh(reload);
+      if (synced) {
+        toast.success(
+          synced.onRoster !== null
+            ? `Technicians refreshed from Zoho FSM: ${synced.onRoster} on the roster${synced.removed ? `, ${synced.removed} no longer active` : ""}.`
+            : "Technicians refreshed from Zoho FSM.",
+        );
+      }
+    } finally {
+      setRefreshing(false);
+    }
+  };
   const [search, setSearch] = useState("");
   const [trade, setTrade] = useState("any");
   const [activeOnly, setActiveOnly] = useState(true);
@@ -220,7 +246,8 @@ export function TechniciansPage() {
                 setPageSize(size);
                 setPage(0);
               }}
-              onRefresh={reload}
+              onRefresh={() => void refresh()}
+              refreshing={refreshing}
             />
           }
           emptyState={
@@ -286,6 +313,7 @@ function TechniciansToolbar({
   pageSize,
   onPageSizeChange,
   onRefresh,
+  refreshing = false,
 }: {
   search: string;
   onSearchChange: (value: string) => void;
@@ -297,6 +325,7 @@ function TechniciansToolbar({
   pageSize: number;
   onPageSizeChange: (size: number) => void;
   onRefresh: () => void;
+  refreshing?: boolean;
 }) {
   const searchId = useId();
   const rowsId = useId();
@@ -348,9 +377,9 @@ function TechniciansToolbar({
             </Select>
           </div>
 
-          <Button onClick={onRefresh} variant="outline" disabled={loading}>
-            <RefreshCwIcon className="size-4 sm:mr-1" />
-            <span className="hidden sm:inline">Refresh</span>
+          <Button onClick={onRefresh} variant="outline" disabled={loading || refreshing} aria-label="Refresh from Zoho FSM">
+            <RefreshCwIcon className={`size-4 sm:mr-1 ${refreshing ? "animate-spin" : ""}`} />
+            <span className="hidden sm:inline">{refreshing ? "Refreshing…" : "Refresh"}</span>
           </Button>
         </div>
       </div>
