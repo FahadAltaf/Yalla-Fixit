@@ -5,6 +5,7 @@ import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
 import {
   importFsmAppointmentsForDay,
   readUnplacedAppointments,
+  takesFsmAppointments,
   type UnplacedAppointment,
 } from "@/lib/server/zoho/import-appointments";
 import { reconcileFsmAppointments } from "@/lib/server/zoho/reconcile";
@@ -97,16 +98,16 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // FR-4: keep the day in step with Zoho FSM. New appointments are pulled in
-    // while the day is still editable (an approved day's entry list is fixed);
-    // statuses, times and crews of what is already on the board are refreshed
-    // either way.
+    // FR-4: keep the day in step with Zoho FSM. New appointments booked in FSM
+    // are pulled in on every day, published ones included (takesFsmAppointments:
+    // not while a publish is running); statuses, times and crews of what is
+    // already on the board are refreshed either way.
     let imported = 0;
     let fsmImport: Awaited<ReturnType<typeof importFsmAppointmentsForDay>> | null = null;
     let fsmFirstPull = false;
     // True when the re-read runs after this response instead of before it.
     let fsmRefreshing = false;
-    const editable = version.status === "draft" || version.status === "draft_revision";
+    const pullsFromFsm = takesFsmAppointments(version.status as string);
     const lastPull = version.fsm_imported_at ? new Date(version.fsm_imported_at).getTime() : 0;
     if (Date.now() - lastPull > FSM_REFRESH_MINUTES * 60_000) {
       // Claim the refresh before running it, so two people opening the day at
@@ -125,7 +126,7 @@ export async function GET(req: NextRequest) {
         fsmFirstPull = !version.fsm_imported_at;
         const versionId = version.id as string;
         const refresh = async () => {
-          const result = editable ? await importFsmAppointmentsForDay(admin, { date, versionId }) : null;
+          const result = pullsFromFsm ? await importFsmAppointmentsForDay(admin, { date, versionId }) : null;
           await reconcileFsmAppointments({ operatingDate: date });
           return result;
         };
@@ -171,7 +172,7 @@ export async function GET(req: NextRequest) {
         .gte("operating_date", addDaysToDateString(date, -CARRY_OVER_DAYS))
         .gt("end_at", dayStart)
         .order("start_at", { ascending: true }),
-      editable && !(fsmImport && !fsmImport.error)
+      pullsFromFsm && !(fsmImport && !fsmImport.error)
         ? readUnplacedAppointments(admin, versionId)
         : Promise.resolve<UnplacedAppointment[]>([]),
       admin.from("schedule_board_orders").select("technician_order").eq("schedule_date", date).maybeSingle(),
@@ -204,10 +205,10 @@ export async function GET(req: NextRequest) {
         });
     }
 
-    // FSM appointments for the date with nobody to draw them on. Only while
-    // the day still takes new bookings; an approved day's list is fixed.
+    // FSM appointments for the date with nobody to draw them on, on any day
+    // that takes FSM's bookings (published days included).
     let unplaced: UnplacedAppointment[] = [];
-    if (editable) unplaced = fsmImport && !fsmImport.error ? (fsmImport.unplaced ?? []) : unplacedStored;
+    if (pullsFromFsm) unplaced = fsmImport && !fsmImport.error ? (fsmImport.unplaced ?? []) : unplacedStored;
 
     // FR-13: the row order the team arranged for this day, if any. The table
     // is a later migration; without it the board simply has no saved order.

@@ -4,7 +4,7 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
 import { reconcileFsmAppointments } from "@/lib/server/zoho/reconcile";
-import { importFsmAppointmentsForDay } from "@/lib/server/zoho/import-appointments";
+import { importFsmAppointmentsForDay, takesFsmAppointments } from "@/lib/server/zoho/import-appointments";
 import { ActionType, ResourceType } from "@/types/types";
 
 // Reconciliation can take a few seconds per FSM read; a busy all-days sweep
@@ -48,8 +48,8 @@ export async function POST(req: NextRequest) {
     if (!result.ok) return NextResponse.json(result.json, { status: result.status });
 
     // FR-4: Refresh also picks up appointments booked directly in FSM since
-    // the day was last opened. Only for the date being viewed, and only while
-    // that day is still editable.
+    // the day was last opened, for the date being viewed, published days
+    // included (takesFsmAppointments: not while a publish is running).
     let imported = 0;
     let fsmImport: Awaited<ReturnType<typeof importFsmAppointmentsForDay>> | null = null;
     const date = parsed.data.date;
@@ -61,7 +61,7 @@ export async function POST(req: NextRequest) {
         .eq("schedule_date", date)
         .eq("is_current", true)
         .maybeSingle();
-      if (version && (version.status === "draft" || version.status === "draft_revision")) {
+      if (version && takesFsmAppointments(version.status as string)) {
         const importResult = await importFsmAppointmentsForDay(admin, { date, versionId: version.id });
         fsmImport = importResult;
         imported = importResult.imported;

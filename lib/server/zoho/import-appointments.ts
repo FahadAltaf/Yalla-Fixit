@@ -263,6 +263,21 @@ async function rememberUnplaced(
 }
 
 /**
+ * Whether a day's current version takes in appointments booked directly in
+ * Zoho FSM. Every state does except while a publish is running
+ * (approved_syncing). It used to be drafts only, so once a day was approved
+ * and published, a job booked in FSM afterwards (in practice same-day
+ * maintenance call-ins) never reached the board, while jobs booked ahead
+ * (Data Center) were already on it: "the schedule shows Data Center but not
+ * maintenance" (11 Nov 2026). These rows are FSM's own appointments, saved as
+ * already in sync, so they are never written back to FSM and do not reopen
+ * the approval; the approval still governs every change made in the portal.
+ */
+export function takesFsmAppointments(status: string | null | undefined): boolean {
+  return status !== "approved_syncing";
+}
+
+/**
  * Import the selected day's FSM appointments into its schedule version.
  *
  * Only appointments missing from the version are added, so it is safe to run
