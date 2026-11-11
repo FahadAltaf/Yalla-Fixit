@@ -1074,10 +1074,15 @@ export const snaggingService = {
 
   /** One address by id (with its document links): opening a form on it without reading the client's whole list and Zoho FSM. */
   getClientAddress: async (id: string): Promise<SnaggingProperty | null> =>
-    executeRESTBackend<{ data: SnaggingProperty | null }>("/api/snagging/properties", {
+    /*
+      executeRESTBackend already returns the reply's \`data\` (the address, or
+      null). Reading \`.data\` of it again always gave undefined, so every
+      "Complete the address" form said the address could not be found (11 Nov).
+    */
+    executeRESTBackend<SnaggingProperty | null>("/api/snagging/properties", {
       method: "GET",
       params: { id },
-    }).then((result) => result.data ?? null),
+    }).then((address) => address ?? null),
 
   createProperty: async (
     input: SnaggingPropertyInput,

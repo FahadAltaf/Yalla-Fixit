@@ -11,6 +11,7 @@ import {
   ListSkeleton,
   SectionSkeleton,
   SubmitButton,
+  useConfirm,
 } from "@/components/dashboard/shared/kaizen-states";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -251,6 +252,7 @@ export function RecordClientAnswerDialog({
   const [note, setNote] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
+  const { confirm, dialog } = useConfirm();
 
   /* What still stops Record, said under the form rather than left to a greyed-out button. */
   const missing = [
@@ -262,6 +264,18 @@ export function RecordClientAnswerDialog({
 
   const record = async () => {
     if (!answer || !file) return;
+    /* Every answer closes the client's link, and approval also makes the contract. */
+    const confirmed = await confirm({
+      title: answer === "approved" ? "Record the approval?" : `Record "${CLIENT_ANSWER_LABELS[answer]}"?`,
+      description:
+        `${clientName.trim()}'s answer goes on the proposal and the client's link closes. ` +
+        (answer === "approved"
+          ? "The proposal is locked as approved and the contract is created from it. This cannot be undone."
+          : "This cannot be undone."),
+      confirmText: answer === "approved" ? "Record the approval" : "Record the answer",
+      variant: answer === "rejected" ? "destructive" : "default",
+    });
+    if (!confirmed) return;
     setBusy(true);
     try {
       const { document } = await clientProfileService.uploadDocument({
@@ -286,6 +300,7 @@ export function RecordClientAnswerDialog({
   };
 
   return (
+    <>
     <Dialog open={open} onOpenChange={(value) => !busy && onOpenChange(value)}>
       <ActionDialogContent busy={busy} className="max-h-[88vh] overflow-y-auto sm:max-w-md">
         <DialogHeader>
@@ -356,5 +371,7 @@ export function RecordClientAnswerDialog({
         </DialogFooter>
       </ActionDialogContent>
     </Dialog>
+    {dialog}
+    </>
   );
 }

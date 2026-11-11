@@ -4,7 +4,7 @@ import { useEffect, useId, useState, type ReactNode } from "react";
 import { CalendarCheck, Copy, ExternalLink, FileText, Mail, MessageCircle, PhoneCall, Save, Search, ShieldCheck, Star } from "lucide-react";
 import { toast } from "sonner";
 
-import { ActionDialogContent, ErrorState, FieldsSkeleton, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
+import { ActionDialogContent, ErrorState, FieldsSkeleton, SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -312,6 +312,7 @@ function useRun({ setWorking }: Pick<BodyProps, "setWorking">) {
 
 function ConfirmationSection({ visit: v, canEdit, working, setWorking, changed }: BodyProps) {
   const run = useRun({ setWorking });
+  const { confirm, dialog } = useConfirm();
   const [prepared, setPrepared] = useState<{ text: string; link: string | null } | null>(null);
   const [channel, setChannel] = useState<Channel>("call");
   const [outcome, setOutcome] = useState<AttemptOutcome>("no_answer");
@@ -321,8 +322,18 @@ function ConfirmationSection({ visit: v, canEdit, working, setWorking, changed }
   const state = v.clientConfirmation as ConfirmationState | null;
   const { rule, attemptState: tries } = v;
 
-  const requestBy = (by: "whatsapp" | "email") =>
-    void run(
+  /* Both reach the client, and a sent request uses up one of the attempts. */
+  const requestBy = async (by: "whatsapp" | "email") => {
+    const confirmed = await confirm({
+      title: by === "whatsapp" ? "Send the request by WhatsApp?" : "Send the request by email?",
+      description:
+        `${v.customerName} will be asked to confirm the visit on ${formatContractDate(v.targetDate)}` +
+        (by === "whatsapp" ? ", and WhatsApp opens with the message ready to send. " : ". ") +
+        `It uses one of the ${rule.attemptCount} ${rule.attemptCount === 1 ? "attempt" : "attempts"} this contract allows.`,
+      confirmText: by === "whatsapp" ? "Prepare the message" : "Send the email",
+    });
+    if (!confirmed) return;
+    await run(
       by,
       async () => {
         const result = await visitsService.visitAction(v.id, { action: "request_confirmation", channel: by });
@@ -345,9 +356,22 @@ function ConfirmationSection({ visit: v, canEdit, working, setWorking, changed }
       },
       "Could not send the request.",
     );
+  };
 
-  const logAttempt = () =>
-    void run(
+  /* Confirmed or declined settles the confirmation; the rest spend an attempt. */
+  const logAttempt = async () => {
+    const settles = outcome === "confirmed" || outcome === "declined";
+    const confirmed = await confirm({
+      title: "Log this attempt?",
+      description:
+        `${channelLabel(channel)} · ${ATTEMPT_OUTCOME_LABELS[outcome]} goes on this visit's record for ${v.customerName}. ` +
+        (settles
+          ? `It settles the client's confirmation as ${outcome === "confirmed" ? "confirmed" : "declined"}.`
+          : `It counts towards the ${rule.attemptCount} ${rule.attemptCount === 1 ? "attempt" : "attempts"} this contract allows.`),
+      confirmText: "Log the attempt",
+    });
+    if (!confirmed) return;
+    await run(
       "attempt",
       async () => {
         await visitsService.visitAction(v.id, { action: "attempt", channel, outcome, note: note.trim() || null });
@@ -357,6 +381,7 @@ function ConfirmationSection({ visit: v, canEdit, working, setWorking, changed }
       },
       "Could not log the attempt.",
     );
+  };
 
   const copy = async (text: string) => {
     try {
@@ -369,6 +394,7 @@ function ConfirmationSection({ visit: v, canEdit, working, setWorking, changed }
 
   return (
     <>
+      {dialog}
       <div className="flex flex-wrap items-start justify-between gap-4 rounded-lg border px-4 py-4">
         <div className="min-w-0 space-y-1.5">
           <Badge variant="secondary" className={`border-0 font-medium ${state ? CONFIRMATION_TONE[state] : "bg-mist text-ink-soft"}`}>
@@ -399,7 +425,7 @@ function ConfirmationSection({ visit: v, canEdit, working, setWorking, changed }
               pendingLabel="Preparing…"
               disabled={working !== null}
               icon={<MessageCircle className="size-4" />}
-              onClick={() => requestBy("whatsapp")}
+              onClick={() => void requestBy("whatsapp")}
             >
               Send request by WhatsApp
             </SubmitButton>
@@ -409,7 +435,7 @@ function ConfirmationSection({ visit: v, canEdit, working, setWorking, changed }
               pendingLabel="Sending…"
               disabled={working !== null}
               icon={<Mail className="size-4" />}
-              onClick={() => requestBy("email")}
+              onClick={() => void requestBy("email")}
             >
               Send by email
             </SubmitButton>
@@ -479,7 +505,7 @@ function ConfirmationSection({ visit: v, canEdit, working, setWorking, changed }
               pendingLabel="Saving…"
               disabled={working !== null}
               icon={<PhoneCall className="size-4" />}
-              onClick={logAttempt}
+              onClick={() => void logAttempt()}
             >
               Log attempt
             </SubmitButton>
