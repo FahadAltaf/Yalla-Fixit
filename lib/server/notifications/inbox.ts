@@ -1,5 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import {
+  listMyNotifications as listAmcNotifications,
+  markNotificationsRead as markAmcNotificationsRead,
+} from "@/lib/server/amc/notifications";
+
 /**
  * A user's in-app notifications (BRD §6.2): newest first, the unread count,
  * and marking them read. Every function takes the user id from the caller's
@@ -65,18 +70,36 @@ export async function listMyNotifications(
   userId: string,
   options: { limit: number; offset: number; unreadOnly: boolean },
 ): Promise<{ notifications: InAppNotification[]; unread: number }> {
+  /*
+    Two stores feed one inbox: portal_notifications (Finance, Reports) and
+    AMC's own amc_notifications (approvals, client decisions, signatures,
+    payments), which predates it. Each is read down to the end of the page
+    asked for, the two are merged newest first, and the page is cut from
+    the merge, so paging stays correct across both.
+  */
+  const upTo = options.offset + options.limit;
   let list = inbox(admin, userId, COLUMNS)
     .order("created_at", { ascending: false })
     .order("id", { ascending: false })
-    .range(options.offset, options.offset + options.limit - 1);
+    .range(0, upTo - 1);
   if (options.unreadOnly) list = list.is("read_at", null);
 
-  const [page, unread] = await Promise.all([list, inbox(admin, userId, "id", true).is("read_at", null)]);
+  const [page, unread, amc] = await Promise.all([
+    list,
+    inbox(admin, userId, "id", true).is("read_at", null),
+    listAmcNotifications(admin as never, userId, upTo, { offset: 0, unreadOnly: options.unreadOnly }),
+  ]);
   if (page.error) throw new Error(page.error.message);
   if (unread.error) throw new Error(unread.error.message);
+  const merged = [
+    ...((page.data ?? []) as unknown as Row[]).map(toNotification),
+    ...amc.notifications.map(
+      (n): InAppNotification => ({ ...n, requiresAction: false, resolvedAt: null }),
+    ),
+  ].sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : a.id < b.id ? 1 : -1));
   return {
-    notifications: ((page.data ?? []) as unknown as Row[]).map(toNotification),
-    unread: unread.count ?? 0,
+    notifications: merged.slice(options.offset, upTo),
+    unread: (unread.count ?? 0) + amc.unread,
   };
 }
 
@@ -95,6 +118,8 @@ export async function markNotificationsRead(
   if (which !== "all") update = update.in("id", which);
   const { error } = await update;
   if (error) throw new Error(error.message);
+  /* AMC's notifications sit in their own table; an id from the other store matches nothing there. */
+  await markAmcNotificationsRead(admin as never, userId, which);
 }
 
 /**

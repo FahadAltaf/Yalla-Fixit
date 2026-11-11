@@ -1,0 +1,64 @@
+import type { AmcConfig } from "@/lib/amc/config";
+import type { RateCard } from "@/lib/amc/rate-card";
+import type { VersionReason } from "@/lib/amc/proposal-rules";
+import type { ProposalVersion } from "@/lib/server/amc/proposal-versions";
+import type { RateCardVersion } from "@/lib/server/amc/rate-card";
+import { amcRequest } from "@/lib/amc/http-cache";
+
+/** Browser calls for Phase 4: the rate card, the wizard's rules, versions, proposals from enquiries. */
+
+async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  return amcRequest<T>(url, init);
+}
+
+export type { ProposalVersion, RateCardVersion };
+
+export interface ProposalRules {
+  today: string;
+  rateCard: { id: string; versionNo: number; effectiveFrom: string; card: RateCard } | null;
+  payments: AmcConfig["payments"];
+  approvals: Pick<
+    AmcConfig["approvals"],
+    "level1Name" | "level2Name" | "level3Name" | "discountLevel1AbovePercent" | "discountLevel2AbovePercent" | "discountLevel3AbovePercent"
+  >;
+  validityDays: number;
+  /** The shortest contract AMC configuration allows, in months (BRD 5.7). */
+  minimumTermMonths?: number;
+}
+
+export interface RateCardResponse {
+  migrated: boolean;
+  today: string;
+  versions: RateCardVersion[];
+  inForceId: string | null;
+  services: Array<{ id: string; label: string; frequencyType: string }>;
+  canEdit: boolean;
+}
+
+export const proposalRulesService = {
+  rules() {
+    return request<ProposalRules>("/api/amc-proposal-rules");
+  },
+  rateCard() {
+    return request<RateCardResponse>("/api/amc-rate-card");
+  },
+  publishRateCard(input: { card: RateCard; effectiveFrom: string; reason: string }) {
+    return request<{ version: RateCardVersion }>("/api/amc-rate-card", { method: "POST", body: JSON.stringify(input) });
+  },
+  versions(submissionId: string) {
+    return request<{ versions: ProposalVersion[]; migrated: boolean }>(`/api/amc-submissions/versions?id=${encodeURIComponent(submissionId)}`);
+  },
+  revise(input: { id: string; reason: VersionReason; summary: string }) {
+    /* reopened: an approved proposal not yet sent, back to a draft of the same version. */
+    return request<{ versionNo: number; lockedVersionNo: number; reopened?: boolean }>("/api/amc-submissions/versions", { method: "POST", body: JSON.stringify(input) });
+  },
+  versionUrl(submissionId: string, versionNo: number) {
+    return request<{ url: string }>(`/api/amc-submissions/versions/file?id=${encodeURIComponent(submissionId)}&version=${versionNo}`);
+  },
+  proposalFromEnquiry(enquiryId: string) {
+    return request<{ submissionId: string; proposalNumber: string; source: "site_visit" | "scope" | "none"; warnings: string[] }>(
+      `/api/amc-enquiries/${enquiryId}/proposal`,
+      { method: "POST" },
+    );
+  },
+};

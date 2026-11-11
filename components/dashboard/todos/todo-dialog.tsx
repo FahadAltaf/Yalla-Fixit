@@ -1,11 +1,13 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { toast } from "sonner";
 import {
   AlignLeft,
   CalendarClock,
   Copy,
+  ExternalLink,
   History,
   Link2,
   Loader2,
@@ -51,6 +53,7 @@ import {
 } from "./attachments-panel";
 import { CommentComposer, MentionText } from "./comment-composer";
 import {
+  amcRecordHref,
   RELATED_TYPES,
   RELATED_TYPE_LABELS,
   TODO_STATUSES,
@@ -831,6 +834,13 @@ export function TodoDialog({
                 <DialogDescription className="sr-only">Todo {todo.todo_key}</DialogDescription>
               </div>
               <div className="flex shrink-0 items-center gap-1 pr-6">
+                {amcRecordHref(todo) && (
+                  <Button type="button" variant="ghost" size="sm" asChild>
+                    <Link href={amcRecordHref(todo)!}>
+                      <ExternalLink className="size-4" /> Open
+                    </Link>
+                  </Button>
+                )}
                 <Button type="button" variant="ghost" size="sm" onClick={() => onCopyLink(todo)}>
                   <Copy className="size-4" /> Copy link
                 </Button>

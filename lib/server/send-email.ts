@@ -1,6 +1,7 @@
 import { Resend } from "resend";
 
 import { withInlineLogo } from "@/lib/server/email-logo-attachment";
+import { applyEmailRedirect } from "@/lib/server/email-redirect";
 
 /**
  * Sends an email from server code, in process.
@@ -32,13 +33,10 @@ export type SendEmailInput = {
   };
 };
 
-export async function sendEmail({
-  to,
-  subject,
-  html,
-  cc,
-  attachment,
-}: SendEmailInput): Promise<{ data: { id?: string } | null }> {
+export async function sendEmail(input: SendEmailInput): Promise<{ data: { id?: string } | null }> {
+  /* Demo safety switch (lib/server/email-redirect.ts): unset in live. */
+  const { to, subject, html, cc } = applyEmailRedirect(input);
+  const { attachment } = input;
   /* RESEND_API_KEY (server-only). The NEXT_PUBLIC_ name is still read so a
      deployment that has not renamed it keeps working; a NEXT_PUBLIC_
      variable is inlined into any browser bundle that references it. */

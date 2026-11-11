@@ -24,12 +24,15 @@ export function PhoneInput({
   onChange,
   disabled,
   id,
+  ariaLabel,
 }: {
   value: string;
   onChange: (value: string) => void;
   disabled?: boolean;
   /** Ties the box to its label. */
   id?: string;
+  /** Names the box where there is no label to tie it to. */
+  ariaLabel?: string;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   /* The country picked in the box, for a pasted local number. */
@@ -119,7 +122,7 @@ export function PhoneInput({
         defaultCountry="ae"
         value={value}
         disabled={disabled}
-        inputProps={{ id }}
+        inputProps={{ id, "aria-label": ariaLabel }}
         onChange={(phone, meta) => {
           const digits = phone.replace(/\D/g, "");
           const dial = meta.country.dialCode;

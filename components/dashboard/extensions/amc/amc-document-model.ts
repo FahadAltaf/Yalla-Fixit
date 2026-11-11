@@ -16,11 +16,12 @@ import {
 import {
   formatDesignationLabel,
   formatDisplayDate,
-  formatPaymentTermsLabel,
+  formatPaymentLabel,
   withEquipment,
 } from "./amc-pricing";
 import type { AmcComputedData } from "./amc-types";
 import { AMC_SCOPE_LIBRARY } from "./amc-scope-library";
+import { libraryEntry } from "@/lib/amc/scope-defaults";
 
 /* A heading line in a library clause: short, and ending in a colon. */
 const isPartHeading = (block: string): boolean => /^[^.\n]{2,60}:$/.test(block.trim());
@@ -137,6 +138,14 @@ export function detailsTable(rows: [string, Run[] | string][]): Block {
   };
 }
 
+/* The contract's material coverage, as the coverage table prints it. */
+const COVERAGE_MATERIAL_LABELS: Record<string, string> = {
+  none: "No materials",
+  consumables: "Consumables",
+  parts_within_limit: "Parts within the limit",
+  all: "All materials",
+};
+
 /* Blank-line separated settings text, with this proposal's figures in. */
 function fillBlocks(value: string, data: AmcComputedData): string[] {
   return textBlocks(fillAmcTokens(value ?? "", data.formData.serviceRows, unlimitedServices(data)));
@@ -178,7 +187,11 @@ function opening(data: AmcComputedData): Block[] {
       kind: "meta",
       items: [
         { label: `AMC ${noun} Date:`, value: data.proposalDate },
-        { label: `AMC ${noun} Number:`, value: data.formData.proposalNumber || "—" },
+        /* A contract carries its own number (AMC-C-…) once it exists; before that, and on a proposal, the proposal's. */
+        {
+          label: `AMC ${noun} Number:`,
+          value: (data.documentType === "contract" ? data.formData.contractNumber : null) || data.formData.proposalNumber || "—",
+        },
       ],
     },
   ];
@@ -284,7 +297,7 @@ function contractBlocks(
       ],
     ],
     ["Amount in Words", totals.amountInWords],
-    ["Terms of Payment", [t(formatPaymentTermsLabel(formData.paymentTerms, totals.termMonths), { bold: true, tone: "brand" })]],
+    ["Terms of Payment", [t(formatPaymentLabel(formData, totals.termMonths), { bold: true, tone: "brand" })]],
   ]);
 
   const contacts = formData.coordinationContacts.filter((c) => c.name?.trim() || c.phone?.trim());
@@ -636,6 +649,51 @@ function contractBlocks(
   const invoiceTerms = fillRef(settings.clauses.invoiceTerms);
 
   /*
+    What each service covers (BRD 5.7, DEV-373), printed under the scope
+    and frequency table. The terms are set on the contract and mirrored
+    into the proposal's document options; a contract without them (or one
+    made before they existed) prints nothing extra.
+  */
+  const terms = formData.entitlementTerms ?? {};
+  const coverageServiceIds = [
+    ...frequencyRows.map((row) => row.serviceId).filter((id) => id in terms),
+    ...selectedIds.filter((id) => id in terms && !frequencyRows.some((row) => row.serviceId === id)),
+  ].filter((id, index, all) => all.indexOf(id) === index);
+  const serviceLabelOf = (serviceId: string) =>
+    frequencyRows.find((row) => row.serviceId === serviceId)?.scope ??
+    servicesForProperty(settings, formData.unitType).find((service) => service.id === serviceId)?.label ??
+    serviceId;
+  const coverageBlocks: Block[] = coverageServiceIds.length
+    ? [
+        { kind: "label", text: "What each service covers" },
+        {
+          kind: "table",
+          widths: [32, 12, 20, 14, 22],
+          header: [
+            headerCell("SERVICE"),
+            headerCell("LABOUR COVERED", "center"),
+            headerCell("MATERIALS"),
+            headerCell("VALUE LIMIT (AED)", "right"),
+            headerCell("EXCLUSIONS"),
+          ],
+          rows: zebra(
+            coverageServiceIds.map((serviceId) => {
+              const term = terms[serviceId];
+              return [
+                cell(serviceLabelOf(serviceId)),
+                cell(term.labourCovered ? "Yes" : "No", { align: "center" }),
+                cell(COVERAGE_MATERIAL_LABELS[term.materialCoverage] ?? term.materialCoverage),
+                cell(term.valueLimitAed != null ? amount(term.valueLimitAed) : "—", { align: "right" }),
+                /* None set on the contract: the scope clause above prints the library's exclusions for it. */
+                cell(term.exclusions?.trim() || (libraryEntry(serviceId) ? "As in its scope (Clause 2)" : "—")),
+              ];
+            }),
+          ),
+        },
+      ]
+    : [];
+
+  /*
     What a clause is called in the document.
 
     Three of them have never used a fixed title: 6.1 names the contract it
@@ -779,6 +837,7 @@ function contractBlocks(
               }),
             ),
           },
+          ...coverageBlocks,
         ];
       case "priceListIntro": {
         if (!formData.optionalSections?.supplyInstallPriceList) return [];
@@ -889,7 +948,7 @@ function contractBlocks(
           {
             kind: "paragraph",
             runs: [
-              t("Annual contract value: "),
+              t(totals.termMonths === 12 ? "Annual contract value: " : `Contract value for ${contractTermPhrase(totals.termMonths)}: `),
               t(`${formatCurrencyAED(totals.grandTotal)} (VAT inclusive).`, { bold: true }),
               ...(invoiceTerms[0] ? [t(` ${invoiceTerms[0]}`)] : []),
             ],

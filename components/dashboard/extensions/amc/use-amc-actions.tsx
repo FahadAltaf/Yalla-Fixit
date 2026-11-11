@@ -1,11 +1,15 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { Loader2, Undo2 } from "lucide-react";
+import { Copy, MessageCircle, Undo2, XCircle } from "lucide-react";
 import { saveAs } from "file-saver";
 import { toast } from "sonner";
 
-import { useConfirm } from "@/components/dashboard/shared/kaizen-states";
+import {
+  ActionDialogContent,
+  SubmitButton,
+  useConfirm,
+} from "@/components/dashboard/shared/kaizen-states";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -22,8 +26,7 @@ import { buildAmcPdfFromSubmission, savedSettingsFor } from "./amc-document-util
 import { AmcPreviewDialog, previewTitle, submissionPreviewData } from "./amc-preview-dialog";
 import { AMC_APPROVALS_CHANGED } from "./amc-approval-notice";
 import { AmcLinkDialog } from "./amc-link-dialog";
-import { ActionDialogContent } from "@/components/dashboard/shared/kaizen-states";
-import { AmcSendDialog, type AmcSendRequest } from "./amc-send-dialog";
+import { AmcSendDialog, shareChannelFor, type AmcSendChoice, type AmcSendDeliver, type AmcSendRequest } from "./amc-send-dialog";
 import type { AmcSettings } from "./amc-settings";
 import type { AmcDocumentType, AmcSubmission } from "./amc-types";
 
@@ -70,6 +73,10 @@ async function settingsFor(
 export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<void> }) {
   const [sendBackFor, setSendBackFor] = useState<AmcSubmission | null>(null);
   const [sendBackReason, setSendBackReason] = useState("");
+  /* Phase 5: reject at the approver's level (a reason is required), and the prepared WhatsApp messages. */
+  const [rejectFor, setRejectFor] = useState<AmcSubmission | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
+  const [whatsapp, setWhatsapp] = useState<{ text: string; messages: Array<{ name: string; address: string; url: string | null }> } | null>(null);
   const [deciding, setDeciding] = useState(false);
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
@@ -85,6 +92,9 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
     documentType: AmcDocumentType;
     settings?: AmcSettings;
   } | null>(null);
+  /* Kept apart from `preview`, so the document stays on screen while the
+     dialog animates closed instead of vanishing under it. */
+  const [previewOpen, setPreviewOpen] = useState(false);
   /*
     The link just minted, kept on screen.
 
@@ -101,20 +111,24 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
   */
   const decide = async (
     submission: AmcSubmission,
-    action: "approve" | "send_back",
+    action: "approve" | "send_back" | "reject",
     reason?: string,
   ) => {
+    let next: string | null = null;
     /* The decision itself, whichever way it goes. */
     const run = async () => {
       setDeciding(true);
       try {
-        await amcSubmissionsService.decide(
+        const { outcome } = await amcSubmissionsService.decide(
           action === "approve"
             ? { action: "approve", id: submission.id }
-            : { action: "send_back", id: submission.id, reason: reason ?? "" },
+            : { action, id: submission.id, reason: reason ?? "" },
         );
+        next = outcome && "handled" in outcome ? outcome.nextLevelName : null;
         setSendBackFor(null);
         setSendBackReason("");
+        setRejectFor(null);
+        setRejectReason("");
         window.dispatchEvent(new Event(AMC_APPROVALS_CHANGED));
         await onChanged();
       } finally {
@@ -146,9 +160,11 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
       });
       if (done) {
         toast.success(
-          sender
-            ? `Approved. ${sender} can now send it to the client.`
-            : "Approved. You can now send it to the client.",
+          next
+            ? `Approved at your level. It now waits for ${next}.`
+            : sender
+              ? `Approved. ${sender} can now send it to the client.`
+              : "Approved. You can now send it to the client.",
         );
       }
       return;
@@ -156,7 +172,7 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
 
     try {
       await run();
-      toast.success("Sent back to the owner with your note.");
+      toast.success(action === "reject" ? "Rejected. The owner sees your reason." : "Sent back to the owner with your note.");
     } catch (error) {
       console.error(error);
       toast.error(getErrorMessage(error, "Couldn't send this proposal back."));
@@ -191,15 +207,19 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
   const send = async (
     listRow: AmcSubmission,
     document: "proposal" | "contract",
-    deliver: "email" | "link",
-    to?: string,
+    choice: AmcSendChoice,
   ) => {
+    const { deliver, to } = choice;
     setSendingId(listRow.id);
     const label = document === "proposal" ? "proposal" : "contract";
     /* One toast from start to finish: building the link or sending the
        email takes a moment, and a click with no feedback gets repeated. */
     const toastId = toast.loading(
-      deliver === "link" ? `Creating the ${label} link…` : `Emailing the ${label} to the client…`,
+      deliver === "link"
+        ? `Creating the ${label} link…`
+        : deliver === "whatsapp"
+          ? "Preparing the WhatsApp message…"
+          : `Emailing the ${label} to the client…`,
     );
     try {
       // The document's own content, which the list row does not carry.
@@ -221,11 +241,16 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
         document,
         deliver,
         to,
+        ...(choice.recipients ? { recipients: choice.recipients, cc_owner: choice.ccOwner ?? true } : {}),
         ...pdf,
       });
       setSendRequest(null);
 
-      if (deliver === "link") {
+      if (deliver === "whatsapp") {
+        /* Prepared, not sent: the owner sends it from WhatsApp (BRD 5.6). */
+        setWhatsapp({ text: result.message ?? result.link, messages: result.messages ?? [] });
+        toast.success("Message ready. Open WhatsApp to send it.", { id: toastId });
+      } else if (deliver === "link") {
         /* Copied for the common case, and shown either way. */
         const copied = await navigator.clipboard
           .writeText(result.link)
@@ -302,6 +327,7 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
         ? (await amcSettingsService.getSettings().catch(() => null))?.settings
         : undefined;
       setPreview({ submission, documentType, settings });
+      setPreviewOpen(true);
     } finally {
       setViewingKey(null);
     }
@@ -322,8 +348,8 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
       />
       {preview ? (
         <AmcPreviewDialog
-          open
-          onOpenChange={(open) => !open && setPreview(null)}
+          open={previewOpen}
+          onOpenChange={setPreviewOpen}
           title={previewTitle(preview.submission)}
           documentType={preview.documentType}
           onDocumentTypeChange={(documentType) =>
@@ -345,10 +371,92 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
         request={sendRequest}
         pending={Boolean(sendRequest) && sendingId === sendRequest?.submission.id}
         onCancel={() => setSendRequest(null)}
-        onConfirm={(request, to) =>
-          void send(request.submission, request.document, request.deliver, to)
-        }
+        onConfirm={(request, choice) => void send(request.submission, request.document, choice)}
       />
+      <Dialog open={Boolean(whatsapp)} onOpenChange={(open) => !open && setWhatsapp(null)}>
+        {/* Prepared already: nothing runs from here, so it never blocks closing. */}
+        <ActionDialogContent busy={false} className="max-h-[88vh] overflow-y-auto sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Send on WhatsApp</DialogTitle>
+            <DialogDescription>
+              The proposal is marked as shared and the link is live. Open WhatsApp for each contact and press send.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-2">
+            <p className="bg-muted/40 rounded-md border p-3 text-sm whitespace-pre-wrap">{whatsapp?.text}</p>
+            <ul className="grid gap-2">
+              {(whatsapp?.messages ?? []).map((m) => (
+                <li key={m.address} className="flex items-center justify-between gap-2 text-sm">
+                  <span className="min-w-0 truncate">
+                    {m.name ? <span className="font-medium">{m.name} · </span> : null}
+                    {m.address}
+                  </span>
+                  {m.url ? (
+                    <Button asChild size="sm">
+                      <a href={m.url} target="_blank" rel="noopener noreferrer">
+                        <MessageCircle className="size-4" />
+                        Open WhatsApp
+                      </a>
+                    </Button>
+                  ) : (
+                    <span className="text-muted-foreground text-xs">Not a mobile number</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() =>
+                void navigator.clipboard.writeText(whatsapp?.text ?? "").then(
+                  () => toast.success("Message copied"),
+                  () => toast.error("Couldn't copy the message"),
+                )
+              }
+            >
+              <Copy className="size-4" />
+              Copy message
+            </Button>
+            <Button onClick={() => setWhatsapp(null)}>Done</Button>
+          </DialogFooter>
+        </ActionDialogContent>
+      </Dialog>
+      <Dialog open={Boolean(rejectFor)} onOpenChange={(open) => !open && !deciding && setRejectFor(null)}>
+        <ActionDialogContent busy={deciding} className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Reject this proposal</DialogTitle>
+            <DialogDescription>
+              It goes back to the owner with your reason and the rest of the approval ladder is cancelled. Nothing goes to the client.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-2 py-2">
+            <Label htmlFor="amc-reject-reason">Why?</Label>
+            <Textarea
+              id="amc-reject-reason"
+              rows={4}
+              value={rejectReason}
+              onChange={(event) => setRejectReason(event.target.value)}
+              placeholder="e.g. A 30% discount is outside what we can offer on this scope."
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRejectFor(null)} disabled={deciding}>
+              Cancel
+            </Button>
+            <SubmitButton
+              variant="destructive"
+              onClick={() => rejectFor && void decide(rejectFor, "reject", rejectReason.trim())}
+              disabled={rejectReason.trim().length === 0}
+              pending={deciding}
+              pendingLabel="Rejecting…"
+              icon={<XCircle className="size-4" />}
+            >
+              Reject
+            </SubmitButton>
+          </DialogFooter>
+        </ActionDialogContent>
+      </Dialog>
       <Dialog open={Boolean(sendBackFor)} onOpenChange={(open) => !open && closeSendBack()}>
         <ActionDialogContent busy={deciding} className="sm:max-w-md">
           <DialogHeader>
@@ -358,7 +466,7 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
               Nothing goes to the client.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-2">
+          <div className="grid gap-2 py-2">
             <Label htmlFor="amc-send-back-reason">What needs changing?</Label>
             <Textarea
               id="amc-send-back-reason"
@@ -374,15 +482,17 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
             </Button>
             {/* FR5.2 requires a reason, so the action stays disabled until
                 there is one rather than failing on the server. */}
-            <Button
+            <SubmitButton
               onClick={() =>
                 sendBackFor && void decide(sendBackFor, "send_back", sendBackReason.trim())
               }
-              disabled={deciding || sendBackReason.trim().length === 0}
+              disabled={sendBackReason.trim().length === 0}
+              pending={deciding}
+              pendingLabel="Sending back…"
+              icon={<Undo2 className="size-4" />}
             >
-              {deciding ? <Loader2 className="size-4 animate-spin" /> : <Undo2 className="size-4" />}
               Send back
-            </Button>
+            </SubmitButton>
           </DialogFooter>
         </ActionDialogContent>
       </Dialog>
@@ -393,11 +503,14 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
     dialogs,
     approve: (submission: AmcSubmission) => void decide(submission, "approve"),
     sendBack: (submission: AmcSubmission) => setSendBackFor(submission),
+    reject: (submission: AmcSubmission) => setRejectFor(submission),
     requestSend: (
       submission: AmcSubmission,
       document: "proposal" | "contract",
-      deliver: "email" | "link",
+      deliver: AmcSendDeliver,
     ) => setSendRequest({ submission, document, deliver }),
+    /* Phase 5: share a proposal on its category's default channel (WhatsApp residential, email commercial). */
+    share: (submission: AmcSubmission) => setSendRequest({ submission, document: "proposal", deliver: shareChannelFor(submission) }),
     download: (submission: AmcSubmission, documentType: AmcDocumentType, format: "pdf" | "docx") =>
       void download(submission, documentType, format),
     view: (submission: AmcSubmission, documentType: AmcDocumentType) =>

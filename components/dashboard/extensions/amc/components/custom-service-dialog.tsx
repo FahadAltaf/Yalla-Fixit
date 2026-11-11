@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -41,12 +41,17 @@ export function CustomServiceDialog({
   const [scope, setScope] = useState("");
   const [tried, setTried] = useState(false);
 
-  useEffect(() => {
-    if (!open) return;
-    setName(initial?.customName ?? "");
-    setScope(initial?.customScope ?? "");
-    setTried(false);
-  }, [open, initial]);
+  /* Filled from the service each time the dialog opens, during render rather
+     than in an effect, so a cancelled edit never leaks into the next one. */
+  const [wasOpen, setWasOpen] = useState(false);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) {
+      setName(initial?.customName ?? "");
+      setScope(initial?.customScope ?? "");
+      setTried(false);
+    }
+  }
 
   const missingName = !name.trim();
 

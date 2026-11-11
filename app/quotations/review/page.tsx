@@ -30,7 +30,8 @@ import { formatCurrencyAED } from "@/utils/format-currency";
 
 
 async function fetchQuotation(
-  estimateId: string
+  estimateId: string,
+  sig: string
 ): Promise<{
   quotation: QuotationData | null;
   isActionable: boolean;
@@ -43,7 +44,8 @@ async function fetchQuotation(
         "Content-Type": "application/json",
       },
       // Review page does not need dashboard-only extras.
-      body: JSON.stringify({ id: estimateId, fetchMode: "review" }),
+      /* The link's signature: without it the quotation is not served. */
+      body: JSON.stringify({ id: estimateId, fetchMode: "review", sig }),
       cache: "no-store",
     });
 
@@ -208,6 +210,7 @@ function EstimateStatusGuard({
 export default function ReviewQuotationPage() {
   const searchParams = useSearchParams();
   const estimateId = searchParams?.get("id");
+  const sig = searchParams?.get("sig") ?? "";
   const discountMode = searchParams?.get("mode");
   const [quotation, setQuotation] = useState<QuotationData | null>(null);
   const [currentStatus, setCurrentStatus] = useState<string | null>(null);
@@ -220,13 +223,13 @@ export default function ReviewQuotationPage() {
         return;
       };
       setIsLoading(true);
-      const { quotation, currentStatus } = await fetchQuotation(estimateId);
+      const { quotation, currentStatus } = await fetchQuotation(estimateId, sig);
       setQuotation(quotation);
       setCurrentStatus(currentStatus);
       setIsLoading(false);
     };
     void fetchData();
-  }, [estimateId]);
+  }, [estimateId, sig]);
 
   if (isLoading) {
     return <div className="flex items-center justify-center py-8 h-[calc(100vh)]"><Loader /></div>;
@@ -259,6 +262,7 @@ export default function ReviewQuotationPage() {
             <DownloadQuotationButton quotation={quotation} discountMode={mode} />
             <ActionSection
               estimateId={quotation.zohoEstimateId}
+              sig={sig}
               quotationNumber={quotation.quotationNumber}
               currentStatus={currentStatus}
               setCurrentStatus={setCurrentStatus}

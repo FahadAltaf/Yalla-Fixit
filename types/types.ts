@@ -124,6 +124,40 @@ export enum ResourceType {
      change without a code change. Separate from the email allowlist, which
      still decides who can open the extension at all (FRD §4). */
   AMC = "amc",
+  /* AMC operations staff who are neither the proposal owner nor an AMC
+     approver: View = every contract, Create = activate, Edit = record usage,
+     FSM links, customers and assessments, Approve = correct usage. Adds to
+     the owner/approver rules; it never takes anything away. */
+  AMC_OPERATIONS = "amc_operations",
+  /* BRD v0.3 6.7 (Phase 1). Each is granted per role in the Permissions
+     screen; admins inherit all of them. */
+  AMC_ENQUIRIES = "amc_enquiries", // enquiry pipeline: View / Create / Edit / Export
+  AMC_RATE_CARD = "amc_rate_card", // rate card: View / Edit (department head and Finance)
+  AMC_CONFIG = "amc_config", // configuration: View / Edit; Approve = thresholds and value bands (management)
+  AMC_PAYMENTS = "amc_payments", // payments: View / Create / Edit; Approve = initial-payment gate override
+  AMC_VISITS = "amc_visits", // visits: View / Create / Edit; Approve = supervisor closure
+  AMC_ALLOWANCES = "amc_allowances", // allowances: View; Approve = override and reversal
+  /*
+    One permission per AMC page, as Snagging and Extensions have (main,
+    20261008100000): a role can be given Contracts without Reports. View
+    opens the page; what can be DONE there is still the rights above
+    (AMC Approve, AMC Operations, Payments, Visits...). Enquiries,
+    Payments, the Visit board (AMC Visits), Rate card and Configuration
+    open on their existing permission.
+  */
+  AMC_PROPOSALS = "amc_proposals",
+  AMC_CONTRACTS = "amc_contracts",
+  AMC_CLIENTS = "amc_clients",
+  AMC_SITE_VISITS = "amc_site_visits",
+  AMC_TECHNICIANS = "amc_technicians",
+  AMC_REPORTS = "amc_reports",
+  AMC_FSM_MAPPING = "amc_fsm_mapping",
+  AMC_OPERATIONS_SETTINGS = "amc_operations_settings",
+  /* Phase 11 (20261012120000): View / Create / Edit; coverage overrides stay AMC Allowances (Approve). */
+  AMC_CALL_OUTS = "amc_call_outs",
+  AMC_ADDITIONAL_WORKS = "amc_additional_works",
+  /* Phase 13 (20261012140000): the renewals due view. */
+  AMC_RENEWALS = "amc_renewals",
   // Scheduling
   SCHEDULING = "scheduling",
   // Property Care / Snagging

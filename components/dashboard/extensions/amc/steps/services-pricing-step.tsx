@@ -1,6 +1,18 @@
 "use client";
 
-import { AlertTriangle, ListChecks, Plus, SlidersHorizontal, Trash2, UserRound } from "lucide-react";
+import { useState } from "react";
+import {
+  AlertTriangle,
+  BadgePercent,
+  CheckCircle2,
+  ListChecks,
+  Package as PackageIcon,
+  Plus,
+  SlidersHorizontal,
+  Trash2,
+  UserRound,
+  Wallet,
+} from "lucide-react";
 import type { UseFormReturn } from "react-hook-form";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -24,7 +36,7 @@ import {
 } from "@/components/ui/table";
 
 import { ServiceTable } from "../components/service-table";
-import { AMC_SERVICES, emptyPriceListRow, getServicesForUnitType } from "../amc-constants";
+import { emptyPriceListRow } from "../amc-constants";
 import { CLAUSE_6_3_HANDYMAN, stripListMarker } from "../amc-contract-content";
 import { Button } from "@/components/ui/button";
 import { Hint } from "@/components/ui/hint";
@@ -38,17 +50,47 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { AmcFormData, AmcPriceListRow } from "../amc-types";
+import {
+  servicesForProperty,
+  type AmcServiceDefinition,
+} from "../amc-settings";
+import { calculateAmcTotals, computeAmcData } from "../amc-pricing";
 import { contractClauseNumber } from "../amc-document-model";
-import { computeAmcData } from "../amc-pricing";
+import {
+  applyPackage,
+  nearestAllowedFrequency,
+  packagesFor,
+  rateItemFor,
+  type RatePackage,
+} from "@/lib/amc/rate-card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/utils";
+import {
+  PAYMENT_PLAN_LABELS,
+  allowedPaymentPlans,
+  approvalLevelName,
+  discountApprovalLevel,
+  isNonStandardPlan,
+  legacyTermsForPlan,
+  type CustomPlan,
+  type PaymentPlan,
+} from "@/lib/amc/proposal-rules";
+import { formatCurrencyAED } from "@/utils/format-currency";
+import type { ProposalRules } from "@/modules/amc-submissions";
+import { TruncatedText } from "@/components/ui/truncated-text";
 
 interface StepProps {
   form: UseFormReturn<AmcFormData>;
+  /** The services AMC Settings defines; the table offers these. */
+  catalogue: ReadonlyArray<AmcServiceDefinition>;
   /*
     The account managers an admin keeps in AMC Settings: a proposal picks
     one from that list and gets their direct number with them (Sharon,
     Oct 2026). Undefined while the settings are still loading.
   */
   settings?: AmcSettings;
+  /* Phase 4: the rate card in force, payment bands and discount thresholds; undefined while loading. */
+  rules?: ProposalRules | null;
 }
 
 /** The picker's "nobody" option (the second manager is optional). */
@@ -78,9 +120,12 @@ const MANAGER_KEPT = "__kept__";
   price services rows start from when the switch is turned on (AMC-057).
   The first paragraph of the clause is its title, the rest one rate each.
 */
-function standardFixedPriceRates(settings: AmcSettings | null | undefined): string[] {
+function standardFixedPriceRates(
+  settings: AmcSettings | null | undefined,
+): string[] {
   const body =
-    settings?.clauseList?.find((clause) => clause.role === "handymanRates")?.body ??
+    settings?.clauseList?.find((clause) => clause.role === "handymanRates")
+      ?.body ??
     settings?.clauses?.handymanRates ??
     "";
   const rates = body
@@ -90,31 +135,292 @@ function standardFixedPriceRates(settings: AmcSettings | null | undefined): stri
     .slice(1)
     .map((rate) => stripListMarker(rate).trim())
     .filter(Boolean);
-  return rates.length > 0 ? rates : CLAUSE_6_3_HANDYMAN.rates.map((rate) => rate.text);
+  return rates.length > 0
+    ? rates
+    : CLAUSE_6_3_HANDYMAN.rates.map((rate) => rate.text);
 }
 
 const unitTypeLabel = (unitType: string) =>
-  unitType === "villa" ? "villas" : unitType === "apartment" ? "apartments" : "offices";
+  unitType === "villa"
+    ? "villas"
+    : unitType === "apartment"
+      ? "apartments"
+      : "offices";
 
-export function ServicesPricingStep({ form, settings }: StepProps) {
+type CardInForce = NonNullable<NonNullable<ProposalRules["rateCard"]>>["card"];
+
+/** One package to pick: its name, how many services, what it says, and its lines. */
+function PackageCard({
+  selected,
+  onSelect,
+  icon,
+  title,
+  meta,
+  description,
+  lines,
+}: {
+  selected: boolean;
+  onSelect: () => void;
+  icon: React.ReactNode;
+  title: string;
+  meta: string;
+  description?: string;
+  lines?: Array<{ key: string; label: string; detail: string }>;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      onClick={onSelect}
+      className={cn(
+        "flex h-full flex-col gap-2 rounded-xl border p-4 text-left transition-colors",
+        selected
+          ? "border-brand bg-brand-50/50 ring-brand/20 ring-2"
+          : "hover:bg-muted/40",
+      )}
+    >
+      <div className="flex items-start justify-between gap-2">
+        <span className="flex items-center gap-2">
+          <span
+            className={cn(
+              "flex size-8 items-center justify-center rounded-lg border",
+              selected ? "border-brand/40 text-brand" : "text-muted-foreground",
+            )}
+          >
+            {icon}
+          </span>
+          <span>
+            <span className="block text-sm font-semibold">{title}</span>
+            <span className="text-muted-foreground block text-xs">{meta}</span>
+          </span>
+        </span>
+        {selected ? (
+          <CheckCircle2 className="text-brand size-4 shrink-0" aria-hidden />
+        ) : null}
+      </div>
+      {description ? (
+        <p className="text-muted-foreground text-xs leading-relaxed">
+          {description}
+        </p>
+      ) : null}
+      {lines?.length ? (
+        <ul className="grid gap-1 border-t pt-2">
+          {lines.map((l) => (
+            <li
+              key={l.key}
+              className="flex items-baseline justify-between gap-2 text-xs"
+            >
+              <TruncatedText className="font-medium">{l.label}</TruncatedText>
+              <span className="text-muted-foreground shrink-0 tabular-nums">
+                {l.detail}
+              </span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </button>
+  );
+}
+
+/** The shape of the rate card, its packages and the services while they load, so nothing jumps when they land. */
+function ServicesLoading() {
+  return (
+    <div className="space-y-4" aria-label="Loading the rate card">
+      <Skeleton className="h-9 w-full rounded-md" />
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        {Array.from({ length: 3 }, (_, i) => (
+          <Skeleton key={i} className="h-28 rounded-xl" />
+        ))}
+      </div>
+      <div className="space-y-2 rounded-xl border p-3">
+        {Array.from({ length: 6 }, (_, i) => (
+          <Skeleton key={i} className="h-10 w-full" />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A brochure package (BRD 5.3: Essential, Advantage, Premium, Complete, or
+ * build your own): picking one ticks its services with their units and
+ * visits a year. It shows the package the lines match, what it holds, and
+ * any of its lines the card cannot price on this property, so a package is
+ * never chosen blind.
+ */
+function PackageField({
+  form,
+  packages,
+  catalogue,
+  card,
+  model,
+}: {
+  form: UseFormReturn<AmcFormData>;
+  packages: RatePackage[];
+  catalogue: ReadonlyArray<AmcServiceDefinition>;
+  card: CardInForce;
+  model: string;
+}) {
+  const rows = form.watch("serviceRows") ?? [];
+  /* "Build your own" chosen on purpose, rather than read from the lines. */
+  const [ownChosen, setOwnChosen] = useState(false);
+  const label = (id: string) => catalogue.find((c) => c.id === id)?.label ?? id;
+  const isFree = (id: string) =>
+    catalogue.find((c) => c.id === id)?.includedFree === true;
+  const allowedFor = (id: string) =>
+    rateItemFor(card, id, model)?.allowedFrequencies ?? [];
+
+  /* The package the ticked lines are (frequencies as the card allows them). */
+  const matching =
+    packages.find((p) => {
+      const lines = new Map(p.lines.map((l) => [l.serviceId, l]));
+      const ticked = rows.filter((r) => r.included && !r.free);
+      return (
+        p.lines.every((l) => {
+          const row = rows.find((r) => r.serviceId === l.serviceId);
+          return (
+            Boolean(row?.included) &&
+            (isFree(l.serviceId) ||
+              (row!.units === l.units &&
+                row!.frequency ===
+                  nearestAllowedFrequency(
+                    allowedFor(l.serviceId),
+                    l.frequency,
+                  )))
+          );
+        }) && ticked.every((r) => lines.has(r.serviceId))
+      );
+    }) ?? null;
+  const value = ownChosen || !matching ? "own" : matching.id;
+  const shown = value === "own" ? null : matching;
+  /* Lines the card cannot price here: the proposal would not submit with them. */
+  const unpriced = shown
+    ? shown.lines
+        .filter(
+          (l) => !isFree(l.serviceId) && !rateItemFor(card, l.serviceId, model),
+        )
+        .map((l) => label(l.serviceId))
+    : [];
+
+  const choose = (id: string) => {
+    if (id === "own") {
+      setOwnChosen(true);
+      return;
+    }
+    const pkg = packages.find((p) => p.id === id);
+    if (!pkg) return;
+    setOwnChosen(false);
+    form.setValue(
+      "serviceRows",
+      applyPackage(form.getValues("serviceRows"), pkg),
+      { shouldValidate: true, shouldDirty: true },
+    );
+  };
+  const lineText = (l: RatePackage["lines"][number]) =>
+    isFree(l.serviceId)
+      ? "Included"
+      : `${l.units} unit${l.units === 1 ? "" : "s"} · ${nearestAllowedFrequency(allowedFor(l.serviceId), l.frequency)} a year`;
+
+  return (
+    <div className="grid gap-2">
+      <p className="text-sm font-medium" id="amc-package-label">
+        Package
+      </p>
+      {/* One card per package, as the brochure shows them; picking one ticks its services. */}
+      <div
+        role="radiogroup"
+        aria-labelledby="amc-package-label"
+        className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3"
+      >
+        <PackageCard
+          selected={value === "own"}
+          onSelect={() => choose("own")}
+          icon={<SlidersHorizontal className="size-4" />}
+          title="Build your own"
+          meta="Any services"
+          description="Tick the services yourself, with their units and visits a year."
+        />
+        {packages.map((p) => (
+          <PackageCard
+            key={p.id}
+            selected={value === p.id}
+            onSelect={() => choose(p.id)}
+            icon={<PackageIcon className="size-4" />}
+            title={p.name}
+            meta={`${p.lines.length} service${p.lines.length === 1 ? "" : "s"}`}
+            description={p.description || undefined}
+            lines={p.lines.map((l) => ({
+              key: l.serviceId,
+              label: label(l.serviceId),
+              detail: lineText(l),
+            }))}
+          />
+        ))}
+      </div>
+      {unpriced.length ? (
+        <p className="text-destructive text-xs">
+          {unpriced.join(", ")} {unpriced.length === 1 ? "has" : "have"} no rate
+          on the card for this property, so the proposal cannot be submitted
+          with {unpriced.length === 1 ? "it" : "them"}. Untick{" "}
+          {unpriced.length === 1 ? "it" : "them"}, or ask for the rate card to
+          be updated.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+export function ServicesPricingStep({
+  form,
+  catalogue,
+  settings,
+  rules,
+}: StepProps) {
+  const card = rules?.rateCard ?? null;
+  const model = form.watch("unitType");
+  const packages = card ? packagesFor(card.card, model) : [];
+  /* The visits a year the card allows per service on this model (BRD 5.3). */
+  const allowedFrequencies = (serviceId: string) =>
+    card
+      ? (rateItemFor(card.card, serviceId, model)?.allowedFrequencies ?? [])
+      : [];
+  const discount = form.watch("discountPercent") ?? 0;
+  const level = rules ? discountApprovalLevel(rules.approvals, discount) : 0;
+  const belowFloor = (form.watch("serviceRows") ?? []).some(
+    (row) => row.included && row.belowFloor,
+  );
   /* null while AMC Settings is loading, so the picker can say so instead of looking empty. */
   const savedManagers = settings
     ? settings.accountManagers.filter((manager) => manager.name.trim())
     : null;
   const unitType = form.watch("unitType");
-  // The catalogue's services this kind of property is not offered.
-  const offeredIds = new Set(getServicesForUnitType(unitType).map((service) => service.id));
-  const hiddenServices = AMC_SERVICES.filter((service) => !offeredIds.has(service.id)).map(
-    (service) => service.label,
+  /* Named, so an absence reads as a rule rather than as a missing row. */
+  const offeredIds = new Set(
+    servicesForProperty({ services: [...catalogue] }, unitType).map(
+      (s) => s.id,
+    ),
   );
+  const hiddenServices = catalogue
+    .filter(
+      (service) => service.enabled !== false && !offeredIds.has(service.id),
+    )
+    .map((service) => service.label.replace(/\s*\(.*?\)\s*/g, " ").trim());
   const showPriceList = form.watch("optionalSections.supplyInstallPriceList");
   const priceListRows = form.watch("priceListRows") ?? [];
-  const showFixedRates = form.watch("optionalSections.additionalFixedPriceServices");
+  const showFixedRates = form.watch(
+    "optionalSections.additionalFixedPriceServices",
+  );
   const fixedPriceRates = form.watch("fixedPriceRates") ?? [];
   /* The services decide which clauses print, and so the rates clause's number. */
   form.watch("serviceRows");
   const handymanClause =
-    showFixedRates && settings ? contractClauseNumber(computeAmcData(form.getValues(), "contract", settings), "handymanRates") : null;
+    showFixedRates && settings
+      ? contractClauseNumber(
+          computeAmcData(form.getValues(), "contract", settings),
+          "handymanRates",
+        )
+      : null;
 
   const setFixedRates = (next: string[]) =>
     form.setValue("fixedPriceRates", next, { shouldValidate: true });
@@ -149,32 +455,91 @@ export function ServicesPricingStep({ form, settings }: StepProps) {
             Contract services
           </h3>
           <p className="text-sm text-muted-foreground">
-            Tick each service this AMC covers, then set its units, visits per
-            year and base price. The price is base price × units × frequency,
-            and it updates as you type.
+            {card
+              ? "Tick each service this AMC covers and set its units and visits per year. Rates come from the rate card and cannot be changed here; the price is rate × units × frequency."
+              : "Tick each service this AMC covers, then set its units, visits per year and base price. The price is base price × units × frequency, and it updates as you type."}
           </p>
         </div>
-        <div className="space-y-4">
-          {/* FR1.4 — villa-only services stay hidden for apartments and
+        {rules === undefined ? (
+          <ServicesLoading />
+        ) : (
+          <>
+            {rules === null ? (
+              <Alert>
+                <AlertTriangle className="size-4" />
+                <AlertTitle className="text-xs font-medium">
+                  The rate card could not be loaded
+                </AlertTitle>
+                <AlertDescription className="text-xs">
+                  Prices are entered by hand for now. Reload the page to try the
+                  card again.
+                </AlertDescription>
+              </Alert>
+            ) : null}
+            {card ? (
+              <div className="rounded-md border bg-muted/30 px-3 py-2 text-xs">
+                <span className="text-muted-foreground">
+                  Rate card V{card.versionNo}, in force since{" "}
+                  {card.effectiveFrom.split("-").reverse().join("/")}.
+                  Promotions in date are applied.
+                </span>
+              </div>
+            ) : null}
+            {card && packages.length ? (
+              <PackageField
+                form={form}
+                packages={packages}
+                catalogue={catalogue}
+                card={card.card}
+                model={model}
+              />
+            ) : null}
+            <div className="space-y-4">
+              {/* FR1.4 — villa-only services stay hidden for apartments and
               offices. Naming them, so an absence reads as a rule rather
               than as a missing row. */}
-          {/* Read from the catalogue, since the library offers some services
+              {/* Read from the catalogue, since the library offers some services
               on offices or villas alone. */}
-          {hiddenServices.length > 0 && (
-            <Alert>
-              <AlertTriangle className="size-4" />
-              <AlertTitle className="text-xs font-medium">
-                Some services are not offered on {unitTypeLabel(unitType)}
-              </AlertTitle>
-              <AlertDescription className="text-xs">
-                Hidden here: {hiddenServices.join(", ")}.
-              </AlertDescription>
-            </Alert>
-          )}
+              {hiddenServices.length > 0 && (
+                <Alert>
+                  <AlertTriangle className="size-4" />
+                  <AlertTitle className="text-xs font-medium">
+                    Some services are not offered on {unitTypeLabel(unitType)}
+                  </AlertTitle>
+                  <AlertDescription className="text-xs">
+                    Hidden here: {hiddenServices.join(", ")}.
+                  </AlertDescription>
+                </Alert>
+              )}
 
-          <ServiceTable form={form} />
-        </div>
+              <ServiceTable
+                form={form}
+                catalogue={catalogue}
+                rateCard={!!card}
+                allowedFrequencies={card ? allowedFrequencies : undefined}
+                discountNote={
+                  rules ? (
+                    <p
+                      className={`flex items-center gap-1.5 text-xs ${level ? "text-warning" : "text-muted-foreground"}`}
+                    >
+                      <BadgePercent className="size-3.5" />
+                      {level
+                        ? `A ${discount}% discount needs ${approvalLevelName(rules.approvals, level)} approval.`
+                        : "This discount is within the standard authority."}
+                      {belowFloor
+                        ? " One or more lines fall below their floor rate, which also needs approval."
+                        : ""}
+                    </p>
+                  ) : null
+                }
+              />
+            </div>
+          </>
+        )}
       </section>
+
+      {/* DEV-366: the plan replaces monthly / quarterly / annual. */}
+      <PaymentPlanSection form={form} rules={rules} />
 
       {/* FR4.4 / §8.2 — clause 1.1 names one or two account managers with
           a direct number. Chosen here, per client. */}
@@ -185,9 +550,9 @@ export function ServicesPricingStep({ form, settings }: StepProps) {
             Account managers
           </h3>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Choose the account managers assigned to this client. Their names and direct contact numbers will appear in the contract for support.
+            Choose the account managers assigned to this client. Their names and
+            direct contact numbers will appear in the contract for support.
           </p>
-
         </div>
         {/*
           A box each, rather than four fields in a row.
@@ -206,7 +571,9 @@ export function ServicesPricingStep({ form, settings }: StepProps) {
               form={form}
               index={index}
               saved={savedManagers}
-              taken={form.watch(`accountManagers.${index === 0 ? 1 : 0}.name`) ?? ""}
+              taken={
+                form.watch(`accountManagers.${index === 0 ? 1 : 0}.name`) ?? ""
+              }
             />
           ))}
         </div>
@@ -265,7 +632,9 @@ export function ServicesPricingStep({ form, settings }: StepProps) {
                           <TableHead>Category</TableHead>
                           <TableHead>Description</TableHead>
                           <TableHead className="w-[130px]">Brand</TableHead>
-                          <TableHead className="w-[120px]">Price (AED)</TableHead>
+                          <TableHead className="w-[120px]">
+                            Price (AED)
+                          </TableHead>
                           <TableHead className="w-10">
                             <span className="sr-only">Remove</span>
                           </TableHead>
@@ -349,8 +718,7 @@ export function ServicesPricingStep({ form, settings }: StepProps) {
                     Additional fixed price services
                   </FormLabel>
                   <p className="text-xs text-muted-foreground">
-                    The hourly rates for handyman work beyond the free
-                    hours.
+                    The hourly rates for handyman work beyond the free hours.
                   </p>
                 </div>
                 <FormControl>
@@ -360,7 +728,10 @@ export function ServicesPricingStep({ form, settings }: StepProps) {
                       field.onChange(checked);
                       /* On, it asks for the rates, starting from the
                          standard ones in AMC Settings (AMC-057). */
-                      if (checked && !fixedPriceRates.some((rate) => rate.trim())) {
+                      if (
+                        checked &&
+                        !fixedPriceRates.some((rate) => rate.trim())
+                      ) {
                         setFixedRates(standardFixedPriceRates(settings));
                       }
                     }}
@@ -381,8 +752,11 @@ export function ServicesPricingStep({ form, settings }: StepProps) {
                     <p className="text-muted-foreground text-xs">
                       {/* The clause's number moves with what else is on the contract (AMC-057: it said 6.3, the contract printed 5.3). */}
                       One rate per line, as it prints in{" "}
-                      {handymanClause ? `clause ${handymanClause}` : "its own clause"}{" "}
-                      of the contract. These start from the standard rates in AMC Settings and apply to this proposal only.
+                      {handymanClause
+                        ? `clause ${handymanClause}`
+                        : "its own clause"}{" "}
+                      of the contract. These start from the standard rates in
+                      AMC Settings and apply to this proposal only.
                     </p>
                     {fixedPriceRates.map((rate, index) => (
                       <div key={index} className="flex items-center gap-2">
@@ -410,7 +784,9 @@ export function ServicesPricingStep({ form, settings }: StepProps) {
                             size="icon"
                             className="text-muted-foreground hover:text-destructive size-8 shrink-0"
                             onClick={() =>
-                              setFixedRates(fixedPriceRates.filter((_, i) => i !== index))
+                              setFixedRates(
+                                fixedPriceRates.filter((_, i) => i !== index),
+                              )
                             }
                             aria-label={`Remove fixed price rate ${index + 1}`}
                           >
@@ -433,7 +809,9 @@ export function ServicesPricingStep({ form, settings }: StepProps) {
                       <button
                         type="button"
                         className="text-primary text-xs font-medium hover:underline"
-                        onClick={() => setFixedRates(standardFixedPriceRates(settings))}
+                        onClick={() =>
+                          setFixedRates(standardFixedPriceRates(settings))
+                        }
                       >
                         Reset to the standard rates
                       </button>
@@ -476,15 +854,28 @@ function AccountManagerField({
   const phone = form.watch(phoneField) ?? "";
   /* Ignoring case and spacing: "ahmed khan " on a proposal is the Settings entry "Ahmed Khan". */
   const sameName = (a: string, b: string) =>
-    a.trim().replace(/\s+/g, " ").toLowerCase() === b.trim().replace(/\s+/g, " ").toLowerCase();
+    a.trim().replace(/\s+/g, " ").toLowerCase() ===
+    b.trim().replace(/\s+/g, " ").toLowerCase();
   const all = saved ?? [];
-  const matched = (name.trim() ? all.find((manager) => sameName(manager.name, name)) : null) ?? null;
-  const list = all.filter((manager) => !taken.trim() || !sameName(manager.name, taken) || manager === matched);
+  const matched =
+    (name.trim()
+      ? all.find((manager) => sameName(manager.name, name))
+      : null) ?? null;
+  const list = all.filter(
+    (manager) =>
+      !taken.trim() || !sameName(manager.name, taken) || manager === matched,
+  );
   const kept = !matched && name.trim() ? { name: name.trim(), phone } : null;
 
   const set = (value: { name: string; phone: string }) => {
-    form.setValue(nameField, value.name, { shouldValidate: true, shouldDirty: true });
-    form.setValue(phoneField, value.phone, { shouldValidate: true, shouldDirty: true });
+    form.setValue(nameField, value.name, {
+      shouldValidate: true,
+      shouldDirty: true,
+    });
+    form.setValue(phoneField, value.phone, {
+      shouldValidate: true,
+      shouldDirty: true,
+    });
   };
 
   const shown = matched ?? kept;
@@ -497,7 +888,9 @@ function AccountManagerField({
     <div className="space-y-3 rounded-lg border p-4">
       <div className="flex items-baseline justify-between gap-2">
         <h4 className="text-sm font-medium">Account manager {index + 1}</h4>
-        {index === 1 ? <span className="text-muted-foreground text-xs">Optional</span> : null}
+        {index === 1 ? (
+          <span className="text-muted-foreground text-xs">Optional</span>
+        ) : null}
       </div>
 
       <Select
@@ -529,7 +922,11 @@ function AccountManagerField({
         </SelectTrigger>
         <SelectContent position="popper" sideOffset={4} className="max-h-72">
           {list.map((manager) => (
-            <SelectItem key={manager.name} value={manager.name} className="py-2">
+            <SelectItem
+              key={manager.name}
+              value={manager.name}
+              className="py-2"
+            >
               <span className="flex w-full items-center justify-between gap-4">
                 <span className="truncate">{manager.name}</span>
                 <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
@@ -541,13 +938,18 @@ function AccountManagerField({
           {kept ? (
             <SelectItem value={MANAGER_KEPT} className="py-2">
               <span className="truncate">{kept.name}</span>
-              <span className="text-muted-foreground ml-2 text-xs">Not in AMC Settings</span>
+              <span className="text-muted-foreground ml-2 text-xs">
+                Not in AMC Settings
+              </span>
             </SelectItem>
           ) : null}
           {name.trim() || index === 1 ? (
             <>
               {list.length || kept ? <SelectSeparator /> : null}
-              <SelectItem value={MANAGER_NONE} className="text-muted-foreground py-2">
+              <SelectItem
+                value={MANAGER_NONE}
+                className="text-muted-foreground py-2"
+              >
                 None
               </SelectItem>
             </>
@@ -561,19 +963,197 @@ function AccountManagerField({
           Settings list exists to keep right.
         */
         <div className="bg-muted/40 flex items-center justify-between gap-3 rounded-md px-3 py-2">
-          <span className="text-sm tabular-nums">{formatPhoneForDocument(shown.phone) || "No number on file"}</span>
-          <span className="text-muted-foreground text-xs">{matched ? "From AMC Settings" : "Saved with this proposal"}</span>
+          <span className="text-sm tabular-nums">
+            {formatPhoneForDocument(shown.phone) || "No number on file"}
+          </span>
+          <span className="text-muted-foreground text-xs">
+            {matched ? "From AMC Settings" : "Saved with this proposal"}
+          </span>
         </div>
       ) : allTaken ? (
         <p className="text-muted-foreground text-xs">
-          The only account manager in AMC Settings is already account manager {index === 0 ? 2 : 1}. Add another under AMC
-          Settings to name a second one.
+          The only account manager in AMC Settings is already account manager{" "}
+          {index === 0 ? 2 : 1}. Add another under AMC Settings to name a second
+          one.
         </p>
       ) : empty ? (
         <p className="text-muted-foreground text-xs">
-          An administrator adds account managers, with their direct numbers, under AMC Settings. They can then be chosen here.
+          An administrator adds account managers, with their direct numbers,
+          under AMC Settings. They can then be chosen here.
         </p>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * How the client pays (BRD 5.8, DEV-366): one payment below the value band;
+ * above it the configured plans, plus a custom plan when allowed. A plan
+ * outside the band is kept but marked, because it needs approval.
+ */
+function PaymentPlanSection({
+  form,
+  rules,
+}: {
+  form: UseFormReturn<AmcFormData>;
+  rules?: ProposalRules | null;
+}) {
+  const values = form.watch();
+  const finalPrice = calculateAmcTotals(values).finalPrice;
+  const plan: PaymentPlan = values.paymentPlan ?? "single";
+  const custom: CustomPlan = values.paymentPlanCustom ?? [];
+  const allowed = rules
+    ? allowedPaymentPlans(rules.payments, finalPrice)
+    : ([
+        "single",
+        "fifty_fifty",
+        "quarterly",
+        "monthly",
+        "custom",
+      ] as PaymentPlan[]);
+  const options = allowed.includes(plan) ? allowed : [plan, ...allowed];
+  const nonStandard = rules
+    ? isNonStandardPlan(rules.payments, finalPrice, plan)
+    : false;
+  const total = custom.reduce(
+    (sum, row) => sum + (Number(row.percent) || 0),
+    0,
+  );
+
+  const setPlan = (next: PaymentPlan) => {
+    form.setValue("paymentPlan", next, {
+      shouldValidate: true,
+      shouldDirty: true,
+    });
+    /* The legacy reading live main prints (lib/amc/proposal-rules.ts). */
+    form.setValue("paymentTerms", legacyTermsForPlan(next), {
+      shouldValidate: true,
+    });
+    if (next === "custom" && custom.length === 0) {
+      form.setValue(
+        "paymentPlanCustom",
+        [
+          { label: "On signing", percent: 50 },
+          { label: "After six months", percent: 50 },
+        ],
+        { shouldValidate: true },
+      );
+    }
+  };
+  const setCustom = (rows: CustomPlan) =>
+    form.setValue("paymentPlanCustom", rows, {
+      shouldValidate: true,
+      shouldDirty: true,
+    });
+
+  return (
+    <section className="space-y-4">
+      <div>
+        <h3 className="flex items-center gap-2 text-base font-semibold">
+          <Wallet className="text-brand size-4" />
+          Payment plan
+        </h3>
+        <p className="text-muted-foreground mt-0.5 text-sm">
+          {rules
+            ? finalPrice < rules.payments.singlePaymentBelowAed
+              ? `Below ${formatCurrencyAED(rules.payments.singlePaymentBelowAed)} a year the AMC is paid in one payment.`
+              : `From ${formatCurrencyAED(rules.payments.singlePaymentBelowAed)} a year the client can pay in instalments.`
+            : "How the client pays the annual fee."}
+        </p>
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Select
+          value={plan}
+          onValueChange={(value) => setPlan(value as PaymentPlan)}
+        >
+          <SelectTrigger className="w-full" aria-label="Payment plan">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {options.map((option) => (
+              <SelectItem key={option} value={option}>
+                {PAYMENT_PLAN_LABELS[option]}
+                {!allowed.includes(option) ? " (outside the band)" : ""}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        {nonStandard ? (
+          <p className="text-warning text-xs">
+            {plan === "custom"
+              ? "A custom plan"
+              : "This plan is outside the standard plans for this value and"}{" "}
+            needs approval.
+          </p>
+        ) : null}
+      </div>
+      {plan === "custom" ? (
+        <div className="space-y-2 rounded-md border p-3">
+          {custom.map((row, index) => (
+            <div key={index} className="flex items-center gap-2">
+              <Input
+                className="h-8 flex-1 text-xs"
+                value={row.label}
+                placeholder="When (e.g. On signing)"
+                aria-label={`Instalment ${index + 1} name`}
+                onChange={(event) =>
+                  setCustom(
+                    custom.map((r, i) =>
+                      i === index ? { ...r, label: event.target.value } : r,
+                    ),
+                  )
+                }
+              />
+              <Input
+                className="h-8 w-24 text-xs"
+                type="number"
+                min={1}
+                max={100}
+                value={row.percent}
+                aria-label={`Instalment ${index + 1} percent`}
+                onChange={(event) =>
+                  setCustom(
+                    custom.map((r, i) =>
+                      i === index
+                        ? { ...r, percent: Number(event.target.value) || 0 }
+                        : r,
+                    ),
+                  )
+                }
+              />
+              <span className="text-muted-foreground text-xs">%</span>
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="size-8"
+                disabled={custom.length <= 2}
+                aria-label={`Remove instalment ${index + 1}`}
+                onClick={() => setCustom(custom.filter((_, i) => i !== index))}
+              >
+                <Trash2 className="size-4" />
+              </Button>
+            </div>
+          ))}
+          <div className="flex items-center justify-between">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={custom.length >= 12}
+              onClick={() => setCustom([...custom, { label: "", percent: 0 }])}
+            >
+              <Plus className="size-4" />
+              Add instalment
+            </Button>
+            <span
+              className={`text-xs tabular-nums ${Math.abs(total - 100) < 0.01 ? "text-muted-foreground" : "text-destructive"}`}
+            >
+              {total}% of 100%
+            </span>
+          </div>
+        </div>
+      ) : null}
+    </section>
   );
 }

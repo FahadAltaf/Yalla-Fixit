@@ -9,6 +9,19 @@ import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
 import { ActionType, ResourceType } from "@/types/types";
+import {
+  STALE_CLIENT_DECISION_FIELDS,
+  checkInternalTransition,
+} from "@/lib/amc/workflow";
+import { submittableProblem } from "@/lib/server/amc/pricing";
+import { submissionRateProblem } from "@/lib/server/amc/rate-card";
+import { notifyProposalEvent } from "@/lib/server/amc/notifications";
+import { decideStep, shareProposal } from "@/lib/server/amc/approval-ladder";
+import { readAmcConfig } from "@/lib/server/amc/config";
+import { ContractError } from "@/lib/server/amc/contracts";
+import { siteVisitProblem } from "@/lib/server/amc/enquiry-proposal";
+import { checkTerm } from "@/lib/amc/contract-lifecycle";
+import { proposalTermMonths } from "@/lib/amc/contracts";
 
 /**
  * The internal half of the approval flow (FR5.1–FR5.3, FR5.9).
@@ -22,13 +35,28 @@ import { ActionType, ResourceType } from "@/types/types";
  * 'approved'.
  *
  * Two gates, deliberately different (FRD §4 vs FR5.3):
- *   - the email allowlist says who may touch the AMC module at all
- *   - role_access amc/approve says who may decide
+ *   - AMC view or approve permission says who may use the module at all
+ *   - the AMC Settings approver list, or role_access amc/approve when the
+ *     list is empty, says who may decide
+ *
+ * The transition rules, including whether a creator may approve their own
+ * proposal, live in lib/amc/workflow.ts.
+ *
+ * Phase 5 (BRD 5.5, DEV-369): submit is "share". The four triggers decide
+ * whether the proposal is approved at once or climbs the configured ladder
+ * (lib/server/amc/approval-ladder.ts), and approve / reject / return act on
+ * the open level. Before 20261007150000, or for a proposal submitted before
+ * the ladder, the single-approver flow below still applies.
  */
 
 const actionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("submit"), id: z.string().uuid() }),
   z.object({ action: z.literal("approve"), id: z.string().uuid() }),
+  z.object({
+    action: z.literal("reject"),
+    id: z.string().uuid(),
+    reason: z.string().trim().min(1, "Give a reason so the owner knows why"),
+  }),
   z.object({
     action: z.literal("send_back"),
     id: z.string().uuid(),
@@ -43,6 +71,8 @@ const actionSchema = z.discriminatedUnion("action", [
 
 const SELECT =
   "id, owner_id, status, customer, final_price, submitted_at, decided_at, sent_back_reason";
+/* Submit also needs the rows, to check every ticked service is priced. */
+const SELECT_WITH_SERVICES = `${SELECT}, services`;
 
 export async function POST(req: NextRequest) {
   const access = await getAuthenticatedUserAccess();
@@ -68,9 +98,14 @@ export async function POST(req: NextRequest) {
 
   const { data: existing, error: fetchError } = await admin
     .from("amc_submissions")
-    .select(SELECT)
+    .select(body.action === "submit" ? SELECT_WITH_SERVICES : SELECT)
     .eq("id", body.id)
-    .maybeSingle();
+    .maybeSingle<{
+      id: string;
+      owner_id: string;
+      status: string;
+      services?: Array<{ serviceId: string; included: boolean; basePrice?: number | null }>;
+    }>();
 
   if (fetchError) {
     return NextResponse.json({ error: fetchError.message }, { status: 500 });
@@ -91,27 +126,82 @@ export async function POST(req: NextRequest) {
 
   let update: Record<string, unknown>;
   let eventType: string;
+  let siteVisitWarning: string | null = null;
+
+  /* FR3.4, FR5.2, FR5.3: who may move it, and from where. */
+  const legacyAction = body.action === "reject" ? "send_back" : body.action;
+  if (body.action === "submit") {
+    const check = checkInternalTransition({ action: "submit", from: existing.status, isOwner, canApprove });
+    if (!check.ok) return NextResponse.json({ error: check.error }, { status: check.status });
+    const problem = submittableProblem(existing.services ?? []) ?? (await submissionRateProblem(admin, existing.id));
+    if (problem) return NextResponse.json({ error: problem }, { status: 400 });
+    const submitConfig = await readAmcConfig(admin);
+    /* BRD 5.7: the contract term, against the configured minimum, before it goes for approval. */
+    const { data: dates } = await admin.from("amc_submissions").select("customer").eq("id", existing.id).maybeSingle<{ customer: { startDate?: string; endDate?: string } | null }>();
+    const term = dates?.customer?.startDate && dates.customer.endDate ? proposalTermMonths(dates.customer.startDate, dates.customer.endDate) : null;
+    const termProblem = term !== null ? checkTerm(term, submitConfig.contracts) : null;
+    if (termProblem) return NextResponse.json({ error: `${termProblem} This proposal runs ${term} months.` }, { status: 400 });
+    /* BRD 5.2: the site visit a commercial proposal needs (flag or block, from configuration). */
+    const visit = await siteVisitProblem(admin, existing.id, submitConfig);
+    if (visit.block) return NextResponse.json({ error: visit.block }, { status: 409 });
+    siteVisitWarning = visit.warning;
+    if (visit.warning) {
+      await recordAmcAudit(admin, { entityType: "submission", entityId: existing.id, eventType: "site_visit_missing", actorId: profile.id, actorLabel, justification: visit.warning });
+    }
+  }
+
+  /* Phase 5: the ladder. */
+  try {
+    const config = await readAmcConfig(admin);
+    const actor = { id: profile.id, label: actorLabel };
+    if (body.action === "submit") {
+      const shared = await shareProposal(admin, body.id, actor, config);
+      if (shared.migrated) {
+        return NextResponse.json({
+          submission: { id: body.id, status: shared.outcome === "pending" ? "awaiting_approval" : "approved" },
+          outcome: shared,
+          ...(siteVisitWarning ? { warning: siteVisitWarning } : {}),
+        });
+      }
+    } else {
+      const decided = await decideStep(
+        admin,
+        {
+          submissionId: body.id,
+          action: body.action === "approve" ? "approve" : body.action === "reject" ? "reject" : "return",
+          comment: body.action === "approve" ? null : body.reason,
+        },
+        actor,
+        canApprove,
+        config,
+      );
+      if (decided.handled) return NextResponse.json({ submission: { id: body.id, status: decided.status }, outcome: decided });
+    }
+  } catch (ladderError) {
+    if (ladderError instanceof ContractError) {
+      return NextResponse.json({ error: ladderError.message }, { status: ladderError.status });
+    }
+    throw ladderError;
+  }
+
+  /* The single-approver flow (no ladder yet). */
+  const check = checkInternalTransition({
+    action: legacyAction,
+    from: existing.status,
+    isOwner,
+    canApprove,
+  });
+  if (!check.ok) {
+    return NextResponse.json({ error: check.error }, { status: check.status });
+  }
 
   if (body.action === "submit") {
-    if (!isOwner) {
-      return NextResponse.json(
-        { error: "Only the owner can submit this proposal" },
-        { status: 403 },
-      );
-    }
-    /* FR3.4 — resubmitting after a send-back is allowed; resubmitting
-       something already under review, or already sent, is not. */
-    if (
-      existing.status !== "draft" &&
-      existing.status !== "sent_back" &&
-      existing.status !== "proposal_rejected"
-    ) {
-      return NextResponse.json(
-        {
-          error: `A proposal that is ${existing.status.replace(/_/g, " ")} cannot be submitted for approval`,
-        },
-        { status: 409 },
-      );
+    /* FR2.12 on the server: the form checks this too, but a request can
+       skip the form. */
+    /* And, when the rate card priced it, every ticked line has a rate at an allowed frequency (BRD 5.3). */
+    const problem = submittableProblem(existing.services ?? []) ?? (await submissionRateProblem(admin, existing.id));
+    if (problem) {
+      return NextResponse.json({ error: problem }, { status: 400 });
     }
     update = {
       status: "awaiting_approval",
@@ -134,6 +224,8 @@ export async function POST(req: NextRequest) {
             proposal_token_hint: null,
             proposal_token_expires_at: null,
             settings_snapshot: null,
+            /* The client's answer was to the old version. */
+            ...STALE_CLIENT_DECISION_FIELDS,
           }
         : {}),
     };
@@ -142,20 +234,6 @@ export async function POST(req: NextRequest) {
         ? "resubmitted_after_client_changes"
         : "submitted_for_approval";
   } else {
-    if (!canApprove) {
-      return NextResponse.json(
-        { error: "You do not have permission to approve AMC proposals" },
-        { status: 403 },
-      );
-    }
-    if (existing.status !== "awaiting_approval") {
-      return NextResponse.json(
-        {
-          error: `A proposal that is ${existing.status.replace(/_/g, " ")} is not awaiting approval`,
-        },
-        { status: 409 },
-      );
-    }
     update =
       body.action === "approve"
         ? {
@@ -168,9 +246,9 @@ export async function POST(req: NextRequest) {
             status: "sent_back",
             decided_at: now,
             decided_by: profile.id,
-            sent_back_reason: body.reason,
+            sent_back_reason: body.action === "reject" ? `Rejected: ${body.reason}` : body.reason,
           };
-    eventType = body.action === "approve" ? "approved" : "sent_back";
+    eventType = body.action === "approve" ? "approved" : body.action === "reject" ? "rejected_by_approver" : "sent_back";
   }
 
   const { data, error } = await admin
@@ -207,9 +285,27 @@ export async function POST(req: NextRequest) {
     eventType,
     actorId: profile.id,
     actorLabel,
-    justification: body.action === "send_back" ? body.reason : null,
+    justification: body.action === "send_back" || body.action === "reject" ? body.reason : null,
     payload: { from: existing.status, to: update.status },
   });
 
-  return NextResponse.json({ submission: data });
+  /* Approvers hear about a submission; the owner about the decision, with
+     the reason when it was sent back. Best effort: never fails the step. */
+  await notifyProposalEvent(admin, {
+    event:
+      body.action === "submit"
+        ? "proposal_submitted"
+        : body.action === "approve"
+          ? "proposal_approved"
+          : "proposal_sent_back",
+    submissionId: body.id,
+    actor: { id: profile.id, label: actorLabel },
+    at: now,
+    facts: body.action === "send_back" || body.action === "reject" ? { reason: body.reason } : {},
+  });
+
+  /* The partial row selected above; services are internal to the check. */
+  const { services: _services, ...submission } = data as Record<string, unknown>;
+  void _services;
+  return NextResponse.json({ submission });
 }

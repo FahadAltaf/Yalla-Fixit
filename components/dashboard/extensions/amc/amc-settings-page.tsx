@@ -8,7 +8,6 @@ import {
   Clock,
   FileText,
   History,
-  Loader2,
   Phone,
   GripVertical,
   Pencil,
@@ -28,10 +27,16 @@ import { toast } from "sonner";
 
 import { PageHeading, PillTabs, SectionCard } from "@/components/dashboard/shared/kaizen";
 import { AmcPhoneInput } from "./components/amc-phone-input";
-import { useConfirm } from "@/components/dashboard/shared/kaizen-states";
+import {
+  ActionDialogContent,
+  ErrorState,
+  FieldsSkeleton,
+  SectionSkeleton,
+  SubmitButton,
+  useConfirm,
+} from "@/components/dashboard/shared/kaizen-states";
 import {
   Dialog,
-  DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
@@ -46,11 +51,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Hint } from "@/components/ui/hint";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
 import { QuoteRichText } from "@/components/dashboard/snagging/quote-rich-text";
 import {
@@ -77,6 +80,8 @@ import {
   type AmcSettings,
   type AmcSettingsOverrides,
 } from "./amc-settings";
+import { TruncatedText } from "@/components/ui/truncated-text";
+import { ModuleGuide } from "@/components/dashboard/extensions/amc-contracts/module-guide";
 
 type AmcUnitType = (typeof AMC_UNIT_TYPES)[number];
 
@@ -306,9 +311,9 @@ function ApproversPicker({
                       }
                     />
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium">{user.name}</span>
+                      <TruncatedText className="text-sm font-medium">{user.name}</TruncatedText>
                       {user.name !== user.email ? (
-                        <span className="text-muted-foreground block truncate text-xs">{user.email}</span>
+                        <TruncatedText className="text-muted-foreground text-xs">{user.email}</TruncatedText>
                       ) : null}
                     </span>
                     {user.isAdmin ? (
@@ -347,7 +352,7 @@ const PROVIDER_TEXT_FIELDS: {
     { key: "address", label: "Company address", wide: true },
     { key: "standardResponseTime", label: "Standard response time", hint: "Printed in the proposal's commercial offer." },
     { key: "emergencyResponseTime", label: "Emergency response time", hint: "Printed in the proposal's commercial offer." },
-    { key: "proposalValidity", label: "Proposal validity", hint: "Printed in the proposal details." },
+    { key: "proposalValidity", label: "Proposal validity", hint: "Kept for reference only. Each proposal now gets its own valid-until date when it is shared (AMC configuration → Proposals → validity days), shown in Email 1 and on the client page; the client link stops accepting answers after it." },
   ];
 
 type View = "values" | "clauses" | "scopes" | "approvers" | "history";
@@ -693,6 +698,7 @@ export function AmcSettingsPage() {
     <PageHeading
       eyebrow="Settings"
       title="AMC settings"
+      info={<ModuleGuide module="amcSettings" />}
       description="Standard wording for proposals and contracts. Changes apply to new proposals only."
       actions={
         isAdmin && settings ? (
@@ -703,14 +709,15 @@ export function AmcSettingsPage() {
                 Unsaved changes
               </span>
             ) : null}
-            <Button onClick={() => void handleSave()} disabled={saving || !dirty}>
-              {saving ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <Save className="size-4" />
-              )}
+            <SubmitButton
+              onClick={() => void handleSave()}
+              disabled={!dirty}
+              pending={saving}
+              pendingLabel="Saving…"
+              icon={<Save className="size-4" />}
+            >
               Save changes
-            </Button>
+            </SubmitButton>
           </div>
         ) : undefined
       }
@@ -734,19 +741,9 @@ export function AmcSettingsPage() {
     return (
       <div className="flex flex-col gap-6">
         {heading}
-        <div className="flex gap-2">
-          {[0, 1, 2, 3].map((i) => (
-            <Skeleton key={i} className="h-8 w-32 rounded-full" />
-          ))}
-        </div>
-        <Card className="space-y-4 p-5">
-          <Skeleton className="h-5 w-52" />
-          <div className="grid gap-4 sm:grid-cols-3">
-            <Skeleton className="h-9 w-full" />
-            <Skeleton className="h-9 w-full" />
-            <Skeleton className="h-9 w-full" />
-          </div>
-        </Card>
+        <SectionSkeleton>
+          <FieldsSkeleton fields={6} columns={3} />
+        </SectionSkeleton>
       </div>
     );
   }
@@ -755,11 +752,11 @@ export function AmcSettingsPage() {
     return (
       <div className="flex flex-col gap-6">
         {heading}
-        <EmptyState
-          icon={<ShieldAlert className="size-5" />}
+        <ErrorState
           title="Couldn't load AMC settings"
-          description="Something went wrong on our side. This is usually temporary, so try again in a moment."
-          action={{ label: "Try again", onClick: () => void load() }}
+          message="Something went wrong on our side. This is usually temporary, so try again in a moment."
+          onRetry={() => void load()}
+          retrying={loading}
         />
       </div>
     );
@@ -1256,16 +1253,7 @@ function TextLibrary({
       {/* Named and written in one place, rather than an untitled row
           appearing at the bottom of the list to be found and filled in. */}
       <Dialog open={adding} onOpenChange={(open) => !open && !addingBusy && setAdding(false)}>
-        <DialogContent
-          className="max-h-[90dvh] overflow-y-auto sm:max-w-2xl"
-          showCloseButton={!addingBusy}
-          onEscapeKeyDown={(event) => {
-            if (addingBusy) event.preventDefault();
-          }}
-          onInteractOutside={(event) => {
-            if (addingBusy) event.preventDefault();
-          }}
-        >
+        <ActionDialogContent busy={addingBusy} className="max-h-[88vh] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>{addLabel ?? "Add"}</DialogTitle>
             <DialogDescription>
@@ -1273,7 +1261,7 @@ function TextLibrary({
               list, or set its number, to place it.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-3">
+          <div className="grid gap-4 py-2">
             <div className="space-y-1.5">
               <Label htmlFor="amc-new-title">Title</Label>
               <Input
@@ -1342,25 +1330,23 @@ function TextLibrary({
             <Button variant="outline" disabled={addingBusy} onClick={() => setAdding(false)}>
               Cancel
             </Button>
-            <Button
-              disabled={
-                addingBusy ||
-                !draft.title.trim() ||
-                (asksUnitTypes && draft.unitTypes.length === 0)
-              }
+            <SubmitButton
+              disabled={!draft.title.trim() || (asksUnitTypes && draft.unitTypes.length === 0)}
+              pending={addingBusy}
+              pendingLabel="Saving…"
+              icon={<Plus className="size-4" />}
               onClick={() => void submitDraft()}
             >
-              {addingBusy ? <Loader2 className="size-4 animate-spin" /> : null}
-              {addingBusy ? "Saving..." : (addLabel ?? "Add")}
-            </Button>
+              {addLabel ?? "Add"}
+            </SubmitButton>
           </DialogFooter>
-        </DialogContent>
+        </ActionDialogContent>
       </Dialog>
 
       {/* Renaming is its own small thing, asked for and confirmed --
           not a title box that rewrites the document as it is typed. */}
       <Dialog open={Boolean(renaming)} onOpenChange={(open) => !open && setRenaming(null)}>
-        <DialogContent className="sm:max-w-md">
+        <ActionDialogContent className="sm:max-w-md">
           <DialogHeader>
             <DialogTitle>Edit</DialogTitle>
             <DialogDescription>
@@ -1368,7 +1354,7 @@ function TextLibrary({
               already sent keep what they were sent with.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-3">
+          <div className="grid gap-4 py-2">
             <div className="space-y-1.5">
               <Label htmlFor="amc-rename">Title</Label>
               <Input
@@ -1395,11 +1381,11 @@ function TextLibrary({
             <Button variant="outline" onClick={() => setRenaming(null)}>
               Cancel
             </Button>
-            <Button disabled={!rename.trim()} onClick={submitRename}>
+            <SubmitButton disabled={!rename.trim()} onClick={submitRename} icon={<Save className="size-4" />}>
               Save
-            </Button>
+            </SubmitButton>
           </DialogFooter>
-        </DialogContent>
+        </ActionDialogContent>
       </Dialog>
 
       <div className="grid lg:grid-cols-[21rem_minmax(0,1fr)]">
@@ -1507,7 +1493,7 @@ function TextLibrary({
                         {/* Two lines before it gives up, rather than cutting
                             "Materials, Spare Parts, Consumables & Labor" off
                             at the comma with half the row still empty. */}
-                        <span className="line-clamp-2 break-words">{item.label}</span>
+                        <TruncatedText>{item.label}</TruncatedText>
                       </button>
                       {changed ? (
                         <Hint label="Customised">

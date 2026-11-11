@@ -7,6 +7,7 @@ import type {
   AmcPendingApprovalsResponse,
 } from "@/components/dashboard/extensions/amc/amc-types";
 import { readAmcSettings } from "@/lib/server/amc/settings";
+import { pendingForApprover } from "@/lib/server/amc/approval-ladder";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
@@ -18,6 +19,10 @@ import { ActionType, ResourceType } from "@/types/types";
  *
  * The bell polls this on every page, so anyone who is not an approver gets
  * an empty queue rather than an error.
+ *
+ * With the approval ladder (Phase 5) a proposal is in someone's queue only
+ * while the level they decide is open; a proposal submitted before the
+ * ladder still goes to the AMC approvers.
  */
 const EMPTY: AmcPendingApprovalsResponse = { canApprove: false, items: [] };
 
@@ -34,9 +39,12 @@ export async function GET() {
     access.profile.email,
     hasResourceAction(access.accessUser, ResourceType.AMC, ActionType.APPROVE),
   );
-  if (!canApprove) return NextResponse.json(EMPTY);
+  const ladder = await pendingForApprover(admin, access.profile.id, canApprove).catch(() => null);
+  const mine = new Set(ladder?.submissionIds ?? []);
+  const onLadder = new Set(ladder?.allPending ?? []);
+  if (!canApprove && mine.size === 0) return NextResponse.json(EMPTY);
 
-  const { data, error } = await admin
+  const { data: fetched, error } = await admin
     .from("amc_submissions")
     .select(
       "id, owner_id, customer, proposal_number, final_price, submitted_at",
@@ -50,7 +58,8 @@ export async function GET() {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  const rows = data ?? [];
+  /* Mine on the ladder, or (for an AMC approver) one with no ladder step. */
+  const rows = (fetched ?? []).filter((row) => mine.has(String(row.id)) || (canApprove && !onLadder.has(String(row.id))));
   const ownerIds = [...new Set(rows.map((row) => String(row.owner_id)))];
   const names = new Map<string, string>();
   if (ownerIds.length > 0) {
@@ -79,5 +88,5 @@ export async function GET() {
     };
   });
 
-  return NextResponse.json({ canApprove, items });
+  return NextResponse.json({ canApprove: canApprove || mine.size > 0, items });
 }

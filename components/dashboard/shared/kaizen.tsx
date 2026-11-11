@@ -44,11 +44,14 @@ export function PageHeading({
   title,
   description,
   actions,
+  info,
 }: {
   eyebrow: string;
   title: string;
   description?: string;
   actions?: React.ReactNode;
+  /** Beside the title: an (i) that explains the page (AMC's ModuleGuide). */
+  info?: React.ReactNode;
 }) {
   return (
     /*
@@ -63,7 +66,14 @@ export function PageHeading({
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div className="min-w-64 flex-1 basis-0 space-y-1.5">
         <p className="eyebrow">{eyebrow}</p>
-        <h1 className="text-3xl">{title}</h1>
+        {info ? (
+          <div className="flex items-center gap-1.5">
+            <h1 className="text-3xl">{title}</h1>
+            {info}
+          </div>
+        ) : (
+          <h1 className="text-3xl">{title}</h1>
+        )}
         {description ? (
           <p className="text-muted-foreground max-w-5xl text-[0.9375rem]">
             {description}
@@ -303,8 +313,15 @@ export function SectionCard({
 }) {
   return (
     <Card className={cn("gap-0 overflow-hidden p-0", className)}>
-      <div className="flex flex-wrap items-center justify-between gap-3 px-5 pt-5 pb-4">
-        <div className="min-w-0">
+      {/*
+        The text takes the room the action leaves (6 Nov), as PageHeading does:
+        sized to its own width, a two-line description pushed the action
+        (Edit) onto a line of its own under it. A very narrow card still
+        lets the action drop below. The action sits level with the title, as a
+        shadcn card action does, so cards side by side line their buttons up.
+      */}
+      <div className="flex flex-wrap items-start justify-between gap-3 px-5 pt-5 pb-4">
+        <div className="min-w-48 flex-1 basis-0">
           <h2 className="flex items-center gap-2 text-lg">
             {icon ? (
               <span className="text-brand shrink-0 [&_svg]:size-[1.125rem]">
@@ -317,7 +334,7 @@ export function SectionCard({
             <p className="text-muted-foreground mt-1 text-sm">{description}</p>
           ) : null}
         </div>
-        {action}
+        {action ? <div className="shrink-0">{action}</div> : null}
       </div>
       <div className={bodyClassName}>{children}</div>
     </Card>

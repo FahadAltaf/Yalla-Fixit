@@ -17,9 +17,10 @@ import {
 import type { AmcComputedData, AmcFormData } from "../amc-types";
 import { contractClauseReferences } from "../amc-document-model";
 import { termFeeLabel } from "../amc-date-utils";
-import { formatDisplayDate, withEquipment } from "../amc-pricing";
+import { formatDisplayDate, formatPaymentLabel, withEquipment } from "../amc-pricing";
 import { getAmcSettingsDefaults, type AmcSettings } from "../amc-settings";
 import { ProposalWording } from "../components/proposal-wording";
+import { TruncateIfText, TruncatedText } from "@/components/ui/truncated-text";
 
 interface StepProps {
   form: UseFormReturn<AmcFormData>;
@@ -31,9 +32,8 @@ interface StepProps {
 }
 
 /**
- * A titled part of the review, laid out like the other two steps. Shared
- * with the proposal's own page, so a proposal reads the same before and
- * after it is submitted.
+ * A titled part of the review, laid out like the sections of the other
+ * two steps.
  */
 export function ReviewSection({
   icon: Icon,
@@ -68,11 +68,29 @@ export function ReviewSection({
 }
 
 /** One label over its value, as a read-only field. */
-export function Fact({ label, children }: { label: string; children: React.ReactNode }) {
+export function Fact({
+  label,
+  children,
+  action,
+  note,
+}: {
+  label: string;
+  children: React.ReactNode;
+  /** A small icon button beside the label (change, edit). */
+  action?: React.ReactNode;
+  /** A muted line under the value, e.g. where a live record now differs. */
+  note?: React.ReactNode;
+}) {
   return (
     <div className="min-w-0">
-      <dt className="text-muted-foreground text-xs">{label}</dt>
-      <dd className="mt-0.5 truncate text-sm font-medium">{children || "—"}</dd>
+      <dt className="text-muted-foreground flex h-4 items-center gap-1 text-xs">
+        {label}
+        {action}
+      </dt>
+      <dd className="mt-0.5 truncate text-sm font-medium">
+        <TruncateIfText>{children || "—"}</TruncateIfText>
+      </dd>
+      {note ? <TruncatedText className="text-muted-foreground mt-0.5 text-xs">{note}</TruncatedText> : null}
     </div>
   );
 }
@@ -297,11 +315,11 @@ export function ReviewStep({ form, computed, settings, onWordingSaved }: StepPro
       {/* Everything entered in step 1, read back in one place. */}
       <ReviewSection
         icon={Building2}
-        title="Property and customer"
+        title="Property and client"
         description="Check these before submitting. Go back a step to change anything."
       >
         <dl className="grid gap-x-6 gap-y-4 rounded-lg border p-4 sm:grid-cols-2 xl:grid-cols-4">
-          <Fact label="Customer">{values.customerName}</Fact>
+          <Fact label="Client">{values.customerName}</Fact>
           <Fact label="Proposal number">{values.proposalNumber}</Fact>
           <Fact label="Property category">
             <span className="capitalize">{values.propertyCategory}</span>
@@ -317,9 +335,7 @@ export function ReviewStep({ form, computed, settings, onWordingSaved }: StepPro
               {formatDisplayDate(values.startDate)} → {formatDisplayDate(values.endDate)}
             </span>
           </Fact>
-          <Fact label="Payment terms">
-            <span className="capitalize">{values.paymentTerms}</span>
-          </Fact>
+          <Fact label="Payment plan">{formatPaymentLabel(values)}</Fact>
         </dl>
       </ReviewSection>
 

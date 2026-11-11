@@ -1,13 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { Check, Copy, ExternalLink, Link2 } from "lucide-react";
+import { Check, Copy, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { ActionDialogContent } from "@/components/dashboard/shared/kaizen-states";
 import {
   Dialog,
-  DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
@@ -55,10 +55,10 @@ export function AmcLinkDialog({
         }
       }}
     >
-      <DialogContent className="sm:max-w-lg">
+      {/* Nothing in here runs on the server, so it never blocks closing. */}
+      <ActionDialogContent busy={false} className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Link2 className="text-brand size-4" />
+          <DialogTitle>
             {link ? `${link.label === "proposal" ? "Proposal" : "Contract"} link` : "Link"}
           </DialogTitle>
           <DialogDescription>
@@ -72,7 +72,7 @@ export function AmcLinkDialog({
           Read-only rather than disabled: the text has to stay selectable
           for somebody whose browser refuses clipboard access.
         */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 py-2">
           <Input
             readOnly
             value={link?.url ?? ""}
@@ -97,7 +97,7 @@ export function AmcLinkDialog({
           ) : null}
           <Button onClick={onClose}>Done</Button>
         </DialogFooter>
-      </DialogContent>
+      </ActionDialogContent>
     </Dialog>
   );
 }

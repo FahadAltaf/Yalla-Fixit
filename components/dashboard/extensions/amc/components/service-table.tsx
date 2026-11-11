@@ -1,12 +1,11 @@
 "use client";
 
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import type { UseFormReturn } from "react-hook-form";
 import { Pencil, Plus, Trash2, Wrench } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   FormControl,
@@ -16,6 +15,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -26,14 +26,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { nearestAllowedFrequency } from "@/lib/amc/rate-card";
 import { formatCurrencyAED } from "@/utils/format-currency";
 
-import {
-  AMC_SERVICES,
-  getServicesForUnitType,
-  isFrequencyEditable,
-} from "../amc-constants";
+import { isFrequencyEditable } from "../amc-constants";
 import { calculateAmcTotals, computeServiceRowPrice } from "../amc-pricing";
+import { servicesForProperty, type AmcServiceDefinition } from "../amc-settings";
 import {
   BASE_PRICE_MESSAGE,
   CUSTOM_SERVICE_PREFIX,
@@ -58,15 +56,31 @@ function listNames(names: string[]): string {
 
 interface ServiceTableProps {
   form: UseFormReturn<AmcFormData>;
+  /** The services AMC Settings defines (the catalogue for this proposal). */
+  catalogue: ReadonlyArray<AmcServiceDefinition>;
+  /**
+   * A rate card is in force (BRD 5.3): base prices are the card's, shown
+   * read-only, with promotions and below-floor lines marked. Without one
+   * they are entered per proposal, as before.
+   */
+  rateCard?: boolean;
+  /** Shown under the discount: the approval its size needs. */
+  discountNote?: React.ReactNode;
+  /**
+   * The visits a year the rate card allows for a service (BRD 5.3); empty
+   * when it does not limit them. The frequency is then picked from these.
+   */
+  allowedFrequencies?: (serviceId: string) => readonly number[];
 }
 
-export function ServiceTable({ form }: ServiceTableProps) {
+export function ServiceTable({ form, catalogue, rateCard = false, discountNote, allowedFrequencies }: ServiceTableProps) {
   const unitType = form.watch("unitType");
   const serviceRows = form.watch("serviceRows");
   const discountPercent = form.watch("discountPercent") ?? 0;
   const formValues = form.watch();
   const totals = calculateAmcTotals(formValues);
-  const availableServices = getServicesForUnitType(unitType);
+  const availableServices = servicesForProperty({ services: [...catalogue] }, unitType);
+  const enabledCount = catalogue.filter((service) => service.enabled !== false).length;
   /*
     What the table lists: the standard services for this kind of property,
     then any added to this proposal alone (DEV-260), which are a number of
@@ -97,6 +111,25 @@ export function ServiceTable({ form }: ServiceTableProps) {
     })
     .map((service) => service.label);
   const flagUnpriced = form.formState.errors.serviceRows?.message === BASE_PRICE_MESSAGE;
+
+  /*
+    A ticked line at a frequency the card does not allow is moved to the
+    nearest one it does, rather than being refused only on submit (a draft
+    started from an enquiry or a site visit may carry the default of 1).
+  */
+  useEffect(() => {
+    if (!allowedFrequencies) return;
+    let changed = false;
+    const next = serviceRows.map((row) => {
+      const service = catalogue.find((s) => s.id === row.serviceId);
+      if (!row.included || !service || !isFrequencyEditable(service.frequencyType)) return row;
+      const frequency = nearestAllowedFrequency(allowedFrequencies(row.serviceId), row.frequency);
+      if (frequency === row.frequency) return row;
+      changed = true;
+      return { ...row, frequency };
+    });
+    if (changed) form.setValue("serviceRows", next, { shouldValidate: true, shouldDirty: true });
+  }, [serviceRows, allowedFrequencies, catalogue, form]);
 
   const updateRow = (
     serviceId: string,
@@ -156,8 +189,8 @@ export function ServiceTable({ form }: ServiceTableProps) {
                     <TableHead className="w-[100px]">Units</TableHead>
                     <TableHead className="w-[120px]">Frequency</TableHead>
                     <TableHead className="w-[70px] text-left">Free</TableHead>
-                    <TableHead className="w-[120px]">Base price</TableHead>
-                    <TableHead className="w-[120px] text-right">Price</TableHead>
+                    <TableHead className="w-[120px]">{rateCard ? "Rate" : "Base price"}</TableHead>
+                    <TableHead className="w-[120px]">Price</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -301,7 +334,25 @@ export function ServiceTable({ form }: ServiceTableProps) {
                             somebody forgot to switch on. The word that
                             will print on the contract is shown instead.
                           */}
-                          {frequencyEditable ? (
+                          {frequencyEditable && (allowedFrequencies?.(service.id).length ?? 0) > 0 ? (
+                            /* The card limits it: only its frequencies are offered. */
+                            <Select
+                              value={String(row.frequency)}
+                              disabled={!row.included}
+                              onValueChange={(value) => updateRow(service.id, { frequency: Number(value) })}
+                            >
+                              <SelectTrigger className="h-8 w-full text-xs" aria-label={`Frequency for ${service.label}`}>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {allowedFrequencies!(service.id).map((n) => (
+                                  <SelectItem key={n} value={String(n)}>
+                                    {n} a year
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          ) : frequencyEditable ? (
                             <Input
                               type="number"
                               min={1}
@@ -388,6 +439,20 @@ export function ServiceTable({ form }: ServiceTableProps) {
                             <span className="text-muted-foreground text-xs">
                               Included
                             </span>
+                          ) : rateCard && !service.custom ? (
+                            /* From the rate card: read-only (BRD 5.3). A custom service is not on the card, so its price is entered. */
+                            <div className="grid gap-0.5 text-xs">
+                              {row.basePrice === undefined ? (
+                                <span className={row.included ? "text-destructive" : "text-muted-foreground"}>No rate on the card</span>
+                              ) : (
+                                <span className="tabular-nums">{formatCurrencyAED(row.basePrice)}</span>
+                              )}
+                              {row.promotionPercent ? (
+                                <Badge variant="secondary" className="bg-success/10 text-success w-fit border-0 px-1.5 py-0 text-[10px] font-medium">
+                                  Promotion −{row.promotionPercent}%
+                                </Badge>
+                              ) : null}
+                            </div>
                           ) : (
                             <Input
                               type="number"
@@ -414,12 +479,17 @@ export function ServiceTable({ form }: ServiceTableProps) {
                             />
                           )}
                         </TableCell>
-                        <TableCell className="text-right text-xs font-medium tabular-nums">
+                        <TableCell className="text-xs font-medium tabular-nums">
                           {row.included && !row.free && row.basePrice === undefined ? (
                             <span className="text-muted-foreground">—</span>
                           ) : (
                             formatCurrencyAED(price)
                           )}
+                          {row.included && row.belowFloor ? (
+                            <div className="text-warning text-[10px] font-normal" title={row.floorRate != null ? `Floor rate ${formatCurrencyAED(row.floorRate)}` : undefined}>
+                              Below floor after discount
+                            </div>
+                          ) : null}
                         </TableCell>
                       </TableRow>
                       </Fragment>
@@ -510,6 +580,7 @@ export function ServiceTable({ form }: ServiceTableProps) {
             </span>
           </div>
         </div>
+        {discountNote}
 
         <Separator />
 
@@ -519,7 +590,7 @@ export function ServiceTable({ form }: ServiceTableProps) {
         </div>
       </div>
 
-      {availableServices.length !== AMC_SERVICES.length && (
+      {availableServices.length !== enabledCount && (
         <p className="text-xs text-muted-foreground">
           Services not offered on this kind of property are hidden.
         </p>

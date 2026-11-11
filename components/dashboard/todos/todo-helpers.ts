@@ -11,6 +11,27 @@ export const RELATED_TYPE_LABELS: Record<TodoRelatedType, string> = {
   appointment: "Appointment",
 };
 
+/*
+  AMC to-dos carry the record they are about as related_type "amc_<kind>"
+  and its id. Where that record has a page of its own, "Open" goes there;
+  visits and instalments open their list (the record is in a dialog there).
+*/
+const AMC_RECORD_LINKS: Record<string, (id: string) => string> = {
+  amc_submission: (id) => `/extensions/amc/${id}`,
+  amc_contract: (id) => `/extensions/amc-contracts/${id}`,
+  amc_visit: () => "/extensions/amc-contracts/board",
+  amc_instalment: () => "/extensions/amc-contracts/payments",
+  amc_call_out: (id) => `/extensions/amc-contracts/call-outs?open=${encodeURIComponent(id)}`,
+  amc_additional_work: (id) => `/extensions/amc-contracts/additional-works?open=${encodeURIComponent(id)}`,
+  amc_enquiry: (id) => `/extensions/amc-contracts/enquiries/${id}`,
+};
+
+export function amcRecordHref(todo: Pick<Todo, "related_type" | "related_id">): string | null {
+  const type = String(todo.related_type ?? "");
+  if (!type.startsWith("amc_") || !todo.related_id) return null;
+  return AMC_RECORD_LINKS[type]?.(todo.related_id) ?? null;
+}
+
 export function toDatetimeLocal(value?: string | null) {
   if (!value) return "";
   const date = new Date(value);

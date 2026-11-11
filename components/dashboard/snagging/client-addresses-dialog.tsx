@@ -37,6 +37,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Hint } from "@/components/ui/hint";
 import { compressImage } from "@/lib/media/compress-image";
+import { requiredPropertyErrors } from "@/lib/snagging/quotation-required";
 import { cn } from "@/lib/utils";
 import { snaggingService, type SnaggingClientOption } from "@/modules/snagging";
 import type { SnaggingProperty, SnaggingPropertyType } from "@/types/types";
@@ -277,6 +278,58 @@ export function ClientAddressesDialog({
   );
 }
 
+/**
+ * One address, opened straight on its form: the job's Setup tab edits its
+ * unit here, the same form and layout as a client's addresses, so an
+ * address is corrected one way wherever it is opened from.
+ */
+export function EditAddressDialog({
+  open,
+  onOpenChange,
+  address,
+  clientName,
+  onSaved,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** The record to edit; it must belong to a client. */
+  address: SnaggingProperty & { client_id: string };
+  clientName?: string | null;
+  onSaved: (saved: SnaggingProperty) => void;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        className="flex max-h-[90vh] flex-col gap-0 overflow-hidden p-0 sm:max-w-3xl"
+        showCloseButton
+      >
+        <DialogHeader className="px-6 pt-6 pb-4 pr-14 text-left">
+          <DialogTitle className="text-lg">
+            {clientName ? `${clientName} · address` : "Address"}
+          </DialogTitle>
+          <DialogDescription>
+            The unit on this client&apos;s file. A change here is the same
+            change on every quotation and job for this unit.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden border-t">
+          {open ? (
+            <AddressForm
+              clientId={address.client_id}
+              address={address}
+              onCancel={() => onOpenChange(false)}
+              onSaved={(saved) => {
+                onOpenChange(false);
+                onSaved(saved);
+              }}
+            />
+          ) : null}
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 /** "Unit 1904, Riviera Tower 3": the line a coordinator recognises the unit by. */
 function addressTitle(row: SnaggingProperty): string {
   // An FSM-only address reads as FSM writes it, "DAMAC MERANO TOWER, 601".
@@ -388,25 +441,48 @@ function Tag({
  * would only have to be finished on the quotation anyway. Only the unit
  * reference is required; the rest is filled in as it becomes known.
  */
-function AddressForm({
+/**
+ * One address, added or corrected: the unit, what it is, its pin on the map
+ * and its paperwork. Also used by AMC (enquiries, site visits), which can
+ * prefill it and add a block of its own above the documents.
+ */
+export function AddressForm({
   clientId,
   address,
   onCancel,
   onSaved,
+  defaults,
+  extra,
+  requireComplete = false,
 }: {
   clientId: string;
   address: SnaggingProperty | null;
   onCancel: () => void;
-  onSaved: () => void;
+  /**
+   * Told about the saved address. A caller with more to save (AMC: the
+   * property's contract details) returns a promise; the form keeps saving,
+   * and says the address is saved, only once that is done too.
+   */
+  onSaved: (saved: SnaggingProperty) => void | Promise<void>;
+  /** Starting values for a new address. */
+  defaults?: { community?: string | null; property_type?: SnaggingPropertyType };
+  /** More fields from the caller, shown before the documents; given the type chosen. */
+  extra?: (context: { type: SnaggingPropertyType }) => React.ReactNode;
+  /**
+   * Holds the address to what a quotation needs (unit, project, type,
+   * bedrooms, built-up area: SNG-017), not just the reference. Used where
+   * an address must be complete before it is used, as for an AMC site visit.
+   */
+  requireComplete?: boolean;
 }) {
   const text = (value: number | null | undefined) =>
     value != null ? String(value) : "";
   const [unit, setUnit] = useState(address?.unit_label ?? "");
   const [building, setBuilding] = useState(address?.building_name ?? "");
-  const [community, setCommunity] = useState(address?.community ?? "");
+  const [community, setCommunity] = useState(address?.community ?? defaults?.community ?? "");
   const [developer, setDeveloper] = useState(address?.developer_name ?? "");
   const [type, setType] = useState<SnaggingPropertyType>(
-    address?.property_type ?? "apartment",
+    address?.property_type ?? defaults?.property_type ?? "apartment",
   );
   const [bedrooms, setBedrooms] = useState(address?.bedrooms ?? 1);
   const [builtUp, setBuiltUp] = useState(text(address?.built_up_area_sqft));
@@ -434,6 +510,17 @@ function AddressForm({
     attempted && !unit.trim()
       ? "Give the unit a reference, e.g. Unit 1904."
       : undefined;
+  /* The quotation's required fields, when the caller asks for a complete address. */
+  const completeErrors = requireComplete
+    ? requiredPropertyErrors({
+        unit_label: unit,
+        building_name: building,
+        property_type: type,
+        bedrooms: isCommercial ? 0 : bedrooms,
+        built_up_area: builtUp,
+      })
+    : {};
+  const shown = attempted ? completeErrors : {};
   const positive = (value: string) =>
     value.trim() && Number(value) > 0 ? Number(value) : null;
   const coordinate = (value: string) =>
@@ -460,7 +547,7 @@ function AddressForm({
 
   async function save() {
     setAttempted(true);
-    if (!unit.trim()) return;
+    if (!unit.trim() || Object.keys(completeErrors).length > 0) return;
     setSaving(true);
     try {
       const input = {
@@ -510,6 +597,9 @@ function AddressForm({
         }
       }
 
+      /* The caller's part first, so "Saving…" lasts until everything is saved and the toast comes as the form closes. */
+      await onSaved(saved);
+
       if (failed.length > 0) {
         toast.warning(
           `The address was saved, but the ${failed.join(" and ")} did not upload.`,
@@ -525,7 +615,6 @@ function AddressForm({
             "It will be filled in when this client is picked on a quotation or a job.",
         });
       }
-      onSaved();
     } catch (err) {
       toast.error(
         err instanceof Error ? err.message : "Could not save the address",
@@ -546,7 +635,11 @@ function AddressForm({
       <div className="min-h-0 flex-1 space-y-6 overflow-y-auto px-6 py-4">
         <FormBlock
           title={address ? "Edit address" : "New address"}
-          description="The unit, and what it is. Only the reference is required."
+          description={
+            requireComplete
+              ? "The unit, and what it is. The reference, project, type, bedrooms and built-up area are required."
+              : "The unit, and what it is. Only the reference is required."
+          }
         >
           <div className="grid gap-4 sm:grid-cols-2">
             <FormField
@@ -564,7 +657,7 @@ function AddressForm({
                 autoFocus
               />
             </FormField>
-            <FormField label="Project / tower" htmlFor="address-building">
+            <FormField label="Project / tower" htmlFor="address-building" required={requireComplete} error={shown.building_name}>
               <Input
                 id="address-building"
                 value={building}
@@ -588,7 +681,7 @@ function AddressForm({
                 placeholder="e.g. Emaar"
               />
             </FormField>
-            <FormField label="Property type" htmlFor="address-type">
+            <FormField label="Property type" htmlFor="address-type" required={requireComplete} error={shown.property_type}>
               <Select
                 value={type}
                 onValueChange={(value) =>
@@ -610,7 +703,7 @@ function AddressForm({
               </Select>
             </FormField>
             {!isCommercial ? (
-              <FormField label="Bedrooms" htmlFor="address-bedrooms">
+              <FormField label="Bedrooms" htmlFor="address-bedrooms" required={requireComplete} error={shown.bedrooms}>
                 <Select
                   value={String(bedrooms)}
                   onValueChange={(value) => setBedrooms(Number(value))}
@@ -632,7 +725,9 @@ function AddressForm({
             <FormField
               label="Built-up area (sq ft)"
               htmlFor="address-built-up"
-              hint="Optional here. A quotation is priced on it."
+              required={requireComplete}
+              error={shown.built_up_area}
+              hint={requireComplete ? undefined : "Optional here. A quotation is priced on it."}
             >
               <Input
                 id="address-built-up"
@@ -720,6 +815,8 @@ function AddressForm({
             </FormField>
           </div>
         </FormBlock>
+
+        {extra ? extra({ type }) : null}
 
         <FormBlock
           title="Documents"
@@ -880,7 +977,7 @@ function DocumentRow({
 }
 
 /** A titled group of fields, so the long form reads as three short ones. */
-function FormBlock({
+export function FormBlock({
   title,
   description,
   children,
@@ -938,7 +1035,7 @@ function OptionRow({
   );
 }
 
-function FormField({
+export function FormField({
   label,
   htmlFor,
   required,

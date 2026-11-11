@@ -51,7 +51,18 @@ export async function GET(req: NextRequest) {
         .eq("id", id)
         .maybeSingle();
       if (error) throw new Error(error.message);
-      return NextResponse.json({ data });
+      if (!data) return NextResponse.json({ data: null });
+      /* As in a client's list: its deed and NOC links, so an edit form opened on it can show them. */
+      const row = data as unknown as Record<string, unknown> & { title_deed_path: string | null; noc_path: string | null };
+      const signed = await signPaths(admin, [row.title_deed_path, row.noc_path].filter((p): p is string => Boolean(p)));
+      return NextResponse.json({
+        data: {
+          ...row,
+          source: "portal",
+          title_deed_url: row.title_deed_path ? (signed.get(row.title_deed_path) ?? null) : null,
+          noc_url: row.noc_path ? (signed.get(row.noc_path) ?? null) : null,
+        },
+      });
     }
 
     // Newest first by when the property was added. updated_at reshuffled

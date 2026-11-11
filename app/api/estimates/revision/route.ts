@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
+import { zohoEdgeHeaders } from "@/lib/server/zoho/edge-auth";
 import { z } from "zod";
-import { createServerClientForApi } from "@/lib/supabase/supabase-server-client";
+import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
+import { requireResourceAccess } from "@/lib/server/require-access";
+import { getFsmAccessToken, zohoFsmWritesOff } from "@/lib/server/zoho/fsm-client";
+import { ActionType, ResourceType } from "@/types/types";
 
 const GET_ESTIMATE_EDGE_URL = `${process.env.SUPABASE_URL}/functions/v1/get-estimate`;
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY!;
 const ZOHO_BASE_URL = "https://fsm.zoho.com/fsm/v1";
 
 const createRevisionSchema = z.object({
@@ -46,19 +49,16 @@ function relationId(value: unknown): string | undefined {
   return undefined;
 }
 
+/* Server-only: the token never leaves the server, and is read with the
+   service role (browsers can no longer read it, 20261005160000). */
 async function getAccessToken(): Promise<string> {
-  const supabase = await createServerClientForApi();
-  const { data, error } = await supabase
-    .from("settings")
-    .select("oauth_access_token")
-    .eq("id", 1)
-    .single();
-
-  if (error || !data?.oauth_access_token) {
+  // A revision creates an estimate in FSM: not while FSM is off or read-only.
+  if (zohoFsmWritesOff()) throw new Error("Zoho FSM is read-only for now, so a revision cannot be created.");
+  try {
+    return await getFsmAccessToken(await createAdminServerClient());
+  } catch {
     throw new Error("Failed to load Zoho access token.");
   }
-
-  return data.oauth_access_token as string;
 }
 
 function getEstimateId(estimate: Record<string, unknown>): string | undefined {
@@ -375,6 +375,11 @@ function buildRevisionPayload(
 }
 
 export async function POST(req: NextRequest) {
+  /* Creates a Zoho estimate as the company: signed-in Extensions users
+     only (Quotation Templates is under Extensions). */
+  const gate = await requireResourceAccess(ResourceType.EXTENSIONS, ActionType.VIEW);
+  if (!gate.ok) return gate.response;
+
   try {
     const rawBody = await req.json();
     console.log("[revision] POST request body:", JSON.stringify(rawBody));
@@ -409,11 +414,7 @@ export async function POST(req: NextRequest) {
 
     const sourceEstimateRes = await fetch(GET_ESTIMATE_EDGE_URL, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-        apikey: SUPABASE_ANON_KEY,
-        "Content-Type": "application/json",
-      },
+      headers: zohoEdgeHeaders("get-estimate"),
       body: JSON.stringify({
         id: estimateId,
         type: "estimate_only",
@@ -467,7 +468,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const supabase = await createServerClientForApi();
+    /* Service role: browsers no longer reach these tables directly. */
+    const supabase = await createAdminServerClient();
 
     const { data: revisionRows, error: revisionRowsError } = await supabase
       .from("estimate_revisions")
@@ -563,11 +565,7 @@ export async function POST(req: NextRequest) {
     if (!createdEstimateNumber) {
       const createdEstimateLookupRes = await fetch(GET_ESTIMATE_EDGE_URL, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
-          apikey: SUPABASE_ANON_KEY,
-          "Content-Type": "application/json",
-        },
+        headers: zohoEdgeHeaders("get-estimate"),
         body: JSON.stringify({
           id: createdEstimateId,
           type: "estimate_only",

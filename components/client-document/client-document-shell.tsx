@@ -71,7 +71,7 @@ export function ClientDocumentShell({
         {children}
 
         <p className="pb-4 text-center text-xs text-slate-500">
-          Questions? Call 800-PERFECT (7373328) or reply to the email we sent you.
+          Questions? Call 800-PERFECT (7373328) or reply to the message we sent you.
         </p>
       </main>
     </div>

@@ -3,11 +3,11 @@
 import { ChevronDown, Download, FileText, FileType, Loader2, X } from "lucide-react";
 
 import { PillTabs } from "@/components/dashboard/shared/kaizen";
+import { ActionDialogContent } from "@/components/dashboard/shared/kaizen-states";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
   DialogClose,
-  DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
@@ -48,7 +48,7 @@ export function AmcPreviewDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Names what is open: the customer, and the proposal number if it has one. */
+  /** Names what is open: the client, and the proposal number if it has one. */
   title: string;
   documentType: AmcDocumentType;
   onDocumentTypeChange: (documentType: AmcDocumentType) => void;
@@ -60,7 +60,9 @@ export function AmcPreviewDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent
+      {/* Held open while a download builds, so the file is not lost behind it. */}
+      <ActionDialogContent
+        busy={downloading}
         // A Close button in the header instead of the corner cross.
         showCloseButton={false}
         className="flex max-h-[92vh] w-[calc(100%-2rem)] flex-col gap-0 overflow-hidden p-0 sm:max-w-5xl"
@@ -111,7 +113,7 @@ export function AmcPreviewDialog({
               </DropdownMenu>
             ) : null}
             <DialogClose asChild>
-              <Button type="button" variant="outline" size="sm">
+              <Button type="button" variant="outline" size="sm" disabled={downloading}>
                 <X className="size-4" />
                 Close
               </Button>
@@ -126,7 +128,7 @@ export function AmcPreviewDialog({
             </div>
           </div>
         </div>
-      </DialogContent>
+      </ActionDialogContent>
     </Dialog>
   );
 }
@@ -154,7 +156,7 @@ export function submissionPreviewData(
 
 /** A popup title that says which proposal is open. */
 export function previewTitle(submission: Pick<AmcSubmission, "customer">): string {
-  return [submission.customer.customerName || "Unnamed customer", submission.customer.proposalNumber]
+  return [submission.customer.customerName || "Unnamed client", submission.customer.proposalNumber]
     .filter(Boolean)
     .join(" · ");
 }

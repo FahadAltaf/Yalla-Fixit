@@ -13,6 +13,7 @@ import {
   ReceiptText,
   ChartColumn,
   ClipboardCheck,
+  FileSignature,
   LayoutDashboard,
   ListTodo,
   Puzzle,
@@ -23,7 +24,14 @@ import {
   UsersRound,
 } from "lucide-react";
 
-import { canUseAmc } from "@/components/dashboard/extensions/amc/amc-constants";
+import {
+  canUseAmc,
+  canViewAmcConfig,
+  canViewAmcEnquiries,
+  canViewAmcPayments,
+  canViewAmcRateCard,
+  canViewAmcVisits,
+} from "@/components/dashboard/extensions/amc/amc-constants";
 import { REPORTS_ENABLED } from "@/lib/reports/enabled";
 import { hasResourceAction, hasSharedListAction } from "@/lib/role-permissions";
 
@@ -199,12 +207,6 @@ export const baseSectionsItems: MenuItem[] = [
         url: "/extensions/quotation-templates",
         resource: ResourceType.EXTENSIONS_QUOTATION_TEMPLATES,
       },
-      {
-        title: "AMC proposals",
-        url: "/extensions/amc",
-        // AMC view or approve, which the resource filter cannot say.
-        canSee: canUseAmc,
-      },
     ],
   },
   {
@@ -299,6 +301,59 @@ export const baseSectionsItems: MenuItem[] = [
     icon: <CalendarClock className="size-4 text-primary" />,
     isActive: false,
     resource: ResourceType.SCHEDULING,
+  },
+  /*
+    AMC is a module of its own, laid out like Snagging: one parent, each
+    section a sub-item. It used to hang off Extensions (so an AMC user
+    without the Extensions permission never saw it) with the rest of its
+    sections in a row of pills inside each page.
+
+    The addresses stay under /extensions/amc*: notifications already
+    stored, and emails already sent, link there.
+
+    Every entry uses canSee rather than resource: AMC access is "any of
+    the AMC permissions" (an approver may hold Approve without View),
+    which the plain resource filter cannot express.
+  */
+  {
+    title: "AMC",
+    url: "/extensions/amc-contracts",
+    icon: <FileSignature className="size-4 text-primary" />,
+    isActive: false,
+    canSee: canUseAmc,
+    items: [
+      { title: "Enquiries", url: "/extensions/amc-contracts/enquiries", canSee: canViewAmcEnquiries },
+      { title: "Proposals", url: "/extensions/amc", resource: ResourceType.AMC_PROPOSALS },
+      {
+        title: "Contracts",
+        url: "/extensions/amc-contracts",
+        /* A contract opens at /extensions/amc-contracts/<id>; the other
+           sections claim longer prefixes, so this only wins on those. */
+        resource: ResourceType.AMC_CONTRACTS,
+      },
+      // { title: "Renewals", url: "/extensions/amc-contracts/renewals", resource: ResourceType.AMC_RENEWALS },
+      // { title: "Payments", url: "/extensions/amc-contracts/payments", canSee: canViewAmcPayments },
+      {
+        title: "Clients",
+        url: "/extensions/amc-contracts/customers",
+        // A property page belongs to its client.
+        match: ["/extensions/amc-contracts/properties"],
+        resource: ResourceType.AMC_CLIENTS,
+      },
+      { title: "Site visits", url: "/extensions/amc-contracts/assessments", resource: ResourceType.AMC_SITE_VISITS },
+      // { title: "Visit board", url: "/extensions/amc-contracts/board", canSee: canViewAmcVisits },
+      // { title: "Job reviews", url: "/extensions/amc-contracts/job-reviews", canSee: canViewAmcVisits },
+      // { title: "Call outs", url: "/extensions/amc-contracts/call-outs", resource: ResourceType.AMC_CALL_OUTS },
+      // { title: "Additional work", url: "/extensions/amc-contracts/additional-works", resource: ResourceType.AMC_ADDITIONAL_WORKS },
+      { title: "Technicians", url: "/extensions/amc-contracts/technicians", resource: ResourceType.AMC_TECHNICIANS },
+      // { title: "Reports", url: "/extensions/amc-contracts/reports", resource: ResourceType.AMC_REPORTS },
+      { title: "Rate card", url: "/extensions/amc-contracts/rate-card", canSee: canViewAmcRateCard },
+      // { title: "FSM mapping", url: "/extensions/amc-contracts/fsm-services", resource: ResourceType.AMC_FSM_MAPPING },
+      // { title: "Operations settings", url: "/extensions/amc-contracts/settings", resource: ResourceType.AMC_OPERATIONS_SETTINGS },
+      /* Admins also have it under Settings; this is for managers and
+         department heads with AMC Configuration who are not admins. */
+      // { title: "Configuration", url: "/settings/amc/configuration", canSee: canViewAmcConfig },
+    ],
   },
   /*
     Workforce (C6, Sami 31 Oct 2026): everyone in one list, the compliance
@@ -461,6 +516,7 @@ export const getNavData = (user: User) => {
           said the same word twice.
         */
         { title: "AMC", url: "/settings/amc", canSee: canUseAmc },
+        { title: "AMC configuration", url: "/settings/amc/configuration", canSee: canViewAmcConfig },
         /*
           The rate card and the quotation wording, which used to sit under
           Snagging beside the work they price. They configure the module

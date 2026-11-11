@@ -1,11 +1,13 @@
+import { formatPhone } from "@/lib/phone/format-phone";
+
 /**
  * Phone numbers as they print on the AMC documents.
  *
  * The wizard stores full international numbers ("+971501234567", from the
  * international phone input). Printed raw they are hard to read, so UAE
  * mobile and landline numbers are grouped the way people write them:
- * "+971 50 123 4567", "+971 4 123 4567". Other countries print with a
- * space after the country code where it can be told apart safely, and
+ * "+971 50 123 4567", "+971 4 123 4567". Other countries print as the
+ * international phone input shows them (lib/phone/format-phone), and
  * anything else prints exactly as entered.
  */
 export function formatPhoneForDocument(value: string | undefined | null): string {
@@ -25,5 +27,7 @@ export function formatPhoneForDocument(value: string | undefined | null): string
     if (/^800\d+$/.test(uae)) return `+971 ${uae}`;
   }
 
+  /* Another country's number, grouped as the phone input shows it (+44 7700 900123). */
+  if (raw.startsWith("+")) return formatPhone(raw) || raw;
   return raw;
 }

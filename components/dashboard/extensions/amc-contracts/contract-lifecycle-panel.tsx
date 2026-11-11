@@ -1,0 +1,697 @@
+"use client";
+
+import { useState } from "react";
+import { AlarmClock, CheckCircle2, Circle, Clock, FileUp, PenLine, Play, Save, ScrollText } from "lucide-react";
+import { toast } from "sonner";
+
+import { SectionCard } from "@/components/dashboard/shared/kaizen";
+import { ActionDialogContent, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
+import DateSelect from "@/components/ui/date-select";
+import { CONTRACT_STATUS_NAMES, MATERIAL_LABELS, expiryFromCommencement, type ContractStatus, type LifecycleAction } from "@/lib/amc/contract-lifecycle";
+import { termMonthsBetween, todayInDubai } from "@/lib/amc/contracts";
+import type { ContractDetail } from "@/modules/amc-contracts/amc-contracts-service";
+import { clientProfileService } from "@/modules/amc-contracts/client-profile-service";
+
+import { formatContractDate, formatDateTime } from "./contract-status";
+import { TruncatedText } from "@/components/ui/truncated-text";
+import { amcRequest } from "@/lib/amc/http-cache";
+import { effectiveExclusions, libraryEntry, standardExclusions } from "@/lib/amc/scope-defaults";
+
+function lifecycle(contractId: string, action: LifecycleAction) {
+  return amcRequest<Record<string, unknown>>(`/api/amc-contracts/${contractId}/lifecycle`, { method: "POST", body: JSON.stringify(action) });
+}
+
+const METHOD_LABELS: Record<string, string> = { link: "Signed on the link", portal: "Signed in the portal", scan: "Signed scan", zoho_sign: "Zoho Sign" };
+
+export type StatusTarget = "on_hold" | "active" | "terminated" | "cancelled";
+type LifecycleDialog = "sign" | "scan" | "activate" | "status" | "snooze" | null;
+
+/**
+ * The contract from the client's approval to activation and after (BRD
+ * 5.7, Phase 6): its number and template, and the signatures in order.
+ * The next step (sign, record a signed scan, activate, hold, resume,
+ * terminate, call off) is offered on the contract's header card, which
+ * opens the dialogs from useLifecycleDialogs.
+ */
+export function ContractLifecycleCard({ data }: { data: ContractDetail }) {
+  const { contract } = data;
+  const signatories = data.signatories ?? [];
+  if (!contract.lifecycle && signatories.length === 0) return null;
+  const status = contract.status as ContractStatus;
+
+  return (
+    <SectionCard
+      icon={<ScrollText />}
+      title={`Contract ${contract.lifecycle?.contractNumber ?? ""}`.trim()}
+      description={[
+        CONTRACT_STATUS_NAMES[status] ?? status,
+        contract.lifecycle?.template ? `${contract.lifecycle.template === "commercial" ? "Commercial" : "Residential"} template` : null,
+        contract.lifecycle?.approvedVersionNo ? `from proposal V${contract.lifecycle.approvedVersionNo}` : null,
+        contract.lifecycle?.clientApprovedAt ? `approved ${formatDateTime(contract.lifecycle.clientApprovedAt)}` : null,
+      ]
+        .filter(Boolean)
+        .join(" · ")}
+      bodyClassName="px-5 pb-5"
+    >
+      {signatories.length ? (
+        <ol className="divide-y rounded-lg border">
+          {signatories.map((s) => {
+            const Icon = s.status === "signed" ? CheckCircle2 : s.status === "pending" ? Clock : Circle;
+            return (
+              <li key={s.id} className="flex flex-wrap items-start gap-3 px-4 py-3 text-sm">
+                <Icon
+                  className={`mt-0.5 size-4 ${s.status === "signed" ? "text-success" : s.status === "pending" ? "text-warning" : "text-muted-foreground"}`}
+                  aria-hidden
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="font-medium">
+                    {s.signOrder}. {s.name}
+                    <span className="text-muted-foreground font-normal"> · {s.party === "client" ? "Client" : (s.title ?? "Yalla Fix It")}</span>
+                  </div>
+                  <div className="text-muted-foreground text-xs">
+                    {s.status === "signed"
+                      ? `${METHOD_LABELS[s.method ?? ""] ?? "Signed"}${s.signedName && s.signedName !== s.name ? ` as ${s.signedName}` : ""}, ${formatDateTime(s.signedAt)}`
+                      : s.status === "pending"
+                        ? s.party === "client"
+                          ? "Signs on the link sent with the contract"
+                          : "Signs here, in the portal"
+                        : "After the signature before"}
+                  </div>
+                </div>
+                <Badge
+                  variant="secondary"
+                  className={`border-0 font-medium capitalize ${
+                    s.status === "signed" ? "bg-success/10 text-success" : s.status === "pending" ? "bg-warning/10 text-warning" : "bg-mist text-ink-soft"
+                  }`}
+                >
+                  {s.status === "pending" ? "Their turn" : s.status}
+                </Badge>
+              </li>
+            );
+          })}
+        </ol>
+      ) : (
+        <p className="text-muted-foreground text-sm">No signatories recorded for this contract.</p>
+      )}
+    </SectionCard>
+  );
+}
+
+/**
+ * The lifecycle dialogs, owned by whichever screen offers the buttons (the
+ * contract's header card). Every dialog stays mounted and is opened by
+ * name, so it animates in and out like every other dialog in the product.
+ */
+export function useLifecycleDialogs(data: ContractDetail, onChanged: () => void) {
+  const [dialog, setDialog] = useState<LifecycleDialog>(null);
+  const [statusTo, setStatusTo] = useState<StatusTarget>("on_hold");
+  const close = (open: boolean) => !open && setDialog(null);
+  const done = () => {
+    setDialog(null);
+    onChanged();
+  };
+
+  const dialogs = (
+    <>
+      <SignDialog open={dialog === "sign"} onOpenChange={close} contractId={data.contract.id} onDone={done} />
+      <ScanDialog open={dialog === "scan"} onOpenChange={close} data={data} onDone={done} />
+      <ActivateDialog open={dialog === "activate"} onOpenChange={close} data={data} onDone={done} />
+      <StatusDialog open={dialog === "status"} onOpenChange={close} contractId={data.contract.id} to={statusTo} onDone={done} />
+      <SnoozeDialog open={dialog === "snooze"} onOpenChange={close} contractId={data.contract.id} onDone={done} />
+    </>
+  );
+
+  return {
+    open: (next: Exclude<LifecycleDialog, "status" | null>) => setDialog(next),
+    openStatus: (to: StatusTarget) => {
+      setStatusTo(to);
+      setDialog("status");
+    },
+    dialogs,
+  };
+}
+
+/* One action at a time: success is a toast and the dialog closes; a failure is a toast and it stays open. */
+function useAction() {
+  const [busy, setBusy] = useState(false);
+  /* success may depend on the answer (activation lands active or waiting for payment). */
+  const run = async <T,>(fn: () => Promise<T>, success: string | ((result: T) => string), after: () => void) => {
+    setBusy(true);
+    try {
+      const result = await fn();
+      toast.success(typeof success === "function" ? success(result) : success);
+      after();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Something went wrong.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return { busy, run };
+}
+
+function DialogShell({
+  open,
+  onOpenChange,
+  title,
+  description,
+  busy,
+  footer,
+  children,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  title: string;
+  description: string;
+  busy: boolean;
+  footer: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
+      <ActionDialogContent busy={busy} className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
+        </DialogHeader>
+        <div className="grid gap-4 py-2">{children}</div>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
+            Cancel
+          </Button>
+          {footer}
+        </DialogFooter>
+      </ActionDialogContent>
+    </Dialog>
+  );
+}
+
+type DialogProps = { open: boolean; onOpenChange: (open: boolean) => void; onDone: () => void };
+
+/*
+  Starts the form afresh each time its dialog opens. Done while rendering,
+  not in an effect, so the first frame of the dialog already shows the
+  fresh form rather than the last one's answers.
+*/
+function useResetOnOpen(open: boolean, reset: () => void) {
+  const [wasOpen, setWasOpen] = useState(open);
+  if (open !== wasOpen) {
+    setWasOpen(open);
+    if (open) reset();
+  }
+}
+
+function SignDialog({ open, onOpenChange, contractId, onDone }: DialogProps & { contractId: string }) {
+  const [name, setName] = useState("");
+  const [agree, setAgree] = useState(false);
+  const { busy, run } = useAction();
+
+  useResetOnOpen(open, () => {
+    setName("");
+    setAgree(false);
+  });
+
+  return (
+    <DialogShell
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Sign the contract"
+      description="Your typed name is recorded as your signature for Yalla Fix It, with the date and time."
+      busy={busy}
+      footer={
+        <SubmitButton
+          pending={busy}
+          pendingLabel="Signing…"
+          icon={<PenLine className="size-4" />}
+          disabled={name.trim().length < 2 || !agree}
+          onClick={() => void run(() => lifecycle(contractId, { action: "sign", typedName: name.trim() }), "Signed. The next signatory has been told.", onDone)}
+        >
+          Sign
+        </SubmitButton>
+      }
+    >
+      <div className="grid gap-2">
+        <Label htmlFor="sign-name">Full name</Label>
+        <Input id="sign-name" value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" />
+      </div>
+      <label className="flex items-start gap-2 text-sm">
+        <Checkbox checked={agree} onCheckedChange={(v) => setAgree(v === true)} />I have read the contract and sign it on behalf of Yalla Fix It.
+      </label>
+    </DialogShell>
+  );
+}
+
+function ScanDialog({ open, onOpenChange, data, onDone }: DialogProps & { data: ContractDetail }) {
+  const [file, setFile] = useState<File | null>(null);
+  const [date, setDate] = useState(todayInDubai());
+  const [name, setName] = useState(data.contract.customerName);
+  const { busy, run } = useAction();
+
+  useResetOnOpen(open, () => {
+    setFile(null);
+    setDate(todayInDubai());
+    setName(data.contract.customerName);
+  });
+
+  const save = () =>
+    run(
+      async () => {
+        const { document } = await clientProfileService.uploadDocument({
+          file: file!,
+          level: "contract",
+          entityId: data.contract.id,
+          category: "Signed scan",
+          title: `Signed contract ${data.contract.lifecycle?.contractNumber ?? ""}`.trim(),
+        });
+        await lifecycle(data.contract.id, { action: "scan", documentId: document.id, signedDate: date, signedByName: name.trim() });
+      },
+      "Signed scan recorded. The contract is signed.",
+      onDone,
+    );
+  return (
+    <DialogShell
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Record a signed scan"
+      description="For a contract signed on paper. The scan is kept with the contract's documents and records every signature still open."
+      busy={busy}
+      footer={
+        <SubmitButton
+          pending={busy}
+          pendingLabel="Recording…"
+          icon={<FileUp className="size-4" />}
+          disabled={!file || !date || name.trim().length < 2}
+          onClick={() => void save()}
+        >
+          Record
+        </SubmitButton>
+      }
+    >
+      <div className="grid gap-2">
+        <Label htmlFor="scan-file">Signed contract (PDF or image)</Label>
+        <Input id="scan-file" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-2">
+          <Label htmlFor="scan-date">Signed on</Label>
+          <DateSelect id="scan-date" max={todayInDubai()} value={date} onChange={setDate} />
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor="scan-name">Signed for the client by</Label>
+          <Input id="scan-name" value={name} onChange={(e) => setName(e.target.value)} />
+        </div>
+      </div>
+    </DialogShell>
+  );
+}
+
+function ActivateDialog({ open, onOpenChange, data, onDone }: DialogProps & { data: ContractDetail }) {
+  const initialStart = () => (data.contract.startDate >= todayInDubai() ? data.contract.startDate : todayInDubai());
+  /* The term the client signed: fixed here (activation sets only when service starts); the server keeps it too. */
+  const signedTerm = data.contract.termMonths || termMonthsBetween(data.contract.startDate, data.contract.endDate) || 12;
+  const [start, setStart] = useState(initialStart);
+  /* Phase 7 (DEV-386): starting before the first instalment needs AMC Payments (Approve) and a reason. */
+  const canStartEarly = data.permissions.payments?.canApprove === true;
+  const [startEarly, setStartEarly] = useState(false);
+  const [earlyReason, setEarlyReason] = useState("");
+  const { busy, run } = useAction();
+
+  useResetOnOpen(open, () => {
+    setStart(initialStart());
+    setStartEarly(false);
+    setEarlyReason("");
+  });
+
+  const months = signedTerm;
+  const end = start && months >= 1 ? expiryFromCommencement(start, months) : null;
+  const early = canStartEarly && startEarly;
+  const activate = async () =>
+    (await lifecycle(data.contract.id, {
+      action: "activate",
+      commencementDate: start,
+      termMonths: months,
+      ...(early ? { startWithoutPayment: { reason: earlyReason.trim() } } : {}),
+    })) as { status?: string };
+  return (
+    <DialogShell
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Activate the contract"
+      description="The commencement date is when service starts, separate from the signing date. With the signed term it sets the expiry, the PPM schedule and the renewal reminder."
+      busy={busy}
+      footer={
+        <SubmitButton
+          pending={busy}
+          pendingLabel="Activating…"
+          icon={<Play className="size-4" />}
+          disabled={!start || !(months >= 1) || (early && earlyReason.trim().length < 3)}
+          onClick={() =>
+            void run(
+              activate,
+              (result) =>
+                result?.status === "pending_initial_payment"
+                  ? "Contract activated. It waits for the first instalment before visits are released."
+                  : "Contract activated.",
+              onDone,
+            )
+          }
+        >
+          Activate
+        </SubmitButton>
+      }
+    >
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-2">
+          <Label htmlFor="act-start">Commencement date</Label>
+          <DateSelect id="act-start" value={start} onChange={setStart} />
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor="act-term">Term</Label>
+          <Input id="act-term" value={`${signedTerm} ${signedTerm === 1 ? "month" : "months"}`} readOnly disabled aria-describedby="act-term-hint" />
+          <p id="act-term-hint" className="text-muted-foreground text-xs">
+            As signed by the client. A different term needs an amendment.
+          </p>
+        </div>
+      </div>
+      {end ? <p className="text-muted-foreground text-sm">Runs to {formatContractDate(end)}.</p> : null}
+      <p className="text-muted-foreground text-sm">
+        {early
+          ? "The payment schedule is made now. The contract starts straight away; the first instalment is still collected."
+          : "The payment schedule is made now. The contract waits for the first instalment before any visit is released."}
+      </p>
+      {canStartEarly ? (
+        <div className="grid gap-3 rounded-lg border p-3">
+          <label className="flex items-start gap-2 text-sm">
+            <Checkbox checked={startEarly} onCheckedChange={(v) => setStartEarly(v === true)} className="mt-0.5" />
+            Start before the first payment (agreed credit terms)
+          </label>
+          {startEarly ? (
+            <div className="grid gap-2">
+              <Label htmlFor="act-early-reason">Reason</Label>
+              <Textarea id="act-early-reason" rows={2} value={earlyReason} onChange={(e) => setEarlyReason(e.target.value)} maxLength={500} />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+    </DialogShell>
+  );
+}
+
+const STATUS_COPY: Record<StatusTarget, { title: string; description: string; button: string; pending: string }> = {
+  on_hold: { title: "Put the contract on hold", description: "Visits pause while it is on hold. The reason is recorded.", button: "Put on hold", pending: "Saving…" },
+  active: { title: "Resume the contract", description: "It is active again from now. Say what changed.", button: "Resume", pending: "Saving…" },
+  terminated: { title: "Terminate the contract", description: "It ends now, before its term. This cannot be undone.", button: "Terminate", pending: "Terminating…" },
+  cancelled: { title: "Call the contract off", description: "It will not start. This cannot be undone.", button: "Call off", pending: "Calling off…" },
+};
+
+function StatusDialog({ open, onOpenChange, contractId, to, onDone }: DialogProps & { contractId: string; to: StatusTarget }) {
+  const [reason, setReason] = useState("");
+  const { busy, run } = useAction();
+  const copy = STATUS_COPY[to];
+
+  useResetOnOpen(open, () => setReason(""));
+
+  return (
+    <DialogShell
+      open={open}
+      onOpenChange={onOpenChange}
+      title={copy.title}
+      description={copy.description}
+      busy={busy}
+      footer={
+        <SubmitButton
+          variant={to === "terminated" || to === "cancelled" ? "destructive" : "default"}
+          pending={busy}
+          pendingLabel={copy.pending}
+          disabled={reason.trim().length < 3}
+          onClick={() => void run(() => lifecycle(contractId, { action: "status", to, reason: reason.trim() }), "Status changed.", onDone)}
+        >
+          {copy.button}
+        </SubmitButton>
+      }
+    >
+      <div className="grid gap-2">
+        <Label htmlFor="status-reason">Reason</Label>
+        <Textarea id="status-reason" rows={3} value={reason} onChange={(e) => setReason(e.target.value)} maxLength={1000} />
+      </div>
+    </DialogShell>
+  );
+}
+
+/*
+  To-do 2 (BRD 6.8): the follow-up to-do while the client signs or pays
+  moves on by a few days, with the reason recorded. A 409 (no open
+  follow-up) is shown as the server words it.
+*/
+function SnoozeDialog({ open, onOpenChange, contractId, onDone }: DialogProps & { contractId: string }) {
+  const [days, setDays] = useState("3");
+  const [reason, setReason] = useState("");
+  const { busy, run } = useAction();
+
+  useResetOnOpen(open, () => {
+    setDays("3");
+    setReason("");
+  });
+
+  const n = Number(days);
+  const daysOk = /^\d+$/.test(days.trim()) && n >= 1 && n <= 14;
+  return (
+    <DialogShell
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Snooze the follow-up"
+      description="The follow-up to-do and its escalation move on by the days you choose. The reason is recorded."
+      busy={busy}
+      footer={
+        <SubmitButton
+          pending={busy}
+          pendingLabel="Snoozing…"
+          icon={<AlarmClock className="size-4" />}
+          disabled={!daysOk || reason.trim().length < 3}
+          onClick={() =>
+            void run(
+              async () => (await lifecycle(contractId, { action: "snooze_follow_up", days: n, reason: reason.trim() })) as { until?: string },
+              (result) => (result?.until ? `Follow-up snoozed until ${formatDateTime(result.until)}` : "Follow-up snoozed"),
+              onDone,
+            )
+          }
+        >
+          Snooze
+        </SubmitButton>
+      }
+    >
+      <div className="grid gap-2">
+        <Label htmlFor="snooze-days">Days (1 to 14)</Label>
+        <Input id="snooze-days" type="number" min={1} max={14} value={days} onChange={(e) => setDays(e.target.value)} />
+      </div>
+      <div className="grid gap-2">
+        <Label htmlFor="snooze-reason">Reason</Label>
+        <Textarea
+          id="snooze-reason"
+          rows={3}
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          maxLength={500}
+          placeholder="e.g. The client is travelling until next week"
+        />
+      </div>
+    </DialogShell>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Entitlements: what each service covers besides its visits (DEV-373) */
+/* ------------------------------------------------------------------ */
+
+type Entitlement = ContractDetail["entitlements"][number];
+
+export function EntitlementTermsCard({ data, onChanged }: { data: ContractDetail; onChanged: () => void }) {
+  /* Kept after the dialog closes, so it can animate out with its content. */
+  const [editing, setEditing] = useState<Entitlement | null>(null);
+  const [editOpen, setEditOpen] = useState(false);
+  const rows = data.entitlements.filter((e) => e.materialCoverage !== undefined);
+  if (rows.length === 0) return null;
+  const canEdit = data.permissions.canEditTerms === true;
+  return (
+    <SectionCard
+      icon={<ScrollText />}
+      title="What each service covers"
+      description="Labour, materials, value limits and exclusions per service. Set before activation; checked when a call out or extra work is assessed. Exclusions start from the Scope of Works Library until changed here."
+      bodyClassName="pb-2"
+    >
+      <div className="overflow-x-auto">
+        <Table className="min-w-[640px]">
+          <TableHeader>
+            <TableRow>
+              <TableHead className="pl-5">Service</TableHead>
+              <TableHead>Labour</TableHead>
+              <TableHead>Materials</TableHead>
+              <TableHead>Value limit</TableHead>
+              <TableHead>Exclusions</TableHead>
+              {canEdit ? (
+                <TableHead className="pr-5">
+                  <span className="sr-only">Actions</span>
+                </TableHead>
+              ) : null}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((e) => (
+              <TableRow key={e.id}>
+                <TableCell className="pl-5 text-sm font-medium">{e.serviceLabel}</TableCell>
+                <TableCell className="text-sm">{e.labourCovered ? "Covered" : "Chargeable"}</TableCell>
+                <TableCell className="text-sm">{MATERIAL_LABELS[e.materialCoverage ?? "consumables"]}</TableCell>
+                <TableCell className="text-sm tabular-nums">{e.valueLimitAed != null ? `AED ${e.valueLimitAed.toLocaleString("en-AE")}` : "—"}</TableCell>
+                <TableCell className="max-w-[280px] text-sm">
+                  {(() => {
+                    /* The contract's own text, else the library's standard exclusions for the service (marked). */
+                    const ex = effectiveExclusions(e.serviceId, e.exclusions);
+                    return ex.text ? (
+                      <div className="grid gap-0.5">
+                        <TruncatedText>{ex.text}</TruncatedText>
+                        {ex.standard ? <span className="text-muted-foreground text-xs">Standard (Scope of Works Library {libraryEntry(e.serviceId)?.ref})</span> : null}
+                      </div>
+                    ) : (
+                      "—"
+                    );
+                  })()}
+                </TableCell>
+                {canEdit ? (
+                  <TableCell className="pr-5 text-right">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        setEditing(e);
+                        setEditOpen(true);
+                      }}
+                    >
+                      Edit
+                    </Button>
+                  </TableCell>
+                ) : null}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+      {editing ? (
+        <TermsDialog
+          open={editOpen}
+          onOpenChange={setEditOpen}
+          contractId={data.contract.id}
+          entitlement={editing}
+          onDone={() => {
+            setEditOpen(false);
+            onChanged();
+          }}
+        />
+      ) : null}
+    </SectionCard>
+  );
+}
+
+function TermsDialog({ open, onOpenChange, contractId, entitlement, onDone }: DialogProps & { contractId: string; entitlement: Entitlement }) {
+  const [labour, setLabour] = useState(entitlement.labourCovered !== false);
+  const [material, setMaterial] = useState<keyof typeof MATERIAL_LABELS>(entitlement.materialCoverage ?? "consumables");
+  const [limit, setLimit] = useState(entitlement.valueLimitAed != null ? String(entitlement.valueLimitAed) : "");
+  /* Starts from the contract's own text, else the library's standard exclusions for the service. */
+  const startingExclusions = () => effectiveExclusions(entitlement.serviceId, entitlement.exclusions).text ?? "";
+  const [exclusions, setExclusions] = useState(startingExclusions);
+  const standard = standardExclusions(entitlement.serviceId);
+  const { busy, run } = useAction();
+
+  /* Each opening starts from the service being edited. */
+  useResetOnOpen(open, () => {
+    setLabour(entitlement.labourCovered !== false);
+    setMaterial(entitlement.materialCoverage ?? "consumables");
+    setLimit(entitlement.valueLimitAed != null ? String(entitlement.valueLimitAed) : "");
+    setExclusions(startingExclusions());
+  });
+
+  return (
+    <DialogShell
+      open={open}
+      onOpenChange={onOpenChange}
+      title={entitlement.serviceLabel}
+      description="What this service covers on this contract."
+      busy={busy}
+      footer={
+        <SubmitButton
+          pending={busy}
+          pendingLabel="Saving…"
+          icon={<Save className="size-4" />}
+          disabled={limit !== "" && !(Number(limit) >= 0)}
+          onClick={() =>
+            void run(
+              () =>
+                lifecycle(contractId, {
+                  action: "entitlement",
+                  entitlementId: entitlement.id!,
+                  labourCovered: labour,
+                  materialCoverage: material,
+                  valueLimitAed: limit === "" ? null : Number(limit),
+                  exclusions: exclusions.trim() || null,
+                }),
+              "Saved",
+              onDone,
+            )
+          }
+        >
+          Save
+        </SubmitButton>
+      }
+    >
+      <label className="flex items-center gap-2 text-sm">
+        <Checkbox checked={labour} onCheckedChange={(v) => setLabour(v === true)} />
+        Labour covered
+      </label>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid gap-2">
+          <Label htmlFor="terms-material">Materials</Label>
+          <Select value={material} onValueChange={(v) => setMaterial(v as keyof typeof MATERIAL_LABELS)}>
+            <SelectTrigger className="w-full" id="terms-material">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {Object.entries(MATERIAL_LABELS).map(([k, l]) => (
+                <SelectItem key={k} value={k}>
+                  {l}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="grid gap-2">
+          <Label htmlFor="terms-limit">Value limit per job (AED)</Label>
+          <Input id="terms-limit" type="number" min={0} value={limit} onChange={(e) => setLimit(e.target.value)} placeholder="Blank: none" />
+        </div>
+      </div>
+      <div className="grid gap-2">
+        <Label htmlFor="terms-excl">Exclusions</Label>
+        <Textarea id="terms-excl" rows={4} value={exclusions} onChange={(e) => setExclusions(e.target.value)} maxLength={1000} />
+        {standard ? (
+          <div className="text-muted-foreground flex flex-wrap items-center gap-x-2 text-xs">
+            <span>
+              {exclusions.trim() === standard ? "The standard text from the Scope of Works Library" : "Changed for this contract"} ({libraryEntry(entitlement.serviceId)?.ref}).
+            </span>
+            {exclusions.trim() !== standard ? (
+              <Button type="button" variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => setExclusions(standard)}>
+                Use the standard text
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+    </DialogShell>
+  );
+}

@@ -46,7 +46,7 @@ export function DatePickerField({
           variant="outline"
           disabled={disabled}
           className={cn(
-            "w-full justify-start text-left font-normal",
+            "h-8 w-full justify-start rounded-[12px] px-2.5 text-left font-normal",
             !value && "text-muted-foreground",
           )}
         >

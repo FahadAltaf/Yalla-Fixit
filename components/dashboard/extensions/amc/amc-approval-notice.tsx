@@ -141,7 +141,7 @@ export function AmcApprovalNotice({
       bodyClassName="border-t"
       action={
         <div className="flex items-center gap-2">
-          <Badge variant="secondary" className="bg-brand/10 text-brand tabular-nums">
+          <Badge variant="secondary" className="bg-brand-50 text-brand border-0 font-medium tabular-nums">
             {waiting}
           </Badge>
           <Button
@@ -161,7 +161,7 @@ export function AmcApprovalNotice({
           <li key={item.id}>
             <DataRow
               icon={<ClipboardCheck aria-hidden />}
-              title={item.customerName || "Unnamed customer"}
+              title={item.customerName || "Unnamed client"}
               subtitle={
                 <>
                   {item.proposalNumber || "No number"}

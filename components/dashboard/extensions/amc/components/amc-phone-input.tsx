@@ -29,16 +29,19 @@ export function AmcPhoneInput({
   value,
   onChange,
   disabled,
+  ariaLabel,
 }: {
   id?: string;
   value: string | undefined;
   onChange: (value: string) => void;
   disabled?: boolean;
+  ariaLabel?: string;
 }) {
   const current = toInternationalPhone(value);
   return (
     <PhoneInput
       id={id}
+      ariaLabel={ariaLabel}
       value={current}
       /*
         A change the user actually made, not the control settling in.

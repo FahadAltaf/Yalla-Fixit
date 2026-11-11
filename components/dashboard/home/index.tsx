@@ -4,6 +4,7 @@ import { HomeNotificationsPanel } from "@/components/dashboard/notifications/hom
 import { PageHeading } from "@/components/dashboard/shared/kaizen";
 import { useAuth } from "@/context/AuthContext";
 
+
 /**
  * The home page.
  *

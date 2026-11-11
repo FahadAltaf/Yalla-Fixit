@@ -21,6 +21,7 @@ import { clauseTextToHtml, htmlToClauseText, roundTrips } from "../amc-clause-ed
 import { contractClauseNumbers, contractClauseReferences } from "../amc-document-model";
 import { AMC_CLAUSE_STRUCTURE_ROLES, type AmcSettings } from "../amc-settings";
 import { isCustomServiceRow, type AmcComputedData, type AmcFormData } from "../amc-types";
+import { TruncatedText } from "@/components/ui/truncated-text";
 
 /*
   Clauses the team does not word here: the structures (services, table,
@@ -204,9 +205,9 @@ export function ProposalWording({
                   </Badge>
                 ) : null}
               </div>
-              <p className="text-muted-foreground mt-0.5 truncate text-xs">
+              <TruncatedText className="text-muted-foreground mt-0.5 text-xs">
                 {firstLine(item.value) || "No text"}
-              </p>
+              </TruncatedText>
             </div>
             <Button
               type="button"

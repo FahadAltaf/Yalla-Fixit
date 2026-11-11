@@ -1,10 +1,23 @@
-import { NextRequest, NextResponse } from "next/server";
-import { z } from "zod";
+import { after, NextRequest, NextResponse } from "next/server";
+import { clientAddress, rateLimited } from "@/lib/server/request-origin";
 
 import { recordAmcAudit } from "@/lib/server/amc/audit";
-import { hashLinkToken } from "@/lib/server/link-token";
+import { notifyProposalEvent } from "@/lib/server/amc/notifications";
+import { archiveSignedContract } from "@/lib/server/amc/signed-archive";
 import { readAmcSettings } from "@/lib/server/amc/settings";
+import type { AmcSettings } from "@/components/dashboard/extensions/amc/amc-settings";
+import { clientTransition } from "@/lib/amc/workflow";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
+import {
+  MAX_DECISION_BODY_BYTES,
+  decisionSchema,
+  publicSettingsFor,
+  toPublicStatus,
+} from "@/lib/server/amc/public-dto";
+import { resolveLink, type LinkRow } from "@/lib/server/amc/link-resolution";
+import { clientSignedOnLink, createContractFromApproval } from "@/lib/server/amc/contract-lifecycle";
+import { readAmcConfig } from "@/lib/server/amc/config";
+import { todayInDubai } from "@/lib/amc/contracts";
 
 /**
  * The client's page (FR5.5, FR5.7, NFR4).
@@ -18,7 +31,14 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
  * the owner's id, internal audit trail, both token hashes and the
  * approver's send-back reasons; none of that is any of the client's
  * business, so the response is assembled field by field rather than
- * spreading the row.
+ * spreading the row (lib/server/amc/public-dto.ts).
+ *
+ * Token lifecycle: a link is usable only while its document waits for the
+ * client (proposal_sent / contract_sent). Once answered, signed, moved on
+ * to the contract, or reopened for changes, the same link is "closed": it
+ * reports the outcome but carries no document and accepts no answer. A
+ * link replaced by a newer send matches nothing (404); past its 30 days
+ * it is refused (410).
  */
 
 const PUBLIC_SELECT = [
@@ -45,26 +65,12 @@ const PUBLIC_SELECT = [
   "contract_sent_at",
 ].join(", ");
 
-type Row = Record<string, unknown> & {
-  id: string;
-  status: string;
-  proposal_token_hash: string | null;
-  contract_token_hash: string | null;
-  proposal_token_expires_at: string | null;
-  contract_token_expires_at: string | null;
-};
+type Row = LinkRow;
 
 const NOT_FOUND = { error: "This link is not available" };
 
 async function findByToken(token: string) {
-  /* A short token is never one of ours — 32 random bytes base64url is 43
-     characters — so this is rejected before it reaches the database. */
-  if (!token || token.length < 32) {
-    return { error: NextResponse.json(NOT_FOUND, { status: 404 }) };
-  }
-
   const admin = await createAdminServerClient();
-  const hash = hashLinkToken(token);
 
   /*
     The lookup also reads the contract's own settings copy (FR6.4). If the
@@ -72,33 +78,31 @@ async function findByToken(token: string) {
     without it, and a contract shows the proposal's copy, which is what
     every contract used before. A client link must never fail over a
     column the page can do without. Read only, so the retry is safe.
+    The hash is hex, so it is safe inside the filter string.
   */
-  const lookup = (columns: string) =>
-    admin
-      .from("amc_submissions")
-      .select(columns)
-      .or(`proposal_token_hash.eq.${hash},contract_token_hash.eq.${hash}`)
-      .maybeSingle();
-  let { data, error } = await lookup(`${PUBLIC_SELECT}, contract_settings_snapshot`);
-  if (error && (error.code === "42703" || error.code === "PGRST204")) {
-    ({ data, error } = await lookup(PUBLIC_SELECT));
+  const lookup = async (hash: string): Promise<Row | null> => {
+    const query = (columns: string) =>
+      admin
+        .from("amc_submissions")
+        .select(columns)
+        .or(`proposal_token_hash.eq.${hash},contract_token_hash.eq.${hash}`)
+        .maybeSingle();
+    const missing = (e: { code?: string } | null) => !!e && (e.code === "42703" || e.code === "PGRST204");
+    /* The payment plan and property type (Phase 4) first, then without them, then without the contract copy. */
+    let { data, error } = await query(`${PUBLIC_SELECT}, contract_settings_snapshot, payment_plan, payment_plan_custom, property_type, client_answer, valid_until`);
+    if (missing(error)) ({ data, error } = await query(`${PUBLIC_SELECT}, contract_settings_snapshot`));
+    if (missing(error)) ({ data, error } = await query(PUBLIC_SELECT));
+    if (error) throw new Error(error.message);
+    return (data as unknown as Row | null) ?? null;
+  };
+
+  /* lib/server/amc/link-resolution.ts: malformed, unknown and superseded
+     tokens are a 404; an expired one a 410. */
+  const resolved = await resolveLink(token, lookup);
+  if (resolved.state === "not_found") {
+    return { error: NextResponse.json(NOT_FOUND, { status: 404 }) };
   }
-
-  if (error) throw new Error(error.message);
-  if (!data) return { error: NextResponse.json(NOT_FOUND, { status: 404 }) };
-
-  const row = data as unknown as Row;
-  /* Which document this link is for is decided by which hash matched, not
-     by anything the caller sends. */
-  const kind: "proposal" | "contract" =
-    row.contract_token_hash === hash ? "contract" : "proposal";
-
-  const expiresAt =
-    kind === "contract"
-      ? row.contract_token_expires_at
-      : row.proposal_token_expires_at;
-
-  if (expiresAt && new Date(expiresAt).getTime() < Date.now()) {
+  if (resolved.state === "expired") {
     return {
       error: NextResponse.json(
         { error: "This link has expired. Please ask us to send it again." },
@@ -106,32 +110,7 @@ async function findByToken(token: string) {
       ),
     };
   }
-
-  return { admin, row, kind };
-}
-
-/** Never send the client the internal fields. */
-function toPublicPayload(row: Row, kind: "proposal" | "contract") {
-  const customer = (row.customer ?? {}) as Record<string, unknown>;
-  return {
-    kind,
-    status: row.status,
-    proposalNumber: row.proposal_number ?? null,
-    customerName: customer.customerName ?? null,
-    startDate: customer.startDate ?? null,
-    endDate: customer.endDate ?? null,
-    paymentTerms: customer.paymentTerms ?? null,
-    property: row.property ?? null,
-    services: row.services ?? [],
-    documentOptions: row.document_options ?? {},
-    discountPercent: Number(row.discount_percent ?? 0),
-    discountAmount: Number(row.discount_amount ?? 0),
-    finalPrice: Number(row.final_price ?? 0),
-    clientDecision: row.client_decision ?? null,
-    clientDecidedAt: row.client_decided_at ?? null,
-    signedByName: row.signed_by_name ?? null,
-    signedAt: row.signed_at ?? null,
-  };
+  return { admin, row: resolved.row, kind: resolved.kind, open: resolved.state === "open" };
 }
 
 /**
@@ -147,31 +126,56 @@ async function toPublicDocument(
 ) {
   const customer = { ...((row.customer ?? {}) as Record<string, unknown>) };
   delete customer.customerId;
+  const services = (row.services ?? []) as Array<{ serviceId?: string; included?: boolean }>;
+  const includedIds = services
+    .filter((service) => service.included && typeof service.serviceId === "string")
+    .map((service) => service.serviceId as string);
+  /* FR6.4: the text this document was sent with. A contract has its own
+     copy; contracts sent before it did went out with the proposal's. The
+     live fallback only covers rows sent before snapshots existed. */
+  const snapshot = ((kind === "contract" ? row.contract_settings_snapshot : null) ??
+    row.settings_snapshot ??
+    null) as Partial<AmcSettings> | null;
+  /* Merged over the defaults, then trimmed (publicSettingsFor). Snapshots
+     taken before 28 Sep 2026 -- every sent proposal in production on
+     5 Oct 2026 -- have no clauseList or services of their own. */
+  const settings = publicSettingsFor(
+    snapshot,
+    snapshot ? null : await readAmcSettings(admin),
+    includedIds,
+  );
+  /* The contract document prints the contract's own number. */
+  let contractNumber: string | null = null;
+  if (kind === "contract") {
+    const { data: contract } = await admin.from("amc_contracts").select("contract_number").eq("submission_id", String(row.id)).maybeSingle<{ contract_number: string | null }>();
+    contractNumber = contract?.contract_number ?? null;
+  }
   return {
     source: {
+      contract_number: contractNumber,
       property: row.property ?? {},
       customer: { ...customer, proposalNumber: row.proposal_number ?? "" },
       document_options: row.document_options ?? {},
-      services: row.services ?? [],
+      services,
       discount_percent: Number(row.discount_percent ?? 0),
     },
     documentType: kind,
-    /* FR6.4: the text this document was sent with. A contract has its own
-       copy; contracts sent before it did went out with the proposal's. The
-       live fallback only covers rows sent before snapshots existed. */
-    settings:
-      (kind === "contract" ? row.contract_settings_snapshot : null) ??
-      row.settings_snapshot ??
-      (await readAmcSettings(admin)),
+    /* Only what this document prints: no approver emails, no disabled
+       clauses, no other services' scopes. */
+    settings,
     sentAt:
       (kind === "contract" ? row.contract_sent_at : row.proposal_sent_at) ?? null,
   };
 }
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   ctx: { params: Promise<{ token: string }> },
 ) {
+  /* Per-address throttle against link guessing (lib/server/request-origin.ts). */
+  if (rateLimited(`amc-link:get:${clientAddress(req.headers)}`, 120, 10 * 60_000)) {
+    return NextResponse.json({ error: "Too many requests. Try again later." }, { status: 429 });
+  }
   try {
     const { token } = await ctx.params;
     const found = await findByToken(token);
@@ -179,8 +183,11 @@ export async function GET(
 
     return NextResponse.json(
       {
-        data: toPublicPayload(found.row, found.kind),
-        document: await toPublicDocument(found.admin, found.row, found.kind),
+        data: toPublicStatus(found.row, found.kind),
+        /* A closed link shows the outcome only, never the document. */
+        document: found.open
+          ? await toPublicDocument(found.admin, found.row, found.kind)
+          : null,
       },
       { headers: { "Cache-Control": "no-store", "X-Robots-Tag": "noindex" } },
     );
@@ -193,33 +200,31 @@ export async function GET(
   }
 }
 
-const decisionSchema = z.discriminatedUnion("action", [
-  z.object({
-    action: z.literal("approve"),
-    name: z.string().trim().min(1, "Please enter your name"),
-  }),
-  z.object({
-    action: z.literal("reject"),
-    name: z.string().trim().min(1, "Please enter your name"),
-    reason: z.string().trim().min(1, "Please tell us what needs changing"),
-  }),
-  z.object({
-    action: z.literal("sign"),
-    name: z.string().trim().min(1, "Please type your full name to sign"),
-  }),
-]);
-
 export async function POST(
   req: NextRequest,
   ctx: { params: Promise<{ token: string }> },
 ) {
+  if (rateLimited(`amc-link:post:${clientAddress(req.headers)}`, 20, 10 * 60_000)) {
+    return NextResponse.json({ error: "Too many requests. Try again later." }, { status: 429 });
+  }
   try {
     const { token } = await ctx.params;
     const found = await findByToken(token);
     if (found.error) return found.error;
     const { admin, row, kind } = found;
 
-    const parsed = decisionSchema.safeParse(await req.json().catch(() => ({})));
+    /* Bounded before parsing: an answer is a name and a short reason. */
+    const raw = await req.text().catch(() => "");
+    if (raw.length > MAX_DECISION_BODY_BYTES) {
+      return NextResponse.json({ error: "Your answer is too long" }, { status: 413 });
+    }
+    let json: unknown = {};
+    try {
+      json = raw ? JSON.parse(raw) : {};
+    } catch {
+      return NextResponse.json({ error: "Invalid request" }, { status: 400 });
+    }
+    const parsed = decisionSchema.safeParse(json);
     if (!parsed.success) {
       return NextResponse.json(
         { error: parsed.error.issues[0]?.message ?? "Invalid request" },
@@ -229,22 +234,27 @@ export async function POST(
     const body = parsed.data;
     const now = new Date().toISOString();
 
-    const isSigning = body.action === "sign";
-    if (isSigning !== (kind === "contract")) {
+    /*
+      FR5.5 — "the answer and the time are recorded", once. The rule is
+      lib/amc/workflow.ts (clientTransition); the expected status is also
+      re-asserted on the update, so a client who leaves the page open and
+      clicks twice, or forwards the link to a colleague who also answers,
+      cannot overwrite the first answer.
+    */
+    const check = clientTransition(body.action, kind, row.status);
+    const expected = kind === "contract" ? "contract_sent" : "proposal_sent";
+    /* BRD 5.4: a proposal is answered within its validity; after it, the coordinator sends an updated one. */
+    const validUntil = kind === "proposal" && typeof row.valid_until === "string" ? row.valid_until : null;
+    if (validUntil && validUntil < todayInDubai()) {
       return NextResponse.json(
-        { error: "That action does not apply to this link" },
-        { status: 400 },
+        { error: `This proposal was valid until ${new Date(`${validUntil}T00:00:00Z`).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" })}. Please ask your coordinator for an updated proposal.` },
+        { status: 410 },
       );
     }
-
-    /*
-      FR5.5 — "the answer and the time are recorded", once. The expected
-      status is re-asserted on the update, so a client who leaves the page
-      open and clicks twice, or forwards the link to a colleague who also
-      answers, cannot overwrite the first answer.
-    */
-    const expected = kind === "contract" ? "contract_sent" : "proposal_sent";
-    if (row.status !== expected) {
+    if (!check.ok && check.status === 400) {
+      return NextResponse.json({ error: check.error }, { status: 400 });
+    }
+    if (!check.ok) {
       return NextResponse.json(
         {
           error:
@@ -275,7 +285,7 @@ export async function POST(
               client_decision: "rejected",
               client_decided_at: now,
               client_decided_by_name: body.name,
-              client_rejected_reason: body.reason,
+              client_rejected_reason: body.action === "request_revision" ? `Revision requested: ${body.reason}` : body.reason,
             };
 
     const { data, error } = await admin
@@ -294,6 +304,20 @@ export async function POST(
       );
     }
 
+    /* Phase 5: which answer, from the link (best effort before 20261007150000). */
+    if (body.action !== "sign") {
+      const { error: answerError } = await admin
+        .from("amc_submissions")
+        .update({
+          client_answer: body.action === "approve" ? "approved" : body.action === "reject" ? "rejected" : "revision_requested",
+          client_answer_source: "link",
+          client_answer_recorded_by: null,
+          client_answer_evidence_id: null,
+        })
+        .eq("id", row.id);
+      if (answerError && answerError.code !== "42703" && answerError.code !== "PGRST204") console.error("AMC client answer not recorded:", answerError.message);
+    }
+
     /* FR5.9 — origin 'client', because there is no account behind this. */
     await recordAmcAudit(admin, {
       entityType: "submission",
@@ -303,16 +327,61 @@ export async function POST(
           ? "contract_signed"
           : body.action === "approve"
             ? "proposal_approved_by_client"
-            : "proposal_rejected_by_client",
+            : body.action === "request_revision"
+              ? "revision_requested_by_client"
+              : "proposal_rejected_by_client",
       actorId: null,
       actorLabel: body.name,
       origin: "client",
-      justification: body.action === "reject" ? body.reason : null,
+      justification: body.action === "reject" || body.action === "request_revision" ? body.reason : null,
       payload: { from: expected, to: update.status },
     });
 
+    /*
+      After the client has their answer: tell the team, and for a
+      signature archive the contract exactly as signed. Both run once,
+      because only the request whose conditional update matched gets here
+      (a retry is answered 409 above), and both are idempotent anyway.
+    */
+    const submissionId = row.id;
+    after(async () => {
+      /* Phase 6: the contract exists from the client's approval; a signature on the link is recorded on it. */
+      if (body.action === "approve") {
+        await createContractFromApproval(admin, submissionId, { id: null, label: body.name }, await readAmcConfig(admin));
+      }
+      if (body.action === "sign") {
+        await clientSignedOnLink(admin, submissionId, body.name, now);
+      }
+      if (body.action === "sign") {
+        try {
+          await archiveSignedContract(admin, submissionId, { when: "at_signing", actor: null });
+        } catch (archiveError) {
+          console.error(
+            "AMC signed contract not archived (staff can archive it from the contract page):",
+            archiveError instanceof Error ? archiveError.message : archiveError,
+          );
+        }
+      }
+      await notifyProposalEvent(admin, {
+        event: body.action === "sign" ? "contract_signed" : body.action === "approve" ? "client_approved" : "client_rejected",
+        submissionId,
+        actor: null,
+        at: now,
+        facts: {
+          signedByName: body.name,
+          signedAt: body.action === "sign" ? now : null,
+          reason: body.action === "reject" ? body.reason : body.action === "request_revision" ? `Revision requested: ${body.reason}` : null,
+        },
+      });
+    });
+
+    /* The row was read before client_answer was written: say the answer just given, or a change request reads as declined. */
+    const answered = toPublicStatus(data as unknown as Row, kind);
+    if (body.action !== "sign") {
+      answered.answer = body.action === "approve" ? "approved" : body.action === "reject" ? "rejected" : "revision_requested";
+    }
     return NextResponse.json(
-      { data: toPublicPayload(data as unknown as Row, kind) },
+      { data: answered },
       { headers: { "Cache-Control": "no-store", "X-Robots-Tag": "noindex" } },
     );
   } catch (error) {

@@ -5,17 +5,25 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { toast } from "sonner";
-import { Check, FileText, Loader2, ScrollText, SendHorizonal } from "lucide-react";
+import {
+  ClipboardCheck,
+  FileText,
+  ListCheck,
+  Loader2,
+  ScrollText,
+  SendHorizonal,
+  UserRound,
+} from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { PageHeading } from "@/components/dashboard/shared/kaizen";
-import { useConfirm } from "@/components/dashboard/shared/kaizen-states";
+import { SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
+import { WizardSkeleton } from "@/components/dashboard/snagging/route-skeletons";
 import { Card } from "@/components/ui/card";
 import { Form } from "@/components/ui/form";
-import { cn } from "@/lib/utils";
 import { amcSubmissionsService } from "@/modules/amc-submissions";
 
-import { getDefaultFormValues } from "./amc-constants";
+import { getDefaultFormValues, isFrequencyEditable } from "./amc-constants";
 import {
   formDataToSubmissionPayload,
   submissionToFormData,
@@ -26,12 +34,16 @@ import { AmcPreviewDialog } from "./amc-preview-dialog";
 import { computeAmcData, syncServiceRowsForUnitType } from "./amc-pricing";
 import {
   amcFormSchema,
+  isCustomServiceRow,
   type AmcDocumentType,
   type AmcFormData,
   type AmcSubmissionStatus,
 } from "./amc-types";
-import type { AmcSettings } from "./amc-settings";
-import { amcSettingsService } from "@/modules/amc-submissions";
+import { getAmcSettingsDefaults, type AmcSettings } from "./amc-settings";
+import { amcSettingsService, proposalRulesService, type ProposalRules } from "@/modules/amc-submissions";
+import { applyRateCard } from "@/lib/amc/rate-card";
+import { proposalTermMonths } from "@/lib/amc/contracts";
+import { planFromLegacyTerms } from "@/lib/amc/proposal-rules";
 import { PropertyCustomerStep } from "./steps/property-customer-step";
 import { ServicesPricingStep } from "./steps/services-pricing-step";
 import { ReviewStep } from "./steps/review-step";
@@ -40,18 +52,21 @@ import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-lab
 const STEPS = [
   {
     id: 1,
-    title: "Property and customer",
-    description: "Property, client, and contract details",
+    title: "Property and client",
+    description: "The property, who the proposal is for, the contract dates and the contacts.",
+    icon: UserRound,
   },
   {
     id: 2,
     title: "Services and pricing",
-    description: "Service table, base prices and discount",
+    description: "The services, their units and frequencies, the prices and any discount.",
+    icon: ListCheck,
   },
   {
     id: 3,
     title: "Review and submit",
-    description: "Summary, preview and submit for approval",
+    description: "Read it back, preview both documents, then submit it for approval.",
+    icon: ClipboardCheck,
   },
 ] as const;
 
@@ -88,7 +103,7 @@ function getErrorMessage(error: unknown, fallback: string) {
 }
 
 const STEP_VALIDATION_MESSAGES: Record<number, string> = {
-  1: "Fill in the property, customer and contract details before you continue.",
+  1: "Fill in the property, client and contract details before you continue.",
   2: "Pick at least one service and give each one units, a frequency and a base price before you continue.",
 };
 
@@ -130,9 +145,6 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
   const searchParams = useSearchParams();
   const initialStep = useRef(Number(searchParams.get("step")) || 1);
   const [currentStep, setCurrentStep] = useState(1);
-  /* The furthest step reached. Every step up to it stays clickable in the
-     step pills, forwards as well as back. */
-  const [furthestStep, setFurthestStep] = useState(1);
   // True while the proposal named in the address is being loaded, so the
   // step in the address is not rewritten before it arrives.
   const restoringRef = useRef(Boolean(submissionId));
@@ -160,6 +172,9 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
     text the client may never be sent.
   */
   const [liveSettings, setLiveSettings] = useState<AmcSettings | undefined>();
+  /* Bumped when a saved proposal is loaded into the form, so the service
+     rows are reconciled with Settings after the load as well as before. */
+  const [loadedTick, setLoadedTick] = useState(0);
   const { confirm, dialog: confirmDialog } = useConfirm();
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const activeSavesRef = useRef(0);
@@ -189,6 +204,55 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
 
   const unitType = form.watch("unitType");
   const watchedValues = form.watch();
+
+  /*
+    Phase 4: the rate card in force, the payment bands and the discount
+    thresholds. Undefined while loading; null when they cannot be read, in
+    which case the wizard prices as entered and the server decides anyway.
+  */
+  const [rules, setRules] = useState<ProposalRules | null | undefined>(undefined);
+  useEffect(() => {
+    let cancelled = false;
+    proposalRulesService.rules().then(
+      (loaded) => !cancelled && setRules(loaded),
+      () => !cancelled && setRules(null),
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /*
+    With a card in force, each line's rate is the card's for this property
+    model (BRD 5.3): set here as the lines, the model or the discount change,
+    so the table and totals show what the server will store. The server
+    prices again from the card on every save, so nothing here is trusted.
+  */
+  const cardInputs = JSON.stringify([
+    unitType,
+    watchedValues.discountPercent ?? 0,
+    (watchedValues.serviceRows ?? []).map((row) => [row.serviceId, row.included, row.units, row.frequency, row.free]),
+  ]);
+  useEffect(() => {
+    const card = rules?.rateCard;
+    if (!card) return;
+    const rows = form.getValues("serviceRows");
+    /* A custom service (DEV-260) is not on the card: it keeps the price typed for it. */
+    const cardable = rows.filter((row) => !isCustomServiceRow(row));
+    /* The card's frequencies bind only services counted in visits (a hotline is once a year). */
+    const types = new Map((liveSettings ?? getAmcSettingsDefaults()).services.map((s) => [s.id, s.frequencyType]));
+    const { rows: carded } = applyRateCard(cardable, card.card, form.getValues("unitType"), rules.today, Number(form.getValues("discountPercent")) || 0, undefined, (id) =>
+      isFrequencyEditable(types.get(id)),
+    );
+    const cardedById = new Map(carded.map((row) => [row.serviceId, row]));
+    const next = rows.map((row) => {
+      const priced = cardedById.get(row.serviceId);
+      return priced ? { ...priced, basePrice: priced.basePrice ?? undefined } : row;
+    });
+    if (JSON.stringify(next) !== JSON.stringify(rows)) {
+      form.setValue("serviceRows", next as AmcFormData["serviceRows"], { shouldValidate: true });
+    }
+  }, [rules, cardInputs, form, loadedTick, liveSettings]);
   const computed = useMemo(
     () => computeAmcData(watchedValues, "proposal", liveSettings),
     [watchedValues, liveSettings],
@@ -212,6 +276,10 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
         toast.error(
           "Couldn't load the latest AMC Settings, so the preview may show the default wording. Reload the page before you send anything.",
         );
+        /* Rows still have to follow some catalogue, or a ticked service the
+           server will refuse could never be unticked. The shipped list is
+           what the previews already fall back to. */
+        if (!cancelled) setLiveSettings((current) => current ?? getAmcSettingsDefaults());
       });
     return () => {
       cancelled = true;
@@ -223,14 +291,8 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
       try {
         const submission =
           await amcSubmissionsService.getSubmission(submissionId);
-        const restored = submissionToFormData(submission);
-        /*
-          Rows for every service now in the catalogue, unticked, so a draft
-          saved before a service existed (the Scope of Works Library added
-          22) can still take it. Ticked rows and their figures are kept.
-        */
-        restored.serviceRows = syncServiceRowsForUnitType(restored.serviceRows, restored.unitType);
-        form.reset(restored);
+        form.reset(submissionToFormData(submission));
+        setLoadedTick((tick) => tick + 1);
         setSubmissionMeta({
           status: submission.status,
           sentBackReason: submission.sent_back_reason ?? null,
@@ -238,8 +300,6 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
           clientName: submission.client_decided_by_name ?? null,
         });
         setCurrentStep(Math.min(Math.max(step, 1), STEPS.length));
-        /* A saved submission has been through the steps already. */
-        setFurthestStep(STEPS.length);
       } catch (error) {
         console.error(error);
         toast.error(
@@ -252,6 +312,13 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
     },
     [form],
   );
+
+  /* An older proposal (or a new one) without a plan reads its legacy terms as one (issue #8). */
+  useEffect(() => {
+    if (!form.getValues("paymentPlan")) {
+      form.setValue("paymentPlan", planFromLegacyTerms(form.getValues("paymentTerms")), { shouldDirty: false });
+    }
+  }, [form, loadedTick]);
 
   // Open the proposal the address names, on the step it names.
   useEffect(() => {
@@ -283,10 +350,10 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
     }
   }, [currentStep, openSubmissionId]);
 
-  // The breadcrumb names the proposal by its customer, not its id.
+  // The breadcrumb names the proposal by its client, not its id.
   const customerName = form.watch("customerName");
   useBreadcrumbLabel(openSubmissionId || undefined, customerName || "Proposal");
-  useBreadcrumbLabel("amc", "AMC proposals");
+  useBreadcrumbLabel("amc", "Proposals");
   useBreadcrumbLabel("new", "New proposal");
 
   useEffect(() => {
@@ -298,15 +365,35 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
     });
   }, [currentStep]);
 
+  /*
+    Rows follow AMC Settings' services for this kind of property. Waits for
+    Settings to load: syncing against the shipped defaults first would drop
+    a row for a service that exists only in Settings, and its price with
+    it. A ticked service that Settings no longer offers is removed and the
+    team is told, so it cannot stay on the bill unseen.
+  */
   useEffect(() => {
+    if (!liveSettings) return;
     const currentRows = form.getValues("serviceRows");
-    const synced = syncServiceRowsForUnitType(currentRows, unitType);
-    const currentJson = JSON.stringify(currentRows);
-    const syncedJson = JSON.stringify(synced);
-    if (currentJson !== syncedJson) {
+    const { rows: synced, removedIncluded } = syncServiceRowsForUnitType(
+      currentRows,
+      unitType,
+      liveSettings.services,
+    );
+    if (JSON.stringify(currentRows) !== JSON.stringify(synced)) {
       form.setValue("serviceRows", synced, { shouldValidate: true });
     }
-  }, [unitType, form]);
+    if (removedIncluded.length > 0) {
+      const labels = removedIncluded.map(
+        (id) => liveSettings.services.find((s) => s.id === id)?.label ?? id,
+      );
+      toast.warning(
+        `Removed ${labels.join(", ")}: AMC Settings doesn't offer ${
+          labels.length === 1 ? "it" : "them"
+        } on this kind of property any more.`,
+      );
+    }
+  }, [unitType, form, liveSettings, loadedTick]);
 
   const persistDraft = useCallback(
     (generatedDocument?: AmcDocumentType) => {
@@ -373,6 +460,15 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
       if (requireValidation) {
         const fields = STEP_FIELDS[currentStep] ?? [];
         const isValid = fields.length === 0 ? true : await form.trigger(fields);
+        /* BRD 5.7: a term under the configured minimum is stopped on the dates step, not at submit. */
+        if (isValid && currentStep === 1 && rules?.minimumTermMonths) {
+          const { startDate, endDate } = form.getValues();
+          const term = startDate && endDate ? proposalTermMonths(startDate, endDate) : null;
+          if (term !== null && term < rules.minimumTermMonths) {
+            toast.error(`The term is at least ${rules.minimumTermMonths} months (AMC configuration). These dates run ${term} month${term === 1 ? "" : "s"}.`);
+            return;
+          }
+        }
 
         if (!isValid) {
           toast.error(
@@ -384,7 +480,6 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
       }
 
       setCurrentStep(targetStep);
-      setFurthestStep((furthest) => Math.max(furthest, targetStep));
       pendingScrollRef.current = true;
 
       const isForward = targetStep > currentStep;
@@ -393,7 +488,7 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
         persistDraft();
       }
     },
-    [currentStep, form, persistDraft],
+    [currentStep, form, persistDraft, rules],
   );
 
   const handleNext = () => {
@@ -402,33 +497,6 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
 
   const handleBack = () => {
     void saveAndNavigate(Math.max(currentStep - 1, 1), false);
-  };
-
-  /*
-    Any step reached so far can be clicked. Going back needs no checks.
-    Going forward checks every step being skipped, in order, and stops on
-    the first one with something missing -- so a jump ahead can never
-    carry a half-filled step into Review & Submit.
-  */
-  const handleStepClick = async (stepId: number) => {
-    if (stepId === currentStep || stepId > furthestStep) return;
-    if (stepId < currentStep) {
-      void saveAndNavigate(stepId, false);
-      return;
-    }
-    for (let step = currentStep; step < stepId; step++) {
-      const fields = STEP_FIELDS[step] ?? [];
-      const isValid = fields.length === 0 ? true : await form.trigger(fields);
-      if (!isValid) {
-        toast.error(
-          STEP_VALIDATION_MESSAGES[step] ??
-            "Please complete all required fields before continuing.",
-        );
-        if (step !== currentStep) void saveAndNavigate(step, false);
-        return;
-      }
-    }
-    void saveAndNavigate(stepId, false);
   };
 
   /*
@@ -447,31 +515,43 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
       );
       return;
     }
-    if (
-      !(await confirm({
-        title: "Submit for approval?",
-        description:
-          "The approver will review this proposal. You can't edit it while it's waiting, and nothing goes to the client until it's approved.",
-        confirmText: "Submit for approval",
-      }))
-    ) {
-      return;
-    }
+    /*
+      The confirmation stays open, its Submit button busy, until the server
+      has answered; then it closes. A refusal (a rate-card rule, a missing
+      field) is said in a toast.
+    */
+    /* What the dialog's work got back (a holder: closures do not narrow locals). */
+    const done: { id?: string; reply?: Awaited<ReturnType<typeof amcSubmissionsService.decide>> } = {};
+    const submitted = await confirm({
+      title: "Submit this proposal?",
+      description:
+        "The approval rules are checked now (discount, value, payment plan, floor rates). Within them it is ready to share at once; otherwise it goes up the approval ladder, and nothing reaches the client until it is approved.",
+      confirmText: "Submit",
+      action: async () => {
+        /* A refusal closes the dialog and is said in a toast, as before; the proposal stays open to correct. */
+        // A failed save has said so already; submitting would send the approver the previous version.
+        if (!(await persistDraft())) return;
+        const id = form.getValues("submissionId");
+        if (!id) {
+          toast.error("The draft hasn't been saved yet.");
+          return;
+        }
+        try {
+          done.reply = await amcSubmissionsService.decide({ action: "submit", id });
+          done.id = id;
+        } catch (error) {
+          console.error(error);
+          toast.error(getErrorMessage(error, "Couldn't submit this proposal for approval."));
+        }
+      },
+    });
+    const submissionId = done.id;
+    if (!submitted || !done.reply || !submissionId) return;
 
     setIsSubmitting(true);
     let leaving = false;
     try {
-      // A failed save has already said so; submitting now would send the
-      // approver the previous version.
-      if (!(await persistDraft())) return;
-
-      const submissionId = form.getValues("submissionId");
-      if (!submissionId) throw new Error("The draft hasn't been saved yet.");
-
-      await amcSubmissionsService.decide({
-        action: "submit",
-        id: submissionId,
-      });
+      const { outcome, warning } = done.reply;
       /*
         This used to rebuild the form from the approval route's reply --
         which carries only the fields the transition changed, not a whole
@@ -483,9 +563,18 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
         The proposal is locked now anyway (FR3.4), so the wizard starts
         fresh and the list shows it as Awaiting approval.
       */
+      /* Phase 5: what the approval rules decided. */
       toast.success(
-        "Sent for approval. Nothing goes to the client until the approver has reviewed it.",
+        outcome && "outcome" in outcome
+          ? outcome.outcome === "pending"
+            ? `Sent to ${outcome.levelName} for approval. Nothing goes to the client until it is approved.`
+            : outcome.outcome === "covered"
+              ? "Approved: this version asks for no more than the last one was approved for. Share it with the client now."
+              : "No approval needed. Share it with the client now."
+          : "Sent for approval. Nothing goes to the client until the approver has reviewed it.",
       );
+      /* Submitted, but worth knowing (e.g. a commercial proposal without its site visit). */
+      if (warning) toast.warning(warning);
       // Its own page: what was sent, and where it stands now. The button
       // stays busy until that page replaces this one.
       leaving = true;
@@ -579,9 +668,16 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
   const renderStep = () => {
     switch (currentStep) {
       case 1:
-        return <PropertyCustomerStep form={form} />;
+        return <PropertyCustomerStep form={form} minimumTermMonths={rules?.minimumTermMonths} />;
       case 2:
-        return <ServicesPricingStep form={form} settings={liveSettings} />;
+        return (
+          <ServicesPricingStep
+            form={form}
+            catalogue={(liveSettings ?? getAmcSettingsDefaults()).services}
+            settings={liveSettings}
+            rules={rules}
+          />
+        );
       case 3:
         return (
           <ReviewStep
@@ -599,9 +695,9 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
   const isReviewStep = currentStep === STEPS.length;
 
   /*
-    The same page shape as the snagging module: the house heading, then
-    the view switcher, then the work in one card -- the form's steps as
-    titled sections and its buttons in a footer, not cards inside a card.
+    The same page shape as New job: the house heading, then the work in
+    one card -- the step's title, its fields as titled sections, and its
+    buttons in a footer, not cards inside a card.
   */
   const editing = Boolean(openSubmissionId);
 
@@ -614,14 +710,20 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
     [watchedValues, liveSettings],
   );
 
+  /* The saved proposal has not arrived: the page's shape, not an empty form. */
+  if (loadingSubmission) return <WizardSkeleton />;
+
+  const stepInfo = STEPS[currentStep - 1];
+  const StepIcon = stepInfo.icon;
+
   return (
     <div ref={wizardRef} className="flex w-full flex-1 flex-col gap-6">
       <PageHeading
-        eyebrow="AMC proposals"
+        eyebrow="Sales"
         title={
           editing
             ? customerName || "Untitled proposal"
-            : "New AMC proposal"
+            : "New proposal"
         }
         description={
           editing
@@ -682,86 +784,37 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
         />
       )}
 
-      {loadingSubmission ? (
-        <>
-          {/* Mirrors the real layout: the steps sit above the card. */}
-          <div className="bg-muted mb-4 h-8 w-72 animate-pulse rounded-full" />
-          <Card className="p-6">
-            <div className="grid gap-4 sm:grid-cols-2">
-              {Array.from({ length: 6 }, (_, index) => (
-                <div key={index} className="bg-muted h-10 animate-pulse rounded-md" />
-              ))}
-            </div>
-          </Card>
-        </>
-      ) : (
-        <Form {...form}>
-          <form
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (!isReviewStep) {
-                handleNext();
-              }
-            }}
-          >
-            {/* Where you are in the three steps. Outside the card, so it
-                reads as navigation over the form rather than as the form's
-                own first row. */}
-            <div className="mb-4 flex flex-wrap gap-2">
-              {STEPS.map((step) => {
-                const isActive = step.id === currentStep;
-                /* Reached already: clickable, marked done. */
-                const isComplete = !isActive && step.id <= furthestStep;
-
-                return (
-                  <button
-                    key={step.id}
-                    type="button"
-                    disabled={step.id > furthestStep}
-                    onClick={() => void handleStepClick(step.id)}
-                    className={cn(
-                      "inline-flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-sm font-medium transition-colors",
-                      isActive && "border-brand bg-brand text-primary-foreground",
-                      isComplete &&
-                        "border-brand/30 bg-brand-50 text-brand hover:bg-brand-50/70 cursor-pointer",
-                      !isActive &&
-                        !isComplete &&
-                        "border-border text-muted-foreground cursor-default opacity-70",
-                    )}
-                  >
-                    {isComplete ? <Check className="size-3.5 shrink-0" /> : null}
-                    {step.title}
-                  </button>
-                );
-              })}
-            </div>
-
-            <Card className="gap-0 p-0">
-              <div className="space-y-6 p-4 sm:p-6">{renderStep()}</div>
-
-              <div className="flex flex-col-reverse gap-2 border-t px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={handleBack}
-                  disabled={currentStep === 1}
-                  className="w-full sm:w-auto"
-                >
-                  Back
-                </Button>
-
-                {!isReviewStep ? (
-                  <Button type="submit" className="w-full min-w-[110px] sm:w-auto">
-                    Continue
-                  </Button>
-                ) : (
-                  <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
-                    {/* Both documents, exactly as the client gets them. */}
+      <Form {...form}>
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (!isReviewStep) {
+              handleNext();
+            }
+          }}
+        >
+          <Card className="gap-0 p-0">
+            <div className="space-y-6 p-4">
+              {/* Each step opens with its own title, as on New job: no step
+                  bar above the card, the footer says how far along it is. */}
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h2 className="flex items-center gap-2 text-xl">
+                    <StepIcon className="text-brand size-5" />
+                    {stepInfo.title}
+                  </h2>
+                  <p className="text-muted-foreground mt-1 text-sm">
+                    {stepInfo.description}
+                  </p>
+                </div>
+                {isReviewStep ? (
+                  /* Both documents, exactly as the client gets them. */
+                  <div className="flex flex-wrap items-center gap-2">
                     <Button
                       type="button"
                       variant="outline"
+                      size="sm"
                       onClick={() => setPreviewDoc("proposal")}
-                      className="w-full sm:w-auto"
                     >
                       <FileText className="size-4" />
                       Preview proposal
@@ -769,39 +822,60 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
                     <Button
                       type="button"
                       variant="outline"
+                      size="sm"
                       onClick={() => setPreviewDoc("contract")}
-                      className="w-full sm:w-auto"
                     >
                       <ScrollText className="size-4" />
                       Preview contract
                     </Button>
-                    {/* FR5.1 — the only way out of the wizard. Nothing
-                        reaches the client before internal approval. */}
-                    <Button
-                      type="button"
-                      onClick={() => void handleSubmitForApproval()}
-                      disabled={isSubmitting}
-                      className="w-full gap-2 sm:w-auto"
-                    >
-                      {isSubmitting ? (
-                        <>
-                          <Loader2 className="size-4 animate-spin" />
-                          Submitting…
-                        </>
-                      ) : (
-                        <>
-                          <SendHorizonal className="size-4" />
-                          Submit for approval
-                        </>
-                      )}
-                    </Button>
                   </div>
+                ) : null}
+              </div>
+              {renderStep()}
+            </div>
+
+            <div className="flex items-center justify-between gap-4 border-t px-6 py-4">
+              <div className="min-w-0">
+                <p className="text-muted-foreground text-xs">
+                  Step {currentStep} of {STEPS.length}
+                  {isReviewStep
+                    ? ". Nothing reaches the client before it is approved."
+                    : ". Your draft saves when you move on."}
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                {/* On the first step, Back leaves the wizard. */}
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() =>
+                    currentStep === 1 ? router.push("/extensions/amc") : handleBack()
+                  }
+                  disabled={isSubmitting}
+                >
+                  Back
+                </Button>
+
+                {!isReviewStep ? (
+                  <Button type="submit">Continue</Button>
+                ) : (
+                  /* FR5.1 — the only way out of the wizard. Nothing
+                     reaches the client before internal approval. */
+                  <SubmitButton
+                    type="button"
+                    onClick={() => void handleSubmitForApproval()}
+                    pending={isSubmitting}
+                    pendingLabel="Submitting…"
+                    icon={<SendHorizonal className="size-4" />}
+                  >
+                    Submit for approval
+                  </SubmitButton>
                 )}
               </div>
-            </Card>
-          </form>
-        </Form>
-      )}
+            </div>
+          </Card>
+        </form>
+      </Form>
     </div>
   );
 }

@@ -1,11 +1,14 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
 
-import { HeadingSkeleton } from "@/components/dashboard/shared/kaizen-states";
+import { WizardSkeleton } from "@/components/dashboard/snagging/route-skeletons";
 import { AmcWizard } from "@/components/dashboard/extensions/amc";
+import { NoPageAccess } from "@/components/dashboard/snagging/no-page-access";
+import { canSeeAmcPage } from "@/lib/server/amc/page-access";
+import { ResourceType } from "@/types/types";
 
 export const metadata: Metadata = {
-  title: "Edit AMC proposal | Extensions",
+  title: "Edit proposal | AMC",
   robots: { index: false, follow: false },
 };
 
@@ -14,10 +17,12 @@ export default async function EditAmcProposalRoute({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  /* The page's own permission decides the page, not just the sidebar entry (as Snagging). */
+  if (!(await canSeeAmcPage(ResourceType.AMC_PROPOSALS))) return <NoPageAccess page="Proposals" />;
   const { id } = await params;
   // The step is read from ?step=, which needs Suspense.
   return (
-    <Suspense fallback={<HeadingSkeleton />}>
+    <Suspense fallback={<WizardSkeleton />}>
       <AmcWizard submissionId={id} />
     </Suspense>
   );

@@ -51,7 +51,7 @@ type ServiceLineItem = {
   Name?: string;
   Description?: string | null;
   Status?: string;
-  Service?: { name?: string } | null;
+  Service?: { id?: string; name?: string } | null;
 };
 
 type ServiceTaskLineItem = { id: string; Name?: string; Status?: string };
@@ -82,6 +82,7 @@ type WorkOrderDetail = {
   id: string;
   Name?: string;
   Type?: string;
+  Contact?: { id?: string; name?: string } | null;
   Service_Line_Items?: ServiceLineItem[];
   Service_Tasks_Line_Items?: ServiceTaskLineItem[];
   Appointments_X_Services?: AxsItem[];
@@ -244,10 +245,15 @@ export async function getFsmWorkOrderLines(workOrderId: string): Promise<FsmResu
       workOrderId: wo.id,
       workOrderName: wo.Name ?? null,
       workOrderType: wo.Type ?? null,
+      // The FSM Contacts record of the work order (AMC links customers by id).
+      contactId: wo.Contact?.id ?? null,
+      contactName: wo.Contact?.name ?? null,
       serviceLineItems: (wo.Service_Line_Items ?? []).map((line) => ({
         id: line.id,
         name: line.Name ?? line.id,
         serviceName: line.Service?.name ?? null,
+        // The FSM Services record id (AMC maps its services to these).
+        serviceId: line.Service?.id ?? null,
         description: line.Description ?? null,
         status: line.Status ?? null,
         scheduled: scheduledLineIds.has(line.id),

@@ -1,4 +1,6 @@
-import { addYears, differenceInCalendarDays, format } from "date-fns";
+import { addYears, format } from "date-fns";
+
+import { proposalTermMonths } from "@/lib/amc/contracts";
 
 export function parseIsoDate(value?: string): Date | undefined {
   if (!value) return undefined;
@@ -39,18 +41,12 @@ export function getDefaultEndDateFromStart(startDate: string): string {
   as 1 Jan to 1 Jan by some and 1 Jan to 31 Dec by others, and counting
   calendar months calls the second of those eleven months.
 */
-const DAYS_PER_MONTH = 30.4375;
-
+/* One rule for the fee and the minimum-term check (lib/amc/contracts.ts); a year without valid dates. */
 export function contractTermMonths(
   startDate: string,
   endDate: string,
 ): number {
-  const start = parseIsoDate(startDate);
-  const end = parseIsoDate(endDate);
-  if (!start || !end) return 12;
-  const days = differenceInCalendarDays(end, start);
-  if (days <= 0) return 12;
-  return Math.max(1, Math.round(days / DAYS_PER_MONTH));
+  return proposalTermMonths(startDate, endDate) ?? 12;
 }
 
 /** "1 year", "6 months", "1 year 6 months" -- for the middle of a sentence. */

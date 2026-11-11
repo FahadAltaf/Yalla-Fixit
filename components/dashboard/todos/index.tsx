@@ -20,6 +20,7 @@ import {
   CircleAlert,
   CirclePause,
   Clock,
+  ExternalLink,
   LayoutGrid,
   List,
   ListTodo,
@@ -31,6 +32,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import Link from "next/link";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -73,7 +75,7 @@ import { usersService } from "@/modules/users/services/users-service";
 import { pickableOptions } from "@/lib/people/pickable";
 import { MentionableUser, TodosFilters, todosService } from "@/modules/todos";
 import { TodoDialog } from "./todo-dialog";
-import { RELATED_TYPES, TODO_STATUSES, formatDateTime, tagBadgeStyle, userLabel } from "./todo-helpers";
+import { RELATED_TYPES, TODO_STATUSES, amcRecordHref, formatDateTime, tagBadgeStyle, userLabel } from "./todo-helpers";
 import {
   TODO_STATUS_LABELS,
   ActionType,
@@ -291,6 +293,16 @@ function TodosListView({
                   <div className="max-w-[160px] whitespace-normal">
                     {[todo.related_type?.replace("_", " "), todo.related_id].filter(Boolean).join(" ") || "-"}
                   </div>
+                  {amcRecordHref(todo) ? (
+                    <Link
+                      href={amcRecordHref(todo)!}
+                      className="text-primary mt-1 inline-flex items-center gap-1 text-xs font-medium hover:underline"
+                      onClick={(event) => event.stopPropagation()}
+                    >
+                      <ExternalLink className="size-3" />
+                      Open
+                    </Link>
+                  ) : null}
                 </TableCell>
                 <TableCell className="align-top">
                   <div className="flex max-w-[200px] flex-wrap gap-1">

@@ -1,12 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
+import { verifyQuotationReview } from "@/lib/server/quotation-review-token";
+import { zohoEdgeHeaders } from "@/lib/server/zoho/edge-auth";
 import { ServiceItemImage } from "@/components/dashboard/extensions/quotation-templates/quotation-templates";
 import { mapToQuotationData } from "@/lib/quotations/estimate-quotation-data";
-import { createServerClientForApi } from "@/lib/supabase/supabase-server-client";
+import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
+import { requireResourceAccess } from "@/lib/server/require-access";
+import { ActionType, ResourceType } from "@/types/types";
 
 const SUPABASE_FUNCTION_URL = `${process.env.SUPABASE_URL}/functions/v1/get-estimate`;
 
 // NOTE: This is a publishable key provided explicitly in the spec.
-const SUPABASE_PUBLISHABLE_KEY = process.env.SUPABASE_ANON_KEY!;
 
 export async function POST(req: NextRequest) {
   try {
@@ -15,6 +18,23 @@ export async function POST(req: NextRequest) {
     const id = body?.id;
     const fetchMode: "dashboard" | "review" =
       body?.fetchMode === "review" ? "review" : "dashboard";
+
+    /*
+      "review" is the customer's public quotation page and stays open. The
+      dashboard view also returns the contact record, revision history and
+      images, so it needs a signed-in user who can open Extensions.
+    */
+    if (fetchMode === "dashboard") {
+      const gate = await requireResourceAccess(ResourceType.EXTENSIONS, ActionType.VIEW);
+      if (!gate.ok) return gate.response;
+    } else if (!verifyQuotationReview(String(id ?? ""), body?.sig)) {
+      /*
+        The customer's review page: only with the signature its emailed link
+        carries. Zoho estimate ids are sequential, so an id alone served any
+        quotation to anyone (lib/server/quotation-review-token.ts).
+      */
+      return NextResponse.json({ success: false, error: "This link is not valid." }, { status: 404 });
+    }
 
     if (!name && !id) {
       return NextResponse.json(
@@ -43,11 +63,8 @@ export async function POST(req: NextRequest) {
 
     const res = await fetch(SUPABASE_FUNCTION_URL, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${SUPABASE_PUBLISHABLE_KEY}`,
-        apikey: SUPABASE_PUBLISHABLE_KEY,
-        "Content-Type": "application/json",
-      },
+      /* Signed: the function serves only this server. */
+      headers: zohoEdgeHeaders("get-estimate"),
       body: JSON.stringify(reqPayload),
     });
 
@@ -113,7 +130,8 @@ export async function POST(req: NextRequest) {
     const effectiveRootKey = `${quotation.zohoEstimateId}_${quotation.quotationNumber}`;
     console.log("🚀 ~ POST ~ effectiveRootKey:", effectiveRootKey);
     let hasRootOrParentRevision = false;
-    const supabase = await createServerClientForApi();
+    /* Service role, dashboard only (checked above). */
+    const supabase = await createAdminServerClient();
     if (fetchMode === "dashboard") {
       const { data: revisionRows, error: revisionRowsError } = await supabase
         .from("estimate_revisions")

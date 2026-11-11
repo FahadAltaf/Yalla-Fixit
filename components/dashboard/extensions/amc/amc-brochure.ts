@@ -1,6 +1,6 @@
 import { getAmcBrochureDefaults, type AmcBrochureKey } from "./amc-brochure-copy";
 import { buildPriceListRows } from "./amc-contract-content";
-import { formatPaymentTermsLabel } from "./amc-pricing";
+import { formatPaymentLabel } from "./amc-pricing";
 import { formatPhoneForDocument } from "./amc-phone";
 import {
   buildProposalServiceRows,
@@ -212,8 +212,9 @@ export function buildAmcBrochure(data: AmcComputedData): AmcBrochure {
     startLabel: getProposalStartLabel(formData),
     annualFee: totals.finalPrice,
     monthlyFee: totals.monthlyPrice,
-    paymentTerms: formatPaymentTermsLabel(formData.paymentTerms, getProposalCoverageMonths(formData)),
-    paidInFull: formData.paymentTerms === "annual",
+    paymentTerms: formatPaymentLabel(formData, getProposalCoverageMonths(formData)),
+    /* One payment for the whole term: the single plan, or the legacy "annual" terms. */
+    paidInFull: formData.paymentPlan ? formData.paymentPlan === "single" : formData.paymentTerms === "annual",
     services: buildProposalServiceRows(formData, frequencyRows, data.settings.services).map((row) => ({
       label: row.service,
       units: row.units,

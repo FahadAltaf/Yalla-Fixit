@@ -137,7 +137,19 @@ export function getDefaultFrequencyForService(serviceId: string): number {
   return service?.frequencyPerYear ?? 1;
 }
 
-export function isFrequencyEditable(frequencyType: AmcService["frequencyType"]) {
+/*
+  The frequency type a row is CHARGED by (lib/amc/pricing.ts): weekly
+  services are charged per week, manpower per month. A service added to
+  the proposal alone ("custom-" id, DEV-260) is a fixed count a year.
+  Shared by the wizard and the server so both price a row the same way.
+*/
+export function chargeFrequencyType(serviceId: string): AmcService["frequencyType"] | null {
+  if (serviceId.startsWith("custom-")) return "fixed";
+  return AMC_SERVICES.find((service) => service.id === serviceId)?.frequencyType ?? null;
+}
+
+/** Whether a service is counted in visits, so its frequency can change (undefined: not a known service). */
+export function isFrequencyEditable(frequencyType: AmcService["frequencyType"] | null | undefined) {
   return (
     frequencyType === "ppm" ||
     frequencyType === "handyman" ||
@@ -230,6 +242,58 @@ export function getDefaultSelectedServices() {
 export function canUseAmc(user: Parameters<typeof hasResourceAction>[0]): boolean {
   return (
     hasResourceAction(user, ResourceType.AMC, ActionType.VIEW) ||
-    hasResourceAction(user, ResourceType.AMC, ActionType.APPROVE)
+    hasResourceAction(user, ResourceType.AMC, ActionType.APPROVE) ||
+    /* AMC operations staff reach the contract screens too. */
+    hasResourceAction(user, ResourceType.AMC_OPERATIONS, ActionType.VIEW) ||
+    hasResourceAction(user, ResourceType.AMC_OPERATIONS, ActionType.EDIT) ||
+    /* BRD v0.3 6.7: any of the AMC role permissions opens the module. */
+    AMC_MODULE_RESOURCES.some((resource) => hasResourceAction(user, resource, ActionType.VIEW))
   );
+}
+
+/** The AMC permission areas added for BRD v0.3 (Phase 1). */
+export const AMC_MODULE_RESOURCES = [
+  ResourceType.AMC_ENQUIRIES,
+  ResourceType.AMC_RATE_CARD,
+  ResourceType.AMC_CONFIG,
+  ResourceType.AMC_PAYMENTS,
+  ResourceType.AMC_VISITS,
+  ResourceType.AMC_ALLOWANCES,
+  /* The page permissions (as Snagging): a role with only one AMC page still reaches the module. */
+  ResourceType.AMC_PROPOSALS,
+  ResourceType.AMC_CONTRACTS,
+  ResourceType.AMC_CLIENTS,
+  ResourceType.AMC_SITE_VISITS,
+  ResourceType.AMC_TECHNICIANS,
+  ResourceType.AMC_REPORTS,
+  ResourceType.AMC_FSM_MAPPING,
+  ResourceType.AMC_OPERATIONS_SETTINGS,
+  ResourceType.AMC_CALL_OUTS,
+  ResourceType.AMC_ADDITIONAL_WORKS,
+  ResourceType.AMC_RENEWALS,
+] as const;
+
+/** Who may open AMC configuration (DEV-419): admins and AMC Configuration View. */
+export function canViewAmcConfig(user: Parameters<typeof hasResourceAction>[0]): boolean {
+  return hasResourceAction(user, ResourceType.AMC_CONFIG, ActionType.VIEW);
+}
+
+/* The sidebar's AMC sections, gated as their API routes are, so nobody is
+   shown a menu entry that only answers "Forbidden". */
+export function canViewAmcEnquiries(user: Parameters<typeof hasResourceAction>[0]): boolean {
+  return hasResourceAction(user, ResourceType.AMC_ENQUIRIES, ActionType.VIEW);
+}
+
+export function canViewAmcRateCard(user: Parameters<typeof hasResourceAction>[0]): boolean {
+  return hasResourceAction(user, ResourceType.AMC_RATE_CARD, ActionType.VIEW);
+}
+
+/* Finance's payments views (Phase 7), gated as /api/amc-payments is. */
+export function canViewAmcPayments(user: Parameters<typeof hasResourceAction>[0]): boolean {
+  return hasResourceAction(user, ResourceType.AMC_PAYMENTS, ActionType.VIEW);
+}
+
+/* The visit board (Phase 9), gated as /api/amc-board is. */
+export function canViewAmcVisits(user: Parameters<typeof hasResourceAction>[0]): boolean {
+  return hasResourceAction(user, ResourceType.AMC_VISITS, ActionType.VIEW);
 }

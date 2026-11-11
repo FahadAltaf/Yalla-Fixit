@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+import { UNIT_TYPES } from "@/lib/amc/client-profile";
+import { PAYMENT_PLANS, customPlanSchema, type CustomPlan, type PaymentPlan, type VersionReason } from "@/lib/amc/proposal-rules";
+
 import { isEndDateBeforeStartDate } from "./amc-date-utils";
 import type { AmcSettings } from "./amc-settings";
 
@@ -81,11 +84,32 @@ export const amcAccountManagerSchema = z.object({
   phone: z.string(),
 });
 
+/*
+  What each service covers on the contract (BRD 5.7, DEV-373), keyed by
+  service id. Set on the contract and mirrored into the proposal's
+  document options so the contract document can print it; absent on
+  proposals and on contracts made before it.
+*/
+export const amcEntitlementTermSchema = z.object({
+  labourCovered: z.boolean(),
+  materialCoverage: z.enum(["none", "consumables", "parts_within_limit", "all"]),
+  valueLimitAed: z.number().nullable(),
+  exclusions: z.string().nullable(),
+});
+
 export const amcServiceRowSchema = z.object({
   serviceId: z.string().min(1),
   included: z.boolean(),
-  units: z.coerce.number().int().min(1, "Units must be at least 1"),
-  frequency: z.coerce.number().int().min(1, "Frequency must be at least 1"),
+  units: z.coerce
+    .number()
+    .int()
+    .min(1, "Units must be at least 1")
+    .max(10_000, "Units can be at most 10,000"),
+  frequency: z.coerce
+    .number()
+    .int()
+    .min(1, "Frequency must be at least 1")
+    .max(1_000, "Frequency can be at most 1,000"),
   /*
     FR2.4: entered per proposal, replacing the unitRate constant. Optional
     here and enforced per row in superRefine, so an unchecked row is never
@@ -95,6 +119,7 @@ export const amcServiceRowSchema = z.object({
   basePrice: z.coerce
     .number()
     .min(0, "Base price cannot be negative")
+    .max(10_000_000, "Base price can be at most 10,000,000")
     .optional(),
   /*
     Included at no charge (Jonathan, Oct 2026).
@@ -112,6 +137,13 @@ export const amcServiceRowSchema = z.object({
   */
   free: z.boolean().default(false),
   price: z.coerce.number().min(0).optional(),
+  /* From the rate card (BRD 5.3), shown read-only; the server sets them again. */
+  rateItemId: z.string().nullable().optional(),
+  standardRate: z.number().nullable().optional(),
+  floorRate: z.number().nullable().optional(),
+  promotionId: z.string().nullable().optional(),
+  promotionPercent: z.number().nullable().optional(),
+  belowFloor: z.boolean().optional(),
   /*
     What the service covers on this property, as signed contracts name it
     ("10 FCU", "3 kitchen hoods") (DEV-261). Optional, free text, and
@@ -140,7 +172,10 @@ export function isCustomServiceRow(row: { serviceId: string }): boolean {
 export const amcFormSchema = z
   .object({
     propertyCategory: propertyCategorySchema,
+    /* The rate model (villa, apartment, office): what prices the proposal. */
     unitType: unitTypeSchema,
+    /* BRD 5.2's full property type (Phase 4); optional for proposals saved before it. */
+    propertyType: z.enum(UNIT_TYPES).optional(),
     propertyAddress: z.string().min(1, "Property address is required"),
     propertyDetail: z.string().min(1, "Property detail is required"),
     serviceRows: z.array(amcServiceRowSchema),
@@ -164,11 +199,16 @@ export const amcFormSchema = z
       amcAccountManagerSchema,
       amcAccountManagerSchema,
     ]),
-    customerName: z.string().min(1, "Customer name is required"),
+    /* The client and property picked from the records; their details fill the fields that print. */
+    customerRecordId: z.string().nullable().optional(),
+    propertyRecordId: z.string().nullable().optional(),
+    /* Started from an enquiry or a site visit: the client and property are edited there, never swapped (not saved). */
+    recordsLocked: z.boolean().optional(),
+    customerName: z.string().min(1, "Client name is required"),
     /* FR4.4 / §8.2: prints in the contract header, where it used to
        fall back to "XXX". Required now. */
     customerId: z.string().min(1, "Customer ID is required"),
-    customerPhone: z.string().min(1, "Customer phone is required"),
+    customerPhone: z.string().min(1, "Client phone is required"),
     customerEmail: z.string().email("Invalid email address"),
     /* The first is required; the rest are optional, all or nothing (AMC-099). */
     coordinationContacts: z
@@ -178,9 +218,16 @@ export const amcFormSchema = z
     startDate: z.string().min(1, "Start date is required"),
     endDate: z.string().min(1, "End date is required"),
     paymentTerms: paymentTermsSchema,
+    /* DEV-366: the payment plan; paymentTerms above is kept as its legacy reading. */
+    paymentPlan: z.enum(PAYMENT_PLANS).optional(),
+    paymentPlanCustom: customPlanSchema.nullable().optional(),
+    /* Read from document_options; only the contract document prints it. */
+    entitlementTerms: z.record(z.string(), amcEntitlementTermSchema).optional(),
     /* Allocated by the server on first save (step 1.7), so the user is
        never asked for it and cannot collide it. Empty until then. */
     proposalNumber: z.string(),
+    /* The contract's number once the client has approved; only the contract document prints it. */
+    contractNumber: z.string().optional(),
     submissionId: z.string().uuid().optional(),
   })
   .superRefine((data, ctx) => {
@@ -290,6 +337,14 @@ export const amcFormSchema = z
       }
     });
 
+    if (data.paymentPlan === "custom" && !data.paymentPlanCustom?.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Set the instalments of the custom payment plan",
+        path: ["paymentPlanCustom"],
+      });
+    }
+
     if (
       data.startDate &&
       data.endDate &&
@@ -315,6 +370,7 @@ export type AmcServiceRow = z.infer<typeof amcServiceRowSchema>;
 export type AmcOptionalSections = z.infer<typeof amcOptionalSectionsSchema>;
 export type AmcPriceListRow = z.infer<typeof amcPriceListRowSchema>;
 export type AmcAccountManager = z.infer<typeof amcAccountManagerSchema>;
+export type AmcEntitlementTerm = z.infer<typeof amcEntitlementTermSchema>;
 export type AmcFormData = z.infer<typeof amcFormSchema>;
 
 /*
@@ -457,12 +513,13 @@ export const AMC_STATUS_LABELS: Record<AmcSubmissionStatus, string> = {
   or one the client asked to change. The last two go back through internal
   approval before anything reaches the client again.
 */
+/*
+  BRD 5.4 (DEV-367): once the client has seen a proposal, a change is a new
+  version, so a rejected proposal is revised (V2 opens as a draft) rather
+  than edited in place.
+*/
 export function isAmcSubmissionEditable(status: AmcSubmissionStatus): boolean {
-  return (
-    status === "draft" ||
-    status === "sent_back" ||
-    status === "proposal_rejected"
-  );
+  return status === "draft" || status === "sent_back";
 }
 
 export interface AmcSubmissionProperty {
@@ -470,6 +527,8 @@ export interface AmcSubmissionProperty {
   unitType: UnitType;
   propertyAddress: string;
   propertyDetail: string;
+  /* Phase 4: the full property type; absent on older proposals. */
+  propertyType?: (typeof UNIT_TYPES)[number];
 }
 
 export interface AmcSubmissionDocumentOptions {
@@ -478,6 +537,8 @@ export interface AmcSubmissionDocumentOptions {
   /* Clause 6.3's rates for this proposal; absent on older ones (AMC-057). */
   fixedPriceRates?: string[];
   accountManagers: [AmcAccountManager, AmcAccountManager];
+  /* Mirrored from the contract's entitlements (server side) for the contract document. */
+  entitlementTerms?: Record<string, AmcEntitlementTerm>;
   /* Wording edited on this proposal; absent on older ones (DEV-263). */
   clauseOverrides?: Record<string, string>;
   scopeOverrides?: Record<string, string>;
@@ -564,6 +625,32 @@ export interface AmcSubmission {
     come only with the whole list.
   */
   viewer_can_approve?: boolean;
+  /* The operational contract made from this proposal (Active AMC), on the
+     single-proposal read only. null: none yet; absent: not checked or the
+     contracts table does not exist yet. */
+  contract_id?: string | null;
+  /* That contract's own number (AMC-C-…), printed on the contract document instead of the proposal's. */
+  contract_number?: string | null;
+  /* Phase 4 (20261007140000). */
+  property_type?: string | null;
+  payment_plan?: PaymentPlan | null;
+  payment_plan_custom?: CustomPlan | null;
+  valid_until?: string | null;
+  /* V1, V2, … (the row is always the active version). */
+  current_version?: number;
+  version_reason?: VersionReason | null;
+  version_summary?: string | null;
+  version_started_at?: string | null;
+  enquiry_id?: string | null;
+  /* Started from a site visit (single read only). */
+  from_site_visit?: boolean;
+  /* The client and property records the proposal is for, when it was linked to them. */
+  customer_id?: string | null;
+  property_id?: string | null;
+  below_floor?: boolean;
+  rate_card_version_id?: string | null;
+  /* Ticked lines the rate card cannot price as they stand (on save replies). */
+  rate_problems?: string[];
 }
 
 /* One entry in a submission's history, from the audit trail (FR5.9). */
@@ -596,7 +683,7 @@ export interface AmcPendingApprovalsResponse {
    submission; the client page (FR5.5, FR5.7) has only these fields. */
 export type AmcDocumentSource = Pick<
   AmcSubmission,
-  "property" | "customer" | "document_options" | "services" | "discount_percent"
+  "property" | "customer" | "document_options" | "services" | "discount_percent" | "payment_plan" | "payment_plan_custom" | "contract_number" | "customer_id" | "property_id"
 > & { id?: string };
 
 export interface AmcSubmissionListResponse {

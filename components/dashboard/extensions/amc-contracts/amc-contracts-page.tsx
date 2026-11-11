@@ -1,0 +1,47 @@
+"use client";
+
+import { useState } from "react";
+import { ShieldCheck } from "lucide-react";
+
+import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
+import { Button } from "@/components/ui/button";
+import { PageHeading } from "@/components/dashboard/shared/kaizen";
+
+import { ContractsList } from "./contracts-list";
+import { ContractsSummary } from "./contracts-summary";
+import { CoverageCheckDialog } from "./coverage-check-dialog";
+import { ModuleGuide } from "@/components/dashboard/extensions/amc-contracts/module-guide";
+
+/**
+ * /extensions/amc-contracts -- signed AMC agreements in operation, and
+ * signed proposals waiting to be activated. AMC proposals stays the sales
+ * and document workflow; this is what happens after the signature.
+ */
+export function AmcContractsPage() {
+  useBreadcrumbLabel("amc-contracts", "AMC contracts");
+  const [checking, setChecking] = useState(false);
+  const [summaryKey, setSummaryKey] = useState(0);
+  return (
+    <div className="flex w-full flex-1 flex-col gap-6">
+      <PageHeading
+        eyebrow="Operations"
+        title="AMC contracts"
+        info={<ModuleGuide module="contracts" />}
+        description="Activate signed AMC proposals, track what each contract covers and how much is used, and see what is expiring."
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Contracts are made by activating a signed proposal, so the
+                heading's action is the question asked most: is this covered? */}
+            <Button onClick={() => setChecking(true)}>
+              <ShieldCheck className="size-4" />
+              Check coverage
+            </Button>
+          </div>
+        }
+      />
+      <ContractsSummary refreshKey={summaryKey} />
+      <ContractsList onRefresh={() => setSummaryKey((k) => k + 1)} />
+      <CoverageCheckDialog open={checking} onOpenChange={setChecking} />
+    </div>
+  );
+}

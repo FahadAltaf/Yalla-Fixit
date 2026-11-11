@@ -7,12 +7,29 @@ import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { canApproveAmc } from "@/components/dashboard/extensions/amc/amc-settings";
 import { readAmcSettings } from "@/lib/server/amc/settings";
+import { priceSubmission } from "@/lib/server/amc/pricing";
+import { canDecideProposal } from "@/lib/amc/workflow";
+import {
+  amcServiceRowsInputSchema,
+  discountPercentSchema,
+} from "@/lib/amc/pricing";
 import { canUseAmc } from "@/components/dashboard/extensions/amc/amc-constants";
 import {
   AMC_STATUSES,
   isAmcSubmissionEditable,
 } from "@/components/dashboard/extensions/amc/amc-types";
 import { likeTerm, pageParams } from "@/lib/server/snagging/search";
+import { todayInDubai } from "@/lib/amc/contracts";
+import { UNIT_TYPES } from "@/lib/amc/client-profile";
+import {
+  PAYMENT_PLANS,
+  customPlanSchema,
+  legacyTermsForPlan,
+  planFromLegacyTerms,
+  type PaymentPlan,
+} from "@/lib/amc/proposal-rules";
+import { rateCardInForce } from "@/lib/server/amc/rate-card";
+import { viewerDecidesStep } from "@/lib/server/amc/approval-ladder";
 import { ActionType, ResourceType } from "@/types/types";
 import type {
   AmcDocumentType,
@@ -27,28 +44,6 @@ const coordinationContactSchema = z.object({
   phone: z.string(),
   // One of the presets, or the client's own title for them (AMC-099).
   designation: z.string().trim().max(60),
-});
-
-const serviceRowSchema = z.object({
-  serviceId: z.string(),
-  included: z.boolean(),
-  units: z.number().int().min(1),
-  frequency: z.number().int().min(1),
-  /* FR2.4. Nullable: a draft row the team has not priced yet is saved
-     unpriced, and must not come back as a free service. */
-  basePrice: z.number().min(0).nullable().optional(),
-  /*
-    Included at no charge, so the row has no base price to save. Optional
-    with a default rather than required, because a draft saved before
-    this existed has no such field and must still load.
-  */
-  free: z.boolean().optional().default(false),
-  price: z.number().min(0).optional(),
-  // What the service covers on this property ("10 FCU") (DEV-261).
-  equipment: z.string().max(80).optional(),
-  // A service added to this proposal alone (DEV-260).
-  customName: z.string().max(120).optional(),
-  customScope: z.string().max(4000).optional(),
 });
 
 const priceListRowSchema = z.object({
@@ -69,6 +64,8 @@ const submissionPayloadSchema = z.object({
     unitType: z.enum(["villa", "apartment", "office"]),
     propertyAddress: z.string(),
     propertyDetail: z.string(),
+    /* BRD 5.2's full list (Phase 4); unitType above stays the rate model. */
+    propertyType: z.enum(UNIT_TYPES).optional(),
   }),
   customer: z.object({
     customerName: z.string(),
@@ -98,11 +95,22 @@ const submissionPayloadSchema = z.object({
       scopeOverrides: z.record(z.string(), z.string().max(20000)).optional(),
     })
     .optional(),
-  services: z.array(serviceRowSchema),
-  discount_percent: z.number().min(0).max(100),
-  discount_amount: z.number().min(0),
-  final_price: z.number().min(0),
+  /* FR2.4: rows as entered. basePrice is nullable -- a draft row the team
+     has not priced yet is saved unpriced, and must not come back as a
+     free service. Validation lives with the pricing (lib/amc/pricing.ts). */
+  services: amcServiceRowsInputSchema,
+  discount_percent: discountPercentSchema,
+  /* Sent by older clients; ignored. The server derives both from the
+     rows and the discount (lib/server/amc/pricing.ts). */
+  discount_amount: z.number().optional(),
+  final_price: z.number().optional(),
   generated_documents: z.array(z.enum(DOCUMENT_TYPES)).optional(),
+  /* DEV-366: replaces monthly/quarterly/annual; customer.paymentTerms is kept as a compatible reading. */
+  payment_plan: z.enum(PAYMENT_PLANS).optional(),
+  payment_plan_custom: customPlanSchema.nullable().optional(),
+  /* The client and property records it is for, picked in the wizard (the typed details stay what prints). */
+  customer_id: z.string().uuid().nullable().optional(),
+  property_id: z.string().uuid().nullable().optional(),
 });
 
 const submissionUpdateSchema = submissionPayloadSchema.partial().extend({
@@ -125,6 +133,53 @@ const LIST_COLUMNS =
   "submitted_at, decided_at, sent_back_reason, proposal_sent_at, contract_sent_at, " +
   "client_decision, client_decided_at, client_decided_by_name, client_rejected_reason, " +
   "signed_by_name, signed_at, created_at, updated_at";
+/* The Phase 4 header fields (20261007140000); the list falls back without them. */
+const LIST_COLUMNS_V2 = `${LIST_COLUMNS}, current_version, payment_plan, valid_until, enquiry_id, below_floor`;
+const PHASE4_COLUMNS = [
+  "property_type",
+  "payment_plan",
+  "payment_plan_custom",
+  "rate_card_version_id",
+  "below_floor",
+] as const;
+const missingColumn = (error: { code?: string } | null | undefined) =>
+  error?.code === "42703" || error?.code === "PGRST204";
+
+/*
+  Writes a row, and again without the Phase 4 columns when the database
+  does not have them yet -- so proposals keep saving on a database where
+  20261007140000 is not applied (the plan's per-file apply order).
+*/
+async function withPhase4Fallback<T>(
+  row: Record<string, unknown>,
+  run: (row: Record<string, unknown>) => PromiseLike<{ data: T | null; error: { code?: string; message: string } | null }>,
+) {
+  const first = await run(row);
+  if (!first.error || !missingColumn(first.error)) return first;
+  const legacy = { ...row };
+  for (const column of PHASE4_COLUMNS) delete legacy[column];
+  return run(legacy);
+}
+
+/* The plan a payload carries, and the legacy terms live main prints for it. */
+function planFields(payload: { payment_plan?: PaymentPlan; payment_plan_custom?: unknown }) {
+  if (!payload.payment_plan) return {};
+  return {
+    payment_plan: payload.payment_plan,
+    payment_plan_custom: payload.payment_plan === "custom" ? (payload.payment_plan_custom ?? null) : null,
+  };
+}
+
+/* The card in force today, or null (none published, or the update not applied). */
+async function pricingCard(admin: Awaited<ReturnType<typeof createAdminServerClient>>) {
+  try {
+    const version = await rateCardInForce(admin);
+    return version ? { id: version.id, card: version.card } : null;
+  } catch (error) {
+    console.error("AMC rate card read failed; pricing as entered:", error);
+    return null;
+  }
+}
 
 type AmcSubmissionRow = {
   id: string;
@@ -157,6 +212,20 @@ type AmcSubmissionRow = {
   signed_at?: string | null;
   created_at: string;
   updated_at: string;
+  /* Phase 4 (20261007140000); absent before it is applied. */
+  property_type?: string | null;
+  payment_plan?: string | null;
+  payment_plan_custom?: unknown;
+  valid_until?: string | null;
+  current_version?: number | null;
+  version_reason?: string | null;
+  version_summary?: string | null;
+  version_started_at?: string | null;
+  enquiry_id?: string | null;
+  below_floor?: boolean | null;
+  rate_card_version_id?: string | null;
+  customer_id?: string | null;
+  property_id?: string | null;
 };
 
 function mapRow(
@@ -196,6 +265,20 @@ function mapRow(
     signed_at: row.signed_at ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at,
+    property_type: row.property_type ?? null,
+    /* An older proposal reads its legacy terms as a plan (issue #8). */
+    payment_plan: (row.payment_plan as PaymentPlan | null) ?? planFromLegacyTerms(row.customer?.paymentTerms),
+    payment_plan_custom: (row.payment_plan_custom as AmcSubmission["payment_plan_custom"]) ?? null,
+    valid_until: row.valid_until ?? null,
+    current_version: Number(row.current_version ?? 1),
+    version_reason: (row.version_reason as AmcSubmission["version_reason"]) ?? null,
+    version_summary: row.version_summary ?? null,
+    version_started_at: row.version_started_at ?? null,
+    enquiry_id: row.enquiry_id ?? null,
+    below_floor: row.below_floor === true,
+    rate_card_version_id: row.rate_card_version_id ?? null,
+    customer_id: row.customer_id ?? null,
+    property_id: row.property_id ?? null,
   };
 }
 
@@ -267,30 +350,58 @@ export async function GET(req: NextRequest) {
       hasResourceAction(gate.accessUser, ResourceType.AMC, ActionType.APPROVE),
     );
     const isOwn = row.owner_id === profile.id;
+    /* DEV-368: approvers and AMC Operations (View) see the team's proposals. */
+    const seesTeam = canApprove || hasResourceAction(gate.accessUser, ResourceType.AMC_OPERATIONS, ActionType.VIEW);
+    /* Phase 5: the approvers named for the open level decide it, so they see it too. */
+    const decidesStep =
+      row.status === "awaiting_approval"
+        ? await viewerDecidesStep(admin, row, profile.id, canApprove).catch(() => null)
+        : null;
     // Someone else's draft stays private, even to an approver.
-    if (!isOwn && (!canApprove || row.status === "draft")) {
+    if (!isOwn && (!(seesTeam || decidesStep) || row.status === "draft")) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
+    /*
+      Three independent reads, at once: the owner's name (someone else's
+      proposal), the contract made from it (Active AMC; from the client's
+      approval, Phase 6) and whether a site visit started it (its client and
+      property are then fixed in the wizard).
+    */
+    const hasContract = row.status === "signed" || row.status === "proposal_approved" || row.status === "contract_sent";
+    const [ownerRead, contractRead, visitRead] = await Promise.all([
+      isOwn ? null : admin.from("user_profile").select("id, full_name, email").eq("id", row.owner_id).maybeSingle(),
+      hasContract ? admin.from("amc_contracts").select("id, contract_number").eq("submission_id", row.id).maybeSingle<{ id: string; contract_number: string | null }>() : null,
+      row.enquiry_id ? null : admin.from("amc_assessments").select("id").eq("submission_id", row.id).limit(1).maybeSingle(),
+    ]);
+
     const names = new Map<string, string>();
-    if (!isOwn) {
-      const { data: owner } = await admin
-        .from("user_profile")
-        .select("id, full_name, email")
-        .eq("id", row.owner_id)
-        .maybeSingle();
-      if (owner) {
-        names.set(
-          String(owner.id),
-          ((owner.full_name as string | null) ?? "").trim() ||
-            String(owner.email ?? ""),
-        );
-      }
+    const owner = ownerRead?.data;
+    if (owner) {
+      names.set(String(owner.id), ((owner.full_name as string | null) ?? "").trim() || String(owner.email ?? ""));
     }
+    /* A database without the contracts table reports nothing. */
+    let contractId: string | null | undefined;
+    let contractNumber: string | null = null;
+    if (contractRead) {
+      contractId = contractRead.error ? undefined : (contractRead.data?.id ?? null);
+      contractNumber = contractRead.data?.contract_number ?? null;
+    }
+    const fromSiteVisit = Boolean(visitRead?.data);
 
     return NextResponse.json({
       ...mapRow(row, { viewerId: profile.id, names }),
-      viewer_can_approve: canApprove,
+      from_site_visit: fromSiteVisit,
+      contract_id: contractId,
+      contract_number: contractNumber,
+      /* One rule for the API and the buttons (lib/amc/workflow.ts),
+         including whether a creator may approve their own proposal. */
+      viewer_can_approve:
+        decidesStep ??
+        canDecideProposal({
+          canApprove,
+          isOwner: row.owner_id === profile.id,
+        }),
     });
   }
 
@@ -342,9 +453,12 @@ export async function GET(req: NextRequest) {
     else's once it has left draft. Null means "only mine", applied as a
     plain equality rather than an `or`.
   */
+  /* DEV-368 (BRD 5.4): approvers and AMC Operations (View) see the team's proposals; others their own. */
+  const seesTeam = canApprove || hasResourceAction(gate.accessUser, ResourceType.AMC_OPERATIONS, ActionType.VIEW);
+  // An approver's "Submitted by others": the proposals they decide on.
   const reviewing = canApprove && othersOnly;
   const visibilityClauses =
-    canApprove && !mineOnly && !reviewing ? [`owner_id.eq.${profile.id}`, "status.neq.draft"] : null;
+    seesTeam && !mineOnly && !reviewing ? [`owner_id.eq.${profile.id}`, "status.neq.draft"] : null;
   /*
     Which rows, before the search: anyone's past draft plus mine (the or
     above), only mine, or -- for an approver's "Submitted by others" --
@@ -366,7 +480,7 @@ export async function GET(req: NextRequest) {
   let searchClauses: string[] | null = null;
   if (term) {
     let ownerIds: string[] = [];
-    if (canApprove) {
+    if (seesTeam) {
       const { data: owners, error: ownerError } = await admin
         .from("user_profile")
         .select("id")
@@ -409,15 +523,21 @@ export async function GET(req: NextRequest) {
     this list is the record of what has been raised. The id breaks ties so
     a row can never appear on two pages.
   */
-  let pageQuery = admin
-    .from("amc_submissions")
-    .select(LIST_COLUMNS, { count: "exact" })
-    .order("created_at", { ascending: false })
-    .order("id")
-    .range(from, to);
-  pageQuery = scoped(pageQuery);
-  if (orFilter) pageQuery = pageQuery.or(orFilter);
-  if (status) pageQuery = pageQuery.eq("status", status);
+  const pageQueryWith = (columns: string) => {
+    let query = admin
+      .from("amc_submissions")
+      .select(columns, { count: "exact" })
+      .order("created_at", { ascending: false })
+      .order("id")
+      .range(from, to);
+    query = scoped(query);
+    if (orFilter) query = query.or(orFilter);
+    if (status) query = query.eq("status", status);
+    return query;
+  };
+  const pageQuery = pageQueryWith(LIST_COLUMNS_V2).then(async (result) =>
+    result.error && missingColumn(result.error) ? pageQueryWith(LIST_COLUMNS) : result,
+  );
 
   const { data, error, count } = await pageQuery;
   if (error) {
@@ -471,30 +591,71 @@ export async function POST(req: NextRequest) {
   const admin = await createAdminServerClient();
   const now = new Date().toISOString();
 
-  const { data, error } = await admin
-    .from("amc_submissions")
-    .insert({
+  const settings = await readSettingsOr503(admin);
+  if ("error" in settings) return settings.error;
+
+  /* The server prices the proposal; totals in the request are ignored.
+     With a rate card in force, the base prices are the card's (BRD 5.3). */
+  const card = await pricingCard(admin);
+  const priced = priceSubmission({
+    services: payload.services,
+    discountPercent: payload.discount_percent,
+    unitType: payload.property.unitType,
+    settings: settings.value,
+    rateCard: card,
+    day: todayInDubai(),
+  });
+  if (!priced.ok) {
+    return NextResponse.json({ error: priced.error }, { status: 400 });
+  }
+
+  const { data, error } = await withPhase4Fallback(
+    {
       owner_id: profile.id,
       /* Always draft. It advances only through the approval route. */
       status: "draft",
       property: payload.property,
-      customer: payload.customer,
+      customer: payload.payment_plan
+        ? { ...payload.customer, paymentTerms: legacyTermsForPlan(payload.payment_plan) }
+        : payload.customer,
       document_options: payload.document_options,
-      services: payload.services,
-      discount_percent: payload.discount_percent,
-      discount_amount: payload.discount_amount,
-      final_price: payload.final_price,
+      services: priced.services,
+      discount_percent: priced.discount_percent,
+      discount_amount: priced.discount_amount,
+      final_price: priced.final_price,
       generated_documents: payload.generated_documents ?? [],
       updated_at: now,
-    })
-    .select("*")
-    .single();
+      ...(payload.property.propertyType ? { property_type: payload.property.propertyType } : {}),
+      ...planFields(payload),
+      ...(card ? { rate_card_version_id: priced.rate_card_version_id, below_floor: priced.below_floor } : {}),
+      ...(payload.customer_id !== undefined ? { customer_id: payload.customer_id } : {}),
+      ...(payload.property_id !== undefined ? { property_id: payload.property_id } : {}),
+    },
+    (row) => admin.from("amc_submissions").insert(row).select("*").single(),
+  );
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json(mapRow(data as AmcSubmissionRow), { status: 201 });
+  /*
+    The number is allocated by the INSERT, so the copy inside customer can
+    only be pinned afterwards. Without this it kept whatever the form sent
+    (usually "") until the first edit.
+  */
+  let row = data as unknown as AmcSubmissionRow;
+  const jsonNumber = (row.customer as { proposalNumber?: string } | null)?.proposalNumber;
+  if (jsonNumber !== row.proposal_number) {
+    const { data: pinned } = await admin
+      .from("amc_submissions")
+      .update({ customer: { ...(row.customer as object), proposalNumber: row.proposal_number } })
+      .eq("id", row.id)
+      .select("*")
+      .single();
+    if (pinned) row = pinned as AmcSubmissionRow;
+  }
+
+  return NextResponse.json({ ...mapRow(row), rate_problems: priced.rateProblems }, { status: 201 });
 }
 
 export async function PUT(req: NextRequest) {
@@ -553,32 +714,125 @@ export async function PUT(req: NextRequest) {
       )
     : existingRow.generated_documents;
 
+  /*
+    Re-price whenever anything that affects the price arrives. Rows,
+    discount or property type missing from this request come from the
+    saved proposal, so a partial update cannot leave stale totals.
+  */
+  let pricedFields: Partial<
+    Pick<
+      AmcSubmissionRow,
+      "services" | "discount_percent" | "discount_amount" | "final_price" | "rate_card_version_id" | "below_floor"
+    >
+  > = {};
+  let rateProblems: string[] = [];
+  if (
+    updates.services !== undefined ||
+    updates.discount_percent !== undefined ||
+    updates.property !== undefined
+  ) {
+    const existingProperty = existingRow.property as { unitType?: string } | null;
+    const settings = await readSettingsOr503(admin);
+    if ("error" in settings) return settings.error;
+    /* A draft is priced on today's card each time it is saved; a shared
+       version is locked and keeps its own (DEV-364, 367). */
+    const card = await pricingCard(admin);
+    const priced = priceSubmission({
+      services: (updates.services ?? existingRow.services ?? []) as Parameters<
+        typeof priceSubmission
+      >[0]["services"],
+      discountPercent: updates.discount_percent ?? Number(existingRow.discount_percent ?? 0),
+      unitType: updates.property?.unitType ?? existingProperty?.unitType ?? "",
+      settings: settings.value,
+      rateCard: card,
+      day: todayInDubai(),
+    });
+    if (!priced.ok) {
+      return NextResponse.json({ error: priced.error }, { status: 400 });
+    }
+    pricedFields = {
+      services: priced.services as AmcSubmissionRow["services"],
+      discount_percent: priced.discount_percent,
+      discount_amount: priced.discount_amount,
+      final_price: priced.final_price,
+      ...(card ? { rate_card_version_id: priced.rate_card_version_id, below_floor: priced.below_floor } : {}),
+    };
+    rateProblems = priced.rateProblems;
+  }
+  /* Never stored as sent: derived above, or left as saved. */
+  delete updates.discount_amount;
+  delete updates.final_price;
+
   /* Pin the JSONB copy to the allocated number, whatever the form sent,
      so the two cannot drift apart through an edit. */
   if (updates.customer) {
     updates.customer = {
       ...updates.customer,
       proposalNumber: existingRow.proposal_number,
+      ...(updates.payment_plan ? { paymentTerms: legacyTermsForPlan(updates.payment_plan) } : {}),
     };
   }
+  const { payment_plan, payment_plan_custom, ...rest } = updates;
+  const propertyType = rest.property?.propertyType;
 
-  const { data, error } = await admin
-    .from("amc_submissions")
-    .update({
-      ...updates,
+  const { data, error } = await withPhase4Fallback(
+    {
+      ...rest,
+      ...pricedFields,
+      ...(propertyType ? { property_type: propertyType } : {}),
+      ...planFields({ payment_plan, payment_plan_custom }),
       generated_documents: mergedDocuments,
       updated_at: new Date().toISOString(),
-    })
-    .eq("id", id)
-    .eq("owner_id", profile.id)
-    .select("*")
-    .single();
+    },
+    (row) =>
+      admin
+        .from("amc_submissions")
+        .update(row)
+        .eq("id", id)
+        .eq("owner_id", profile.id)
+        /* Re-asserted: an autosave that lands just after an approval must not
+           rewrite the approved proposal. */
+        .in("status", EDITABLE_STATUSES)
+        .select("*")
+        .maybeSingle(),
+  );
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
+  if (!data) {
+    return NextResponse.json(
+      { error: "This proposal changed status a moment ago and can no longer be edited. Reload it." },
+      { status: 409 },
+    );
+  }
 
-  return NextResponse.json(mapRow(data as AmcSubmissionRow));
+  return NextResponse.json({ ...mapRow(data as AmcSubmissionRow), rate_problems: rateProblems });
+}
+
+/*
+  What PUT may still write over (isAmcSubmissionEditable). A proposal the
+  client has seen is changed through a new version (BRD 5.4, DEV-367), so a
+  rejected one is revised rather than edited in place.
+*/
+const EDITABLE_STATUSES = ["draft", "sent_back"];
+
+/* AMC Settings decide what may be priced; if they cannot be read, say so
+   as JSON rather than failing with an HTML 500. */
+async function readSettingsOr503(
+  admin: Awaited<ReturnType<typeof createAdminServerClient>>,
+): Promise<{ value: Awaited<ReturnType<typeof readAmcSettings>> } | { error: NextResponse }> {
+  try {
+    return { value: await readAmcSettings(admin) };
+  } catch (error) {
+    console.error("AMC settings read failed:", error);
+    return {
+      error: NextResponse.json(
+        { error: "AMC Settings could not be loaded, so the proposal was not saved. Try again." },
+        { status: 503 },
+      ),
+    };
+  }
 }
 
 /*

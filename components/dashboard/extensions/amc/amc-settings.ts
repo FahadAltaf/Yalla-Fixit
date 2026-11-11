@@ -184,6 +184,13 @@ export const amcServiceSchema = z.object({
   reference: z.string().default(""),
   /** False keeps it on file without offering it on new proposals. */
   enabled: z.boolean().default(true),
+  /**
+   * Included in every contract at no charge, with no unit rate (client,
+   * Oct 2026: the 24/7 helpdesk). A new proposal starts the row ticked and
+   * free. Settings saved before this have no value; the shipped default
+   * applies (see mergeAmcSettings).
+   */
+  includedFree: z.boolean().optional(),
 });
 
 export type AmcServiceDefinition = z.infer<typeof amcServiceSchema>;
@@ -560,6 +567,7 @@ export function getAmcSettingsDefaults(): AmcSettings {
       hasScopeSection: service.hasScopeSection,
       reference: service.reference ?? "",
       enabled: true,
+      includedFree: service.includedFree === true,
     })),
     serviceScopes,
     brochure: getAmcBrochureDefaults(),
@@ -688,7 +696,14 @@ export function mergeAmcSettings(
     clauseList,
     /* Whole, not merged: a service added or removed is not a per-key
        edit, exactly as with the clauses. */
-    services: overrides.services?.length ? overrides.services : defaults.services,
+    /* Saved services predating includedFree take the shipped value. */
+    services: overrides.services?.length
+      ? overrides.services.map((service) => ({
+          ...service,
+          includedFree:
+            service.includedFree ?? defaults.services.find((d) => d.id === service.id)?.includedFree ?? false,
+        }))
+      : defaults.services,
     serviceScopes: {
       ...defaults.serviceScopes,
       ...(overrides.serviceScopes ?? {}),

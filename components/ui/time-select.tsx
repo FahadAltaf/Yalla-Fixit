@@ -45,6 +45,7 @@ export default function TimeSelect({
   placeholder,
   "aria-label": ariaLabel,
   id,
+  step,
 }: {
   /** "HH:mm", 24-hour. Empty string means unset. */
   value: string;
@@ -67,6 +68,8 @@ export default function TimeSelect({
   placeholder?: string;
   "aria-label"?: string;
   id?: string;
+  /** Seconds between times in the stepper (900 = quarter hours); minutes only, never seconds. */
+  step?: number;
 }) {
   return (
     <div className={cn("relative", className)}>
@@ -82,6 +85,7 @@ export default function TimeSelect({
         disabled={disabled}
         min={min}
         max={max}
+        step={step}
         // defaultValue={new Date().getTime()}
         aria-label={ariaLabel ?? placeholder ?? "Time"}
         /*

@@ -58,6 +58,17 @@ RESOURCE_ACTIONS[ResourceType.TODOS] = CRUD_MODULE_ACTIONS;
    editing a proposal is gated by the email allowlist instead, which FRD
    §4 keeps out of scope. */
 RESOURCE_ACTIONS[ResourceType.AMC] = [ActionType.VIEW, ActionType.APPROVE];
+/* AMC operations (contracts after signature): View every contract,
+   Create = activate, Edit = record usage / FSM links / customers and
+   assessments, Approve = correct usage. */
+RESOURCE_ACTIONS[ResourceType.AMC_OPERATIONS] = [ActionType.VIEW, ActionType.CREATE, ActionType.EDIT, ActionType.APPROVE];
+/* BRD v0.3 6.7: the AMC roles are made of these (lib/amc/role-templates.ts). */
+RESOURCE_ACTIONS[ResourceType.AMC_ENQUIRIES] = [ActionType.VIEW, ActionType.CREATE, ActionType.EDIT, ActionType.EXPORT];
+RESOURCE_ACTIONS[ResourceType.AMC_RATE_CARD] = [ActionType.VIEW, ActionType.EDIT];
+RESOURCE_ACTIONS[ResourceType.AMC_CONFIG] = [ActionType.VIEW, ActionType.EDIT, ActionType.APPROVE];
+RESOURCE_ACTIONS[ResourceType.AMC_PAYMENTS] = [ActionType.VIEW, ActionType.CREATE, ActionType.EDIT, ActionType.APPROVE];
+RESOURCE_ACTIONS[ResourceType.AMC_VISITS] = [ActionType.VIEW, ActionType.CREATE, ActionType.EDIT, ActionType.APPROVE];
+RESOURCE_ACTIONS[ResourceType.AMC_ALLOWANCES] = [ActionType.VIEW, ActionType.APPROVE];
 // Scheduling is a full CRUD module plus an Approve permission (#2): the holder
 // can approve/reject a submitted day and receives the submission email.
 RESOURCE_ACTIONS[ResourceType.SCHEDULING] = [...CRUD_MODULE_ACTIONS, ActionType.APPROVE];
@@ -156,7 +167,15 @@ const resourceDisplayNameMap: Partial<Record<ResourceType, string>> =
   the permission to sign in to the inspector app on a phone.
 */
 const EXTRA_RESOURCE_NAMES: Partial<Record<ResourceType, string>> = {
-  [ResourceType.AMC]: "AMC Proposals",
+  /* The module itself: View opens AMC; Approve makes an approver of proposals. Its pages sit under it. */
+  [ResourceType.AMC]: "AMC (module; Approve = proposal approver)",
+  [ResourceType.AMC_OPERATIONS]: "AMC Operations",
+  [ResourceType.AMC_ENQUIRIES]: "AMC Enquiries",
+  [ResourceType.AMC_RATE_CARD]: "AMC Rate Card",
+  [ResourceType.AMC_CONFIG]: "AMC Configuration (Approve = thresholds and bands)",
+  [ResourceType.AMC_PAYMENTS]: "AMC Payments (Approve = payment gate override)",
+  [ResourceType.AMC_VISITS]: "AMC Visits (Approve = supervisor closure)",
+  [ResourceType.AMC_ALLOWANCES]: "AMC Allowances (Approve = override and reversal)",
   [ResourceType.SNAGGING]: "Snagging (whole module)",
   [ResourceType.EXTENSIONS]: "Extensions (whole module)",
   [ResourceType.MOBILE_APP]: "Mobile application",
@@ -273,6 +292,25 @@ export const RESOURCE_PARENT: Partial<Record<ResourceType, ResourceType>> = {
   [ResourceType.MOBILE_APP]: ResourceType.SNAGGING,
   [ResourceType.EXTENSIONS_BULK_DOWNLOAD]: ResourceType.EXTENSIONS,
   [ResourceType.EXTENSIONS_QUOTATION_TEMPLATES]: ResourceType.EXTENSIONS,
+  /* AMC: its pages, and the rights that decide what can be done on them. */
+  [ResourceType.AMC_ENQUIRIES]: ResourceType.AMC,
+  [ResourceType.AMC_PROPOSALS]: ResourceType.AMC,
+  [ResourceType.AMC_CONTRACTS]: ResourceType.AMC,
+  [ResourceType.AMC_PAYMENTS]: ResourceType.AMC,
+  [ResourceType.AMC_CLIENTS]: ResourceType.AMC,
+  [ResourceType.AMC_SITE_VISITS]: ResourceType.AMC,
+  [ResourceType.AMC_VISITS]: ResourceType.AMC,
+  [ResourceType.AMC_TECHNICIANS]: ResourceType.AMC,
+  [ResourceType.AMC_CALL_OUTS]: ResourceType.AMC,
+  [ResourceType.AMC_ADDITIONAL_WORKS]: ResourceType.AMC,
+  [ResourceType.AMC_RENEWALS]: ResourceType.AMC,
+  [ResourceType.AMC_REPORTS]: ResourceType.AMC,
+  [ResourceType.AMC_RATE_CARD]: ResourceType.AMC,
+  [ResourceType.AMC_FSM_MAPPING]: ResourceType.AMC,
+  [ResourceType.AMC_OPERATIONS_SETTINGS]: ResourceType.AMC,
+  [ResourceType.AMC_CONFIG]: ResourceType.AMC,
+  [ResourceType.AMC_OPERATIONS]: ResourceType.AMC,
+  [ResourceType.AMC_ALLOWANCES]: ResourceType.AMC,
   [ResourceType.FINANCE_QUEUE]: ResourceType.FINANCE,
   [ResourceType.FINANCE_EXCLUSIONS]: ResourceType.FINANCE,
   [ResourceType.FINANCE_QUERIES]: ResourceType.FINANCE,

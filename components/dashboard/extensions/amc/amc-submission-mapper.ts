@@ -33,6 +33,7 @@ export function formDataToSubmissionPayload(
     unitType: data.unitType,
     propertyAddress: data.propertyAddress,
     propertyDetail: data.propertyDetail,
+    ...(data.propertyType ? { propertyType: data.propertyType } : {}),
   };
 
   const customer: AmcSubmissionCustomer = {
@@ -66,6 +67,11 @@ export function formDataToSubmissionPayload(
     discount_amount: totals.discountAmount,
     final_price: totals.finalPrice,
     generated_documents: generatedDocuments,
+    ...(data.customerRecordId !== undefined ? { customer_id: data.customerRecordId } : {}),
+    ...(data.propertyRecordId !== undefined ? { property_id: data.propertyRecordId } : {}),
+    ...(data.paymentPlan
+      ? { payment_plan: data.paymentPlan, payment_plan_custom: data.paymentPlan === "custom" ? (data.paymentPlanCustom ?? null) : null }
+      : {}),
   };
 }
 
@@ -75,10 +81,11 @@ export function submissionToFormData(submission: AmcDocumentSource): AmcFormData
     unitType: submission.property.unitType,
     propertyAddress: submission.property.propertyAddress,
     propertyDetail: submission.property.propertyDetail,
+    propertyType: submission.property.propertyType,
     /* FR3.3: basePrice has to come back too, or reopening a submission
        silently blanks every price the team entered. */
     serviceRows: submission.services.map(
-      ({ serviceId, included, units, frequency, basePrice, free, equipment, customName, customScope }) => ({
+      ({ serviceId, included, units, frequency, basePrice, free, equipment, customName, customScope, rateItemId, standardRate, floorRate, promotionId, promotionPercent, belowFloor }) => ({
         serviceId,
         included,
         units,
@@ -88,6 +95,12 @@ export function submissionToFormData(submission: AmcDocumentSource): AmcFormData
         // DEV-260: only a custom service carries these.
         ...(customName !== undefined ? { customName } : {}),
         ...(customScope !== undefined ? { customScope } : {}),
+        rateItemId,
+        standardRate,
+        floorRate,
+        promotionId,
+        promotionPercent,
+        belowFloor,
         /*
           A submission saved before free rows existed has no flag, and a
           priced row must not come back as a giveaway. False is the right
@@ -119,6 +132,13 @@ export function submissionToFormData(submission: AmcDocumentSource): AmcFormData
       { name: "", phone: "" },
       { name: "", phone: "" },
     ],
+    /* The contract's coverage terms, for the contract document only. */
+    ...(submission.document_options?.entitlementTerms
+      ? { entitlementTerms: submission.document_options.entitlementTerms }
+      : {}),
+    customerRecordId: submission.customer_id ?? null,
+    propertyRecordId: submission.property_id ?? null,
+    recordsLocked: Boolean(("enquiry_id" in submission && submission.enquiry_id) || ("from_site_visit" in submission && submission.from_site_visit)),
     customerName: submission.customer.customerName,
     customerId: submission.customer.customerId ?? "",
     customerPhone: submission.customer.customerPhone,
@@ -129,7 +149,10 @@ export function submissionToFormData(submission: AmcDocumentSource): AmcFormData
       submission.customer.endDate ??
       getDefaultEndDate(submission.customer.startDate),
     paymentTerms: submission.customer.paymentTerms,
+    paymentPlan: submission.payment_plan ?? undefined,
+    paymentPlanCustom: submission.payment_plan_custom ?? null,
     proposalNumber: submission.customer.proposalNumber,
+    contractNumber: submission.contract_number ?? undefined,
     submissionId: submission.id ?? "",
   };
 }
