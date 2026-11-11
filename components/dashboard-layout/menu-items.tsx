@@ -339,7 +339,7 @@ export const baseSectionsItems: MenuItem[] = [
       // { title: "Job reviews", url: "/extensions/amc-contracts/job-reviews", canSee: canViewAmcVisits },
       // { title: "Call outs", url: "/extensions/amc-contracts/call-outs", resource: ResourceType.AMC_CALL_OUTS },
       // { title: "Additional work", url: "/extensions/amc-contracts/additional-works", resource: ResourceType.AMC_ADDITIONAL_WORKS },
-      // { title: "Technicians", url: "/extensions/amc-contracts/technicians", resource: ResourceType.AMC_TECHNICIANS },
+      { title: "Technicians", url: "/extensions/amc-contracts/technicians", resource: ResourceType.AMC_TECHNICIANS },
       // { title: "Reports", url: "/extensions/amc-contracts/reports", resource: ResourceType.AMC_REPORTS },
       { title: "Rate card", url: "/extensions/amc-contracts/rate-card", canSee: canViewAmcRateCard },
       // { title: "FSM mapping", url: "/extensions/amc-contracts/fsm-services", resource: ResourceType.AMC_FSM_MAPPING },
