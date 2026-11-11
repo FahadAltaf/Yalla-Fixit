@@ -16,7 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { PageHeading, SectionCard } from "@/components/dashboard/shared/kaizen";
-import { ActionDialogContent, ErrorState, FieldsSkeleton, SectionSkeleton, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
+import { ActionDialogContent, ErrorState, FieldsSkeleton, SectionSkeleton, SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
 import { cn } from "@/lib/utils";
 import {
   amcContractsService,
@@ -58,6 +58,7 @@ function NotificationSettings() {
   const [form, setForm] = useState<(AmcNotificationSettings & { thresholdsText: string; extraText: string }) | null>(null);
   const [busy, setBusy] = useState(false);
   const [running, setRunning] = useState(false);
+  const { confirm, dialog: confirmDialog } = useConfirm();
 
   if (error) return <ErrorState title="Could not load the notification settings" message={error} onRetry={reload} />;
   if (loading || !data)
@@ -100,6 +101,11 @@ function NotificationSettings() {
     }
   };
 
+  /* Asked first (11 Nov 2026): it acts at once, so it is confirmed like every other step. */
+  const runRemindersCheck = () =>
+    void confirm({ title: "Run the contract reminders now?", description: "Creates the expiry reminders that are due and sends them by the channels set below, as the daily run does. Reminders already sent are not sent again.", confirmText: "Run reminders" }).then((ok) => {
+      if (ok) void runNow();
+    });
   const runNow = async () => {
     setRunning(true);
     try {
@@ -195,7 +201,7 @@ function NotificationSettings() {
 
       {data.canEdit ? (
         <div className="flex flex-wrap justify-end gap-2 border-t pt-4">
-          <SubmitButton variant="outline" pending={running} pendingLabel="Running…" icon={<Play className="size-4" />} onClick={() => void runNow()} disabled={!!form}>
+          <SubmitButton variant="outline" pending={running} pendingLabel="Running…" icon={<Play className="size-4" />} onClick={() => runRemindersCheck()} disabled={!!form}>
             Run reminders now
           </SubmitButton>
           <SubmitButton pending={busy} pendingLabel="Saving…" icon={<Save className="size-4" />} onClick={() => void save()} disabled={!form}>
@@ -205,6 +211,7 @@ function NotificationSettings() {
       ) : (
         <p className="text-muted-foreground text-xs">Only AMC approvers can change this.</p>
       )}
+      {confirmDialog}
     </SectionCard>
   );
 }

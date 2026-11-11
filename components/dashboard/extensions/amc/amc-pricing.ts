@@ -16,6 +16,7 @@ import type {
   FrequencyRow,
 } from "./amc-types";
 import { UNIT_TYPE_LABELS } from "@/lib/amc/client-profile";
+import type { ModelChain } from "@/lib/amc/rate-card";
 import { paymentPlanLabel } from "@/lib/amc/proposal-rules";
 
 import { isCustomServiceRow } from "./amc-types";
@@ -156,7 +157,7 @@ function formatFrequencyForPdf(
   drift apart.
 */
 function buildFrequencyRows(data: AmcFormData, settings: AmcSettings): FrequencyRow[] {
-  const offered = servicesForProperty(settings, data.unitType);
+  const offered = servicesForProperty(settings, [data.propertyType, data.unitType]);
   const allowedIds = new Set(offered.map((service) => service.id));
   const byId = new Map(offered.map((service) => [service.id, service]));
 
@@ -193,7 +194,7 @@ function buildFrequencyRows(data: AmcFormData, settings: AmcSettings): Frequency
 
 function offeredRowsOnly(data: AmcFormData, settings: AmcSettings): AmcServiceRow[] {
   const offered = new Set(
-    servicesForProperty(settings, data.unitType).map((service) => service.id),
+    servicesForProperty(settings, [data.propertyType, data.unitType]).map((service) => service.id),
   );
   return data.serviceRows.filter(
     (row) => !row.included || offered.has(row.serviceId) || isCustomServiceRow(row),
@@ -344,7 +345,8 @@ export function computeAmcData(
 */
 export function syncServiceRowsForUnitType(
   serviceRows: AmcServiceRow[],
-  unitType: AmcFormData["unitType"],
+  /** The rate model, or the full property type first and then the rate model. */
+  unitType: ModelChain,
   catalogue: ReadonlyArray<AmcServiceDefinition> = getAmcSettingsDefaults().services,
 ): { rows: AmcServiceRow[]; removedIncluded: string[] } {
   const offered = servicesForProperty({ services: [...catalogue] }, unitType);

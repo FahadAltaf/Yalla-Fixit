@@ -75,6 +75,7 @@ import {
   Trash2,
   UsersRound,
   X,
+  Wrench,
 } from "lucide-react";
 import {
   AvailabilityCell,
@@ -89,6 +90,7 @@ import TimeSelect from "@/components/ui/time-select";
 import { Card } from "@/components/ui/card";
 import { TablePager } from "@/components/data-table/table-pager";
 import { ManageTechnicianDialog, type TechnicianDialogView } from "./manage-technician-dialog";
+import { AmcSkillsDialog } from "@/components/dashboard/extensions/amc-contracts/amc-skills-dialog";
 import { Hint } from "@/components/ui/hint";
 
 /*
@@ -267,6 +269,9 @@ export default function WorkforcePeople({ technicians, access }: Props) {
 
   /* The row menu's dialog: which technician, and which view (attributes, working hours or leave). */
   const [activeTechnician, setActiveTechnician] = useState<{ technician: TechnicianReference; view: TechnicianDialogView } | null>(null);
+  /* The technician whose AMC skills are open (moved here from AMC -> Technicians, 11 Nov 2026). */
+  const [amcSkills, setAmcSkills] = useState<{ fsmId: string; name: string } | null>(null);
+  const closeAmcSkills = useCallback(() => setAmcSkills(null), []);
   // FR-21: the managed list behind the Add Leave dropdown.
   const [leaveTypes, setLeaveTypes] = useState<LeaveType[]>([]);
   const [bulkLeaveOpen, setBulkLeaveOpen] = useState(false);
@@ -1145,6 +1150,9 @@ export default function WorkforcePeople({ technicians, access }: Props) {
                             <DropdownMenuItem onSelect={() => setActiveTechnician({ technician, view: "hours" })}>
                               <Clock className="size-4" /> Working hours
                             </DropdownMenuItem>
+                            <DropdownMenuItem onSelect={() => setAmcSkills({ fsmId: technician.fsm_resource_id, name: technician.display_name })}>
+                              <Wrench className="size-4" /> AMC skills
+                            </DropdownMenuItem>
                             <DropdownMenuSeparator />
                             <DropdownMenuItem onSelect={() => setActiveTechnician({ technician, view: "leave" })}>
                               <Plus className="size-4" /> Add leave
@@ -1180,6 +1188,8 @@ export default function WorkforcePeople({ technicians, access }: Props) {
             onChanged={loadAll}
           />
         )}
+
+        {amcSkills ? <AmcSkillsDialog key={amcSkills.fsmId} fsmId={amcSkills.fsmId} name={amcSkills.name} onClose={closeAmcSkills} /> : null}
 
         {activeTechnician && (
           <ManageTechnicianDialog

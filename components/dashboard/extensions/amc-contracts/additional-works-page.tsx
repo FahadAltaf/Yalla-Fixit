@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Database, Hammer, Plus } from "lucide-react";
 
@@ -13,10 +14,11 @@ import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { IdentityCell } from "@/components/ui/entity-avatar";
 import { Money } from "@/components/ui/money";
+import { additionalWorkPageHref } from "@/lib/amc/field-visits";
 import { additionalWorksService, type AdditionalWorkRecord } from "@/modules/amc-contracts/additional-works-service";
 
-import { AdditionalWorkDetailDialog, workSourceLabel } from "./additional-work-detail-dialog";
-import { ListToolbar, RiskBadge, WorkStatusBadge, useUrlDialog } from "./call-out-shared";
+import { workSourceLabel } from "./additional-work-sections";
+import { ListToolbar, RiskBadge, WorkStatusBadge } from "./call-out-shared";
 import { RaiseAdditionalWorkDialog } from "./raise-additional-work-dialog";
 import { useAmcData } from "./use-amc-data";
 import { useDialog } from "./profile/use-dialog";
@@ -105,7 +107,13 @@ export function AdditionalWorksPage() {
   const [scope, setScope] = useState("open");
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(25);
-  const detail = useUrlDialog("open");
+  const router = useRouter();
+  const openWork = (id: string) => router.push(additionalWorkPageHref(id));
+  /* Older links opened the work here with ?open=<id>: send them to its page. */
+  useEffect(() => {
+    const asked = new URLSearchParams(window.location.search).get("open");
+    if (asked) router.replace(additionalWorkPageHref(asked));
+  }, [router]);
   const raising = useDialog<true>();
 
   const term = search.trim().toLowerCase();
@@ -181,7 +189,7 @@ export function AdditionalWorksPage() {
             setPage(0);
           }}
           onGlobalFilterChange={setSearch}
-          handleRowClick={(row) => detail.show(row.id)}
+          handleRowClick={(row) => openWork(row.id)}
           toolbar={
             <ListToolbar
               search={search}
@@ -232,7 +240,6 @@ export function AdditionalWorksPage() {
         />
       </Card>
 
-      <AdditionalWorkDetailDialog key={`detail-${detail.key}`} workId={detail.target} open={detail.open} onOpenChange={detail.onOpenChange} onChanged={reload} />
       <RaiseAdditionalWorkDialog
         key={`raise-${raising.key}`}
         open={raising.open}
@@ -240,7 +247,7 @@ export function AdditionalWorksPage() {
         source="manual"
         onRaised={async (w) => {
           await reload();
-          detail.show(w.id);
+          openWork(w.id);
         }}
       />
     </div>

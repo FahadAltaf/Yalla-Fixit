@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Archive, ArchiveRestore, BadgePercent, Building2, CalendarRange, History, Info, Package, Pencil, Plus, Send, Tags, Trash2, Undo2 } from "lucide-react";
+import { Archive, ArchiveRestore, BadgePercent, Building2, CalendarRange, History, Info, Package, Pencil, Plus, Send, Tags, Trash2, Undo2, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
@@ -74,6 +74,9 @@ const TONE = {
   info: "bg-brand-50 text-brand",
   neutral: "bg-mist text-ink-soft",
 } as const;
+/* Every property type is on the card (11 Nov 2026); a type with no rate of its own is priced on its family's. */
+const MODEL_FALLBACK_HINT = "Townhouse uses the Villa rate, and Restaurant, Clinic, Shop and Warehouse use the Office rate, unless they have a rate of their own. Any property covers the rest.";
+
 function Tone({ tone, children }: { tone: keyof typeof TONE; children: React.ReactNode }) {
   return (
     <Badge variant="secondary" className={cn("border-0 font-medium", TONE[tone])}>
@@ -501,6 +504,7 @@ function RateDialog({
                   ))}
                 </SelectContent>
               </Select>
+              <p className="text-muted-foreground text-xs">{MODEL_FALLBACK_HINT}</p>
             </div>
             <div className="grid gap-1.5">
               <Label>Counted</Label>
@@ -612,45 +616,62 @@ function PackagesTab({ card, editing, services, onChange }: { card: RateCard; ed
           action={editing ? { label: "Add a package", onClick: () => open("new") } : undefined}
         />
       ) : (
-        <div className="grid gap-3 md:grid-cols-2">
-          {card.packages.map((p) => (
-            <div key={p.id} className={cn("rounded-lg border p-4", !p.active && "opacity-60")}>
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-medium">{p.name}</span>
-                    {!p.active ? <Tone tone="neutral">Inactive</Tone> : null}
+        /* Each package as a card (11 Nov 2026): what it is, its services as rows, and what it adds up to. */
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {card.packages.map((p) => {
+            const visits = p.lines.reduce((n, l) => n + l.frequency, 0);
+            const units = p.lines.reduce((n, l) => n + l.units, 0);
+            return (
+              <div key={p.id} className={cn("bg-card flex flex-col overflow-hidden rounded-xl border shadow-xs", !p.active && "opacity-60")}>
+                <div className="flex items-start gap-3 border-b px-4 py-3.5">
+                  <span className="bg-brand-50 text-brand flex size-10 shrink-0 items-center justify-center rounded-lg border border-brand/20 [&_svg]:size-5">
+                    <Package />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="truncate text-base font-semibold">{p.name}</span>
+                      {p.active ? <Tone tone="good">Active</Tone> : <Tone tone="neutral">Inactive</Tone>}
+                    </div>
+                    <div className="text-muted-foreground truncate text-xs">{p.models.length ? p.models.map((m) => MODEL_LABELS[m]).join(", ") : "Every property model"}</div>
                   </div>
-                  <div className="text-muted-foreground text-xs">{p.models.length ? p.models.map((m) => MODEL_LABELS[m]).join(", ") : "Every property model"}</div>
+                  {editing ? (
+                    <RowActionsMenu
+                      label={p.name}
+                      actions={[
+                        { label: "Edit", icon: <Pencil className="size-4" />, onSelect: () => open(p) },
+                        {
+                          label: "Remove",
+                          icon: <Trash2 className="size-4" />,
+                          destructive: true,
+                          onSelect: () => onChange({ ...card, packages: card.packages.filter((x) => x.id !== p.id) }),
+                        },
+                      ]}
+                    />
+                  ) : null}
                 </div>
-                {editing ? (
-                  <RowActionsMenu
-                    label={p.name}
-                    actions={[
-                      { label: "Edit", icon: <Pencil className="size-4" />, onSelect: () => open(p) },
-                      {
-                        label: "Remove",
-                        icon: <Trash2 className="size-4" />,
-                        destructive: true,
-                        onSelect: () => onChange({ ...card, packages: card.packages.filter((x) => x.id !== p.id) }),
-                      },
-                    ]}
-                  />
-                ) : null}
+                {p.description ? <p className="text-muted-foreground px-4 pt-3 text-sm">{p.description}</p> : null}
+                <ul className="flex-1 divide-y px-4 py-1">
+                  {p.lines.map((l) => (
+                    <li key={l.serviceId} className="flex items-center justify-between gap-3 py-2 text-sm">
+                      <span className="flex min-w-0 items-center gap-2">
+                        <CheckCircle2 className="text-success size-4 shrink-0" />
+                        <span className="truncate">{label(l.serviceId)}</span>
+                      </span>
+                      <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
+                        {l.units} {l.units === 1 ? "unit" : "units"} · {l.frequency}× a year
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+                <div className="bg-muted/30 text-muted-foreground flex items-center justify-between gap-3 border-t px-4 py-2.5 text-xs">
+                  <span>
+                    {p.lines.length} {p.lines.length === 1 ? "service" : "services"} · {units} {units === 1 ? "unit" : "units"}
+                  </span>
+                  <span className="text-foreground font-medium tabular-nums">{visits} visits a year</span>
+                </div>
               </div>
-              {p.description ? <p className="text-muted-foreground mt-2 text-sm">{p.description}</p> : null}
-              <ul className="mt-2 space-y-0.5 text-sm">
-                {p.lines.map((l) => (
-                  <li key={l.serviceId}>
-                    {label(l.serviceId)}{" "}
-                    <span className="text-muted-foreground">
-                      · {l.units} unit(s) × {l.frequency} a year
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
       <PackageDialog
@@ -720,7 +741,7 @@ function PackageDialog({
           </div>
           <div className="grid gap-1.5">
             <Label>Offered on (none ticked: every model)</Label>
-            <div className="flex flex-wrap gap-4">
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3">
               {PROPERTY_MODELS.map((m) => (
                 <label key={m} className="flex items-center gap-2 text-sm">
                   <Checkbox
@@ -731,6 +752,7 @@ function PackageDialog({
                 </label>
               ))}
             </div>
+            <p className="text-muted-foreground text-xs">Ticking Villa also covers Townhouses, and Office also covers Restaurants, Clinics, Shops and Warehouses.</p>
           </div>
           <div className="grid gap-2">
             <Label>Services</Label>
@@ -1001,7 +1023,7 @@ function PromotionDialog({
           </div>
           <div className="grid gap-1.5">
             <Label>Property models (none ticked: every model)</Label>
-            <div className="flex flex-wrap gap-4">
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2 sm:grid-cols-3">
               {PROPERTY_MODELS.map((m) => (
                 <label key={m} className="flex items-center gap-2 text-sm">
                   <Checkbox
@@ -1012,6 +1034,7 @@ function PromotionDialog({
                 </label>
               ))}
             </div>
+            <p className="text-muted-foreground text-xs">Ticking Villa also covers Townhouses, and Office also covers Restaurants, Clinics, Shops and Warehouses.</p>
           </div>
           {error ? (
             <p className="text-destructive text-xs" role="alert">

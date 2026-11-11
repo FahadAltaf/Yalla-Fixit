@@ -79,7 +79,8 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
   const discountPercent = form.watch("discountPercent") ?? 0;
   const formValues = form.watch();
   const totals = calculateAmcTotals(formValues);
-  const availableServices = servicesForProperty({ services: [...catalogue] }, unitType);
+  const propertyType = form.watch("propertyType");
+  const availableServices = servicesForProperty({ services: [...catalogue] }, [propertyType, unitType]);
   const enabledCount = catalogue.filter((service) => service.enabled !== false).length;
   /*
     What the table lists: the standard services for this kind of property,

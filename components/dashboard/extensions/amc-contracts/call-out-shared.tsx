@@ -1,15 +1,18 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import { format } from "date-fns";
 import { Copy, ExternalLink, ImagePlus, LoaderCircleIcon, RefreshCwIcon, SearchIcon, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 
 import { StatusSelect } from "@/components/data-table/toolbars/status-select";
+import { PillTabs } from "@/components/dashboard/shared/kaizen";
 import { ActionDialogContent, SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
+import { EmptyState } from "@/components/ui/empty-state";
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -180,7 +183,49 @@ export function Muted({ children }: { children: ReactNode }) {
   return <span className="text-muted-foreground font-normal">{children}</span>;
 }
 
-export function Panel({ title, description, action, children }: { title: string; description?: string; action?: ReactNode; children: ReactNode }) {
+/**
+ * Where a Panel sits: "box" (a bordered box inside a dialog, the default) or
+ * "card" (a card of its own on a page: the visit page sets it, so the same
+ * sections read as the page's cards).
+ */
+export const PanelSurface = createContext<"box" | "card">("box");
+
+export function Panel({
+  title,
+  description,
+  icon,
+  action,
+  actions,
+  children,
+}: {
+  title: string;
+  description?: string;
+  /** A small lucide icon beside the title, in brand red (as SectionCard). */
+  icon?: ReactNode;
+  action?: ReactNode;
+  /** The panel's buttons (Update …, Raise …), top right level with the title, as SectionCard's action. */
+  actions?: ReactNode;
+  children: ReactNode;
+}) {
+  const surface = useContext(PanelSurface);
+  const buttons = action || actions ? <div className="flex flex-wrap items-center gap-2">{action}{actions}</div> : null;
+  if (surface === "card") {
+    return (
+      <Card className="grid gap-4 p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-48 flex-1 basis-0">
+            <h2 className="flex items-center gap-2 text-lg">
+              {icon ? <span className="text-brand shrink-0 [&_svg]:size-[1.125rem]">{icon}</span> : null}
+              {title}
+            </h2>
+            {description ? <p className="text-muted-foreground mt-1 text-sm">{description}</p> : null}
+          </div>
+          {buttons}
+        </div>
+        {children}
+      </Card>
+    );
+  }
   return (
     <div className="grid gap-3 rounded-lg border px-4 py-4">
       <div className="flex flex-wrap items-start justify-between gap-2">
@@ -188,11 +233,66 @@ export function Panel({ title, description, action, children }: { title: string;
           <p className="text-sm font-medium">{title}</p>
           {description ? <p className="text-muted-foreground mt-0.5 text-xs">{description}</p> : null}
         </div>
-        {action}
+        {buttons}
       </div>
       {children}
     </div>
   );
+}
+
+/**
+ * A section's form in a dialog (11 Nov 2026): the page shows where things
+ * stand with an Update button, and the fields open here, as everywhere
+ * else in AMC. Panels inside read as boxes, not page cards. Cancel is
+ * built in; `submit` is the save button.
+ */
+export function SectionDialog({
+  open,
+  onOpenChange,
+  title,
+  description,
+  busy = false,
+  wide = false,
+  submit,
+  children,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  title: string;
+  description?: string;
+  busy?: boolean;
+  wide?: boolean;
+  submit: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
+      <ActionDialogContent busy={busy} className={cn("max-h-[88vh] overflow-y-auto", wide ? "sm:max-w-2xl" : "sm:max-w-lg")}>
+        <DialogHeader>
+          <DialogTitle>{title}</DialogTitle>
+          {description ? <DialogDescription>{description}</DialogDescription> : null}
+        </DialogHeader>
+        <PanelSurface.Provider value="box">
+          <div className="grid gap-4 py-1">{children}</div>
+        </PanelSurface.Provider>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
+            Cancel
+          </Button>
+          {submit}
+        </DialogFooter>
+      </ActionDialogContent>
+    </Dialog>
+  );
+}
+
+/**
+ * A section with nothing in it yet (11 Nov 2026): a dashed box with an icon,
+ * what is missing and how it fills, as Snagging's empty panels, instead of
+ * a bare line of grey text. Use it inside a Panel.
+ */
+export function PanelEmpty({ icon, title, description }: { icon: ReactNode; title: string; description: string }) {
+  return <EmptyState icon={icon} title={title} description={description} className="rounded-lg border border-dashed p-6 md:p-8" />;
 }
 
 export function Field({ id, label, hint, children }: { id: string; label: string; hint?: ReactNode; children: ReactNode }) {
@@ -275,7 +375,17 @@ export interface PhotoItem {
   kind: string;
   caption: string | null;
   url: string | null;
+  createdAt?: string;
 }
+
+/* The kind on the photo: after in green, a fault in red, the rest neutral. */
+const PHOTO_KIND_TONE: Record<string, string> = {
+  after: "bg-success text-white",
+  fault: "bg-danger text-white",
+  finding: "bg-warning text-white",
+};
+const photoWhen = (iso: string) =>
+  new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Dubai" }).format(new Date(iso));
 
 /**
  * A photo grid with upload (kind chosen first) and removal, for a call out
@@ -312,6 +422,7 @@ export function PhotosPanel<K extends string>({
   const kindId = useId();
   const { confirm, dialog } = useConfirm();
   const labelOf = (k: string) => labels[k as K] ?? k;
+  const [shownKind, setShownKind] = useState<string>("all");
 
   const add = async (files: FileList | null) => {
     if (!files?.length) return;
@@ -348,48 +459,19 @@ export function PhotosPanel<K extends string>({
       },
     });
 
+  const present = kinds.filter((k) => photos.some((p) => p.kind === k));
+  const shown = shownKind === "all" ? photos : photos.filter((p) => p.kind === shownKind);
+
   return (
-    <Panel title={title} description={description}>
-      {photos.length === 0 ? (
-        <p className="text-muted-foreground text-sm">No photos yet.</p>
-      ) : (
-        <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-          {photos.map((p) => (
-            <li key={p.id} className="relative overflow-hidden rounded-lg border">
-              {p.url ? (
-                <a href={p.url} target="_blank" rel="noopener noreferrer">
-                  {/* eslint-disable-next-line @next/next/no-img-element -- short-lived signed URL, not optimisable */}
-                  <img src={p.url} alt={p.caption ?? `${labelOf(p.kind)} photo`} className="aspect-[4/3] w-full object-cover" loading="lazy" />
-                </a>
-              ) : (
-                <div className="bg-muted text-muted-foreground flex aspect-[4/3] items-center justify-center text-xs">Unavailable</div>
-              )}
-              <Badge variant="secondary" className="bg-background/90 text-foreground absolute bottom-1.5 left-1.5 border-0 font-medium">
-                {labelOf(p.kind)}
-              </Badge>
-              {editable ? (
-                <Button
-                  size="icon"
-                  variant="secondary"
-                  className="absolute top-1.5 right-1.5 size-7 opacity-90"
-                  aria-label="Remove photo"
-                  disabled={disabled || uploading}
-                  onClick={() => ask(p.id)}
-                >
-                  <Trash2 className="size-3.5" />
-                </Button>
-              ) : null}
-              {p.caption ? <p className="text-muted-foreground truncate px-2 py-1 text-xs">{p.caption}</p> : null}
-            </li>
-          ))}
-        </ul>
-      )}
-      {editable ? (
-        <div className="flex flex-wrap items-end gap-2">
-          <div className="grid gap-2">
-            <Label htmlFor={kindId}>Photo of</Label>
+    <Panel
+      title={title}
+      description={description}
+      icon={<ImagePlus />}
+      actions={
+        editable ? (
+          <>
             <Select value={kind} onValueChange={(k) => setKind(k as K)}>
-              <SelectTrigger id={kindId} className="w-40">
+              <SelectTrigger id={kindId} size="sm" className="w-36" aria-label="Photo of">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -400,21 +482,71 @@ export function PhotosPanel<K extends string>({
                 ))}
               </SelectContent>
             </Select>
-          </div>
-          <input ref={input} type="file" accept="image/jpeg,image/png,image/webp" multiple className="hidden" onChange={(e) => void add(e.target.files)} />
-          <SubmitButton
-            variant="outline"
-            pending={uploading}
-            pendingLabel="Uploading…"
-            disabled={disabled}
-            icon={<ImagePlus className="size-4" />}
-            onClick={() => input.current?.click()}
-          >
-            Add photos
-          </SubmitButton>
-          <p className="text-muted-foreground w-full text-xs">JPEG, PNG or WebP, up to 10 MB each. Stored privately.</p>
+            <input ref={input} type="file" accept="image/jpeg,image/png,image/webp" multiple className="hidden" onChange={(e) => void add(e.target.files)} />
+            <SubmitButton pending={uploading} pendingLabel="Uploading…" disabled={disabled} icon={<ImagePlus className="size-4" />} onClick={() => input.current?.click()}>
+              Add photos
+            </SubmitButton>
+          </>
+        ) : null
+      }
+    >
+      {photos.length === 0 ? (
+        <PanelEmpty
+          icon={<ImagePlus />}
+          title="No photos yet"
+          description={editable ? "Choose what the photo is of, then Add photos: JPEG, PNG or WebP, up to 10 MB each." : "Photos taken on the visit show here."}
+        />
+      ) : (
+        <div className="grid gap-4">
+          {present.length > 1 ? (
+            <PillTabs
+              value={shownKind}
+              onChange={setShownKind}
+              tabs={[{ value: "all", label: "All", count: photos.length }, ...present.map((k) => ({ value: k as string, label: labels[k], count: photos.filter((p) => p.kind === k).length }))]}
+            />
+          ) : null}
+          <ul className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
+            {shown.map((p) => (
+              <li key={p.id} className="group bg-card relative overflow-hidden rounded-xl border shadow-xs">
+                {p.url ? (
+                  <a href={p.url} target="_blank" rel="noopener noreferrer" className="relative block overflow-hidden" title="Open the full photo">
+                    {/* eslint-disable-next-line @next/next/no-img-element -- short-lived signed URL, not optimisable */}
+                    <img
+                      src={p.url}
+                      alt={p.caption ?? `${labelOf(p.kind)} photo`}
+                      className="aspect-[4/3] w-full object-cover transition-transform duration-200 group-hover:scale-[1.03]"
+                      loading="lazy"
+                    />
+                  </a>
+                ) : (
+                  <div className="bg-muted text-muted-foreground flex aspect-[4/3] items-center justify-center text-xs">Unavailable</div>
+                )}
+                <span className={cn("absolute top-2 left-2 rounded-md px-2 py-0.5 text-xs font-medium shadow-sm", PHOTO_KIND_TONE[p.kind] ?? "bg-background/90 text-foreground")}>
+                  {labelOf(p.kind)}
+                </span>
+                {editable ? (
+                  <Button
+                    size="icon"
+                    variant="secondary"
+                    className="absolute top-2 right-2 size-7 opacity-0 shadow-sm transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+                    aria-label="Remove photo"
+                    disabled={disabled || uploading}
+                    onClick={() => ask(p.id)}
+                  >
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                ) : null}
+                <div className="grid gap-0.5 px-3 py-2.5">
+                  <p className="truncate text-sm font-medium" title={p.caption ?? undefined}>
+                    {p.caption || `${labelOf(p.kind)} photo`}
+                  </p>
+                  {p.createdAt ? <p className="text-muted-foreground text-xs">{photoWhen(p.createdAt)}</p> : null}
+                </div>
+              </li>
+            ))}
+          </ul>
         </div>
-      ) : null}
+      )}
       {dialog}
     </Panel>
   );
@@ -680,6 +812,7 @@ export function ListToolbar({
   pageSize,
   onPageSizeChange,
   onRefresh,
+  extra,
 }: {
   search: string;
   onSearchChange: (value: string) => void;
@@ -687,6 +820,8 @@ export function ListToolbar({
   searchLabel: string;
   loading: boolean;
   filters: ToolbarFilter[];
+  /** Beside the search, before the filters: e.g. one Filters button holding them all (as Finance's lists). */
+  extra?: ReactNode;
   pageSize: number;
   onPageSizeChange: (size: number) => void;
   onRefresh: () => void;
@@ -711,6 +846,7 @@ export function ListToolbar({
               {loading ? <LoaderCircleIcon aria-label="Loading..." className="animate-spin" role="status" size={16} /> : <SearchIcon aria-hidden="true" size={16} />}
             </div>
           </div>
+          {extra}
           {filters.map((f) => (
             <StatusSelect key={f.label} options={f.options} value={f.value} onChange={f.onChange} label={f.label} />
           ))}

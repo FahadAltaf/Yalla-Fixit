@@ -17,10 +17,9 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { todayInDubai } from "@/lib/amc/contracts";
+import { visitPageHref } from "@/lib/amc/field-visits";
 import { visitsService, type BoardVisit } from "@/modules/amc-contracts/visits-service";
 
-import { CallOutDetailDialog } from "./call-out-detail-dialog";
-import { useDialog } from "./profile/use-dialog";
 import { useAmcData } from "./use-amc-data";
 import { ConfirmChangeDialog, CrewDialog, MoveDialog, PlaceDialog, type ChangeRequest, type PlaceRequest } from "./visit-board-dialogs";
 import { VisitBoardGrid } from "./visit-board-grid";
@@ -100,8 +99,6 @@ export function VisitBoard() {
   const [change, setChange] = useState<ChangeRequest | null>(null);
   const closeDialog = (open: boolean) => !open && setOpenKind(null);
   const { confirm, dialog: confirmDialog } = useConfirm();
-  /* An open call out is scheduled from its own dialog (Phase 11). */
-  const callOut = useDialog<string>();
 
   const onDone = (message: string) => {
     toast.success(message);
@@ -212,7 +209,7 @@ export function VisitBoard() {
           <ToPlacePanel
             visits={data.toPlace}
             callOuts={data.callOuts ?? []}
-            onOpenCallOut={(id) => callOut.show(id)}
+            onOpenCallOut={(id) => router.push(visitPageHref(id))}
             date={date}
             canEdit={canEdit}
             onPlace={(v) => openPlace(v)}
@@ -299,7 +296,6 @@ export function VisitBoard() {
       <MoveDialog open={openKind === "move"} onOpenChange={closeDialog} onDone={onDone} reload={reload} visits={targets} date={date} />
       <CrewDialog open={openKind === "crew"} onOpenChange={closeDialog} onDone={onDone} reload={reload} visits={targets} technicians={data?.technicians ?? []} />
       <ConfirmChangeDialog open={openKind === "change"} onOpenChange={closeDialog} onDone={onDone} reload={reload} request={change} />
-      <CallOutDetailDialog key={callOut.key} callOutId={callOut.target} open={callOut.open} onOpenChange={callOut.onOpenChange} onChanged={reload} />
       {confirmDialog}
     </div>
   );

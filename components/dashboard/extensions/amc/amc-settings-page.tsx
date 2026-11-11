@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
+import { UNIT_TYPE_LABELS } from "@/lib/amc/client-profile";
 import {
   ArrowDown,
   ArrowUp,
@@ -1302,11 +1303,14 @@ function TextLibrary({
                           }))
                         }
                       >
-                        {type === "villa" ? "Villas" : type === "apartment" ? "Apartments" : "Offices"}
+                        {UNIT_TYPE_LABELS[type]}
                       </Button>
                     );
                   })}
                 </div>
+                <p className="text-muted-foreground text-xs">
+                  Villa also covers Townhouses, and Office also covers Restaurants, Clinics, Shops and Warehouses.
+                </p>
                 {draft.unitTypes.length === 0 ? (
                   <p className="text-destructive text-xs">
                     Pick at least one, or it can never be offered.

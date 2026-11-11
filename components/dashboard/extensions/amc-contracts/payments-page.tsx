@@ -15,7 +15,6 @@ import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { IdentityCell } from "@/components/ui/entity-avatar";
 import { Money } from "@/components/ui/money";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/context/AuthContext";
 import { useDebounce } from "@/hooks/use-debounce";
@@ -30,6 +29,7 @@ import {
   type PaymentMode,
 } from "@/lib/amc/payments";
 import { hasResourceAction } from "@/lib/role-permissions";
+import { cn } from "@/lib/utils";
 import type { InstalmentFilter } from "@/lib/server/amc/payments";
 import {
   PaymentsRequestError,
@@ -556,6 +556,118 @@ function ChequesTable({
   );
 }
 
+const noop = () => undefined;
+
+/* The client page's lists: a row opens the contract's Payments tab. */
+const CLIENT_INSTALMENT_COLUMNS: ColumnDef<InstalmentListRow>[] = [
+  {
+    id: "contract",
+    header: "Contract",
+    cell: ({ row }) => (
+      <IdentityCell title={row.original.contract?.contractNumber || "Contract"} subtitle={row.original.contract?.propertyLabel || null} icon={ScrollText} />
+    ),
+  },
+  { id: "no", header: "#", size: 48, cell: ({ row }) => <span className="text-sm tabular-nums">{row.original.instalmentNo}</span> },
+  { id: "due", header: "Due", cell: ({ row }) => <span className="text-sm tabular-nums">{formatContractDate(row.original.dueDate)}</span> },
+  { id: "outstanding", header: "Outstanding", cell: ({ row }) => <Money value={row.original.outstanding} className="text-sm font-medium" /> },
+  { id: "status", header: "Status", cell: ({ row }) => <InstalmentStatusBadge status={row.original.status} /> },
+  {
+    id: "late",
+    header: "Overdue",
+    cell: ({ row }) => (
+      <span className="text-sm">
+        <DaysOverdue days={row.original.daysOverdue} />
+      </span>
+    ),
+  },
+];
+
+const CLIENT_CHEQUE_COLUMNS: ColumnDef<ChequeListRow>[] = [
+  { id: "no", header: "Cheque no.", cell: ({ row }) => <IdentityCell title={row.original.chequeNo} icon={Landmark} /> },
+  { id: "bank", header: "Bank", cell: ({ row }) => <span className="text-sm">{row.original.bank || "—"}</span> },
+  { id: "date", header: "Date", cell: ({ row }) => <span className="text-sm tabular-nums">{formatContractDate(row.original.chequeDate)}</span> },
+  {
+    id: "contract",
+    header: "Contract",
+    cell: ({ row }) => (
+      <div>
+        <div className="text-sm tabular-nums">{row.original.contract?.contractNumber || "Contract"}</div>
+        {row.original.instalmentNo ? <div className="text-muted-foreground text-xs">Instalment {row.original.instalmentNo}</div> : null}
+      </div>
+    ),
+  },
+  { id: "amount", header: "Amount", cell: ({ row }) => <Money value={row.original.amount} className="text-sm font-medium" /> },
+  {
+    id: "status",
+    header: "Status",
+    cell: ({ row }) => (
+      <div className="space-y-0.5">
+        <ChequeStatusBadge status={row.original.status} />
+        {row.original.bounceReason ? <TruncatedText className="text-muted-foreground max-w-[200px] text-xs">{row.original.bounceReason}</TruncatedText> : null}
+      </div>
+    ),
+  },
+];
+
+/* A voided payment stays on the list, greyed and struck through. */
+const voidedClass = (p: ClientPaymentReceived) => (p.voided ? "text-muted-foreground line-through" : "");
+
+const CLIENT_RECEIVED_COLUMNS: ColumnDef<ClientPaymentReceived>[] = [
+  {
+    id: "date",
+    header: "Date",
+    cell: ({ row }) => {
+      const p = row.original;
+      return (
+        <span className={cn("text-sm tabular-nums", p.voided && "text-muted-foreground")}>
+          <span className={p.voided ? "line-through" : ""}>{formatContractDate(p.receivedOn)}</span>
+          {p.voided ? (
+            <Badge variant="secondary" className="bg-mist text-ink-soft ml-2 border-0 font-medium">
+              Voided
+            </Badge>
+          ) : null}
+        </span>
+      );
+    },
+  },
+  {
+    id: "contract",
+    header: "Contract",
+    cell: ({ row }) => <span className={cn("text-sm tabular-nums", voidedClass(row.original))}>{row.original.contractNumber || "Contract"}</span>,
+  },
+  {
+    id: "no",
+    header: "#",
+    size: 48,
+    cell: ({ row }) => <span className={cn("text-sm tabular-nums", voidedClass(row.original))}>{row.original.instalmentNo ?? "—"}</span>,
+  },
+  {
+    id: "mode",
+    header: "Mode",
+    cell: ({ row }) => (
+      <span className={cn("text-sm", voidedClass(row.original))}>{PAYMENT_MODE_LABELS[row.original.mode as PaymentMode] ?? row.original.mode}</span>
+    ),
+  },
+  {
+    id: "amount",
+    header: "Amount",
+    cell: ({ row }) => <Money value={row.original.amount} className={cn("text-sm font-medium", voidedClass(row.original))} />,
+  },
+  {
+    id: "reference",
+    header: "Reference / receipt",
+    cell: ({ row }) => {
+      const p = row.original;
+      return (
+        <div className={cn("text-sm", voidedClass(p))}>
+          <TruncatedText text={p.reference || "—"} className="max-w-[220px]" />
+          {p.receiptNo ? <div className="text-muted-foreground text-xs tabular-nums">Receipt {p.receiptNo}</div> : null}
+        </div>
+      );
+    },
+  },
+];
+
 /**
  * A client's payments, on the client's page: their balance, every
  * instalment still open across their contracts, their cheques and the
@@ -640,47 +752,21 @@ export function ClientPaymentsPanel({ clientId }: { clientId: string }) {
             : "Everything still owed across the client's contracts. Open a contract to record a payment."
         }
         icon={<CalendarClock />}
-        bodyClassName={instalments.length ? "pb-2" : "border-t"}
+        bodyClassName="border-t"
       >
-        {instalments.length === 0 ? (
-          <EmptyState icon={<CalendarClock className="size-5" />} title="Nothing owed" description="This client has no open instalments." />
-        ) : (
-          <div className="overflow-x-auto">
-            <Table className="min-w-[760px]">
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="pl-5">Contract</TableHead>
-                  <TableHead className="w-12">#</TableHead>
-                  <TableHead>Due</TableHead>
-                  <TableHead>Outstanding</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="pr-5">Overdue</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {instalments.map((i) => (
-                  <TableRow key={i.id} className="cursor-pointer" onClick={() => router.push(contractHref(i.contractId))}>
-                    <TableCell className="pl-5">
-                      <div className="text-sm font-medium tabular-nums">{i.contract?.contractNumber || "Contract"}</div>
-                      {i.contract?.propertyLabel ? <TruncatedText className="text-muted-foreground max-w-[260px] text-xs">{i.contract.propertyLabel}</TruncatedText> : null}
-                    </TableCell>
-                    <TableCell className="text-sm tabular-nums">{i.instalmentNo}</TableCell>
-                    <TableCell className="text-sm tabular-nums">{formatContractDate(i.dueDate)}</TableCell>
-                    <TableCell>
-                      <Money value={i.outstanding} className="text-sm font-medium" />
-                    </TableCell>
-                    <TableCell>
-                      <InstalmentStatusBadge status={i.status} />
-                    </TableCell>
-                    <TableCell className="pr-5 text-sm">
-                      <DaysOverdue days={i.daysOverdue} />
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
+        <DataTable
+          columns={CLIENT_INSTALMENT_COLUMNS}
+          data={instalments}
+          loading={false}
+          rowCount={instalments.length}
+          pageSize={500}
+          currentPage={0}
+          onPageChange={noop}
+          onPageSizeChange={noop}
+          onGlobalFilterChange={noop}
+          handleRowClick={(row) => router.push(contractHref(row.contractId))}
+          emptyState={<EmptyState icon={<CalendarClock className="size-5" />} title="Nothing owed" description="This client has no open instalments." />}
+        />
       </SectionCard>
 
       <ClientCheques clientId={clientId} />
@@ -723,7 +809,7 @@ function ClientCheques({ clientId }: { clientId: string }) {
           : "Every cheque the client has given and where it stands. Open a contract to deposit, clear or replace one."
       }
       icon={<Landmark />}
-      bodyClassName={cheques.length ? "pb-2" : "border-t"}
+      bodyClassName="border-t"
     >
       {error && !data ? (
         <div className="p-5">
@@ -731,45 +817,20 @@ function ClientCheques({ clientId }: { clientId: string }) {
         </div>
       ) : !data ? (
         <ListSkeleton rows={3} />
-      ) : cheques.length === 0 ? (
-        <EmptyState icon={<Landmark className="size-5" />} title="No cheques" description="Cheques recorded against this client's instalments appear here." />
       ) : (
-        <div className="overflow-x-auto">
-          <Table className="min-w-[760px]">
-            <TableHeader>
-              <TableRow>
-                <TableHead className="pl-5">Cheque no.</TableHead>
-                <TableHead>Bank</TableHead>
-                <TableHead>Date</TableHead>
-                <TableHead>Contract</TableHead>
-                <TableHead>Amount</TableHead>
-                <TableHead className="pr-5">Status</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {cheques.map((c) => (
-                <TableRow key={c.id} className="cursor-pointer" onClick={() => router.push(contractHref(c.contractId))}>
-                  <TableCell className="pl-5 text-sm font-medium tabular-nums">{c.chequeNo}</TableCell>
-                  <TableCell className="text-sm">{c.bank || "—"}</TableCell>
-                  <TableCell className="text-sm tabular-nums">{formatContractDate(c.chequeDate)}</TableCell>
-                  <TableCell>
-                    <div className="text-sm tabular-nums">{c.contract?.contractNumber || "Contract"}</div>
-                    {c.instalmentNo ? <div className="text-muted-foreground text-xs">Instalment {c.instalmentNo}</div> : null}
-                  </TableCell>
-                  <TableCell>
-                    <Money value={c.amount} className="text-sm font-medium" />
-                  </TableCell>
-                  <TableCell className="pr-5">
-                    <div className="space-y-0.5">
-                      <ChequeStatusBadge status={c.status} />
-                      {c.bounceReason ? <TruncatedText className="text-muted-foreground max-w-[200px] text-xs">{c.bounceReason}</TruncatedText> : null}
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+        <DataTable
+          columns={CLIENT_CHEQUE_COLUMNS}
+          data={cheques}
+          loading={false}
+          rowCount={cheques.length}
+          pageSize={500}
+          currentPage={0}
+          onPageChange={noop}
+          onPageSizeChange={noop}
+          onGlobalFilterChange={noop}
+          handleRowClick={(row) => router.push(contractHref(row.contractId))}
+          emptyState={<EmptyState icon={<Landmark className="size-5" />} title="No cheques" description="Cheques recorded against this client's instalments appear here." />}
+        />
       )}
     </SectionCard>
   );
@@ -815,7 +876,7 @@ function ClientPaymentsReceived({ clientId }: { clientId: string }) {
           : "Money received across the client's contracts, newest first."
       }
       icon={<Banknote />}
-      bodyClassName={payments?.length ? "pb-2" : "border-t"}
+      bodyClassName="border-t"
     >
       {error && !payments ? (
         <div className="p-5">
@@ -823,50 +884,20 @@ function ClientPaymentsReceived({ clientId }: { clientId: string }) {
         </div>
       ) : !payments ? (
         <ListSkeleton rows={3} />
-      ) : payments.length === 0 ? (
-        <EmptyState icon={<Banknote className="size-5" />} title="Nothing received yet" description="Payments recorded on the client's contracts appear here." />
       ) : (
-        <div className="overflow-x-auto">
-          <Table className="min-w-[760px]">
-            <TableHeader>
-              <TableRow>
-                <TableHead className="pl-5">Date</TableHead>
-                <TableHead>Contract</TableHead>
-                <TableHead className="w-12">#</TableHead>
-                <TableHead>Mode</TableHead>
-                <TableHead>Amount</TableHead>
-                <TableHead className="pr-5">Reference / receipt</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {payments.map((p) => {
-                const struck = p.voided ? "line-through" : "";
-                return (
-                  <TableRow key={p.id} className={`cursor-pointer ${p.voided ? "text-muted-foreground" : ""}`} onClick={() => router.push(contractHref(p.contractId))}>
-                    <TableCell className="pl-5 text-sm tabular-nums">
-                      <span className={struck}>{formatContractDate(p.receivedOn)}</span>
-                      {p.voided ? (
-                        <Badge variant="secondary" className="bg-mist text-ink-soft ml-2 border-0 font-medium">
-                          Voided
-                        </Badge>
-                      ) : null}
-                    </TableCell>
-                    <TableCell className={`text-sm tabular-nums ${struck}`}>{p.contractNumber || "Contract"}</TableCell>
-                    <TableCell className={`text-sm tabular-nums ${struck}`}>{p.instalmentNo ?? "—"}</TableCell>
-                    <TableCell className={`text-sm ${struck}`}>{PAYMENT_MODE_LABELS[p.mode as PaymentMode] ?? p.mode}</TableCell>
-                    <TableCell className={`${struck}`}>
-                      <Money value={p.amount} className="text-sm font-medium" />
-                    </TableCell>
-                    <TableCell className={`pr-5 text-sm ${struck}`}>
-                      <TruncatedText text={p.reference || "—"} className="max-w-[220px]" />
-                      {p.receiptNo ? <div className="text-muted-foreground text-xs tabular-nums">Receipt {p.receiptNo}</div> : null}
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-        </div>
+        <DataTable
+          columns={CLIENT_RECEIVED_COLUMNS}
+          data={payments}
+          loading={false}
+          rowCount={payments.length}
+          pageSize={500}
+          currentPage={0}
+          onPageChange={noop}
+          onPageSizeChange={noop}
+          onGlobalFilterChange={noop}
+          handleRowClick={(row) => router.push(contractHref(row.contractId))}
+          emptyState={<EmptyState icon={<Banknote className="size-5" />} title="Nothing received yet" description="Payments recorded on the client's contracts appear here." />}
+        />
       )}
     </SectionCard>
   );

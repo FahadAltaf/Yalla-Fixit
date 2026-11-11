@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import { DataTable } from "@/components/data-table";
 import { StatusSelect } from "@/components/data-table/toolbars/status-select";
 import { PageHeading } from "@/components/dashboard/shared/kaizen";
-import { ActionDialogContent, ErrorState, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
+import { ActionDialogContent, ErrorState, SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ import { IdentityCell } from "@/components/ui/entity-avatar";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import DateSelect from "@/components/ui/date-select";
@@ -58,7 +59,13 @@ export function TechniciansPage() {
     nothing on screen to show it had done anything.
   */
   const [refreshing, setRefreshing] = useState(false);
-  const refresh = async () => {
+  const { confirm, dialog: confirmDialog } = useConfirm();
+  /* Asked first (11 Nov 2026): it acts at once, so it is confirmed like every other step. */
+  const refresh = () =>
+    void confirm({ title: "Refresh the roster from Zoho FSM?", description: "Adds technicians new in Zoho FSM and marks those no longer there as inactive, then reloads the list. AMC skills and notes are kept.", confirmText: "Refresh" }).then((ok) => {
+      if (ok) void refreshNow();
+    });
+  const refreshNow = async () => {
     setRefreshing(true);
     try {
       const synced = await visitsService.syncTechnicians().catch((e: unknown) => {
@@ -188,6 +195,7 @@ export function TechniciansPage() {
 
   return (
     <div className="flex w-full flex-1 flex-col gap-6">
+      {confirmDialog}
       <PageHeading
         eyebrow="Configuration"
         title="Technicians"
@@ -403,18 +411,21 @@ function skillRows(t: TechnicianRecord | null): Record<Trade, SkillRow> {
 }
 
 /* Remounted per open (key), so the form starts from the technician it was opened for. */
-function EditTechnicianDialog({
+export function EditTechnicianDialog({
   open,
   onOpenChange,
   technician,
   today,
   onSaved,
+  loading = false,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   technician: TechnicianRecord | null;
   today: string;
   onSaved: () => void;
+  /** Opened before the record arrives (People -> AMC skills): the dialog shows at once with a loading body. */
+  loading?: boolean;
 }) {
   const [skills, setSkills] = useState(() => skillRows(technician));
   const [areas, setAreas] = useState<string[]>(technician?.areas ?? []);
@@ -424,6 +435,18 @@ function EditTechnicianDialog({
   const [isDriver, setIsDriver] = useState(technician?.isDriver ?? false);
   const [notes, setNotes] = useState(technician?.notes ?? "");
   const [saving, setSaving] = useState(false);
+  /* The record can arrive after the dialog opened: start the form from it once it does. */
+  const [formFor, setFormFor] = useState(technician?.fsmId ?? null);
+  if ((technician?.fsmId ?? null) !== formFor) {
+    setFormFor(technician?.fsmId ?? null);
+    setSkills(skillRows(technician));
+    setAreas(technician?.areas ?? []);
+    setTools(technician?.tools ?? []);
+    setAccess(technician?.accessPermissions ?? []);
+    setHasVehicle(technician?.hasVehicle ?? false);
+    setIsDriver(technician?.isDriver ?? false);
+    setNotes(technician?.notes ?? "");
+  }
   const vehicleId = useId();
   const driverId = useId();
   const notesId = useId();
@@ -463,16 +486,59 @@ function EditTechnicianDialog({
     <Dialog open={open} onOpenChange={(next) => !saving && onOpenChange(next)}>
       <ActionDialogContent busy={saving} className="max-h-[88vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>Edit technician</DialogTitle>
+          <DialogTitle>AMC skills{technician ? ` · ${technician.name}` : ""}</DialogTitle>
           <DialogDescription>
-            {technician ? `${technician.name}: ` : ""}the trades and permissions the visit board checks before it suggests or accepts them for a visit.
+            What this technician can do on AMC visits. The visit board reads it to suggest the right person for a visit, and warns when someone is
+            missing a trade, a valid certificate or an access pass.
           </DialogDescription>
         </DialogHeader>
 
+        {loading ? (
+          <div className="grid gap-3 py-2" aria-busy="true" aria-label="Loading the technician">
+            <Skeleton className="h-4 w-24" />
+            <div className="divide-y rounded-lg border">
+              {TRADES.map((trade) => (
+                <div key={trade} className="grid gap-3 px-3 py-3 sm:grid-cols-[8rem_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)] sm:items-center">
+                  <Skeleton className="h-5 w-20" />
+                  <Skeleton className="h-9 w-full" />
+                  <Skeleton className="h-9 w-full" />
+                  <Skeleton className="h-9 w-full" />
+                </div>
+              ))}
+            </div>
+            <Skeleton className="h-9 w-full" />
+            <Skeleton className="h-9 w-full" />
+          </div>
+        ) : (
         <div className="grid gap-4 py-2">
           <div className="grid gap-2">
             <span className="text-sm font-medium">Trades</span>
+            {/* What each column means (11 Nov 2026): staff asked what Level, Certificate and the date are for. */}
+            <dl className="bg-muted/40 text-muted-foreground grid gap-1.5 rounded-lg border px-3 py-2.5 text-xs sm:grid-cols-2">
+              <div>
+                <dt className="text-foreground inline font-medium">Tick </dt>
+                <dd className="inline">each trade they do. Unticked trades are never suggested.</dd>
+              </div>
+              <div>
+                <dt className="text-foreground inline font-medium">Level: </dt>
+                <dd className="inline">Expert is suggested first, Competent can be suggested, Trainee is never suggested for that trade.</dd>
+              </div>
+              <div>
+                <dt className="text-foreground inline font-medium">Certificate: </dt>
+                <dd className="inline">the licence or certificate they hold for the trade, e.g. a DEWA or Civil Defence card number. Optional.</dd>
+              </div>
+              <div>
+                <dt className="text-foreground inline font-medium">Expires on: </dt>
+                <dd className="inline">when that certificate runs out. After it, they are not suggested for the trade until it is renewed. Leave empty if it never expires.</dd>
+              </div>
+            </dl>
             <div className="divide-y rounded-lg border">
+              <div className="text-muted-foreground hidden gap-3 px-3 py-2 text-xs font-medium sm:grid sm:grid-cols-[8rem_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
+                <span>Trade</span>
+                <span>Level</span>
+                <span>Certificate</span>
+                <span>Expires on</span>
+              </div>
               {TRADES.map((trade) => {
                 const row = skills[trade];
                 const expired = row.on && isExpired(row.expires || null, today);
@@ -495,7 +561,7 @@ function EditTechnicianDialog({
                       </SelectContent>
                     </Select>
                     <Input
-                      placeholder="Certificate"
+                      placeholder="Certificate no."
                       aria-label={`${TRADE_LABELS[trade]} certificate`}
                       value={row.certificate}
                       maxLength={200}
@@ -505,6 +571,7 @@ function EditTechnicianDialog({
                     <DateSelect
                       aria-label={`${TRADE_LABELS[trade]} certificate expiry`}
                       value={row.expires}
+                      placeholder="No expiry"
                       disabled={!row.on}
                       className={expired ? "border-danger text-danger" : undefined}
                       onChange={(value) => setSkill(trade, { expires: value })}
@@ -513,13 +580,10 @@ function EditTechnicianDialog({
                 );
               })}
             </div>
-            <p className="text-muted-foreground text-xs">
-              A trainee, or a certificate past its expiry, is never suggested for that trade. Leave the expiry empty when the certificate does not run out.
-            </p>
           </div>
 
           <ChipsField label="Areas" hint="Communities or areas they usually cover. Empty means anywhere." values={areas} onChange={setAreas} max={30} />
-          <ChipsField label="Tools" values={tools} onChange={setTools} max={50} />
+          <ChipsField label="Tools" hint="Special tools or equipment they carry, e.g. drain camera, tall ladder." values={tools} onChange={setTools} max={50} />
           <ChipsField
             label="Access permissions"
             hint="Gate pass types they hold, spelled as on the property's access rules."
@@ -548,12 +612,13 @@ function EditTechnicianDialog({
             <Textarea id={notesId} rows={3} value={notes} maxLength={1000} onChange={(e) => setNotes(e.target.value)} />
           </div>
         </div>
+        )}
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
             Cancel
           </Button>
-          <SubmitButton pending={saving} pendingLabel="Saving…" icon={<Save className="size-4" />} disabled={!technician} onClick={() => void save()}>
+          <SubmitButton pending={saving} pendingLabel="Saving…" icon={<Save className="size-4" />} disabled={!technician || loading} onClick={() => void save()}>
             Save
           </SubmitButton>
         </DialogFooter>

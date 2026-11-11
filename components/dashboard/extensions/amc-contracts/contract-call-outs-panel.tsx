@@ -1,7 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { ChevronDown, Database, Gauge, Hammer, History, PhoneCall, Plus } from "lucide-react";
+import type { ColumnDef } from "@tanstack/react-table";
 
 import { DataTable } from "@/components/data-table";
 import { SectionCard, StatCard, StatCardGrid } from "@/components/dashboard/shared/kaizen";
@@ -13,13 +15,16 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { EmptyState } from "@/components/ui/empty-state";
 import { Money } from "@/components/ui/money";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { additionalWorkPageHref, visitPageHref } from "@/lib/amc/field-visits";
 import { cn } from "@/lib/utils";
 import { additionalWorksService } from "@/modules/amc-contracts/additional-works-service";
-import { callOutsService, type AllowanceMovementKind } from "@/modules/amc-contracts/call-outs-service";
+import {
+  callOutsService,
+  type AllowanceMovement,
+  type AllowanceMovementKind,
+} from "@/modules/amc-contracts/call-outs-service";
 
-import { AdditionalWorkDetailDialog } from "./additional-work-detail-dialog";
 import { workColumns } from "./additional-works-page";
-import { CallOutDetailDialog } from "./call-out-detail-dialog";
 import { callOutColumns } from "./call-outs-page";
 import { Muted } from "./call-out-shared";
 import { formatDateTime } from "./contract-status";
@@ -38,8 +43,55 @@ const MOVEMENT_LABELS: Record<AllowanceMovementKind, { label: string; tone: stri
 
 const noop = () => undefined;
 
+/* The allowance movements table: one row per booking, release, use, adjustment or correction. */
+function movementColumns(): ColumnDef<AllowanceMovement>[] {
+  return [
+    {
+      id: "when",
+      header: "When",
+      cell: ({ row }) => <span className="whitespace-nowrap">{formatDateTime(row.original.occurredAt)}</span>,
+    },
+    {
+      id: "service",
+      header: "Service",
+      cell: ({ row }) => row.original.serviceLabel || <Muted>—</Muted>,
+    },
+    {
+      id: "movement",
+      header: "Movement",
+      cell: ({ row }) => {
+        const kind = MOVEMENT_LABELS[row.original.kind as AllowanceMovementKind];
+        return (
+          <Badge variant="secondary" className={cn("border-0 font-medium", kind?.tone ?? "bg-mist text-ink-soft")}>
+            {kind?.label ?? row.original.kind}
+          </Badge>
+        );
+      },
+    },
+    {
+      id: "quantity",
+      header: "Quantity",
+      cell: ({ row }) => <span className="tabular-nums">{row.original.quantity}</span>,
+    },
+    {
+      id: "callOut",
+      header: "Call out",
+      cell: ({ row }) => row.original.callOutNo ?? <Muted>—</Muted>,
+    },
+    {
+      id: "note",
+      header: "Note",
+      cell: ({ row }) => (
+        <span className="text-muted-foreground block max-w-[260px] whitespace-normal">{row.original.notes ?? "—"}</span>
+      ),
+    },
+  ];
+}
+
 /* The allowance card on this tab: off, the Coverage tab shows the same per service. */
 const SHOW_ALLOWANCES_HERE = false;
+/* Hidden for now (11 Nov 2026, the user): the allowance ledger. Set to true to bring it back. */
+const SHOW_ALLOWANCE_MOVEMENTS = false;
 /* The additional-work money cards (quoted, approved, invoiced, paid): off for now. */
 const SHOW_WORK_TOTALS = false;
 
@@ -56,8 +108,10 @@ export function ContractCallOutsPanel({ contractId, contractOpen }: { contractId
   const [ledgerOpen, setLedgerOpen] = useState(false);
   const logging = useDialog<true>();
   const raising = useDialog<true>();
-  const callOut = useDialog<string>();
-  const work = useDialog<string>();
+  const router = useRouter();
+  /* A call out opens on its own page (AMC -> Visits). */
+  const openCallOut = (id: string) => router.push(visitPageHref(id));
+  const openWork = (id: string) => router.push(additionalWorkPageHref(id));
 
   const reloadAll = () => {
     allowances.reload();
@@ -67,6 +121,7 @@ export function ContractCallOutsPanel({ contractId, contractOpen }: { contractId
 
   const callOutCols = useMemo(() => callOutColumns({ withClient: false }), []);
   const workCols = useMemo(() => workColumns({ withClient: false }), []);
+  const movementCols = useMemo(() => movementColumns(), []);
 
   const migrated = allowances.data?.migrated !== false && callOuts.data?.migrated !== false;
   const rollup = allowances.data?.additionalWork;
@@ -178,7 +233,7 @@ export function ContractCallOutsPanel({ contractId, contractOpen }: { contractId
               onPageChange={noop}
               onPageSizeChange={noop}
               onGlobalFilterChange={noop}
-              handleRowClick={(row) => callOut.show(row.id)}
+              handleRowClick={(row) => openCallOut(row.id)}
               emptyState={
                 <EmptyState
                   icon={<PhoneCall />}
@@ -222,7 +277,7 @@ export function ContractCallOutsPanel({ contractId, contractOpen }: { contractId
               onPageChange={noop}
               onPageSizeChange={noop}
               onGlobalFilterChange={noop}
-              handleRowClick={(row) => work.show(row.id)}
+              handleRowClick={(row) => openWork(row.id)}
               emptyState={
                 <EmptyState
                   icon={<Hammer />}
@@ -236,7 +291,7 @@ export function ContractCallOutsPanel({ contractId, contractOpen }: { contractId
       </SectionCard>
 
       {/* Allowance movements */}
-      {allowances.data ? (
+      {SHOW_ALLOWANCE_MOVEMENTS && allowances.data ? (
         <Collapsible open={ledgerOpen} onOpenChange={setLedgerOpen}>
           <SectionCard
             title="Allowance movements"
@@ -252,43 +307,26 @@ export function ContractCallOutsPanel({ contractId, contractOpen }: { contractId
             }
           >
             <CollapsibleContent>
-              {allowances.data.movements.length === 0 ? (
-                <p className="text-muted-foreground px-5 pb-5 text-sm">No movements yet.</p>
-              ) : (
-                <div className="overflow-x-auto border-t">
-                  <Table className="min-w-[760px]">
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead className="pl-5">When</TableHead>
-                        <TableHead>Service</TableHead>
-                        <TableHead>Movement</TableHead>
-                        <TableHead>Quantity</TableHead>
-                        <TableHead>Call out</TableHead>
-                        <TableHead className="pr-5">Note</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {allowances.data.movements.map((m) => {
-                        const kind = MOVEMENT_LABELS[m.kind as AllowanceMovementKind];
-                        return (
-                          <TableRow key={m.id}>
-                            <TableCell className="pl-5 whitespace-nowrap">{formatDateTime(m.occurredAt)}</TableCell>
-                            <TableCell>{m.serviceLabel || <Muted>—</Muted>}</TableCell>
-                            <TableCell>
-                              <Badge variant="secondary" className={cn("border-0 font-medium", kind?.tone ?? "bg-mist text-ink-soft")}>
-                                {kind?.label ?? m.kind}
-                              </Badge>
-                            </TableCell>
-                            <TableCell className="tabular-nums">{m.quantity}</TableCell>
-                            <TableCell>{m.callOutNo ?? <Muted>—</Muted>}</TableCell>
-                            <TableCell className="text-muted-foreground max-w-[260px] pr-5 whitespace-normal">{m.notes ?? "—"}</TableCell>
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
-                </div>
-              )}
+              <div className="border-t">
+                <DataTable
+                  columns={movementCols}
+                  data={allowances.data.movements}
+                  loading={false}
+                  rowCount={allowances.data.movements.length}
+                  pageSize={500}
+                  currentPage={0}
+                  onPageChange={noop}
+                  onPageSizeChange={noop}
+                  onGlobalFilterChange={noop}
+                  emptyState={
+                    <EmptyState
+                      icon={<History />}
+                      title="No movements yet"
+                      description="Bookings, releases, use, adjustments and corrections show here as they happen."
+                    />
+                  }
+                />
+              </div>
             </CollapsibleContent>
           </SectionCard>
         </Collapsible>
@@ -302,10 +340,9 @@ export function ContractCallOutsPanel({ contractId, contractOpen }: { contractId
         onLogged={reloadAll}
         onOpenCallOut={(id) => {
           logging.onOpenChange(false);
-          callOut.show(id);
+          openCallOut(id);
         }}
       />
-      <CallOutDetailDialog key={`call-out-${callOut.key}`} callOutId={callOut.target} open={callOut.open} onOpenChange={callOut.onOpenChange} onChanged={reloadAll} />
       <RaiseAdditionalWorkDialog
         key={`raise-${raising.key}`}
         open={raising.open}
@@ -314,10 +351,9 @@ export function ContractCallOutsPanel({ contractId, contractOpen }: { contractId
         source="manual"
         onRaised={(w) => {
           reloadAll();
-          work.show(w.id);
+          openWork(w.id);
         }}
       />
-      <AdditionalWorkDetailDialog key={`work-${work.key}`} workId={work.target} open={work.open} onOpenChange={work.onOpenChange} onChanged={reloadAll} />
     </>
   );
 }

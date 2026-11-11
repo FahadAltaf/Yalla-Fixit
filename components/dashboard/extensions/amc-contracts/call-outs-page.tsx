@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
 import { Database, PhoneCall, Plus } from "lucide-react";
 
@@ -13,10 +14,10 @@ import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { IdentityCell } from "@/components/ui/entity-avatar";
 import { CALL_OUT_PRIORITY_LABELS } from "@/lib/amc/call-outs";
+import { visitPageHref } from "@/lib/amc/field-visits";
 import { callOutsService, type CallOutRecord } from "@/modules/amc-contracts/call-outs-service";
 
-import { CallOutDetailDialog } from "./call-out-detail-dialog";
-import { CallOutStatusBadge, CoverageBadge, ListToolbar, PriorityBadge, SlaBadge, shortDateTime, useUrlDialog } from "./call-out-shared";
+import { CallOutStatusBadge, CoverageBadge, ListToolbar, PriorityBadge, SlaBadge, shortDateTime } from "./call-out-shared";
 import { LogCallOutDialog } from "./log-call-out-dialog";
 import { useAmcData } from "./use-amc-data";
 import { useDialog } from "./profile/use-dialog";
@@ -101,8 +102,8 @@ export function callOutColumns({ withClient = true }: { withClient?: boolean } =
  * AMC -> Call outs (Phase 11: DEV-405, 406): every call out the person
  * may see, newest first, with its SLA and coverage. Logging one shows the
  * coverage answer before it is confirmed; opening one schedules the crew,
- * records attendance and findings, and closes it. ?open=<id> (from a
- * notification) opens that call out.
+ * records attendance and findings, and closes it, on its page (AMC ->
+ * Visits). ?open=<id> (older notification links) goes to that page.
  */
 export function CallOutsPage() {
   const [scope, setScope] = useState("open");
@@ -111,7 +112,13 @@ export function CallOutsPage() {
   const [priority, setPriority] = useState("any");
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(25);
-  const detail = useUrlDialog("open");
+  const router = useRouter();
+  const openCallOut = (id: string) => router.push(visitPageHref(id));
+  /* Older links opened the call out here with ?open=<id>: send them to its page. */
+  useEffect(() => {
+    const asked = new URLSearchParams(window.location.search).get("open");
+    if (asked) router.replace(visitPageHref(asked));
+  }, [router]);
   const logging = useDialog<true>();
 
   const term = search.trim().toLowerCase();
@@ -179,7 +186,7 @@ export function CallOutsPage() {
             setPage(0);
           }}
           onGlobalFilterChange={setSearch}
-          handleRowClick={(row) => detail.show(row.id)}
+          handleRowClick={(row) => openCallOut(row.id)}
           toolbar={
             <ListToolbar
               search={search}
@@ -239,7 +246,6 @@ export function CallOutsPage() {
         />
       </Card>
 
-      <CallOutDetailDialog key={`detail-${detail.key}`} callOutId={detail.target} open={detail.open} onOpenChange={detail.onOpenChange} onChanged={reload} />
       <LogCallOutDialog
         key={`log-${logging.key}`}
         open={logging.open}
@@ -247,7 +253,7 @@ export function CallOutsPage() {
         onLogged={reload}
         onOpenCallOut={(id) => {
           logging.onOpenChange(false);
-          detail.show(id);
+          openCallOut(id);
         }}
       />
     </div>

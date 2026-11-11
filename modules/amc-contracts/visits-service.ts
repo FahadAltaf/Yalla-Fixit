@@ -54,6 +54,10 @@ export const visitsService = {
   technicians() {
     return request<TechniciansResponse>("/api/amc-technicians");
   },
+  /** One technician's AMC record (Workforce -> People, AMC skills). */
+  technician(fsmId: string) {
+    return request<{ migrated: boolean; technician: TechnicianRecord | null; canEdit: boolean }>(`/api/amc-technicians/${encodeURIComponent(fsmId)}`);
+  },
   /** The roster from Zoho FSM (read only there); AMC skills are kept. */
   syncTechnicians() {
     return request<{ onRoster: number | null; removed: number }>("/api/amc-technicians", { method: "POST" });

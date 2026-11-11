@@ -16,6 +16,7 @@ export type ModuleKey =
   | "renewals"
   | "payments"
   | "clients"
+  | "visits"
   | "visitBoard"
   | "jobReviews"
   | "callOuts"
@@ -62,6 +63,7 @@ const L = {
   renewals: { label: "Renewals", href: "/extensions/amc-contracts/renewals" },
   payments: { label: "Payments", href: "/extensions/amc-contracts/payments" },
   clients: { label: "Clients", href: "/extensions/amc-contracts/customers" },
+  visits: { label: "Visits", href: "/extensions/amc-contracts/visits" },
   visitBoard: { label: "Visit board", href: "/extensions/amc-contracts/board" },
   jobReviews: { label: "Job reviews", href: "/extensions/amc-contracts/job-reviews" },
   callOuts: { label: "Call outs", href: "/extensions/amc-contracts/call-outs" },
@@ -277,6 +279,33 @@ export const MODULE_GUIDES: Record<ModuleKey, Guide> = {
   /* ---------------------------------------------------------------- */
   /* Delivery                                                          */
   /* ---------------------------------------------------------------- */
+  visits: {
+    title: "Visits",
+    summary: "Every AMC visit in one list: planned maintenance visits, call outs, approved additional work and site visits before a proposal, wherever each one stands.",
+    who: "Coordinators, supervisors and the AMC team.",
+    steps: [
+      { title: "See what is open", detail: "The list opens on the visits still to be done, soonest first. Filter by kind, stage, day (today, the next 7 days, overdue) or technician, or search a number, client or property." },
+      { title: "Read the stage", detail: "Every kind moves through the same stages: To plan (no slot yet), Planned (slot and crew set), Confirmed (the client confirmed), In progress (the crew is on it), Awaiting review (the job sheet or call out waits to be closed), Done or Cancelled. The kind's own status shows under it." },
+      { title: "Open a visit", detail: "Click a row to open its page: crew and time, the client, access and the job sheet for a planned visit; crew and time, findings, photos and additional work for a call out. Additional work and site visits still open on their own screens." },
+    ],
+    explain: [
+      {
+        title: "Which visits are listed",
+        items: [
+          "Planned visits: every PPM visit of every contract, from its schedule.",
+          "Call outs: every emergency and non-emergency call out.",
+          "Additional work: once the client approved it (before that it is a quotation, on the Additional work page).",
+          "Site visits: the assessments booked before a proposal.",
+        ],
+      },
+    ],
+    rules: [
+      "Overdue: the visit's last day has passed (the end of a planned visit's window, a call out's deadline, the date additional work was scheduled for) and the crew has not finished on site.",
+      "Whoever sees every contract sees every visit; anyone else sees the visits of their own contracts and their own site visits.",
+    ],
+    before: [L.contracts, L.callOuts],
+    after: [L.visitBoard, L.jobReviews],
+  },
   visitBoard: {
     title: "Visit board",
     summary: "Put planned maintenance (PPM) visits on a day: who goes and when. Live jobs and leave show who is already busy.",

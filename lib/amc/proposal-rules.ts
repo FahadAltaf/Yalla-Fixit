@@ -2,7 +2,9 @@ import { z } from "zod";
 
 import type { AmcConfig } from "./config";
 import { UNIT_TYPE_CATEGORY, type UNIT_TYPES } from "./client-profile";
-import type { PropertyModel } from "./rate-card";
+
+/** The unit type a proposal is priced and scoped on (the property type falls back to it on the rate card). */
+export type RateFamily = "villa" | "apartment" | "office";
 
 /**
  * Proposal rules added by BRD v0.3 (5.4, 5.8; DEV-365, 366, 367): versions,
@@ -163,7 +165,7 @@ export type PropertyType = (typeof UNIT_TYPES)[number];
  * office (plan assumption: rates by model until the card says otherwise).
  * "Other" follows its category.
  */
-export function rateModelFor(propertyType: PropertyType | string | null | undefined, category?: string | null): PropertyModel {
+export function rateModelFor(propertyType: PropertyType | string | null | undefined, category?: string | null): RateFamily {
   switch (propertyType) {
     case "villa":
     case "townhouse":

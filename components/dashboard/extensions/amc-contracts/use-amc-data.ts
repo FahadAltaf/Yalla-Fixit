@@ -13,7 +13,7 @@ import { amcFresh } from "@/lib/amc/http-cache";
  * (Refresh, or after a save) always goes to the server.
  */
 export function useAmcData<T>(load: () => Promise<T>, key: string) {
-  const [state, setState] = useState<{ key: string; data: T | null; error: string | null }>({ key: "", data: null, error: null });
+  const [state, setState] = useState<{ key: string; version: number; data: T | null; error: string | null }>({ key: "", version: 0, data: null, error: null });
   const [version, setVersion] = useState(0);
   /* The version last loaded: a higher one is a reload, which skips the cache. */
   const loadedVersion = useRef(0);
@@ -23,8 +23,8 @@ export function useAmcData<T>(load: () => Promise<T>, key: string) {
     const reloading = version > loadedVersion.current;
     loadedVersion.current = version;
     (reloading ? amcFresh(load) : load()).then(
-      (data) => !stale && setState({ key, data, error: null }),
-      (e) => !stale && setState({ key, data: null, error: e instanceof Error ? e.message : "Something went wrong." }),
+      (data) => !stale && setState({ key, version, data, error: null }),
+      (e) => !stale && setState({ key, version, data: null, error: e instanceof Error ? e.message : "Something went wrong." }),
     );
     return () => {
       stale = true;
@@ -34,6 +34,13 @@ export function useAmcData<T>(load: () => Promise<T>, key: string) {
   }, [key, version]);
 
   const reload = useCallback(() => setVersion((v) => v + 1), []);
-  const current = state.key === key ? state : { data: null, error: null };
-  return { data: current.data, error: current.error, loading: current.data === null && current.error === null, reload };
+  const current = state.key === key ? state : { data: null, error: null, version };
+  return {
+    data: current.data,
+    error: current.error,
+    loading: current.data === null && current.error === null,
+    /* A reload (Refresh, after a save) on its way: the last answer stays on screen meanwhile. */
+    reloading: current.data !== null && current.version !== version,
+    reload,
+  };
 }

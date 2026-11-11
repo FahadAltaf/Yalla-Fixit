@@ -1,7 +1,9 @@
 import type { z } from "zod";
 
 import type { additionalWorkActionSchema, additionalWorkCreateSchema } from "@/lib/amc/call-outs";
-import type { AdditionalWorkRecord } from "@/lib/server/amc/additional-works";
+import type { AdditionalWorkRecord, WorkSlot } from "@/lib/server/amc/additional-works";
+import type { FieldVisitHistoryItem } from "@/lib/server/amc/field-visits";
+import type { CallOutSuggestion } from "@/modules/amc-contracts/call-outs-service";
 import type { WorkPhoto } from "@/lib/server/amc/call-outs";
 import { amcRequest } from "@/lib/amc/http-cache";
 
@@ -13,7 +15,10 @@ import { amcRequest } from "@/lib/amc/http-cache";
  * `canEdit` only decide what is offered.
  */
 
-export type { AdditionalWorkRecord, WorkPhoto };
+export type { AdditionalWorkRecord, WorkPhoto, WorkSlot };
+
+/** Technicians for a slot: the same answer as a call out's. */
+export type WorkCrewSuggestion = CallOutSuggestion;
 
 /** What a screen sends: the schemas' input, before their trims and defaults. */
 export type AdditionalWorkCreateBody = z.input<typeof additionalWorkCreateSchema>;
@@ -31,6 +36,8 @@ export interface AdditionalWorksResponse {
 export interface AdditionalWorkResponse {
   work: AdditionalWorkRecord;
   photos: WorkPhoto[];
+  /** When and who does the work (20261112100000). */
+  slot: WorkSlot;
   canEdit: boolean;
 }
 
@@ -63,6 +70,15 @@ export const additionalWorksService = {
   },
   work(id: string) {
     return request<AdditionalWorkResponse>(workUrl(id));
+  },
+  /** Technicians with the work's trade for a slot, and the suggested crew. */
+  suggest(id: string, date: string, time: string, durationMinutes: number) {
+    const params = new URLSearchParams({ suggest: "1", date, time, duration: String(durationMinutes) });
+    return request<WorkCrewSuggestion>(`${workUrl(id)}?${params.toString()}`);
+  },
+  /** Everything that happened to the work, newest first (its page's History tab). */
+  history(id: string) {
+    return request<{ history: FieldVisitHistoryItem[] }>(`${workUrl(id)}/history`);
   },
   action(id: string, action: AdditionalWorkActionInput) {
     return request<WorkActionResult>(workUrl(id), { method: "POST", body: JSON.stringify(action) });

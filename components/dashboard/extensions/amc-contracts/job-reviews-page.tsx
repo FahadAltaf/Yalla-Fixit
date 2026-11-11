@@ -1,7 +1,8 @@
 "use client";
 
-import { useId, useMemo, useState } from "react";
+import { useCallback, useId, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
 import { format } from "date-fns";
 import { ClipboardCheck, Database, ExternalLink, LoaderCircleIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
@@ -22,10 +23,9 @@ import { jobSheetsService, type JobReviewItem } from "@/modules/amc-contracts/jo
 
 import { ReportClockBadge, ReviewReasonBadges } from "./job-sheet-panel";
 import { useAmcData } from "./use-amc-data";
-import { useDialog } from "./profile/use-dialog";
-import { VisitDetailDialog } from "./visit-detail-dialog";
 import { TruncatedText } from "@/components/ui/truncated-text";
 import { ModuleGuide } from "@/components/dashboard/extensions/amc-contracts/module-guide";
+import { visitPageHref } from "@/lib/amc/field-visits";
 import { amcRefresh } from "@/lib/amc/http-cache";
 
 const FILTER_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
@@ -55,8 +55,9 @@ export function JobReviewsPage() {
   const [filter, setFilter] = useState("any");
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(25);
-  const reviewing = useDialog<string>();
-  const showReview = reviewing.show;
+  const router = useRouter();
+  /* The review is the visit page's Job sheet tab. */
+  const showReview = useCallback((visitId: string) => router.push(`${visitPageHref(visitId)}?tab=job_sheet`), [router]);
 
   const term = search.trim().toLowerCase();
   const all = useMemo(() => data?.items ?? [], [data]);
@@ -192,7 +193,7 @@ export function JobReviewsPage() {
             setPage(0);
           }}
           onGlobalFilterChange={setSearch}
-          handleRowClick={(row) => reviewing.show(row.visitId)}
+          handleRowClick={(row) => showReview(row.visitId)}
           toolbar={
             <JobReviewsToolbar
               search={search}
@@ -229,14 +230,6 @@ export function JobReviewsPage() {
         />
       </Card>
 
-      <VisitDetailDialog
-        key={reviewing.key}
-        visitId={reviewing.target}
-        open={reviewing.open}
-        onOpenChange={reviewing.onOpenChange}
-        onChanged={reload}
-        initialTab="job_sheet"
-      />
     </div>
   );
 }

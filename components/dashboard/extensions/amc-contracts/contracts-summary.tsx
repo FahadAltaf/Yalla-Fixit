@@ -17,6 +17,9 @@ const BASE = "/extensions/amc-contracts";
  * The figures above the contracts list, counted from the contracts the
  * viewer can see. Each card opens the matching filter.
  */
+/* Hidden for now (11 Nov 2026, the user): the contracts list shows the figures only. Set to true to bring the card back. */
+const SHOW_RECENT_USAGE = false;
+
 export function ContractsSummary({ refreshKey }: { refreshKey: number }) {
   const [data, setData] = useState<ContractsDashboard | null>(null);
   const [failed, setFailed] = useState(false);
@@ -89,7 +92,7 @@ export function ContractsSummary({ refreshKey }: { refreshKey: number }) {
         .
       </p>
 
-      {data.recentUsage.length ? (
+      {SHOW_RECENT_USAGE && data.recentUsage.length ? (
         <SectionCard
           title="Recent usage"
           description={`${data.usageLast30Days} ${data.usageLast30Days === 1 ? "entry" : "entries"} of usage in the last 30 days.`}

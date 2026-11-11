@@ -1503,7 +1503,7 @@ export async function createProposalFromAssessment(admin: Admin, id: string, act
   const propertyType = property?.unitType ?? a.unitType ?? null;
   const category = property?.propertyCategory ?? a.propertyCategory;
   const model = rateModelFor(propertyType, category);
-  const offered = servicesForProperty(settings, model);
+  const offered = servicesForProperty(settings, [propertyType, model]);
   const prefill = proposalPrefillFromAssessment(
     {
       status: a.status,
@@ -1524,10 +1524,11 @@ export async function createProposalFromAssessment(admin: Admin, id: string, act
   const priced = priceSubmission({
     /* Each line at a frequency the card allows (the scope or the service default may say 1). */
     services: card
-      ? snapToCardFrequencies(lines, card.card, prefill.property.unitType, (id) => isFrequencyEditable(offered.find((s) => s.id === id)?.frequencyType))
+      ? snapToCardFrequencies(lines, card.card, [propertyType, prefill.property.unitType], (id) => isFrequencyEditable(offered.find((s) => s.id === id)?.frequencyType))
       : lines,
     discountPercent: 0,
     unitType: prefill.property.unitType,
+    propertyType,
     settings,
     rateCard: card ? { id: card.id, card: card.card } : null,
     day: todayInDubai(),

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import {
   AlertTriangle,
   BadgePercent,
@@ -60,9 +60,11 @@ import {
   applyPackage,
   nearestAllowedFrequency,
   packagesFor,
+  type ModelChain,
   rateItemFor,
   type RatePackage,
 } from "@/lib/amc/rate-card";
+import { UNIT_TYPE_LABELS } from "@/lib/amc/client-profile";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import {
@@ -140,12 +142,11 @@ function standardFixedPriceRates(
     : CLAUSE_6_3_HANDYMAN.rates.map((rate) => rate.text);
 }
 
+/* "villas", "townhouses", "clinics"... for every property type (11 Nov 2026). */
 const unitTypeLabel = (unitType: string) =>
-  unitType === "villa"
-    ? "villas"
-    : unitType === "apartment"
-      ? "apartments"
-      : "offices";
+  unitType in UNIT_TYPE_LABELS && unitType !== "other"
+    ? `${UNIT_TYPE_LABELS[unitType as keyof typeof UNIT_TYPE_LABELS].toLowerCase()}s`
+    : "this property type";
 
 type CardInForce = NonNullable<NonNullable<ProposalRules["rateCard"]>>["card"];
 
@@ -260,7 +261,7 @@ function PackageField({
   packages: RatePackage[];
   catalogue: ReadonlyArray<AmcServiceDefinition>;
   card: CardInForce;
-  model: string;
+  model: ModelChain;
 }) {
   const rows = form.watch("serviceRows") ?? [];
   /* "Build your own" chosen on purpose, rather than read from the lines. */
@@ -378,7 +379,10 @@ export function ServicesPricingStep({
   rules,
 }: StepProps) {
   const card = rules?.rateCard ?? null;
-  const model = form.watch("unitType");
+  /* The property type's own rates first (a townhouse), then the unit type's (villa). */
+  const propertyType = form.watch("propertyType");
+  const unitType = form.watch("unitType");
+  const model = useMemo(() => [propertyType, unitType] as const, [propertyType, unitType]);
   const packages = card ? packagesFor(card.card, model) : [];
   /* The visits a year the card allows per service on this model (BRD 5.3). */
   const allowedFrequencies = (serviceId: string) =>
@@ -394,10 +398,9 @@ export function ServicesPricingStep({
   const savedManagers = settings
     ? settings.accountManagers.filter((manager) => manager.name.trim())
     : null;
-  const unitType = form.watch("unitType");
   /* Named, so an absence reads as a rule rather than as a missing row. */
   const offeredIds = new Set(
-    servicesForProperty({ services: [...catalogue] }, unitType).map(
+    servicesForProperty({ services: [...catalogue] }, model).map(
       (s) => s.id,
     ),
   );
@@ -504,7 +507,7 @@ export function ServicesPricingStep({
                 <Alert>
                   <AlertTriangle className="size-4" />
                   <AlertTitle className="text-xs font-medium">
-                    Some services are not offered on {unitTypeLabel(unitType)}
+                    Some services are not offered on {unitTypeLabel(propertyType ?? unitType)}
                   </AlertTitle>
                   <AlertDescription className="text-xs">
                     Hidden here: {hiddenServices.join(", ")}.

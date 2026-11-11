@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+import { UNIT_TYPE_LABELS, UNIT_TYPES } from "@/lib/amc/client-profile";
+import { modelChain, type ModelChain } from "@/lib/amc/rate-card";
+
 import {
   AMC_BROCHURE_KEYS,
   getAmcBrochureDefaults,
@@ -175,7 +178,7 @@ export const amcServiceSchema = z.object({
    * It used to be a villa-only flag, which could say "villas" and nothing
    * else -- there was no way to offer something on offices alone.
    */
-  unitTypes: z.array(z.enum(["villa", "apartment", "office"])).optional(),
+  unitTypes: z.array(z.enum(UNIT_TYPES)).optional(),
   /** The flag it replaced; still read from settings saved before it. */
   villaOnly: z.boolean().default(false),
   /** Whether it prints a scope of work of its own in clause 2. */
@@ -791,22 +794,26 @@ export function canApproveAmc(
  */
 export function servicesForProperty(
   settings: Pick<AmcSettings, "services">,
-  unitType?: string,
+  /** The property type, or the types to try (a proposal's full type, then its rate model). */
+  unitType?: ModelChain,
 ): AmcServiceDefinition[] {
+  /* A type also answers to its family (a townhouse to villa), as on the rate card. */
+  const types = unitType ? modelChain(unitType) : [];
   return settings.services.filter((service) => {
     if (service.enabled === false) return false;
-    if (!unitType) return true;
+    if (types.length === 0) return true;
     /* The list wins where it is set; the old flag answers for services
        saved before property types could be chosen. */
     if (service.unitTypes?.length) {
-      return service.unitTypes.includes(unitType as "villa" | "apartment" | "office");
+      const list: readonly string[] = service.unitTypes;
+      return types.some((type) => list.includes(type));
     }
-    return !service.villaOnly || unitType === "villa";
+    return !service.villaOnly || types.includes("villa");
   });
 }
 
-/** Every kind of property, for a service that names none. */
-export const AMC_UNIT_TYPES = ["villa", "apartment", "office"] as const;
+/** Every kind of property (the property form's list, 11 Nov 2026), for a service that names none. */
+export const AMC_UNIT_TYPES = UNIT_TYPES;
 
 /** How a service's property types read on screen. */
 export function unitTypesLabel(service: Pick<AmcServiceDefinition, "unitTypes" | "villaOnly">) {
@@ -815,9 +822,11 @@ export function unitTypesLabel(service: Pick<AmcServiceDefinition, "unitTypes" |
     : service.villaOnly
       ? (["villa"] as const)
       : AMC_UNIT_TYPES;
-  if (types.length === AMC_UNIT_TYPES.length) return "Offered on every property type.";
-  const names = types.map((type) => (type === "villa" ? "villas" : `${type}s`));
-  return `Offered on ${names.join(" and ")} only.`;
+  const list: readonly string[] = types;
+  /* Every type covered, directly or through its family (Villa covers Townhouse). */
+  if (AMC_UNIT_TYPES.every((type) => type === "other" || modelChain(type).some((m) => list.includes(m)))) return "Offered on every property type.";
+  const names = types.map((type) => UNIT_TYPE_LABELS[type]);
+  return `Offered on ${names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0]} only.`;
 }
 
 export function resolveAmcSettings(

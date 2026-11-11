@@ -28,6 +28,7 @@ import {
   Send,
   ShieldCheck,
   XCircle,
+  CheckCircle2,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -46,9 +47,10 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Money } from "@/components/ui/money";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import type { ColumnDef } from "@tanstack/react-table";
+import { DataTable } from "@/components/data-table";
 import {
   SectionCard,
   StatCard,
@@ -71,14 +73,13 @@ import { SendClientReportDialog } from "./client-report-dialog";
 import { ClientReportViewer } from "./client-report-viewer";
 import { ContractAmendmentsPanel } from "./contract-amendments-panel";
 import { ContractCallOutsPanel } from "./contract-call-outs-panel";
-import { ContractCommercial } from "./contract-commercial";
 import { ContractCustomer } from "./contract-customer";
 import { ContractDocuments } from "./contract-documents";
 import { ContractFsm } from "./contract-fsm";
 import { ContractLifecycleCard, EntitlementTermsCard, useLifecycleDialogs } from "./contract-lifecycle-panel";
 import { ContractPaymentsPanel, openInstalmentCount, useContractPayments } from "./contract-payments-panel";
 import { ContractRenewal, RenewalReminders } from "./contract-renewal";
-import { ContractSchedulePanel, useContractSchedule } from "./contract-schedule-panel";
+import { ContractSchedulePanel, scheduleHistoryEntries, useContractSchedule } from "./contract-schedule-panel";
 import {
   AUDIT_LABELS,
   CALL_OUT_LABELS,
@@ -90,8 +91,10 @@ import {
   formatContractDate,
   formatDateTime,
 } from "./contract-status";
+import { shortDay, shortPlace } from "./detail-header";
 import { CoverageCheckDialog } from "./coverage-check-dialog";
 import { usePaymentDialogs } from "./payment-dialogs";
+import { HistoryCard, type HistoryEntry } from "./history-card";
 import { useUrlTab } from "./profile/use-url-tab";
 import { RecordUsageDialog } from "./record-usage-dialog";
 import { UsageHistory } from "./usage-history";
@@ -104,8 +107,121 @@ import { callOutsService } from "@/modules/amc-contracts/call-outs-service";
 
 /* "What each service covers" on the Coverage tab: hidden for now. The terms still apply to call outs and print in the contract. */
 const SHOW_ENTITLEMENT_TERMS = false;
+/* Hidden for now (11 Nov 2026, the user): usage is recorded from the visits and call outs, not by hand here. Set to true to bring Record usage back. */
+const SHOW_RECORD_USAGE = false;
 
 const LIST = "/extensions/amc-contracts";
+
+const noop = () => undefined;
+
+type Entitlement = Awaited<ReturnType<typeof amcContractsService.get>>["entitlements"][number];
+
+/** The Coverage tab's columns: the service, how much is used, booked by open call outs, what is left, and its state. */
+function coverageColumns({ bookedFor, nearZeroFor }: { bookedFor: Map<string, number>; nearZeroFor: Set<string> }): ColumnDef<Entitlement>[] {
+  const counts = (e: Entitlement) => e.entitlementType === "visits" || e.entitlementType === "hours";
+  return [
+    {
+      id: "service",
+      header: "Service",
+      cell: ({ row: { original: e } }) => (
+        <div className="flex min-w-0 flex-col">
+          <span className="font-medium">{e.serviceLabel}</span>
+          <span className="text-muted-foreground text-xs">
+            {[
+              ENTITLEMENT_TYPE_LABELS[e.entitlementType],
+              counts(e) || e.entitlementType === "unlimited" ? `${e.units} ${e.units === 1 ? "unit" : "units"} × ${e.entitlementType === "hours" ? `${e.frequency} h` : e.frequency} a year` : null,
+              e.callOutClass ? CALL_OUT_LABELS[e.callOutClass] : null,
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+          </span>
+        </div>
+      ),
+    },
+    {
+      id: "used",
+      header: "Used",
+      cell: ({ row: { original: e } }) =>
+        counts(e) && e.includedQuantity !== null ? (
+          <div className="grid min-w-40 gap-1.5">
+            <span className="text-sm tabular-nums">
+              <span className="font-medium">{formatQuantity(e.usedQuantity)}</span>
+              <span className="text-muted-foreground">
+                {" "}
+                of {formatQuantity(e.includedQuantity)} {unitWord(e.entitlementType, e.includedQuantity)}
+              </span>
+            </span>
+            <Progress value={e.usagePercent ?? 0} className="h-1.5 w-full max-w-40" aria-label={`${e.serviceLabel} usage`} />
+          </div>
+        ) : e.entitlementType === "unlimited" ? (
+          <span className="text-sm">
+            <span className="font-medium tabular-nums">{formatQuantity(e.usedQuantity)}</span>
+            <span className="text-muted-foreground"> used · no limit</span>
+          </span>
+        ) : (
+          <span className="text-muted-foreground text-sm">Included, not counted</span>
+        ),
+    },
+    {
+      id: "booked",
+      header: "Booked",
+      cell: ({ row: { original: e } }) => {
+        const booked = bookedFor.get(e.id) ?? 0;
+        return <span className="text-sm tabular-nums">{booked ? formatQuantity(booked) : <span className="text-muted-foreground">—</span>}</span>;
+      },
+    },
+    {
+      id: "left",
+      header: "Left",
+      cell: ({ row: { original: e } }) =>
+        e.remainingQuantity !== null ? (
+          <span className={`font-semibold tabular-nums ${e.remainingQuantity === 0 ? "text-danger" : nearZeroFor.has(e.id) ? "text-warning" : ""}`}>
+            {formatQuantity(e.remainingQuantity)} <span className="text-muted-foreground text-xs font-normal">{unitWord(e.entitlementType, e.remainingQuantity)}</span>
+          </span>
+        ) : e.entitlementType === "unlimited" ? (
+          <span className="font-semibold">Unlimited</span>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        ),
+    },
+    {
+      id: "state",
+      header: "State",
+      cell: ({ row: { original: e } }) => (
+        <span className="flex flex-wrap items-center gap-1.5">
+          <Badge variant="secondary" className={`border-0 font-medium ${entitlementStateTone(e.state)}`}>
+            {ENTITLEMENT_STATE_LABELS[e.state]}
+          </Badge>
+          {nearZeroFor.has(e.id) && e.remainingQuantity !== 0 ? (
+            <Badge variant="secondary" className="bg-warning/10 text-warning border-0 font-medium">
+              Nearly used up
+            </Badge>
+          ) : null}
+        </span>
+      ),
+    },
+  ];
+}
+
+/* An icon for each kind of contract event, by what it did. */
+function contractEventIcon(type: string) {
+  const Icon = /cancel|reject|terminat|void/.test(type)
+    ? XCircle
+    : /hold|pause|suspend/.test(type)
+      ? Pause
+      : /resum|activ|sign|approv|confirm/.test(type)
+        ? CheckCircle2
+        : /send|sent|share|email/.test(type)
+          ? Send
+          : /renew/.test(type)
+            ? RefreshCw
+            : /payment|invoice|paid/.test(type)
+              ? ReceiptText
+              : /edit|amend|update|change/.test(type)
+                ? PenLine
+                : History;
+  return <Icon aria-hidden />;
+}
 
 const TABS = ["overview", "coverage", "schedule", "call-outs", "usage", "fsm", "payments", "renewal", "amendments", "documents", "history"] as const;
 type Tab = (typeof TABS)[number];
@@ -246,12 +362,25 @@ function ContractView({
   };
 
   const { contract, entitlements, summary, audit, source, permissions, sla, commitments } = data;
+  /* The History tab: the contract's events and its schedule's changes (moved here from the Schedule tab, 11 Nov 2026), newest first. */
+  /* The schedule's own record says these two better (with the visit count), so the contract's copy is left out. */
+  const historyEntries: HistoryEntry[] = [
+    ...audit.filter((a) => a.type !== "ppm_schedule_generated" && a.type !== "ppm_schedule_confirmed").map((a) => ({
+      key: a.id,
+      icon: contractEventIcon(a.type),
+      title: AUDIT_LABELS[a.type] ?? a.type.replace(/_/g, " ").replace(/^\w/, (ch) => ch.toUpperCase()),
+      actor: a.actor ?? null,
+      detail: a.note ? `"${a.note}"` : null,
+      at: a.at,
+    })),
+    ...scheduleHistoryEntries(schedule.data),
+  ].sort((x, y) => y.at.localeCompare(x.at));
   /* Booked by open call outs and nearly used up, per service, for the Coverage tab (the call-out ledger; cached, shared with the Call outs tab). */
   const allowances = useAmcData(() => callOutsService.allowances(contract.id), `allowances:${contract.id}`);
   const bookedFor = new Map((allowances.data?.allowances ?? []).map((a) => [a.entitlementId, a.reserved]));
   const nearZeroFor = new Set((allowances.data?.allowances ?? []).filter((a) => a.nearZero).map((a) => a.entitlementId));
   const status = contract.status as ContractStatus;
-  const canRecord = permissions.canRecordUsage && entitlements.some((e) => e.consumable);
+  const canRecord = SHOW_RECORD_USAGE && permissions.canRecordUsage && entitlements.some((e) => e.consumable);
   const counted = summary.withRemaining + summary.exhausted;
   const paymentPerms = payments.data?.permissions ?? permissions.payments;
   /* Waiting for its first payment (DEV-386): recording it is the next step. */
@@ -401,11 +530,12 @@ function ContractView({
               <CopyId id={contract.id} />
             </div>
             <p className="text-muted-foreground text-sm">
+              {/* Short and to the point (11 Nov 2026): where, the term, who looks after it. */}
               {[
-                contract.propertyLabel,
-                `${formatContractDate(contract.startDate)} to ${formatContractDate(contract.endDate)}`,
-                contract.accountManagers.length
-                  ? `managed by ${contract.accountManagers.map((m) => m.name).filter(Boolean).join(", ")}`
+                shortPlace(contract.propertyLabel),
+                `${shortDay(contract.startDate)} – ${shortDay(contract.endDate)}`,
+                contract.accountManagers[0]?.name
+                  ? `${contract.accountManagers[0].name}${contract.accountManagers.length > 1 ? ` +${contract.accountManagers.length - 1}` : ""}`
                   : null,
               ]
                 .filter(Boolean)
@@ -521,7 +651,7 @@ function ContractView({
         />
         <StatCard
           label="Usage"
-          value={<span className="text-xl tabular-nums">{summary.usageEvents} entries</span>}
+          value={<span className="text-xl tabular-nums">{summary.usageEvents} {summary.usageEvents === 1 ? "entry" : "entries"}</span>}
           headline={
             [
               summary.includedVisits ? `${formatQuantity(summary.remainingVisits)} of ${formatQuantity(summary.includedVisits)} visits left` : null,
@@ -574,7 +704,7 @@ function ContractView({
           <TabsTrigger value="documents">Documents</TabsTrigger>
           <TabsTrigger value="history">
             History
-            <TabCount value={audit.length} />
+            <TabCount value={historyEntries.length} />
           </TabsTrigger>
         </TabsList>
 
@@ -601,25 +731,7 @@ function ContractView({
                 </>
               }
             />
-            {/* The money side, here rather than on a tab of its own, so the overview answers what the contract is worth. */}
-            <div className="grid gap-6 lg:grid-cols-3">
-              <SectionCard title="Commercial" icon={<ReceiptText />} bodyClassName="px-5 pb-5">
-                <DetailList
-                  rows={[
-                    { label: "Subtotal", value: <Money value={contract.subtotal} /> },
-                    ...(contract.discountAmount > 0
-                      ? [{ label: `Discount (${contract.discountPercent}%)`, value: <>−<Money value={contract.discountAmount} /></> }]
-                      : []),
-                    { label: "Fee before VAT", value: <Money value={contract.finalPrice} /> },
-                    { label: `VAT (${AMC_VAT_PERCENT}%)`, value: <Money value={contract.vatAmount} /> },
-                    { label: "Grand total", value: <Money value={contract.grandTotal} className="font-semibold" /> },
-                  ]}
-                />
-              </SectionCard>
-              <div className="lg:col-span-2">
-                <ContractCommercial contract={contract} entitlements={entitlements} canManage={permissions.canCorrect} />
-              </div>
-            </div>
+            {/* The Commercial and Commercial history cards were removed (11 Nov 2026, the user): the value incl. VAT is on the Contract value card above. */}
           </>,
         )}
 
@@ -630,101 +742,21 @@ function ContractView({
               title="Coverage and allowances"
               description="Every service on the contract as signed: what it includes, how much is used, booked by open call outs, and what is left."
               icon={<ListChecks />}
-              bodyClassName="pb-2"
+              bodyClassName="border-t"
             >
-              <div className="overflow-x-auto">
-                <Table className="min-w-[760px]">
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="pl-5">Service</TableHead>
-                      <TableHead className="w-[30%]">Used</TableHead>
-                      <TableHead className="text-right">Booked</TableHead>
-                      <TableHead className="text-right">Left</TableHead>
-                      <TableHead>State</TableHead>
-                      <TableHead className="pr-5 text-right">
-                        <span className="sr-only">Actions</span>
-                      </TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {entitlements.map((e) => {
-                      const counts = e.entitlementType === "visits" || e.entitlementType === "hours";
-                      const unit = (n: number) => unitWord(e.entitlementType, n);
-                      /* Booked by open call outs (the allowance ledger), when it has loaded. */
-                      const booked = bookedFor.get(e.id) ?? 0;
-                      const near = nearZeroFor.has(e.id);
-                      return (
-                        <TableRow key={e.id}>
-                          <TableCell className="pl-5">
-                            <div className="font-medium">{e.serviceLabel}</div>
-                            <div className="text-muted-foreground text-xs">
-                              {[
-                                ENTITLEMENT_TYPE_LABELS[e.entitlementType],
-                                counts || e.entitlementType === "unlimited"
-                                  ? `${e.units} ${e.units === 1 ? "unit" : "units"} × ${e.entitlementType === "hours" ? `${e.frequency} h` : e.frequency} a year`
-                                  : null,
-                                e.callOutClass ? CALL_OUT_LABELS[e.callOutClass] : null,
-                              ]
-                                .filter(Boolean)
-                                .join(" · ")}
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            {counts && e.includedQuantity !== null ? (
-                              <div className="grid gap-1.5">
-                                <span className="text-sm tabular-nums">
-                                  <span className="font-medium">{formatQuantity(e.usedQuantity)}</span>
-                                  <span className="text-muted-foreground">
-                                    {" "}
-                                    of {formatQuantity(e.includedQuantity)} {unit(e.includedQuantity)} used
-                                  </span>
-                                </span>
-                                <Progress value={e.usagePercent ?? 0} className="h-1.5 w-full max-w-48" aria-label={`${e.serviceLabel} usage`} />
-                              </div>
-                            ) : e.entitlementType === "unlimited" ? (
-                              <span className="text-sm">
-                                <span className="font-medium tabular-nums">{formatQuantity(e.usedQuantity)}</span>
-                                <span className="text-muted-foreground"> used · no limit</span>
-                              </span>
-                            ) : (
-                              <span className="text-muted-foreground text-sm">Included, not counted</span>
-                            )}
-                          </TableCell>
-                          <TableCell className="text-right text-sm tabular-nums">{booked ? formatQuantity(booked) : <span className="text-muted-foreground">—</span>}</TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {e.remainingQuantity !== null ? (
-                              <span className={`font-semibold ${e.remainingQuantity === 0 ? "text-danger" : near ? "text-warning" : ""}`}>
-                                {formatQuantity(e.remainingQuantity)} <span className="text-muted-foreground text-xs font-normal">{unit(e.remainingQuantity)}</span>
-                              </span>
-                            ) : e.entitlementType === "unlimited" ? (
-                              <span className="font-semibold">Unlimited</span>
-                            ) : (
-                              <span className="text-muted-foreground">—</span>
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            <Badge variant="secondary" className={`border-0 font-medium ${entitlementStateTone(e.state)}`}>
-                              {ENTITLEMENT_STATE_LABELS[e.state]}
-                            </Badge>
-                            {near && e.remainingQuantity !== 0 ? (
-                              <Badge variant="secondary" className="bg-warning/10 text-warning ml-1.5 border-0 font-medium">
-                                Nearly used up
-                              </Badge>
-                            ) : null}
-                          </TableCell>
-                          <TableCell className="pr-5 text-right">
-                            {permissions.canRecordUsage && e.consumable ? (
-                              <Button size="sm" variant="outline" onClick={() => recordUsage(e.id)} disabled={e.state === "exhausted"}>
-                                Record
-                              </Button>
-                            ) : null}
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
-              </div>
+              {/* As every list in the product (11 Nov 2026): the data table. Usage is recorded from the visits, so no Record button per row. */}
+              <DataTable
+                columns={coverageColumns({ bookedFor, nearZeroFor })}
+                data={entitlements}
+                loading={false}
+                rowCount={entitlements.length}
+                pageSize={500}
+                currentPage={0}
+                onPageChange={noop}
+                onPageSizeChange={noop}
+                onGlobalFilterChange={noop}
+                emptyState={<EmptyState icon={<ListChecks />} title="No services" description="The services signed on the contract, with what each includes, show here." />}
+              />
             </SectionCard>
 
             {/* Hidden for now (10 Nov 2026, Danish): set SHOW_ENTITLEMENT_TERMS to bring the card back. */}
@@ -735,7 +767,7 @@ function ContractView({
                 <>
                   {/* As the client signed them: from this contract's frozen wording. */}
                   <div>
-                    <SubHeading>As signed</SubHeading>
+                    {/* <SubHeading>As signed</SubHeading> */}
                     <DetailList
                       rows={[
                         ...(commitments.emergencyResponse
@@ -817,15 +849,13 @@ function ContractView({
 
         {panel(
           "renewal",
-          <div className="grid gap-6 lg:grid-cols-2">
-            <ContractRenewal
-              contractId={contract.id}
-              proposalNumber={contract.lifecycle?.contractNumber ?? contract.proposalNumber}
-              canRenew={permissions.canRenew}
-              onChanged={() => void load()}
-            />
-            <RenewalReminders contractId={contract.id} cancelled={contract.status === "cancelled"} />
-          </div>,
+          <ContractRenewal
+            contractId={contract.id}
+            proposalNumber={contract.lifecycle?.contractNumber ?? contract.proposalNumber}
+            canRenew={permissions.canRenew}
+            onChanged={() => void load()}
+            reminders={<RenewalReminders contractId={contract.id} cancelled={contract.status === "cancelled"} />}
+          />,
         )}
 
         {panel(
@@ -852,26 +882,12 @@ function ContractView({
 
         {panel(
           "history",
-          <SectionCard title="History" description="Everything done to this contract, newest first." icon={<History />} bodyClassName="px-5 pb-5">
-            {audit.length === 0 ? (
-              <p className="text-muted-foreground text-sm">No events yet.</p>
-            ) : (
-              <ol className="relative space-y-3 border-l pl-4">
-                {audit.map((a) => (
-                  <li key={a.id} className="relative">
-                    <span className="bg-brand absolute top-1.5 -left-[21px] size-2.5 rounded-full" aria-hidden />
-                    <div className="flex flex-wrap items-baseline justify-between gap-x-3">
-                      <span className="text-sm font-medium">{AUDIT_LABELS[a.type] ?? a.type.replace(/_/g, " ")}</span>
-                      <span className="text-muted-foreground text-xs">{formatDateTime(a.at)}</span>
-                    </div>
-                    <div className="text-muted-foreground text-sm">
-                      {[a.actor ?? "System", a.note ? `Reason: ${a.note}` : null].filter(Boolean).join(" · ")}
-                    </div>
-                  </li>
-                ))}
-              </ol>
-            )}
-          </SectionCard>,
+          /* As a Snagging job's Activity (11 Nov 2026), as every AMC history. */
+          <HistoryCard
+            description="Everything done to this contract and its visit schedule."
+            entries={historyEntries}
+            emptyDescription="Activation, holds, renewals, amendments and every other change appear here as they happen."
+          />,
         )}
       </Tabs>
 
@@ -924,9 +940,9 @@ function ContractView({
         onSend={
           canOperate
             ? () => {
-                setViewingReport(false);
-                setReporting(true);
-              }
+              setViewingReport(false);
+              setReporting(true);
+            }
             : undefined
         }
       />

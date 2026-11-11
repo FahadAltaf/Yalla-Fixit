@@ -573,7 +573,7 @@ export async function renewalOverview(admin: Admin, contractId: string, escalati
   if (!blockedReason) {
     const settings = await readAmcSettings(admin);
     const unitType = String(contract.property.unitType ?? contract.unitType ?? "");
-    const offered = servicesForProperty(settings, unitType);
+    const offered = servicesForProperty(settings, [typeof contract.property.propertyType === "string" ? contract.property.propertyType : null, unitType]);
     const draft = buildRenewalDraft(
       {
         id: contract.id,

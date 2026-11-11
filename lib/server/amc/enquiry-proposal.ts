@@ -95,7 +95,7 @@ export async function createProposalFromEnquiry(admin: Admin, enquiryId: string,
 
   const propertyType = (property.unitType ?? enquiry.unitType ?? null) as Parameters<typeof rateModelFor>[0];
   const model = rateModelFor(propertyType, category);
-  const offered = servicesForProperty(settings, model);
+  const offered = servicesForProperty(settings, [propertyType, model]);
 
   /* The lines: the visit's recommendations and counts, else the property's scope. */
   let source: ProposalFromEnquiry["source"] = "none";
@@ -133,9 +133,10 @@ export async function createProposalFromEnquiry(admin: Admin, enquiryId: string,
   });
   const priced = priceSubmission({
     /* Each line at a frequency the card allows (the scope or the default may say 1). */
-    services: card ? snapToCardFrequencies(rows, card.card, model, (id) => isFrequencyEditable(offered.find((s) => s.id === id)?.frequencyType)) : rows,
+    services: card ? snapToCardFrequencies(rows, card.card, [propertyType, model], (id) => isFrequencyEditable(offered.find((s) => s.id === id)?.frequencyType)) : rows,
     discountPercent: 0,
     unitType: model,
+    propertyType,
     settings,
     rateCard: card ? { id: card.id, card: card.card } : null,
     day: todayInDubai(),

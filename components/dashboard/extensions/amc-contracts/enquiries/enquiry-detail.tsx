@@ -11,7 +11,6 @@ import {
   ChevronDown,
   ClipboardCheck,
   FileSignature,
-  History,
   Inbox,
   Link2,
   MapPin,
@@ -41,6 +40,7 @@ import {
   SectionSkeleton,
   StatGridSkeleton,
   SubmitButton,
+  useConfirm,
 } from "@/components/dashboard/shared/kaizen-states";
 import {
   GoogleLocationMap,
@@ -82,11 +82,13 @@ import {
   DetailHeaderCard,
   DetailHeaderSkeleton,
   DetailToolbar,
+  shortPlace,
 } from "../detail-header";
 import { EditClientDialog } from "../edit-client-dialog";
 import { LIFECYCLE_TONE } from "../profile/identity-card";
 import { useUrlTab } from "../profile/use-url-tab";
 import { useAmcData } from "../use-amc-data";
+import { HistoryCard } from "../history-card";
 import {
   EnquiryFormDialog,
   FollowUpDialog,
@@ -129,6 +131,7 @@ export function EnquiryDetail({ id }: { id: string }) {
   /* Set by Refresh and cleared when the answer lands; the page stays on screen meanwhile. */
   const [refreshing, setRefreshing] = useState(false);
   const [fetchedAt, setFetchedAt] = useState<number | null>(null);
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const { data, error, loading, reload } = useAmcData(
     () =>
       enquiriesService
@@ -213,7 +216,12 @@ export function EnquiryDetail({ id }: { id: string }) {
   const canStartProposal = Boolean(e) && canEdit && !closed && !e?.proposal;
 
   /* DEV-365: the proposal, prefilled from the enquiry, its property and its site visit. */
-  const startProposal = async () => {
+  /* Asked first (11 Nov 2026): it acts at once, so it is confirmed like every other step. */
+  const startProposal = () =>
+    void confirm({ title: "Create a proposal from this enquiry?", description: "Starts a draft proposal prefilled from the enquiry, its property and its site visit, then opens it to enter the prices. Nothing is sent to the client.", confirmText: "Create proposal" }).then((ok) => {
+      if (ok) void startProposalNow();
+    });
+  const startProposalNow = async () => {
     if (!e) return;
     setStarting(true);
     try {
@@ -281,11 +289,7 @@ export function EnquiryDetail({ id }: { id: string }) {
           }
           title={e.customer.name || "Enquiry"}
           status={<StageBadge stage={e.stage} stages={m.stages} />}
-          subline={[
-            e.property?.label ?? "No property linked yet",
-            `enquired ${formatDateTime(e.enquiredAt)}`,
-            e.owner ? `owned by ${e.owner.name}` : "no owner yet",
-          ].join(" · ")}
+          subline={[shortPlace(e.property?.label) ?? "No property yet", `Enquired ${formatDateTime(e.enquiredAt)}`, e.owner ? e.owner.name : "No owner yet"].join(" · ")}
           actions={
             <>
               {ready && e ? (
@@ -1014,61 +1018,40 @@ export function EnquiryDetail({ id }: { id: string }) {
                 ) : null}
                 {activityOpened.has("history") ? (
                   <div hidden={activity !== "history"}>
-                    <SectionCard
+                    {/* As a Snagging job's Activity (11 Nov 2026), as every AMC history. */}
+                    <HistoryCard
                       title="Stage history"
                       description="Who moved the enquiry, when, and why."
-                      icon={<History />}
-                      bodyClassName="border-t"
-                    >
-                      {history.length === 0 ? (
-                        <EmptyState
-                          icon={<History className="size-5" />}
-                          title="No changes recorded"
-                          description="Each stage change is listed here with who made it and why."
-                        />
-                      ) : (
-                        <ul className="divide-y">
-                          {[...history].reverse().map((h, i) => (
-                            <li
-                              key={`${h.at}-${i}`}
-                              className="flex flex-wrap items-start gap-2 px-5 py-3 text-sm"
-                            >
-                              <div className="flex flex-wrap items-center gap-1.5">
-                                {h.from ? (
-                                  <>
-                                    <StageBadge
-                                      stage={h.from}
-                                      stages={m.stages}
-                                    />
-                                    <ArrowRight className="text-muted-foreground size-3.5" />
-                                  </>
-                                ) : (
-                                  <span className="text-muted-foreground">
-                                    Logged at
-                                  </span>
-                                )}
-                                <StageBadge stage={h.to} stages={m.stages} />
-                              </div>
-                              <span className="text-muted-foreground ml-auto text-xs tabular-nums">
-                                {formatDateTime(h.at)} ·{" "}
-                                {h.actorLabel ??
-                                  (h.origin === "system" ? "Portal" : "—")}
-                              </span>
-                              {h.reason ? (
-                                <p className="text-muted-foreground w-full text-sm">
-                                  {h.reason}
-                                </p>
-                              ) : null}
-                              {typeof h.details.warning === "string" ? (
-                                <p className="text-warning w-full text-xs">
-                                  {h.details.warning}
-                                </p>
-                              ) : null}
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </SectionCard>
+                      noun="changes"
+                      entries={[...history].reverse().map((h, i) => ({
+                        key: `${h.at}-${i}`,
+                        icon: <ArrowRight aria-hidden />,
+                        title: (
+                          <span className="flex flex-wrap items-center gap-1.5">
+                            {h.from ? (
+                              <>
+                                <StageBadge stage={h.from} stages={m.stages} />
+                                <ArrowRight className="text-muted-foreground size-3.5" />
+                              </>
+                            ) : (
+                              <span className="text-muted-foreground font-normal">Logged at</span>
+                            )}
+                            <StageBadge stage={h.to} stages={m.stages} />
+                          </span>
+                        ),
+                        actor: h.actorLabel ?? (h.origin === "system" ? "Portal" : null),
+                        detail:
+                          h.reason || typeof h.details.warning === "string" ? (
+                            <>
+                              {h.reason ? `"${h.reason}"` : null}
+                              {typeof h.details.warning === "string" ? <span className="text-warning"> {h.details.warning}</span> : null}
+                            </>
+                          ) : null,
+                        at: h.at,
+                      }))}
+                      emptyTitle="No changes recorded"
+                      emptyDescription="Each stage change is listed here with who made it and why."
+                    />
                   </div>
                 ) : null}
               </>,
@@ -1139,6 +1122,7 @@ export function EnquiryDetail({ id }: { id: string }) {
               }}
             />
           ) : null}
+          {confirmDialog}
           {dialog === "link" ? (
             <LinkPropertyDialog
               open
