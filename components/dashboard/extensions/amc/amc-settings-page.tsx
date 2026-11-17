@@ -11,7 +11,7 @@ import {
   History,
   Phone,
   GripVertical,
-  Pencil,
+  SquarePen,
   Plus,
   RotateCcw,
   Save,
@@ -261,15 +261,25 @@ function ApproversPicker({
 }) {
   const [query, setQuery] = useState("");
   const term = query.trim().toLowerCase();
-  const shown = users.filter(
-    (user) => !term || user.name.toLowerCase().includes(term) || user.email.includes(term),
+  /*
+    Someone saved as an approver who cannot open AMC (their role has no AMC
+    access, or they left) is listed too (16 Nov 2026): counted but hidden,
+    they made "3 approvers" show two ticks. Shown here, marked, to untick.
+  */
+  const missing: AmcUser[] = approvers
+    .filter((email) => !users.some((user) => sameEmail(user.email, email)))
+    .map((email) => ({ email, name: email, isAdmin: false }));
+  const everyone = [...users, ...missing];
+  const shown = everyone.filter(
+    (user) => !term || user.name.toLowerCase().includes(term) || user.email.toLowerCase().includes(term),
   );
+  const canApprove = approvers.filter((email) => users.some((user) => sameEmail(user.email, email))).length;
 
   return (
     <SectionCard
       icon={<UserCheck />}
       title="Approvers"
-      description="Choose who can approve or send back a proposal after it is submitted for approval. The list shows admins and everyone whose role has AMC access. If nobody is ticked, anyone whose role has the AMC approve permission can approve."
+      description="Who approves a proposal at any approval level that names nobody in AMC Configuration → Approvals. A level that names its approvers there is decided by them alone. Nobody ever approves a proposal they own. If nobody is ticked here, anyone whose role has the AMC approve permission can."
       bodyClassName="px-5 pb-5"
     >
       <div className="relative mb-3">
@@ -287,7 +297,7 @@ function ApproversPicker({
         />
       </div>
 
-      {users.length === 0 ? (
+      {everyone.length === 0 ? (
         <p className="text-muted-foreground text-sm">
           Nobody has AMC access yet. Give a role the AMC Proposals permission in role settings first.
         </p>
@@ -298,6 +308,7 @@ function ApproversPicker({
           ) : (
             shown.map((user) => {
               const selected = approvers.some((email) => sameEmail(email, user.email));
+              const noAccess = missing.includes(user);
               return (
                 <li key={user.email}>
                   <label className="hover:bg-muted/40 flex cursor-pointer items-center gap-3 px-4 py-3">
@@ -317,7 +328,11 @@ function ApproversPicker({
                         <TruncatedText className="text-muted-foreground text-xs">{user.email}</TruncatedText>
                       ) : null}
                     </span>
-                    {user.isAdmin ? (
+                    {noAccess ? (
+                      <Badge variant="secondary" className="bg-warning/10 text-warning shrink-0 border-0 font-normal" title="Their role has no AMC access, so they cannot approve. Untick them, or give their role AMC access.">
+                        No AMC access
+                      </Badge>
+                    ) : user.isAdmin ? (
                       <Badge variant="outline" className="shrink-0 font-normal">
                         Admin
                       </Badge>
@@ -332,8 +347,8 @@ function ApproversPicker({
 
       <p className="text-muted-foreground mt-3 text-xs">
         {approvers.length > 0
-          ? `${approvers.length} approver${approvers.length === 1 ? "" : "s"}. Only they can approve and see the approval queue.`
-          : "No approvers chosen, so anyone whose role has the AMC approve permission can approve."}
+          ? `${canApprove} approver${canApprove === 1 ? "" : "s"}${missing.length ? ` (${missing.length} more without AMC access)` : ""}. They approve any level that names nobody in Configuration, and see the approval queue.`
+          : "No approvers chosen, so anyone whose role has the AMC approve permission can approve a level that names nobody in Configuration."}
       </p>
     </SectionCard>
   );
@@ -1523,7 +1538,7 @@ function TextLibrary({
                                 aria-label={`Edit ${item.label}`}
                                 onClick={() => openRename(item)}
                               >
-                                <Pencil className="size-3.5" />
+                                <SquarePen className="size-3.5" />
                               </Button>
                             </Hint>
                           ) : null}

@@ -4,19 +4,21 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Building2,
   Download,
-  Loader2,
+  FileCheck2,
   FileText,
+  Loader2,
   MapPin,
-  Pencil,
+  SquarePen,
   Plus,
+  Trees,
   Upload,
   X,
 } from "lucide-react";
+import { OptionToggle } from "@/components/dashboard/shared/option-toggle";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -260,7 +262,7 @@ export function ClientAddressesDialog({
                               {linking === row.id ? (
                                 <Loader2 className="size-4 animate-spin" />
                               ) : (
-                                <Pencil className="size-4" />
+                                <SquarePen className="size-4" />
                               )}
                             </Button>
                           </Hint>
@@ -765,10 +767,11 @@ export function AddressForm({
           </div>
 
           {hasPlot ? (
-            <OptionRow
+            <OptionToggle
               checked={external}
               onChange={setExternal}
               title="External areas are in scope"
+              icon={<Trees />}
               description="Garden, pool and landscaping are inspected too."
             />
           ) : null}
@@ -822,10 +825,11 @@ export function AddressForm({
           title="Documents"
           description="Optional paperwork, kept with the address so every job on this unit has it."
         >
-          <OptionRow
+          <OptionToggle
             checked={nocRequired}
             onChange={setNocRequired}
             title="An NOC or authorization letter is required"
+            icon={<FileCheck2 />}
             description="The person requesting the inspection is not the owner."
           />
           <div className="divide-y overflow-hidden rounded-lg border">
@@ -996,42 +1000,6 @@ export function FormBlock({
       </div>
       {children}
     </section>
-  );
-}
-
-/** A yes/no about the unit, as a whole-row tick box. */
-function OptionRow({
-  checked,
-  onChange,
-  title,
-  description,
-}: {
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-  title: string;
-  description?: string;
-}) {
-  return (
-    <label
-      className={cn(
-        "flex cursor-pointer items-start gap-3 rounded-lg border p-3 text-sm transition-colors",
-        checked ? "border-brand bg-brand-50" : "hover:bg-muted/40",
-      )}
-    >
-      <Checkbox
-        checked={checked}
-        onCheckedChange={(value) => onChange(Boolean(value))}
-        className="mt-0.5"
-      />
-      <span>
-        <span className="font-medium">{title}</span>
-        {description ? (
-          <span className="text-muted-foreground mt-0.5 block text-xs leading-relaxed">
-            {description}
-          </span>
-        ) : null}
-      </span>
-    </label>
   );
 }
 

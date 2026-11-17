@@ -2,13 +2,13 @@
 
 import { useState } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Archive, ArchiveRestore, BadgePercent, Building2, CalendarRange, History, Info, Package, Pencil, Plus, Send, Tags, Trash2, Undo2, CheckCircle2 } from "lucide-react";
+import { Archive, ArchiveRestore, BadgePercent, Building2, CalendarRange, CircleAlert, History, Info, Package, SquarePen, Plus, Send, Sparkles, Tags, Trash2, Undo2, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
 import { IconText } from "@/components/data-table/columns/icon-text";
 import { DataRow, PageHeading, SectionCard, TabCount } from "@/components/dashboard/shared/kaizen";
-import { ActionDialogContent, ErrorState, HeadingSkeleton, SectionSkeleton, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
+import { ActionDialogContent, ErrorState, HeadingSkeleton, SectionSkeleton, SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -38,8 +38,10 @@ import {
   type RateItem,
   type RatePackage,
   type RatePromotion,
+  rateItemFor,
 } from "@/lib/amc/rate-card";
 import { describeRateCardField } from "@/lib/amc/rate-card-history";
+import { suggestedPackages } from "@/lib/amc/package-templates";
 import { cn } from "@/lib/utils";
 import { isFrequencyEditable } from "@/components/dashboard/extensions/amc/amc-constants";
 import { proposalRulesService, type RateCardResponse, type RateCardVersion } from "@/modules/amc-submissions";
@@ -159,7 +161,7 @@ export function RateCardPage() {
             </>
           ) : (
             <Button onClick={() => setDraft(structuredClone(base))}>
-              <Pencil className="size-4" />
+              <SquarePen className="size-4" />
               Change the card
             </Button>
           )
@@ -192,7 +194,7 @@ export function RateCardPage() {
           {/* A working copy is a state worth seeing from every tab, so it is a banner rather than a chip. */}
           {editing ? (
             <Alert className={problem ? "border-danger/30 bg-danger/5" : "border-warning/30 bg-warning/5"}>
-              <Pencil className={problem ? "text-danger" : "text-warning"} />
+              <SquarePen className={problem ? "text-danger" : "text-warning"} />
               <AlertTitle>
                 Editing a working copy: {changes.length} change{changes.length === 1 ? "" : "s"} not published
               </AlertTitle>
@@ -323,7 +325,7 @@ function RatesTab({ card, editing, services, onChange }: { card: RateCard; editi
               <RowActionsMenu
                 label={label(row.original.serviceId)}
                 actions={[
-                  { label: "Edit", icon: <Pencil className="size-4" />, onSelect: () => open(row.original) },
+                  { label: "Edit", icon: <SquarePen className="size-4" />, onSelect: () => open(row.original) },
                   row.original.retired
                     ? { label: "Restore", icon: <ArchiveRestore className="size-4" />, onSelect: () => toggleRetired(row.original) }
                     : { label: "Retire", icon: <Archive className="size-4" />, onSelect: () => toggleRetired(row.original) },
@@ -589,10 +591,26 @@ function PackagesTab({ card, editing, services, onChange }: { card: RateCard; ed
   const [editingPkg, setEditingPkg] = useState<RatePackage | "new" | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const label = (id: string) => services.find((s) => s.id === id)?.label ?? id;
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const open = (pkg: RatePackage | "new") => {
     setEditingPkg(pkg);
     setDialogOpen(true);
   };
+  /* Ready-made tiers (lib/amc/package-templates.ts) the card does not have yet. */
+  const suggestions = editing ? suggestedPackages(card.packages, services.map((s) => s.id)) : [];
+  const addSuggested = () =>
+    void confirm({
+      title: `Add ${suggestions.length} suggested ${suggestions.length === 1 ? "package" : "packages"}?`,
+      description: `${suggestions.map((p) => p.name).join(", ")} go into the working copy with typical units and visits a year. Change or remove any of them; nothing reaches proposals until the card is published.`,
+      confirmText: "Add packages",
+    }).then((ok) => {
+      if (!ok) return;
+      onChange({ ...card, packages: [...card.packages, ...suggestions] });
+      toast.success(`${suggestions.length} ${suggestions.length === 1 ? "package" : "packages"} added to the working copy`);
+    });
+  /* A line the card has no rate for (on every model the package is for) cannot be priced in a proposal. */
+  const priced = (serviceId: string, models: readonly string[]) =>
+    models.length ? models.every((m) => rateItemFor(card, serviceId, m)) : card.items.some((i) => !i.retired && i.serviceId === serviceId);
   return (
     <SectionCard
       title="Packages"
@@ -601,19 +619,28 @@ function PackagesTab({ card, editing, services, onChange }: { card: RateCard; ed
       bodyClassName="px-5 pb-5"
       action={
         editing ? (
-          <Button size="sm" variant="outline" onClick={() => open("new")}>
-            <Plus className="size-4" />
-            Add a package
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            {suggestions.length ? (
+              <Button size="sm" variant="outline" onClick={addSuggested}>
+                <Sparkles className="size-4" />
+                Suggested packages
+              </Button>
+            ) : null}
+            <Button size="sm" variant="outline" onClick={() => open("new")}>
+              <Plus className="size-4" />
+              Add a package
+            </Button>
+          </div>
         ) : null
       }
     >
+      {confirmDialog}
       {card.packages.length === 0 ? (
         <EmptyState
           icon={<Package />}
           title="No packages"
           description="Packages are optional: proposals can always pick services one by one."
-          action={editing ? { label: "Add a package", onClick: () => open("new") } : undefined}
+          action={editing ? (suggestions.length ? { label: "Add suggested packages", onClick: addSuggested } : { label: "Add a package", onClick: () => open("new") }) : undefined}
         />
       ) : (
         /* Each package as a card (11 Nov 2026): what it is, its services as rows, and what it adds up to. */
@@ -621,6 +648,7 @@ function PackagesTab({ card, editing, services, onChange }: { card: RateCard; ed
           {card.packages.map((p) => {
             const visits = p.lines.reduce((n, l) => n + l.frequency, 0);
             const units = p.lines.reduce((n, l) => n + l.units, 0);
+            const unpriced = p.lines.filter((l) => !priced(l.serviceId, p.models)).length;
             return (
               <div key={p.id} className={cn("bg-card flex flex-col overflow-hidden rounded-xl border shadow-xs", !p.active && "opacity-60")}>
                 <div className="flex items-start gap-3 border-b px-4 py-3.5">
@@ -638,7 +666,7 @@ function PackagesTab({ card, editing, services, onChange }: { card: RateCard; ed
                     <RowActionsMenu
                       label={p.name}
                       actions={[
-                        { label: "Edit", icon: <Pencil className="size-4" />, onSelect: () => open(p) },
+                        { label: "Edit", icon: <SquarePen className="size-4" />, onSelect: () => open(p) },
                         {
                           label: "Remove",
                           icon: <Trash2 className="size-4" />,
@@ -654,7 +682,11 @@ function PackagesTab({ card, editing, services, onChange }: { card: RateCard; ed
                   {p.lines.map((l) => (
                     <li key={l.serviceId} className="flex items-center justify-between gap-3 py-2 text-sm">
                       <span className="flex min-w-0 items-center gap-2">
-                        <CheckCircle2 className="text-success size-4 shrink-0" />
+                        {priced(l.serviceId, p.models) ? (
+                          <CheckCircle2 className="text-success size-4 shrink-0" />
+                        ) : (
+                          <CircleAlert className="text-warning size-4 shrink-0" aria-label="No rate on the card" />
+                        )}
                         <span className="truncate">{label(l.serviceId)}</span>
                       </span>
                       <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
@@ -669,6 +701,11 @@ function PackagesTab({ card, editing, services, onChange }: { card: RateCard; ed
                   </span>
                   <span className="text-foreground font-medium tabular-nums">{visits} visits a year</span>
                 </div>
+                {unpriced ? (
+                  <div className="bg-warning/10 text-warning border-t px-4 py-2 text-xs">
+                    {unpriced} {unpriced === 1 ? "service has" : "services have"} no rate on the card yet, so proposals cannot use this package until {unpriced === 1 ? "it is" : "they are"} priced.
+                  </div>
+                ) : null}
               </div>
             );
           })}
@@ -882,7 +919,7 @@ function PromotionsTab({ card, editing, services, today, onChange }: { card: Rat
               <RowActionsMenu
                 label={row.original.name}
                 actions={[
-                  { label: "Edit", icon: <Pencil className="size-4" />, onSelect: () => open(row.original) },
+                  { label: "Edit", icon: <SquarePen className="size-4" />, onSelect: () => open(row.original) },
                   {
                     label: "Remove",
                     icon: <Trash2 className="size-4" />,

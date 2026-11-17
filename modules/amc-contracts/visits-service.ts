@@ -1,7 +1,7 @@
 import type { z } from "zod";
 
 import type { boardActionSchema, technicianProfileSchema, visitActionSchema } from "@/lib/amc/visits";
-import type { BoardData, BoardVisit, TechnicianRecord, VisitDetail, VisitSuggestion } from "@/lib/server/amc/visits";
+import type { AvailableInspectors, BoardData, BoardVisit, TechnicianRecord, VisitDetail, VisitSuggestion } from "@/lib/server/amc/visits";
 import { amcRequest } from "@/lib/amc/http-cache";
 
 /**
@@ -55,6 +55,13 @@ export const visitsService = {
     return request<TechniciansResponse>("/api/amc-technicians");
   },
   /** One technician's AMC record (Workforce -> People, AMC skills). */
+  /** Who can inspect a site visit at that time and is free then, in one request (16 Nov 2026). */
+  availableInspectors(startIso: string, minutes: number, options: { ignoreAssessmentId?: string | null; currentUserId?: string | null } = {}) {
+    const q = new URLSearchParams({ start: startIso, minutes: String(minutes) });
+    if (options.ignoreAssessmentId) q.set("ignore", options.ignoreAssessmentId);
+    if (options.currentUserId) q.set("current", options.currentUserId);
+    return request<AvailableInspectors>(`/api/amc-technicians/availability?${q.toString()}`);
+  },
   technician(fsmId: string) {
     return request<{ migrated: boolean; technician: TechnicianRecord | null; canEdit: boolean }>(`/api/amc-technicians/${encodeURIComponent(fsmId)}`);
   },

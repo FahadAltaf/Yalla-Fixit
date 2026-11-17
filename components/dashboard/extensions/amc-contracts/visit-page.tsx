@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { CalendarClock, ClipboardList, FileSignature, History, ListChecks, MessageCircle, PhoneCall, ShieldCheck } from "lucide-react";
+import { CalendarClock, ClipboardList, FileSignature, History, ListChecks, MessageCircle, PhoneCall, ShieldCheck, Wrench } from "lucide-react";
 
 import { SectionCard, StatCard, StatCardGrid } from "@/components/dashboard/shared/kaizen";
 import { ErrorState, SectionSkeleton } from "@/components/dashboard/shared/kaizen-states";
@@ -32,7 +32,7 @@ import {
   useCallOutWorkDialogs,
   type CallOutWorking,
 } from "./call-out-sections";
-import { CoverageBadge, PanelSurface, shortDateTime } from "./call-out-shared";
+import { CoverageBadge, HeaderActionsSlot, PanelSurface, shortDateTime } from "./call-out-shared";
 import { formatContractDate } from "./contract-status";
 import { DetailHeaderCard, DetailHeaderSkeleton, DetailToolbar, shortPlace } from "./detail-header";
 import { DetailList } from "./enquiries/enquiry-ui";
@@ -40,7 +40,7 @@ import { JobSheetPanel } from "./job-sheet-panel";
 import { HistoryCard, type HistoryEntry } from "./history-card";
 import { useUrlTab } from "./profile/use-url-tab";
 import { useAmcData } from "./use-amc-data";
-import { AccessSection, AssignmentSection, ConfirmationSection, type VisitWorking } from "./visit-sections";
+import { AccessSection, AssignmentSection, ConfirmationSection, StartVisitAction, type VisitWorking } from "./visit-sections";
 import { channelLabel, slotLabel } from "./visit-status";
 
 const TABS = ["overview", "crew", "client", "access", "job_sheet", "findings", "photos", "works", "history"] as const;
@@ -106,6 +106,8 @@ export function VisitPage({ id }: { id: string }) {
   const ppm = useAmcData(() => (kind === "ppm" ? visitsService.visit(id) : Promise.resolve(null)), kind === "ppm" ? `visit:${id}` : "visit:none");
   const callOut = useAmcData(() => (kind === "call_out" ? callOutsService.callOut(id) : Promise.resolve(null)), kind === "call_out" ? `call-out:${id}` : "call-out:none");
   const { tab, setTab, isOpened } = useUrlTab<Tab>(TABS, "overview");
+  /* Where the job sheet puts its Return / Close visit / report buttons. */
+  const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
   const history = useAmcData(() => (isOpened("history") ? fieldVisitsService.history(id) : Promise.resolve(null)), isOpened("history") ? `field-visit-history:${id}` : "history:none");
   /* One action at a time on the page (a send, a save, a search). */
   const [visitWorking, setVisitWorking] = useState<VisitWorking>(null);
@@ -131,15 +133,17 @@ export function VisitPage({ id }: { id: string }) {
   const refresh = () => amcRefresh(reloadAll);
 
   const callOutActions = useCallOutActions(callOut.data, changed, busy);
-  const works = useCallOutWorkDialogs(callOut.data, changed);
+  const works = useCallOutWorkDialogs(callOut.data);
 
   const tabs = kind ? KIND_TABS[kind] : (["overview", "history"] as const);
   /* A tab in the link this kind does not have (?tab=photos on a planned visit) shows the overview. */
   const shown: Tab = tabs.includes(tab) ? tab : "overview";
   const notFound = header.error && /not found/i.test(header.error);
 
+  /* The job sheet is mounted (hidden) once it is in review or done, so its buttons are in the header from any tab. */
+  const sheetActive = inReviewOrDone(v?.stage);
   const panel = (value: Tab, children: ReactNode) =>
-    tabs.includes(value) && (isOpened(value) || shown === value) ? (
+    tabs.includes(value) && (isOpened(value) || shown === value || (value === "job_sheet" && sheetActive)) ? (
       <TabsContent value={value} forceMount className="mt-4 flex flex-col gap-4 data-[state=inactive]:hidden">
         {children}
       </TabsContent>
@@ -231,6 +235,9 @@ export function VisitPage({ id }: { id: string }) {
                 </Button>
               ) : null}
               {kind === "call_out" ? callOutActions.buttons : null}
+              <span ref={setHeaderSlot} className="contents" />
+              {/* The office starts a planned visit; until then the phone keeps its job sheet shut (17 Nov 2026). */}
+              {kind === "ppm" && ppm.data ? <StartVisitAction {...ppmProps(ppm.data)} onTab={setTab} /> : null}
             </>
           }
         />
@@ -239,6 +246,7 @@ export function VisitPage({ id }: { id: string }) {
       {kind === "call_out" && callOut.data ? <CallOutNotices callOut={callOut.data.callOut} /> : null}
 
       {v ? (
+        <HeaderActionsSlot.Provider value={headerSlot}>
         <PanelSurface.Provider value="card">
           <Tabs value={shown} onValueChange={setTab}>
             <TabsList className="h-auto w-full flex-wrap justify-start gap-1 group-data-horizontal/tabs:h-auto">
@@ -278,6 +286,7 @@ export function VisitPage({ id }: { id: string }) {
             {panel("history", <HistoryPanel data={history} />)}
           </Tabs>
         </PanelSurface.Provider>
+        </HeaderActionsSlot.Provider>
       ) : null}
 
       {callOutActions.dialog}
@@ -294,7 +303,9 @@ const shortDay = (iso: string) => new Intl.DateTimeFormat("en-GB", { weekday: "s
 const hhmm = (iso: string) => new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Dubai" }).format(new Date(iso));
 const slotHours = (start: string, end: string | null) => (end ? `${hhmm(start)}–${hhmm(end)}` : hhmm(start));
 const dayOnly = (d: string) => shortDay(`${d}T12:00:00Z`);
-const hours = (minutes: number) => `${Math.round(minutes / 6) / 10} h`;
+
+/* A visit in review or done has job sheet buttons for the header. */
+const inReviewOrDone = (stage: string | undefined) => stage === "review" || stage === "done";
 
 /** The services on a visit, one line each: what, its trade and how many units. */
 function ServicesList({ lines }: { lines: Array<{ id: string; label: string; trade: string; units: number }> }) {
@@ -311,6 +322,35 @@ function ServicesList({ lines }: { lines: Array<{ id: string; label: string; tra
         </span>
       ))}
     </span>
+  );
+}
+
+/*
+  More than one service on a visit (a clubbed visit), as tiles (17 Nov
+  2026): right-aligned lines in a label row read as one long sentence.
+*/
+function ServiceTiles({ lines }: { lines: Array<{ id: string; label: string; trade: string; units: number }> }) {
+  return (
+    <div className="mb-2 grid gap-2 pt-1">
+      <p className="text-muted-foreground text-sm">
+        Services <span className="tabular-nums">({lines.length})</span>
+      </p>
+      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+        {lines.map((l) => (
+          <div key={l.id} className="flex items-center gap-3 rounded-lg border px-3 py-2.5">
+            <span aria-hidden className="bg-muted/50 text-muted-foreground flex size-9 shrink-0 items-center justify-center rounded-md border">
+              <Wrench className="size-4" />
+            </span>
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-medium">{l.label}</span>
+              <span className="text-muted-foreground block text-xs">
+                {TRADE_LABELS[l.trade as keyof typeof TRADE_LABELS] ?? l.trade} · <span className="tabular-nums">{l.units}</span> {l.units === 1 ? "unit" : "units"}
+              </span>
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -338,7 +378,7 @@ function PpmOverview({ v, data, onTab }: { v: FieldVisitRow; data: Loaded<PpmDat
           label="Crew"
           value={v.crew.length ? (lead?.name ?? "—") : "Not assigned"}
           headline={v.crew.length > 1 ? `+${v.crew.length - 1} more` : v.crew.length ? "Lead technician" : "Find a crew on Crew & time"}
-          caption={`Needs ${hours(d.need.durationMinutes)}, ${d.need.headcount} ${d.need.headcount === 1 ? "person" : "people"}`}
+          caption={`Needs ${d.need.headcount} ${d.need.headcount === 1 ? "person" : "people"}`}
           tone={v.crew.length ? "good" : "neutral"}
           onSelect={() => onTab("crew")}
           selectLabel="Open crew and time"
@@ -364,9 +404,10 @@ function PpmOverview({ v, data, onTab }: { v: FieldVisitRow; data: Loaded<PpmDat
       </StatCardGrid>
 
       <SectionCard title="Visit details" description="What the crew does, for which contract, and when it may be done." icon={<ListChecks />} bodyClassName="px-5 pb-4">
+        {d.lines.length > 1 ? <ServiceTiles lines={d.lines} /> : null}
         <DetailList
           rows={[
-            { label: "Services", value: <ServicesList lines={d.lines} /> },
+            ...(d.lines.length > 1 ? [] : [{ label: "Service", value: <ServicesList lines={d.lines} /> }]),
             {
               label: "Contract",
               value: v.contractId ? (

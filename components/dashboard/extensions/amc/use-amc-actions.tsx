@@ -24,7 +24,7 @@ import { amcSettingsService, amcSubmissionsService } from "@/modules/amc-submiss
 
 import { buildAmcPdfFromSubmission, savedSettingsFor } from "./amc-document-utils";
 import { AmcPreviewDialog, previewTitle, submissionPreviewData } from "./amc-preview-dialog";
-import { AMC_APPROVALS_CHANGED } from "./amc-approval-notice";
+import { AMC_DECISION_MADE } from "./amc-approval-notice";
 import { AmcLinkDialog } from "./amc-link-dialog";
 import { AmcSendDialog, shareChannelFor, type AmcSendChoice, type AmcSendDeliver, type AmcSendRequest } from "./amc-send-dialog";
 import type { AmcSettings } from "./amc-settings";
@@ -129,7 +129,7 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
         setSendBackReason("");
         setRejectFor(null);
         setRejectReason("");
-        window.dispatchEvent(new Event(AMC_APPROVALS_CHANGED));
+        window.dispatchEvent(new Event(AMC_DECISION_MADE));
         await onChanged();
       } finally {
         setDeciding(false);

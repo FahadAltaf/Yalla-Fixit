@@ -9,6 +9,7 @@ import {
   type ResolvedAmcConfig,
 } from "@/lib/amc/config";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
+import { cachedRead, forgetCachedRead } from "@/lib/server/amc/read-cache";
 
 /**
  * Server access to the AMC configuration (DEV-357). Only saved sections
@@ -33,8 +34,9 @@ export async function readAmcConfigResolved(admin: SupabaseClient): Promise<Reso
   return { ...resolveAmcConfig((data ?? []) as Array<{ key: string; value: unknown }>), migrated: true };
 }
 
+/** The configuration, kept for a few seconds per server (read-cache.ts); a save reads it fresh. */
 export async function readAmcConfig(admin: SupabaseClient): Promise<AmcConfig> {
-  return (await readAmcConfigResolved(admin)).config;
+  return cachedRead(admin, "amc_config", async () => (await readAmcConfigResolved(admin)).config);
 }
 
 export class AmcConfigError extends Error {
@@ -61,6 +63,7 @@ export async function writeAmcConfigSection<K extends AmcConfigSection>(
     .from(TABLE)
     .upsert({ key: section, value, updated_by: actor.id, updated_at: new Date().toISOString() }, { onConflict: "key" });
   if (error) throw new Error(error.message);
+  forgetCachedRead("amc_config");
 
   await recordAmcAudit(admin, {
     entityType: "config",

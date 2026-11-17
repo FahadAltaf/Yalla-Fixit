@@ -547,7 +547,7 @@ function RecordPaymentDialog({
         <Field id="pay-received" label="Received on">
           <DateSelect id="pay-received" max={todayInDubai()} value={receivedOn} onChange={setReceivedOn} />
         </Field>
-        <Field id="pay-value-date" label="Value date (optional)">
+        <Field id="pay-value-date" label="Value date (optional)" hint="When the money reached our bank, if not the day it was received.">
           <DateSelect id="pay-value-date" value={valueDate} onChange={setValueDate} />
         </Field>
       </div>

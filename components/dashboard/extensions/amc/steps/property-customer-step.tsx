@@ -200,7 +200,7 @@ export function PropertyCustomerStep({
   const pickClient = (c: CustomerRecord) => {
     fillClient(c);
     if (c.id !== customerRecordId) clearProperty();
-    if (!c.customerRef) void giveClientId(c.id);
+    /* The effect below gives the Client ID; asking here too sent the same POST twice (13 Nov 2026). */
   };
   /* A client on file without a Client ID gets the next one (Zoho FSM is only read, so it cannot number them). */
   const giveClientId = async (id: string) => {

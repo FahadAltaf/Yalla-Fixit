@@ -190,6 +190,13 @@ export function Muted({ children }: { children: ReactNode }) {
  */
 export const PanelSurface = createContext<"box" | "card">("box");
 
+/**
+ * The visit page's header buttons (17 Nov 2026): a tab's own actions --
+ * the job sheet's Return / Close visit / report -- go up beside Open
+ * contract instead of sitting at the bottom of the tab.
+ */
+export const HeaderActionsSlot = createContext<HTMLElement | null>(null);
+
 export function Panel({
   title,
   description,
@@ -313,6 +320,29 @@ export function ReadText({ value, empty = "—" }: { value: string | null | unde
 /* A prepared WhatsApp message                                         */
 /* ------------------------------------------------------------------ */
 
+/**
+ * A prepared message as the office reads it (17 Nov 2026): a long link
+ * (a signed report URL runs to hundreds of characters) shows as a short
+ * "Open link". What is copied or sent keeps the full link.
+ */
+export function MessageText({ text, className }: { text: string; className?: string }) {
+  const parts = text.split(/(https?:\/\/\S+)/g);
+  return (
+    <p className={cn("text-sm break-words whitespace-pre-wrap", className)}>
+      {parts.map((part, i) =>
+        i % 2 === 1 ? (
+          <a key={i} href={part} target="_blank" rel="noopener noreferrer" title={part} className="text-primary inline-flex items-center gap-1 align-baseline font-medium underline-offset-2 hover:underline">
+            Open link
+            <ExternalLink className="size-3" />
+          </a>
+        ) : (
+          part
+        ),
+      )}
+    </p>
+  );
+}
+
 export function PreparedMessage({
   title = "The WhatsApp message",
   message,
@@ -345,7 +375,7 @@ export function PreparedMessage({
           </Button>
         ) : null}
       </div>
-      <p className="text-sm whitespace-pre-wrap">{message}</p>
+      <MessageText text={message} />
       {!whatsapp ? <p className="text-warning text-xs">No phone number on file: copy the message and send it yourself.</p> : null}
       <div className="flex flex-wrap gap-2">
         {whatsapp ? (

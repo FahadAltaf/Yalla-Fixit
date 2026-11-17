@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 import {
   AlertTriangle,
   BadgePercent,
+  Check,
   CheckCircle2,
   ListChecks,
   Package as PackageIcon,
@@ -63,6 +64,7 @@ import {
   type ModelChain,
   rateItemFor,
   type RatePackage,
+  MODEL_LABELS,
 } from "@/lib/amc/rate-card";
 import { UNIT_TYPE_LABELS } from "@/lib/amc/client-profile";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -150,7 +152,14 @@ const unitTypeLabel = (unitType: string) =>
 
 type CardInForce = NonNullable<NonNullable<ProposalRules["rateCard"]>>["card"];
 
-/** One package to pick: its name, how many services, what it says, and its lines. */
+type PackageLine = { key: string; label: string; detail: string };
+
+/**
+ * One choice in the Package picker (12 Nov 2026 redesign): a header with
+ * its icon, name and who it is for; what it says; its services as rows;
+ * and a footer with what it adds up to. "Build your own" uses the same
+ * card, dashed until chosen, listing what is ticked so far.
+ */
 function PackageCard({
   selected,
   onSelect,
@@ -159,6 +168,10 @@ function PackageCard({
   meta,
   description,
   lines,
+  more = 0,
+  empty,
+  footer,
+  dashed = false,
 }: {
   selected: boolean;
   onSelect: () => void;
@@ -166,7 +179,13 @@ function PackageCard({
   title: string;
   meta: string;
   description?: string;
-  lines?: Array<{ key: string; label: string; detail: string }>;
+  lines?: PackageLine[];
+  /** Lines not shown ("+3 more"). */
+  more?: number;
+  /** Shown instead of the lines when there are none. */
+  empty?: React.ReactNode;
+  footer?: { left: string; right?: string };
+  dashed?: boolean;
 }) {
   return (
     <button
@@ -175,50 +194,58 @@ function PackageCard({
       aria-checked={selected}
       onClick={onSelect}
       className={cn(
-        "flex h-full flex-col gap-2 rounded-xl border p-4 text-left transition-colors",
-        selected
-          ? "border-brand bg-brand-50/50 ring-brand/20 ring-2"
-          : "hover:bg-muted/40",
+        "bg-card flex h-full flex-col overflow-hidden rounded-xl border text-left transition-colors",
+        dashed && !selected && "border-dashed",
+        selected ? "border-brand ring-brand/20 ring-2" : "hover:border-foreground/20 hover:bg-muted/30",
       )}
     >
-      <div className="flex items-start justify-between gap-2">
-        <span className="flex items-center gap-2">
-          <span
-            className={cn(
-              "flex size-8 items-center justify-center rounded-lg border",
-              selected ? "border-brand/40 text-brand" : "text-muted-foreground",
-            )}
-          >
-            {icon}
-          </span>
-          <span>
-            <span className="block text-sm font-semibold">{title}</span>
-            <span className="text-muted-foreground block text-xs">{meta}</span>
-          </span>
+      <div className="flex items-start gap-3 px-4 pt-4">
+        <span
+          className={cn(
+            "flex size-10 shrink-0 items-center justify-center rounded-lg border [&_svg]:size-5",
+            selected ? "bg-brand-50 border-brand/30 text-brand" : "bg-muted/40 text-muted-foreground",
+          )}
+        >
+          {icon}
         </span>
-        {selected ? (
-          <CheckCircle2 className="text-brand size-4 shrink-0" aria-hidden />
-        ) : null}
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-base font-semibold">{title}</span>
+          <span className="text-muted-foreground block truncate text-xs">{meta}</span>
+        </span>
+        <span
+          className={cn(
+            "flex size-5 shrink-0 items-center justify-center rounded-full border",
+            selected ? "border-brand bg-brand text-white" : "border-muted-foreground/40",
+          )}
+          aria-hidden
+        >
+          {selected ? <Check className="size-3" strokeWidth={3} /> : null}
+        </span>
       </div>
-      {description ? (
-        <p className="text-muted-foreground text-xs leading-relaxed">
-          {description}
-        </p>
-      ) : null}
-      {lines?.length ? (
-        <ul className="grid gap-1 border-t pt-2">
-          {lines.map((l) => (
-            <li
-              key={l.key}
-              className="flex items-baseline justify-between gap-2 text-xs"
-            >
-              <TruncatedText className="font-medium">{l.label}</TruncatedText>
-              <span className="text-muted-foreground shrink-0 tabular-nums">
-                {l.detail}
-              </span>
-            </li>
-          ))}
-        </ul>
+      {description ? <p className="text-muted-foreground px-4 pt-2 text-xs leading-relaxed">{description}</p> : null}
+      <div className="flex-1 px-4 pt-3 pb-3">
+        {lines?.length ? (
+          <ul className="divide-y rounded-lg border">
+            {lines.map((l) => (
+              <li key={l.key} className="flex items-center justify-between gap-2 px-3 py-1.5 text-xs">
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <CheckCircle2 className="text-success size-3.5 shrink-0" aria-hidden />
+                  <TruncatedText className="font-medium">{l.label}</TruncatedText>
+                </span>
+                <span className="text-muted-foreground shrink-0 tabular-nums">{l.detail}</span>
+              </li>
+            ))}
+            {more > 0 ? <li className="text-muted-foreground px-3 py-1.5 text-xs">+{more} more</li> : null}
+          </ul>
+        ) : (
+          empty ?? null
+        )}
+      </div>
+      {footer ? (
+        <div className="bg-muted/30 text-muted-foreground flex items-center justify-between gap-2 border-t px-4 py-2 text-xs">
+          <span>{footer.left}</span>
+          {footer.right ? <span className="text-foreground font-medium tabular-nums">{footer.right}</span> : null}
+        </div>
       ) : null}
     </button>
   );
@@ -318,10 +345,27 @@ function PackageField({
       { shouldValidate: true, shouldDirty: true },
     );
   };
-  const lineText = (l: RatePackage["lines"][number]) =>
+  const lineText = (l: { serviceId: string; units: number; frequency: number }) =>
     isFree(l.serviceId)
       ? "Included"
       : `${l.units} unit${l.units === 1 ? "" : "s"} · ${nearestAllowedFrequency(allowedFor(l.serviceId), l.frequency)} a year`;
+  /* Visits a year: services visited on a schedule (PPM and fixed), not hours, call-outs or the hotline. */
+  const isVisit = (id: string) => {
+    const type = catalogue.find((c) => c.id === id)?.frequencyType;
+    return type === "ppm" || type === "fixed";
+  };
+  const totals = (lines: ReadonlyArray<{ serviceId: string; frequency: number }>) => {
+    const visits = lines.reduce((n, l) => n + (isVisit(l.serviceId) ? nearestAllowedFrequency(allowedFor(l.serviceId), l.frequency) : 0), 0);
+    return {
+      left: `${lines.length} service${lines.length === 1 ? "" : "s"}`,
+      right: visits ? `${visits} visit${visits === 1 ? "" : "s"} a year` : undefined,
+    };
+  };
+  /* What "Build your own" holds now: the ticked lines, a few shown. */
+  const ticked = rows.filter((r) => r.included);
+  const OWN_SHOWN = 4;
+  const modelsText = (models: readonly string[]) =>
+    models.length ? models.map((m) => MODEL_LABELS[m as keyof typeof MODEL_LABELS] ?? m).join(", ") : "Every property";
 
   return (
     <div className="grid gap-2">
@@ -337,25 +381,45 @@ function PackageField({
         <PackageCard
           selected={value === "own"}
           onSelect={() => choose("own")}
-          icon={<SlidersHorizontal className="size-4" />}
+          icon={<SlidersHorizontal />}
           title="Build your own"
-          meta="Any services"
-          description="Tick the services yourself, with their units and visits a year."
+          meta={value === "own" && ticked.length ? "Your own selection" : "Pick services one by one"}
+          dashed
+          lines={
+            value === "own"
+              ? ticked.slice(0, OWN_SHOWN).map((r) => ({ key: r.serviceId, label: label(r.serviceId), detail: lineText(r) }))
+              : undefined
+          }
+          more={value === "own" ? Math.max(0, ticked.length - OWN_SHOWN) : 0}
+          empty={
+            <ol className="text-muted-foreground grid gap-1.5 text-xs">
+              {["Tick the services below", "Set units and visits a year", "Prices come from the rate card"].map((step, i) => (
+                <li key={step} className="flex items-center gap-2">
+                  <span className="bg-muted text-foreground flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold tabular-nums">
+                    {i + 1}
+                  </span>
+                  {step}
+                </li>
+              ))}
+            </ol>
+          }
+          footer={value === "own" && ticked.length ? totals(ticked) : { left: "Any services, any mix" }}
         />
         {packages.map((p) => (
           <PackageCard
             key={p.id}
             selected={value === p.id}
             onSelect={() => choose(p.id)}
-            icon={<PackageIcon className="size-4" />}
+            icon={<PackageIcon />}
             title={p.name}
-            meta={`${p.lines.length} service${p.lines.length === 1 ? "" : "s"}`}
+            meta={modelsText(p.models)}
             description={p.description || undefined}
             lines={p.lines.map((l) => ({
               key: l.serviceId,
               label: label(l.serviceId),
               detail: lineText(l),
             }))}
+            footer={totals(p.lines)}
           />
         ))}
       </div>
@@ -459,7 +523,7 @@ export function ServicesPricingStep({
           </h3>
           <p className="text-sm text-muted-foreground">
             {card
-              ? "Tick each service this AMC covers and set its units and visits per year. Rates come from the rate card and cannot be changed here; the price is rate × units × frequency."
+              ? "Tick each service this AMC covers and set its units and visits per year. Rates are filled in from the rate card and can be changed for this proposal; a rate under the card's floor, or for a service the card does not price, needs approval. The price is rate × units × frequency."
               : "Tick each service this AMC covers, then set its units, visits per year and base price. The price is base price × units × frequency, and it updates as you type."}
           </p>
         </div>

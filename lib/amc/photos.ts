@@ -52,7 +52,7 @@ export function checkPhotoUpload(input: {
   if (input.assessmentStatus !== "draft") {
     return { ok: false, status: 409, error: "A completed assessment's photos are kept as they are." };
   }
-  if (!input.canEdit) return { ok: false, status: 403, error: "Only its assessor or an AMC approver can add photos." };
+  if (!input.canEdit) return { ok: false, status: 403, error: "Only its inspector or an AMC approver can add photos." };
   if (input.existingCount >= AMC_PHOTOS_PER_ASSESSMENT) {
     return { ok: false, status: 409, error: `An assessment holds at most ${AMC_PHOTOS_PER_ASSESSMENT} photos.` };
   }
@@ -68,6 +68,6 @@ export function checkPhotoRemoval(input: { assessmentStatus: string; canEdit: bo
   if (input.assessmentStatus !== "draft") {
     return { ok: false, status: 409, error: "A completed assessment's photos are kept as history." };
   }
-  if (!input.canEdit) return { ok: false, status: 403, error: "Only its assessor or an AMC approver can remove photos." };
+  if (!input.canEdit) return { ok: false, status: 403, error: "Only its inspector or an AMC approver can remove photos." };
   return { ok: true };
 }

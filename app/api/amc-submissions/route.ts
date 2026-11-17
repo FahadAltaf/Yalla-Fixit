@@ -29,7 +29,7 @@ import {
   type PaymentPlan,
 } from "@/lib/amc/proposal-rules";
 import { rateCardInForce } from "@/lib/server/amc/rate-card";
-import { viewerDecidesStep } from "@/lib/server/amc/approval-ladder";
+import { stepDeciders, viewerDecidesStep } from "@/lib/server/amc/approval-ladder";
 import { ActionType, ResourceType } from "@/types/types";
 import type {
   AmcDocumentType,
@@ -369,10 +369,11 @@ export async function GET(req: NextRequest) {
       property are then fixed in the wizard).
     */
     const hasContract = row.status === "signed" || row.status === "proposal_approved" || row.status === "contract_sent";
-    const [ownerRead, contractRead, visitRead] = await Promise.all([
+    const [ownerRead, contractRead, visitRead, deciders] = await Promise.all([
       isOwn ? null : admin.from("user_profile").select("id, full_name, email").eq("id", row.owner_id).maybeSingle(),
       hasContract ? admin.from("amc_contracts").select("id, contract_number").eq("submission_id", row.id).maybeSingle<{ id: string; contract_number: string | null }>() : null,
       row.enquiry_id ? null : admin.from("amc_assessments").select("id").eq("submission_id", row.id).limit(1).maybeSingle(),
+      row.status === "awaiting_approval" ? stepDeciders(admin, row, settings.approval?.approvers ?? []).catch(() => null) : null,
     ]);
 
     const names = new Map<string, string>();
@@ -392,6 +393,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       ...mapRow(row, { viewerId: profile.id, names }),
       from_site_visit: fromSiteVisit,
+      approval_deciders: deciders,
       contract_id: contractId,
       contract_number: contractNumber,
       /* One rule for the API and the buttons (lib/amc/workflow.ts),

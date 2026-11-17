@@ -2,7 +2,7 @@
 
 import { Fragment, useEffect, useState } from "react";
 import type { UseFormReturn } from "react-hook-form";
-import { Pencil, Plus, Trash2, Wrench } from "lucide-react";
+import { SquarePen, Plus, RotateCcw, Trash2, Wrench } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -253,7 +253,7 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
                                 aria-label={`Edit ${service.label}`}
                                 onClick={() => setEditing(service.id)}
                               >
-                                <Pencil className="size-3.5" />
+                                <SquarePen className="size-3.5" />
                               </Button>
                               <Button
                                 type="button"
@@ -441,14 +441,52 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
                               Included
                             </span>
                           ) : rateCard && !service.custom ? (
-                            /* From the rate card: read-only (BRD 5.3). A custom service is not on the card, so its price is entered. */
-                            <div className="grid gap-0.5 text-xs">
-                              {row.basePrice === undefined ? (
-                                <span className={row.included ? "text-destructive" : "text-muted-foreground"}>No rate on the card</span>
-                              ) : (
-                                <span className="tabular-nums">{formatCurrencyAED(row.basePrice)}</span>
-                              )}
-                              {row.promotionPercent ? (
+                            /*
+                              Always a box (16 Nov 2026): filled in with the card's
+                              rate when it has one, empty when it does not. Typing
+                              changes it for this proposal; under the card's floor,
+                              or off the card, the proposal goes for approval. The
+                              arrow puts the card's rate back.
+                            */
+                            <div className="grid gap-1 text-xs">
+                              <div className="flex items-center gap-1">
+                                <Input
+                                  type="number"
+                                  min={0}
+                                  step="0.01"
+                                  className="h-8 w-24 text-xs tabular-nums"
+                                  placeholder={row.standardRate != null || row.rateItemId ? "0.00" : "Enter rate"}
+                                  disabled={!row.included}
+                                  aria-label={`Rate for ${service.label}`}
+                                  aria-invalid={flagUnpriced && row.included && row.basePrice === undefined ? true : undefined}
+                                  value={row.basePrice ?? ""}
+                                  onChange={(event) =>
+                                    updateRow(service.id, {
+                                      rateOverride: true,
+                                      basePrice: event.target.value === "" ? undefined : Math.max(0, Number(event.target.value)),
+                                    })
+                                  }
+                                />
+                                {row.rateOverride && row.standardRate != null ? (
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="size-7 shrink-0"
+                                    title="Use the card's rate"
+                                    aria-label={`Use the card's rate for ${service.label}`}
+                                    onClick={() => updateRow(service.id, { rateOverride: false, basePrice: undefined })}
+                                  >
+                                    <RotateCcw className="size-3.5" />
+                                  </Button>
+                                ) : null}
+                              </div>
+                              {row.rateOverride && row.standardRate != null ? (
+                                <span className="text-muted-foreground text-[10px]">Card {formatCurrencyAED(row.standardRate)}</span>
+                              ) : row.standardRate == null && !row.rateItemId ? (
+                                <span className={row.included && row.basePrice === undefined ? "text-destructive text-[10px]" : "text-muted-foreground text-[10px]"}>Not on the card</span>
+                              ) : null}
+                              {row.promotionPercent && !row.rateOverride ? (
                                 <Badge variant="secondary" className="bg-success/10 text-success w-fit border-0 px-1.5 py-0 text-[10px] font-medium">
                                   Promotion −{row.promotionPercent}%
                                 </Badge>
@@ -488,7 +526,7 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
                           )}
                           {row.included && row.belowFloor ? (
                             <div className="text-warning text-[10px] font-normal" title={row.floorRate != null ? `Floor rate ${formatCurrencyAED(row.floorRate)}` : undefined}>
-                              Below floor after discount
+                              {row.rateOverride ? (row.floorRate != null ? "Below the floor: needs approval" : "Off the card: needs approval") : "Below floor after discount"}
                             </div>
                           ) : null}
                         </TableCell>

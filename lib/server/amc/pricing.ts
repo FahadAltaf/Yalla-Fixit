@@ -47,6 +47,8 @@ export interface StoredServiceRow {
   promotionId?: string | null;
   promotionPercent?: number | null;
   belowFloor?: boolean;
+  /** The rate was changed on this proposal (16 Nov 2026). */
+  rateOverride?: boolean;
 }
 
 export type PricedSubmission =
@@ -137,6 +139,7 @@ export function priceSubmission({
         free: row.free,
         price: row.price,
         ...(entered?.equipment?.trim() ? { equipment: entered.equipment.trim() } : {}),
+        ...(entered?.rateOverride === true && !row.free ? { rateOverride: true } : {}),
         ...(entered?.customName !== undefined ? { customName: entered.customName } : {}),
         ...(entered?.customScope !== undefined ? { customScope: entered.customScope } : {}),
         ...(rate

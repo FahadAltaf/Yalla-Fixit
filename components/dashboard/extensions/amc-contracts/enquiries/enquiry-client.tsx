@@ -7,7 +7,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
-  DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
@@ -18,6 +17,7 @@ import { PhoneInput } from "@/components/ui/phone-input";
 import type { CustomerRecord } from "@/modules/amc-contracts/amc-contracts-service";
 
 import { Field } from "./enquiry-ui";
+import { ActionDialogContent, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
 import { formatPhone } from "@/lib/phone/format-phone";
 
 /*
@@ -118,26 +118,38 @@ export function NewClientDialog({
 }: {
   adding: { typed: string; fromFsm: boolean } | null;
   onClose: () => void;
-  onAdd: (client: NewClient) => void;
+  /** May save; the dialog shows it working, and can't be closed, until it settles. */
+  onAdd: (client: NewClient) => void | Promise<unknown>;
   /** The first line under the title; the enquiry's wording when left out. */
   intro?: string;
   /** Offers a Client ID field too (optional: the next one is given when blank). */
   askClientId?: boolean;
 }) {
+  /* The save runs in the caller; shown here so "Add client" never looks idle (13 Nov 2026). */
+  const [saving, setSaving] = useState(false);
+  const add = async (client: NewClient) => {
+    setSaving(true);
+    try {
+      await onAdd(client);
+    } finally {
+      setSaving(false);
+    }
+  };
   return (
-    <Dialog open={adding !== null} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="sm:max-w-md">
+    <Dialog open={adding !== null} onOpenChange={(open) => !open && !saving && onClose()}>
+      <ActionDialogContent busy={saving} className="sm:max-w-md">
         {adding ? (
           <NewClientForm
             typed={adding.typed}
             requireEmail={adding.fromFsm}
             onClose={onClose}
-            onAdd={onAdd}
+            onAdd={add}
+            saving={saving}
             intro={intro}
             askClientId={askClientId}
           />
         ) : null}
-      </DialogContent>
+      </ActionDialogContent>
     </Dialog>
   );
 }
@@ -147,6 +159,7 @@ function NewClientForm({
   requireEmail,
   onClose,
   onAdd,
+  saving = false,
   intro = "Saved as a prospect when the enquiry is logged, and they are the enquiry's contact.",
   askClientId = false,
 }: {
@@ -154,6 +167,7 @@ function NewClientForm({
   requireEmail: boolean;
   onClose: () => void;
   onAdd: (client: NewClient) => void;
+  saving?: boolean;
   intro?: string;
   askClientId?: boolean;
 }) {
@@ -188,7 +202,7 @@ function NewClientForm({
           {askClientId ? " A Client ID is given automatically when it is left blank." : ""}
         </DialogDescription>
       </DialogHeader>
-      <div className="grid gap-4 py-2">
+      <fieldset disabled={saving} className="grid gap-4 py-2">
         <Field label="Client name" htmlFor="new-client-name">
           <Input
             id="new-client-name"
@@ -250,13 +264,16 @@ function NewClientForm({
             maxLength={200}
           />
         </Field>
-      </div>
+      </fieldset>
       <DialogFooter>
-        <Button variant="outline" onClick={onClose}>
+        <Button variant="outline" onClick={onClose} disabled={saving}>
           Cancel
         </Button>
-        <Button
-          disabled={!valid}
+        <SubmitButton
+          pending={saving}
+          pendingLabel="Adding client…"
+          icon={<UserPlus className="size-4" />}
+          disabled={!valid || saving}
           onClick={() =>
             onAdd({
               ...value,
@@ -268,9 +285,8 @@ function NewClientForm({
             })
           }
         >
-          <UserPlus className="size-4" />
           Add client
-        </Button>
+        </SubmitButton>
       </DialogFooter>
     </>
   );

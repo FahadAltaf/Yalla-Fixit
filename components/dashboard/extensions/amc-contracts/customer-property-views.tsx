@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Building2, ChevronRight, ClipboardCheck, Layers, Pencil, Plus, Receipt, ScrollText, TriangleAlert, UserRound, UserX } from "lucide-react";
+import { ArrowLeft, Building2, ChevronRight, ClipboardCheck, Layers, SquarePen, Plus, Receipt, ScrollText, TriangleAlert, UserRound, UserX } from "lucide-react";
 import { toast } from "sonner";
 import type { ColumnDef } from "@tanstack/react-table";
 
@@ -46,7 +46,7 @@ import { ContactsPanel } from "./profile/contacts-panel";
 import { DetailList } from "./profile/detail-list";
 import { DocumentsPanel } from "./profile/documents-panel";
 import { IdentityCard, LIFECYCLE_TONE } from "./profile/identity-card";
-import { AccessRulesPanel, AssetsPanel, ScopePanel } from "./profile/property-panels";
+import { AccessRulesPanel, AssetsPanel, PropertyPassesPanel, ScopePanel } from "./profile/property-panels";
 import { useDialog } from "./profile/use-dialog";
 import { useUrlTab } from "./profile/use-url-tab";
 import { ClientEnquiriesCard } from "./enquiries/client-enquiries-card";
@@ -392,7 +392,7 @@ export function CustomerDetail({ id }: { id: string }) {
           <div className="flex flex-wrap items-center gap-2">
             {canEdit ? (
               <Button variant="outline" onClick={() => editing.show(true)}>
-                <Pencil className="size-4" />
+                <SquarePen className="size-4" />
                 Edit
               </Button>
             ) : null}
@@ -706,7 +706,7 @@ export function PropertyDetail({ id }: { id: string }) {
               ) : null}
               {canEdit ? (
                 <Button variant="outline" onClick={() => editing.show(true)}>
-                  <Pencil className="size-4" />
+                  <SquarePen className="size-4" />
                   Edit
                 </Button>
               ) : null}
@@ -853,30 +853,6 @@ export function PropertyDetail({ id }: { id: string }) {
                   </div>
                 </SectionCard>
 
-                <SectionCard title="Combined units" icon={<Layers />} description="Linked, not merged: each keeps its owner, billing and history." bodyClassName="border-t">
-                  {units.parent ? (
-                    <DataRow
-                      onClick={() => router.push(`/extensions/amc-contracts/properties/${units.parent!.id}`)}
-                      icon={<Building2 />}
-                      title={units.parent.label}
-                      subtitle="This unit is part of it"
-                      trailing={<ChevronRight className="text-muted-foreground size-4" aria-hidden />}
-                    />
-                  ) : null}
-                  {units.children.map((u) => (
-                    <DataRow
-                      key={u.id}
-                      onClick={() => router.push(`/extensions/amc-contracts/properties/${u.id}`)}
-                      icon={<Layers />}
-                      title={u.label}
-                      subtitle={[unitTypeLabel(u.unitType), u.customerId && u.customerId !== customer?.id ? "different owner" : null].filter(Boolean).join(" · ") || "Unit within"}
-                      trailing={<ChevronRight className="text-muted-foreground size-4" aria-hidden />}
-                    />
-                  ))}
-                  {!units.parent && units.children.length === 0 ? (
-                    <p className="text-muted-foreground px-5 py-4 text-sm">Not linked to other units. Link one from its Edit form.</p>
-                  ) : null}
-                </SectionCard>
               </>,
             )}
 
@@ -918,7 +894,10 @@ export function PropertyDetail({ id }: { id: string }) {
                 ) : null}
                 {maintainedOpened.has("access") ? (
                   <div hidden={maintained !== "access"}>
-                    <AccessRulesPanel propertyId={property.id} canEdit={canEdit} />
+                    <div className="flex flex-col gap-6">
+                      <AccessRulesPanel propertyId={property.id} canEdit={canEdit} />
+                      <PropertyPassesPanel propertyId={property.id} canEdit={canEdit} />
+                    </div>
                   </div>
                 ) : null}
               </>,

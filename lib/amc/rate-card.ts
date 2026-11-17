@@ -268,6 +268,8 @@ interface CardRow {
   frequency: number;
   basePrice?: number | null;
   free?: boolean | null;
+  /** The rate was changed on this proposal (16 Nov 2026): basePrice is kept, not set from the card. */
+  rateOverride?: boolean | null;
 }
 
 export interface CardPricing<R extends CardRow> {
@@ -296,14 +298,43 @@ export function applyRateCard<R extends CardRow>(
   let belowFloor = false;
   const priced = rows.map((row) => {
     const item = rateItemFor(card, row.serviceId, model);
+    /*
+      A rate changed on the proposal (16 Nov 2026) is kept as entered. Under
+      the card's floor, or for a service the card does not price, the line
+      counts as below the floor, so the proposal goes for approval.
+    */
+    const manual =
+      row.rateOverride === true && !row.free && typeof row.basePrice === "number" && Number.isFinite(row.basePrice) ? roundAed(row.basePrice) : null;
     if (!item) {
-      if (row.included && !row.free) problems.push(`${labelOf(row.serviceId)} has no rate on the card for this property.`);
       const none: RateFields = { rateItemId: null, standardRate: null, floorRate: null, promotionId: null, promotionPercent: null, belowFloor: false };
+      if (manual !== null) {
+        if (row.included) belowFloor = true;
+        return { ...row, ...none, basePrice: manual, belowFloor: row.included };
+      }
+      if (row.included && !row.free) problems.push(`${labelOf(row.serviceId)} has no rate on the card for this property.`);
       /* No rate, no price: a ticked line cannot be submitted until the card has one. */
       return { ...row, ...none, basePrice: null };
     }
     if (row.included && countsVisits(row.serviceId) && item.allowedFrequencies.length > 0 && !item.allowedFrequencies.includes(Math.trunc(row.frequency))) {
       problems.push(`${labelOf(row.serviceId)} can be ${item.allowedFrequencies.join(", ")} times a year on the card, not ${row.frequency}.`);
+    }
+    /* Being retyped (the box emptied): left unpriced, not snapped back to the card; submitting asks for a price. */
+    if (manual === null && row.rateOverride === true && !row.free) {
+      return { ...row, basePrice: null, rateItemId: item.id, standardRate: item.standardRate, floorRate: item.floorRate, promotionId: null, promotionPercent: null, belowFloor: false };
+    }
+    if (manual !== null) {
+      const under = row.included && (manual + 1e-9 < item.floorRate || lineBelowFloor(manual, item.floorRate, discountPercent));
+      if (under) belowFloor = true;
+      return {
+        ...row,
+        basePrice: manual,
+        rateItemId: item.id,
+        standardRate: item.standardRate,
+        floorRate: item.floorRate,
+        promotionId: null,
+        promotionPercent: null,
+        belowFloor: under,
+      };
     }
     const promo = promotionFor(card, row.serviceId, model, day);
     const basePrice = roundAed(item.standardRate * (1 - (promo?.percentOff ?? 0) / 100));

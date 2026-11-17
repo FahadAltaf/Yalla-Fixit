@@ -1,7 +1,7 @@
 "use client";
 
 import { ColumnDef } from "@tanstack/react-table";
-import { FolderTree, Layers, Pencil } from "lucide-react";
+import { FolderTree, Layers, SquarePen } from "lucide-react";
 
 import { IconText } from "@/components/data-table/columns/icon-text";
 import { SeverityBadge } from "@/components/dashboard/snagging/shared";
@@ -163,7 +163,7 @@ export function getCatalogueV2Columns({
               onClick={() => onEdit(row.original)}
               aria-label={`Edit ${row.original.label}`}
             >
-              <Pencil className="size-3.5" />
+              <SquarePen className="size-3.5" />
             </Button>
           ) : null}
         </div>

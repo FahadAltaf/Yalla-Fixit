@@ -1,10 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { AlarmClock, CheckCircle2, Circle, Clock, FileUp, PenLine, Play, Save, ScrollText } from "lucide-react";
+import { AlarmClock, CalendarRange, CheckCircle2, Circle, Clock, FileUp, Info, PenLine, Play, Save, ScrollText } from "lucide-react";
 import { toast } from "sonner";
 
 import { SectionCard } from "@/components/dashboard/shared/kaizen";
+import { OptionToggle } from "@/components/dashboard/shared/option-toggle";
 import { ActionDialogContent, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -369,12 +370,17 @@ function ActivateDialog({ open, onOpenChange, data, onDone }: DialogProps & { da
         </SubmitButton>
       }
     >
+      {/*
+        content-start on both columns (17 Nov 2026): the Term column is taller
+        (its hint), and a stretched grid spread the date's label and box apart,
+        so the two labels sat at different heights.
+      */}
       <div className="grid gap-4 sm:grid-cols-2">
-        <div className="grid gap-2">
+        <div className="grid content-start gap-2">
           <Label htmlFor="act-start">Commencement date</Label>
           <DateSelect id="act-start" value={start} onChange={setStart} />
         </div>
-        <div className="grid gap-2">
+        <div className="grid content-start gap-2">
           <Label htmlFor="act-term">Term</Label>
           <Input id="act-term" value={`${signedTerm} ${signedTerm === 1 ? "month" : "months"}`} readOnly disabled aria-describedby="act-term-hint" />
           <p id="act-term-hint" className="text-muted-foreground text-xs">
@@ -382,28 +388,49 @@ function ActivateDialog({ open, onOpenChange, data, onDone }: DialogProps & { da
           </p>
         </div>
       </div>
-      {end ? <p className="text-muted-foreground text-sm">Runs to {formatContractDate(end)}.</p> : null}
-      <p className="text-muted-foreground text-sm">
-        {early
-          ? "The payment schedule is made now. The contract starts straight away; the first instalment is still collected."
-          : "The payment schedule is made now. The contract waits for the first instalment before any visit is released."}
-      </p>
+      {/* What activating does, as one panel: the dates it runs, then the payment rule. */}
+      <div className="bg-muted/30 divide-y rounded-lg border text-sm">
+        {end && start ? (
+          <div className="flex items-center gap-3 px-4 py-3">
+            <CalendarRange className="text-muted-foreground size-4 shrink-0" aria-hidden />
+            <span>
+              Runs <span className="font-medium">{longDate(start)}</span> to <span className="font-medium">{longDate(end)}</span>
+            </span>
+          </div>
+        ) : null}
+        <div className="text-muted-foreground flex items-start gap-3 px-4 py-3">
+          <Info className="mt-0.5 size-4 shrink-0" aria-hidden />
+          <span>
+            {early
+              ? "The payment schedule is made now. The contract starts straight away; the first instalment is still collected."
+              : "The payment schedule is made now. The contract waits for the first instalment before any visit is released."}
+          </span>
+        </div>
+      </div>
       {canStartEarly ? (
-        <div className="grid gap-3 rounded-lg border p-3">
-          <label className="flex items-start gap-2 text-sm">
-            <Checkbox checked={startEarly} onCheckedChange={(v) => setStartEarly(v === true)} className="mt-0.5" />
-            Start before the first payment (agreed credit terms)
-          </label>
+        <div className="grid gap-3">
+          <OptionToggle
+            checked={startEarly}
+            onChange={setStartEarly}
+            icon={<Play />}
+            title="Start before the first payment"
+            description="Agreed credit terms: visits are released now."
+          />
           {startEarly ? (
             <div className="grid gap-2">
               <Label htmlFor="act-early-reason">Reason</Label>
-              <Textarea id="act-early-reason" rows={2} value={earlyReason} onChange={(e) => setEarlyReason(e.target.value)} maxLength={500} />
+              <Textarea id="act-early-reason" rows={2} value={earlyReason} onChange={(e) => setEarlyReason(e.target.value)} maxLength={500} placeholder="Why it starts before the first payment" />
             </div>
           ) : null}
         </div>
       ) : null}
     </DialogShell>
   );
+}
+
+/** "17 Nov 2026", as the date box above shows it. */
+function longDate(iso: string) {
+  return new Date(`${iso.slice(0, 10)}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
 }
 
 const STATUS_COPY: Record<StatusTarget, { title: string; description: string; button: string; pending: string }> = {

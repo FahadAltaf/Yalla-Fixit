@@ -142,14 +142,17 @@ function FieldInput({
   const wide = field.kind === "users" || field.kind === "list" || field.kind === "holidays" || field.kind === "multi";
   return (
     <div className={wide ? "space-y-1.5 sm:col-span-2 xl:col-span-3" : "space-y-1.5"}>
+      <Label htmlFor={id}>{field.label}</Label>
+      {/* A switch row the height of an input, under its label, so it lines up with the fields beside it (16 Nov 2026). */}
       {field.kind === "boolean" ? (
-        <div className="flex items-center justify-between gap-3 rounded-md border px-3 py-2.5">
-          <Label htmlFor={id} className="font-normal">{field.label}</Label>
+        <label
+          htmlFor={id}
+          className="bg-background dark:bg-input/30 flex h-8 cursor-pointer items-center justify-between gap-3 rounded-md border px-3 has-[button:disabled]:cursor-not-allowed has-[button:disabled]:opacity-60"
+        >
+          <span className="truncate text-sm">{field.toggle}</span>
           <Switch id={id} checked={value === true} onCheckedChange={(c) => onChange(c)} disabled={disabled} />
-        </div>
-      ) : (
-        <Label htmlFor={id}>{field.label}</Label>
-      )}
+        </label>
+      ) : null}
 
       {field.kind === "number" ? (
         <div className="flex items-center gap-2">

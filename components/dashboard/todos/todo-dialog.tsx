@@ -13,7 +13,7 @@ import {
   Loader2,
   MessageSquare,
   Paperclip,
-  Pencil,
+  SquarePen,
   Trash2,
   X,
 } from "lucide-react";
@@ -620,7 +620,7 @@ export function TodoDialog({
                             aria-label="Edit comment"
                             onClick={() => setEditingComment({ id: comment.id, body: comment.body })}
                           >
-                            <Pencil className="size-3.5" />
+                            <SquarePen className="size-3.5" />
                           </Button>
                         )}
                         <Button

@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useRouter } from "next/navigation";
 import { format } from "date-fns";
 import {
-  CalendarCheck,
   CalendarClock,
   CalendarDays,
   CalendarPlus,
@@ -212,7 +211,7 @@ export function ContractSchedulePanel({ contractId, schedule }: { contractId: st
       title: again ? "Make the schedule again?" : "Make the schedule?",
       description: again
         ? "The tentative visits are replaced by a fresh plan from the contract's PPM services, term and rules."
-        : "One visit for each PPM service occurrence over the term, each with its service window. It starts tentative.",
+        : "One visit for each PPM service occurrence over the term, each with its service window. It is confirmed as it is made.",
       confirmText: again ? "Make again" : "Make schedule",
       action: async () => {
         /* Refused (409) once a visit was adjusted: say so and close, there is nothing to retry. */
@@ -222,18 +221,6 @@ export function ContractSchedulePanel({ contractId, schedule }: { contractId: st
         } catch (e) {
           toast.error(e instanceof Error ? e.message : "Could not make the schedule.");
         }
-      },
-    });
-
-  const confirmSchedule = () =>
-    void confirm({
-      title: "Confirm the schedule?",
-      description:
-        "It becomes the plan of record: visits not yet scheduled become Scheduled. After this, moving a visit outside its window needs a reason and keeps the original date.",
-      confirmText: "Confirm schedule",
-      action: async () => {
-        await post({ action: "confirm" });
-        toast.success("Schedule confirmed");
       },
     });
 
@@ -321,66 +308,11 @@ export function ContractSchedulePanel({ contractId, schedule }: { contractId: st
         />
       </StatCardGrid>
 
-      {/* The plan's state, and what can be done to the whole of it. */}
-      <div
-        className={`flex flex-wrap items-center justify-between gap-4 rounded-xl border px-5 py-4 ${
-          confirmed ? "border-success/30 bg-success/5" : "border-warning/30 bg-warning/5"
-        }`}
-      >
-        <div className="min-w-0">
-          <p className={`text-sm font-medium ${confirmed ? "text-success" : "text-warning"}`}>
-            {confirmed
-              ? `Confirmed${confirmed.by ? ` by ${confirmed.by}` : ""} on ${formatContractDate(confirmed.at)}`
-              : "Tentative — not yet confirmed"}
-          </p>
-          <p className="text-muted-foreground mt-0.5 text-sm">
-            {confirmed
-              ? "Moving a visit inside its window is fine. Outside it, say why: the original date is kept."
-              : "Dates can still be adjusted freely. Confirm to make this the plan of record."}
-            {` Window: ${plural(rules.windowDays, "day")} from each cycle's start.`}
-          </p>
-        </div>
-        {canEdit ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" onClick={() => openDialog("add")} disabled={lines.length === 0}>
-              <CalendarPlus className="size-4" />
-              Add visit
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="icon" aria-label="More schedule actions">
-                  <MoreHorizontal className="size-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-56">
-                <DropdownMenuItem onClick={clubOverlapping} disabled={overlapGroups.length === 0}>
-                  <Combine className="size-4" />
-                  Club overlapping visits
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => openDialog("rules")}>
-                  <Settings2 className="size-4" />
-                  Schedule rules
-                </DropdownMenuItem>
-                {confirmed ? null : (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem onClick={() => makeSchedule(true)}>
-                      <RefreshCw className="size-4" />
-                      Make schedule again
-                    </DropdownMenuItem>
-                  </>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
-            {confirmed ? null : (
-              <Button onClick={confirmSchedule}>
-                <CalendarCheck className="size-4" />
-                Confirm schedule
-              </Button>
-            )}
-          </div>
-        ) : null}
-      </div>
+      {/*
+        No Tentative banner or Confirm button (17 Nov 2026): the schedule is
+        confirmed when the contract starts, by its payment or on agreed
+        terms (lib/server/amc/ppm.ts, ensurePpmSchedule).
+      */}
 
       <SectionCard
         title="Visits"
@@ -392,12 +324,50 @@ export function ContractSchedulePanel({ contractId, schedule }: { contractId: st
         icon={<CalendarClock />}
         bodyClassName="pb-2"
         action={
-          progress.cancelled > 0 ? (
-            <div className="flex items-center gap-2">
-              <Switch id="ppm-show-cancelled" checked={showCancelled} onCheckedChange={setShowCancelled} />
-              <Label htmlFor="ppm-show-cancelled" className="text-sm font-normal">
-                Show removed and clubbed ({progress.cancelled})
-              </Label>
+          progress.cancelled > 0 || canEdit ? (
+            <div className="flex flex-wrap items-center gap-3">
+              {progress.cancelled > 0 ? (
+                <div className="flex items-center gap-2">
+                  <Switch id="ppm-show-cancelled" checked={showCancelled} onCheckedChange={setShowCancelled} />
+                  <Label htmlFor="ppm-show-cancelled" className="text-sm font-normal">
+                    Show removed and clubbed ({progress.cancelled})
+                  </Label>
+                </div>
+              ) : null}
+              {canEdit ? (
+                <div className="flex items-center gap-2">
+                  <Button size="sm" variant="outline" onClick={() => openDialog("add")} disabled={lines.length === 0}>
+                    <CalendarPlus className="size-4" />
+                    Add visit
+                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="outline" size="icon" className="size-8" aria-label="More schedule actions">
+                        <MoreHorizontal className="size-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-56">
+                      <DropdownMenuItem onClick={clubOverlapping} disabled={overlapGroups.length === 0}>
+                        <Combine className="size-4" />
+                        Club overlapping visits
+                      </DropdownMenuItem>
+                      <DropdownMenuItem onClick={() => openDialog("rules")}>
+                        <Settings2 className="size-4" />
+                        Schedule rules
+                      </DropdownMenuItem>
+                      {confirmed ? null : (
+                        <>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem onClick={() => makeSchedule(true)}>
+                            <RefreshCw className="size-4" />
+                            Make schedule again
+                          </DropdownMenuItem>
+                        </>
+                      )}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              ) : null}
             </div>
           ) : null
         }
@@ -1014,7 +984,7 @@ function RulesDialog({ open, onOpenChange, rules, submit }: BaseProps & { rules:
       busy={busy}
       wide
       title="Schedule rules"
-      description="The service window and the appointment attempt rule for this contract. Visits already planned keep their windows."
+      description="The service window and the appointment attempt rule for this contract. A new window length applies to every visit not yet done."
       footer={
         <SubmitButton
           pending={busy}

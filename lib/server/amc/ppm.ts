@@ -10,6 +10,8 @@ import {
   clubbedWindow,
   clubbingGroups,
   ppmProgress,
+  rewindowVisit,
+  visitRenumbering,
   windowAfterMove,
   type PpmAction,
   type PpmProgress,
@@ -281,6 +283,15 @@ export async function contractPpm(admin: Admin, contractId: string, config: AmcC
     }
     throw error;
   }
+  /*
+    A schedule made before 17 Nov 2026 may still be tentative on a running
+    contract. There is no Confirm button any more, so it is confirmed here,
+    once (the claim in confirmPpmSchedule), the first time it is read.
+  */
+  if (isOpen(c) && !c.ppm_confirmed_at) {
+    const visits = await confirmPpmSchedule(admin, contractId, { id: null, label: "Automatic (contract running)" }, { auto: true }).catch(() => 0);
+    if (visits) c = { ...c, ppm_confirmed_at: new Date().toISOString() };
+  }
   const [visitsResult, changesResult, lines] = await Promise.all([
     /* With the board columns when Phase 9 is applied; without them before. */
     (async () => {
@@ -459,6 +470,8 @@ export async function generatePpmSchedule(
     actorLabel: actor.label,
     payload: { visits: planned.length, replaced: Boolean(opts.replace && existing) },
   });
+  /* Made on a running contract, so it is the plan of record at once (17 Nov 2026). */
+  await confirmPpmSchedule(admin, contractId, actor, { auto: true });
   return { created: planned.length };
 }
 
@@ -471,8 +484,15 @@ export async function generatePpmSchedule(
 export async function ensurePpmSchedule(admin: Admin, contractId: string, actor: Actor, config: AmcConfig): Promise<void> {
   try {
     const { count, error } = await admin.from("amc_visits").select("id", { count: "exact", head: true }).eq("contract_id", contractId);
-    if (error || (count ?? 0) > 0) return;
-    await generatePpmSchedule(admin, contractId, actor, config);
+    if (error) return;
+    if (!count) await generatePpmSchedule(admin, contractId, actor, config);
+    /*
+      Confirmed as it is made (17 Nov 2026): this runs when the contract
+      starts -- activated with its first payment, the payment received
+      later, or started on agreed terms -- so the schedule is the plan of
+      record from then. There is no tentative step to confirm by hand.
+    */
+    await confirmPpmSchedule(admin, contractId, actor, { auto: true });
   } catch (e) {
     if (!(e instanceof ContractError && (e.status === 409 || e.status === 503))) {
       console.error("[amc:ppm] schedule not generated:", e instanceof Error ? e.message : e);
@@ -480,11 +500,123 @@ export async function ensurePpmSchedule(admin: Admin, contractId: string, actor:
   }
 }
 
+/** Every visit not yet done gets the new window length (rewindowVisit); returns how many changed. */
+async function rewindowOpenVisits(admin: Admin, contractId: string, windowDays: number, calendar: WorkingCalendar): Promise<number> {
+  const { data, error } = await admin
+    .from("amc_visits")
+    .select("id, status, window_start, window_end, cycle_end, target_date, original_target_date, reschedule_count, lines:amc_visit_lines!amc_visit_lines_visit_id_fkey(id, home_window_start, home_window_end, home_cycle_end, home_target_date)")
+    .eq("contract_id", contractId)
+    .in("status", [...PLANNABLE_STATUSES]);
+  if (error) throw fail(error);
+  const today = todayInDubai();
+  const now = new Date().toISOString();
+  let changed = 0;
+  for (const v of (data ?? []) as Row[]) {
+    /* A date moved with a reason, or agreed with the client, is kept. */
+    const keepDate = Boolean(v.original_target_date) || Number(v.reschedule_count) > 0 || v.status === "confirmed";
+    const lines = (v.lines ?? []) as Row[];
+    /* Each service's own window first: a clubbed visit's window is where they meet. */
+    const homes = lines.map((l) => ({
+      line: l,
+      next: rewindowVisit(
+        { windowStart: String(l.home_window_start), cycleEnd: String(l.home_cycle_end), targetDate: String(l.home_target_date), keepDate },
+        windowDays,
+        calendar,
+      ),
+    }));
+    const own = rewindowVisit({ windowStart: String(v.window_start), cycleEnd: String(v.cycle_end), targetDate: String(v.target_date), keepDate }, windowDays, calendar);
+    const meetEnd = lines.length > 1 ? homes.reduce((end, h) => (h.next.windowEnd < end ? h.next.windowEnd : end), own.windowEnd) : own.windowEnd;
+    const windowEnd = meetEnd >= String(v.window_start) ? meetEnd : own.windowEnd;
+    const next =
+      windowEnd === own.windowEnd
+        ? own
+        : rewindowVisit({ windowStart: String(v.window_start), cycleEnd: windowEnd, targetDate: String(v.target_date), keepDate }, windowDays, calendar);
+    const linesChanged = homes.filter((h) => h.next.windowEnd !== String(h.line.home_window_end) || h.next.targetDate !== String(h.line.home_target_date));
+    if (next.windowEnd === String(v.window_end) && next.targetDate === String(v.target_date) && !linesChanged.length) continue;
+    const { error: visitError } = await admin
+      .from("amc_visits")
+      .update({
+        window_end: next.windowEnd,
+        target_date: next.targetDate,
+        /* A longer window can lift an overdue visit back into time. */
+        ...(next.windowEnd >= today ? { overdue_notified_at: null } : {}),
+        updated_at: now,
+      })
+      .eq("id", String(v.id));
+    if (visitError) throw fail(visitError);
+    /* Each line's own window too, so separating a trade later keeps the new length. */
+    for (const { line, next: home } of linesChanged) {
+      await admin.from("amc_visit_lines").update({ home_window_end: home.windowEnd, home_target_date: home.targetDate, updated_at: now }).eq("id", String(line.id));
+    }
+    changed += 1;
+  }
+  return changed;
+}
+
+/**
+ * Makes the schedule the plan of record: visits not yet scheduled become
+ * Scheduled, and a move outside its window then needs a reason. Returns
+ * how many visits it covers (0: nothing to confirm). A no-op on a schedule
+ * that is already confirmed, unless `again` (the explicit action).
+ */
+export async function confirmPpmSchedule(
+  admin: Admin,
+  contractId: string,
+  actor: Actor,
+  opts: { auto?: boolean; again?: boolean } = {},
+): Promise<number> {
+  const now = new Date().toISOString();
+  const { count } = await admin.from("amc_visits").select("id", { count: "exact", head: true }).eq("contract_id", contractId).neq("status", "cancelled");
+  if (!count) return 0;
+  /* Claimed once: two requests at the same moment confirm it once. */
+  let claim = admin.from("amc_contracts").update({ ppm_confirmed_at: now, ppm_confirmed_by: actor.id, updated_at: now }).eq("id", contractId);
+  if (!opts.again) claim = claim.is("ppm_confirmed_at", null);
+  const { data: claimed, error } = await claim.select("id");
+  if (error) throw fail(error);
+  if (!claimed?.length) return count;
+  await admin.from("amc_visits").update({ status: "scheduled", updated_at: now }).eq("contract_id", contractId).eq("status", "not_scheduled");
+  await recordChange(admin, { contractId, type: "confirmed", detail: { visits: count, again: Boolean(opts.again), auto: Boolean(opts.auto) } }, actor);
+  await recordAmcAudit(admin, { entityType: "contract", entityId: contractId, eventType: "ppm_schedule_confirmed", actorId: actor.id, actorLabel: actor.label, payload: { visits: count, auto: Boolean(opts.auto) } });
+  return count;
+}
+
 /* ------------------------------------------------------------------ */
 /* Actions (DEV-389, 390)                                              */
 /* ------------------------------------------------------------------ */
 
+/* The actions that change which visits there are: the numbers follow the dates again after them. */
+const RENUMBER_AFTER: ReadonlySet<PpmAction["action"]> = new Set(["add", "remove", "club", "club_overlapping", "separate"]);
+
 export async function performPpmAction(admin: Admin, contractId: string, action: PpmAction, actor: Actor, config: AmcConfig): Promise<{ ok: true; changed?: number }> {
+  const result = await runPpmAction(admin, contractId, action, actor, config);
+  if (RENUMBER_AFTER.has(action.action)) await renumberVisits(admin, contractId);
+  return result;
+}
+
+/**
+ * Applies visitRenumbering in two passes, because (contract_id, visit_no)
+ * is unique: the visits that change park on numbers out of the way first,
+ * then take their new ones.
+ */
+async function renumberVisits(admin: Admin, contractId: string): Promise<void> {
+  const { data, error } = await admin.from("amc_visits").select("id, visit_no, status, target_date").eq("contract_id", contractId);
+  if (error) throw fail(error);
+  const visits = ((data ?? []) as Row[]).map((r) => ({ id: String(r.id), visitNo: Number(r.visit_no), status: r.status as VisitStatus, targetDate: String(r.target_date) }));
+  const moves = [...visitRenumbering(visits).entries()];
+  if (!moves.length) return;
+  const park = Math.max(0, ...visits.map((v) => v.visitNo)) + 1000;
+  const now = new Date().toISOString();
+  for (const [i, [id]] of moves.entries()) {
+    const { error: parkError } = await admin.from("amc_visits").update({ visit_no: park + i, updated_at: now }).eq("id", id);
+    if (parkError) throw fail(parkError);
+  }
+  for (const [id, no] of moves) {
+    const { error: setError } = await admin.from("amc_visits").update({ visit_no: no, updated_at: now }).eq("id", id);
+    if (setError) throw fail(setError);
+  }
+}
+
+async function runPpmAction(admin: Admin, contractId: string, action: PpmAction, actor: Actor, config: AmcConfig): Promise<{ ok: true; changed?: number }> {
   const c = await contractFacts(admin, contractId);
   if (action.action === "generate") {
     const made = await generatePpmSchedule(admin, contractId, actor, config, { replace: action.replace });
@@ -503,8 +635,17 @@ export async function performPpmAction(admin: Admin, contractId: string, action:
       })
       .eq("id", contractId);
     if (error) throw fail(error);
-    await recordChange(admin, { contractId, type: "rules_changed", detail: { ...action } }, actor);
-    return { ok: true };
+    /*
+      The window length reaches the visits not yet done (17 Nov 2026). It
+      used to apply only to visits planned afterwards -- and with the
+      schedule made and confirmed when the contract starts, that was none.
+      Every save brings them into line (a contract saved before this fix
+      included); a visit already in line is left alone.
+    */
+    const windowDays = action.windowDays ?? config.scheduling.serviceWindowDays;
+    const rewindowed = await rewindowOpenVisits(admin, contractId, windowDays, calendarOf(config));
+    await recordChange(admin, { contractId, type: "rules_changed", detail: { ...action, rewindowed } }, actor);
+    return { ok: true, changed: rewindowed };
   }
   if (!isOpen(c)) throw new ContractError("The schedule can be changed while the contract is active or on hold.", 409);
   const confirmed = Boolean(c.ppm_confirmed_at);
@@ -665,13 +806,8 @@ export async function performPpmAction(admin: Admin, contractId: string, action:
       return { ok: true };
     }
     case "confirm": {
-      const { count } = await admin.from("amc_visits").select("id", { count: "exact", head: true }).eq("contract_id", contractId).neq("status", "cancelled");
-      if (!count) throw new ContractError("There are no visits to confirm.", 409);
-      const { error } = await admin.from("amc_contracts").update({ ppm_confirmed_at: now, ppm_confirmed_by: actor.id, updated_at: now }).eq("id", contractId);
-      if (error) throw fail(error);
-      await admin.from("amc_visits").update({ status: "scheduled", updated_at: now }).eq("contract_id", contractId).eq("status", "not_scheduled");
-      await recordChange(admin, { contractId, type: "confirmed", detail: { visits: count, again: confirmed } }, actor);
-      await recordAmcAudit(admin, { entityType: "contract", entityId: contractId, eventType: "ppm_schedule_confirmed", actorId: actor.id, actorLabel: actor.label, payload: { visits: count } });
+      const visits = await confirmPpmSchedule(admin, contractId, actor, { again: confirmed });
+      if (!visits) throw new ContractError("There are no visits to confirm.", 409);
       return { ok: true };
     }
   }

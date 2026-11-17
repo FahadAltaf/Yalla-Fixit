@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Archive, ArchiveRestore, Eye, EyeOff, Pencil, RefreshCw, UserRoundX } from "lucide-react";
+import { ArrowLeft, Archive, ArchiveRestore, Eye, EyeOff, SquarePen, RefreshCw, UserRoundX } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -160,7 +160,7 @@ export default function EmployeeRecordView({ id, embedded = false }: { id: strin
             ) : null}
             {rights.edit && !record.archived_at ? (
               <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
-                <Pencil className="size-4" /> Edit
+                <SquarePen className="size-4" /> Edit
               </Button>
             ) : null}
             {rights.edit && linkedActive && !record.archived_at ? (

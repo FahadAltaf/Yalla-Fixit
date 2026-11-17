@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Archive, ClipboardList, EllipsisVerticalIcon, History, KeyRound, Pencil, Plus, Power, Wrench } from "lucide-react";
+import { Archive, ClipboardList, EllipsisVerticalIcon, FileText, History, KeyRound, ShieldCheck, SquarePen, Plus, Power, Trash2, Wrench } from "lucide-react";
 import { toast } from "sonner";
 import type { ColumnDef } from "@tanstack/react-table";
 
@@ -191,7 +191,7 @@ function assetColumns({
               {canEdit && a.status === "active" ? (
                 <>
                   <DropdownMenuItem onClick={() => onEdit(a)}>
-                    <Pencil className="size-4" />
+                    <SquarePen className="size-4" />
                     Edit
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => onRetire(a)} className="text-destructive focus:text-destructive">
@@ -540,7 +540,10 @@ export function AccessRulesPanel({ propertyId, canEdit }: { propertyId: string; 
       title: r.active ? `Switch off ${ACCESS_TYPE_LABELS[r.accessType as keyof typeof ACCESS_TYPE_LABELS]}?` : "Switch this rule back on?",
       description: r.active ? "Visits stop asking for it. The rule stays on record." : "Visits will ask for it again.",
       confirmText: r.active ? "Switch off" : "Switch on",
-      action: () => clientProfileService.updateAccessRule(propertyId, r.id, { ...ruleInput(r), active: !r.active }),
+      action: async () => {
+        await clientProfileService.updateAccessRule(propertyId, r.id, { ...ruleInput(r), active: !r.active });
+        await clientProfileService.refreshPropertyAccess(propertyId).catch(() => undefined);
+      },
     });
     if (ok) reload();
   };
@@ -607,7 +610,7 @@ export function AccessRulesPanel({ propertyId, canEdit }: { propertyId: string; 
               {canEdit ? (
                 <RowMenu label="Rule actions">
                   <DropdownMenuItem onClick={() => editing.show(r)}>
-                    <Pencil className="size-4" />
+                    <SquarePen className="size-4" />
                     Edit
                   </DropdownMenuItem>
                   <DropdownMenuItem onClick={() => void toggle(r)}>
@@ -629,10 +632,195 @@ export function AccessRulesPanel({ propertyId, canEdit }: { propertyId: string; 
           const target = editing.target;
           if (!target || target === "new") await clientProfileService.addAccessRule(propertyId, input);
           else await clientProfileService.updateAccessRule(propertyId, target.id, { ...input, active: target.active });
+          /* Whether the property needs a pass decides a visit's access when it has none. */
+          await clientProfileService.refreshPropertyAccess(propertyId).catch(() => undefined);
           toast.success("Access rule saved");
           reload();
         }}
       />
+    </SectionCard>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Passes (17 Nov 2026)                                                */
+/* ------------------------------------------------------------------ */
+
+/**
+ * The property's gate passes: a community or building pass that covers
+ * every visit there while it is valid. Each is its own file with its own
+ * valid-until and note; visits count them with their own passes.
+ */
+export function PropertyPassesPanel({ propertyId, canEdit }: { propertyId: string; canEdit: boolean }) {
+  const { data, error, loading, reload } = useAmcData(() => clientProfileService.documents({ level: "property", entityId: propertyId }), `property-passes|${propertyId}`);
+  const passes = (data?.documents ?? []).filter((d) => d.category === "Gate pass" && !d.superseded);
+  const { confirm, dialog } = useConfirm();
+  const [open, setOpen] = useState<"new" | { id: string; fileName: string } | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
+  const [validUntil, setValidUntil] = useState("");
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const today = new Date().toISOString().slice(0, 10);
+
+  const startAdd = () => {
+    setFiles([]);
+    setValidUntil("");
+    setNote("");
+    setOpen("new");
+  };
+  const startEdit = (d: { id: string; fileName: string; expiresOn: string | null; notes: string | null }) => {
+    setValidUntil(d.expiresOn ?? "");
+    setNote(d.notes ?? "");
+    setOpen({ id: d.id, fileName: d.fileName });
+  };
+  const save = () =>
+    runSave(
+      setBusy,
+      async () => {
+        if (open === "new") {
+          for (const file of files) {
+            await clientProfileService.uploadDocument({
+              file,
+              level: "property",
+              entityId: propertyId,
+              category: "Gate pass",
+              title: `Gate pass: ${file.name}`,
+              expiresOn: validUntil || null,
+              notes: note.trim() || null,
+            });
+          }
+          await clientProfileService.refreshPropertyAccess(propertyId);
+          toast.success(files.length === 1 ? "Pass added" : `${files.length} passes added`);
+        } else if (open) {
+          await clientProfileService.updatePropertyPass(propertyId, { documentId: open.id, validUntil: validUntil || null, note: note.trim() || null });
+          toast.success("Pass saved");
+        }
+        reload();
+      },
+      () => setOpen(null),
+    );
+  const remove = (d: { id: string; fileName: string }) =>
+    void confirm({
+      title: `Remove ${d.fileName}?`,
+      description: "It no longer counts for visits to this property. The file stays on record.",
+      confirmText: "Remove pass",
+      action: async () => {
+        await clientProfileService.removePropertyPass(propertyId, d.id);
+        toast.success("Pass removed");
+        reload();
+      },
+    });
+  const openFile = async (id: string) => {
+    try {
+      const { url } = await clientProfileService.documentUrl(id);
+      window.open(url, "_blank", "noopener");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not open the pass");
+    }
+  };
+
+  return (
+    <SectionCard
+      icon={<ShieldCheck />}
+      title="Passes"
+      description="Community or building passes for this property. A pass valid on a visit's day covers that visit; a visit can also have passes of its own."
+      bodyClassName="border-t"
+      action={
+        canEdit ? (
+          <Button size="sm" variant="outline" onClick={startAdd}>
+            <Plus className="size-4" />
+            Add pass
+          </Button>
+        ) : null
+      }
+    >
+      {dialog}
+      {error ? (
+        <div className="p-5">
+          <ErrorState title="Could not load the passes" message={error} onRetry={reload} />
+        </div>
+      ) : loading && !data ? (
+        <ListSkeleton rows={2} />
+      ) : passes.length === 0 ? (
+        <EmptyState
+          icon={<ShieldCheck className="size-5" />}
+          title="No passes"
+          description="Add the community gate pass or building permit this property holds, with how long it is valid."
+          action={canEdit ? { label: "Add pass", onClick: startAdd } : undefined}
+        />
+      ) : (
+        <ul className="divide-y">
+          {passes.map((d) => {
+            const ranOut = d.expiresOn !== null && d.expiresOn < today;
+            return (
+              <li key={d.id} className="flex flex-wrap items-center gap-3 px-5 py-3.5">
+                <span aria-hidden className="bg-muted/50 text-muted-foreground flex size-9 shrink-0 items-center justify-center rounded-md border">
+                  <FileText className="size-4" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="truncate font-medium" title={d.fileName}>{d.fileName}</span>
+                    <Badge variant="secondary" className={`border-0 font-medium ${ranOut ? "bg-warning/10 text-warning" : "bg-success/10 text-success"}`}>
+                      {d.expiresOn ? (ranOut ? `Ran out ${formatContractDate(d.expiresOn)}` : `Valid until ${formatContractDate(d.expiresOn)}`) : "No end date"}
+                    </Badge>
+                  </div>
+                  {d.notes ? <p className="mt-0.5 text-sm whitespace-pre-wrap">{d.notes}</p> : null}
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  <Button size="sm" variant="outline" onClick={() => void openFile(d.id)}>
+                    Open
+                  </Button>
+                  {canEdit ? (
+                    <>
+                      <Button size="icon" variant="ghost" className="size-8" title="Change the date or note" aria-label={`Change ${d.fileName}`} onClick={() => startEdit(d)}>
+                        <SquarePen className="size-4" />
+                      </Button>
+                      <Button size="icon" variant="ghost" className="text-destructive size-8" title="Remove the pass" aria-label={`Remove ${d.fileName}`} onClick={() => remove(d)}>
+                        <Trash2 className="size-4" />
+                      </Button>
+                    </>
+                  ) : null}
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      <Dialog open={open !== null} onOpenChange={(next) => !busy && !next && setOpen(null)}>
+        <ActionDialogContent busy={busy} className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{open === "new" ? "Add pass" : "Change the pass"}</DialogTitle>
+            <DialogDescription>{open && open !== "new" ? open.fileName : "The pass or permit this property holds. Several files can share one date and note."}</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-2">
+            {open === "new" ? (
+              <div className="grid gap-1.5">
+                <Label htmlFor="property-pass-files">Files</Label>
+                <Input id="property-pass-files" type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp" onChange={(e) => setFiles(Array.from(e.target.files ?? []))} />
+                <p className="text-muted-foreground text-xs">{files.length ? files.map((f) => f.name).join(", ") : "Choose one or more: PDF or photos."}</p>
+              </div>
+            ) : null}
+            <div className="grid gap-1.5">
+              <Label htmlFor="property-pass-until">Valid until (optional)</Label>
+              <DateSelect id="property-pass-until" value={validUntil} onChange={setValidUntil} />
+              <p className="text-muted-foreground text-xs">Leave empty if it has no end date.</p>
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="property-pass-note">Note (optional)</Label>
+              <Textarea id="property-pass-note" rows={2} maxLength={500} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Gate number, who issued it, anything the crew should know" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOpen(null)} disabled={busy}>
+              Cancel
+            </Button>
+            <SubmitButton onClick={() => void save()} pending={busy} pendingLabel={open === "new" ? "Uploading…" : "Saving…"} disabled={open === "new" && files.length === 0}>
+              {open === "new" ? (files.length > 1 ? `Add ${files.length} passes` : "Add pass") : "Save pass"}
+            </SubmitButton>
+          </DialogFooter>
+        </ActionDialogContent>
+      </Dialog>
     </SectionCard>
   );
 }
@@ -663,7 +851,8 @@ function DayPicker({ value, onChange }: { value: number[]; onChange: (days: numb
   );
 }
 
-function AccessRuleDialog({
+/* Also opened from a visit's Access tab (17 Nov 2026), to add a rule without leaving the visit. */
+export function AccessRuleDialog({
   open,
   onOpenChange,
   initial,
@@ -885,7 +1074,7 @@ function scopeColumns({
         canEdit ? (
           <RowMenu label={`Actions for ${label(row.original.serviceId)}`}>
             <DropdownMenuItem onClick={() => onEdit(row.original)}>
-              <Pencil className="size-4" />
+              <SquarePen className="size-4" />
               Edit
             </DropdownMenuItem>
             <DropdownMenuItem onClick={() => onRemove(row.original)} className="text-destructive focus:text-destructive">

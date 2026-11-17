@@ -37,7 +37,7 @@ export function isSessionExpired(error: unknown): boolean {
 // return a plain string (`{ error: "..." }`) or a Zod validation object
 // (`{ error: { formErrors, fieldErrors } }`); the latter used to surface as the
 // useless "[object Object]". This names the exact field(s) that failed.
-function extractErrorMessage(payload: unknown, status: number): string {
+export function extractErrorMessage(payload: unknown, status: number): string {
   const err = (payload as { error?: unknown; message?: unknown })?.error;
   if (typeof err === "string" && err.trim()) return err;
   if (err && typeof err === "object") {

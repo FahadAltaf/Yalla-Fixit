@@ -153,7 +153,7 @@ export function useCallOutActions(data: CallOutData | null, changed: () => Promi
  * its own page (AMC -> Additional work -> the work), where a work just
  * raised is opened to be quoted.
  */
-export function useCallOutWorkDialogs(data: CallOutData | null, changed: () => Promise<void>) {
+export function useCallOutWorkDialogs(data: CallOutData | null) {
   const raising = useDialog<true>();
   const router = useRouter();
   const open = (workId: string) => router.push(additionalWorkPageHref(workId));
@@ -171,8 +171,8 @@ export function useCallOutWorkDialogs(data: CallOutData | null, changed: () => P
         initialTrade={c.trade}
         initialTechnicianId={c.technicianIds[0] ?? null}
         context={`call out ${c.callOutNo}`}
-        onRaised={async (w) => {
-          await changed();
+        onRaised={(w) => {
+          /* Straight to the new work's page: a reload here was thrown away by the navigation (13 Nov 2026). */
           open(w.id);
         }}
       />
@@ -406,6 +406,8 @@ function ScheduleDialog({ callOut: c, open, onOpenChange, working, setWorking, c
   const [duration, setDuration] = useState(String(placedMinutes ?? (c.priority === "emergency" ? 60 : 120)));
   const [suggestion, setSuggestion] = useState<{ key: string; data: CallOutSuggestion } | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
+  /* Chosen technicians still without a mobile login (the crew list creates them). */
+  const [missingLogins, setMissingLogins] = useState(0);
   const [override, setOverride] = useState("");
   const ids = { date: useId(), time: useId(), duration: useId(), override: useId() };
 
@@ -465,7 +467,7 @@ function ScheduleDialog({ callOut: c, open, onOpenChange, working, setWorking, c
         <SubmitButton
           pending={working === "schedule"}
           pendingLabel="Saving…"
-          disabled={working !== null || !fresh || picked.length === 0 || picked.length > 10 || reasonMissing}
+          disabled={working !== null || !fresh || picked.length === 0 || picked.length > 10 || reasonMissing || missingLogins > 0}
           icon={<CalendarCheck className="size-4" />}
           onClick={save}
         >
@@ -501,7 +503,7 @@ function ScheduleDialog({ callOut: c, open, onOpenChange, working, setWorking, c
           Find technicians
         </SubmitButton>
       </div>
-      {options ? <CrewPicker options={options} picked={picked} onPickedChange={setPicked} disabled={working !== null} /> : null}
+      {options ? <CrewPicker options={options} picked={picked} onPickedChange={setPicked} disabled={working !== null} onMissingLoginsChange={setMissingLogins} /> : null}
       {fresh && differs && picked.length ? (
         <Field
           id={ids.override}

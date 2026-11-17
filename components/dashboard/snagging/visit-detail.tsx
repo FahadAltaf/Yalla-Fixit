@@ -18,7 +18,7 @@ import {
   FileText,
   Loader2,
   MessageSquareWarning,
-  Pencil,
+  SquarePen,
   Undo2,
   UserRound,
 } from "lucide-react";
@@ -508,7 +508,7 @@ export default function VisitDetail({ taskId, visitId }: { taskId: string; visit
                 <div className="flex flex-wrap items-center gap-2">
                   {canEdit && visit.status !== "completed" && visit.status !== "cancelled" ? (
                     <Button variant="outline" onClick={() => setEditOpen(true)}>
-                      <Pencil className="size-4" />
+                      <SquarePen className="size-4" />
                       Edit visit
                     </Button>
                   ) : null}

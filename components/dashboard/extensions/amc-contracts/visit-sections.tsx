@@ -2,7 +2,7 @@
 
 import { useId, useState, type ReactNode } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
-import { CalendarCheck, Copy, ExternalLink, FileText, KeyRound, Mail, MessageCircle, MessageSquare, PhoneCall, Save, Search, ShieldCheck, Users, type LucideIcon } from "lucide-react";
+import { CalendarCheck, CheckCircle2, Copy, ExternalLink, FileText, KeyRound, Mail, MessageCircle, MessageSquare, PhoneCall, Play, Plus, Save, Search, ShieldCheck, SquarePen, Trash2, Users, XCircle, type LucideIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
@@ -21,29 +21,27 @@ import TimeSelect from "@/components/ui/time-select";
 import { ACCESS_TYPE_LABELS, TRADE_LABELS, WEEKDAY_SHORT } from "@/lib/amc/client-profile";
 import { PLANNABLE_STATUSES, VISIT_STATUS_LABELS } from "@/lib/amc/ppm";
 import {
-  ACCESS_STATUS_LABELS,
-  ACCESS_STATUSES,
   ATTEMPT_OUTCOME_LABELS,
   ATTEMPT_OUTCOMES,
   CONFIRMATION_LABELS,
-  type AccessStatus,
+  startProblems,
   type AttemptOutcome,
   type Trade,
 } from "@/lib/amc/visits";
 import { formatPhone } from "@/lib/phone/format-phone";
-import { clientProfileService } from "@/modules/amc-contracts/client-profile-service";
+import { clientProfileService, type AccessRuleRecord } from "@/modules/amc-contracts/client-profile-service";
 import { visitsService, type VisitDetail, type VisitSuggestion } from "@/modules/amc-contracts/visits-service";
 
 import { Field, Muted, Panel, PanelEmpty, SectionDialog } from "./call-out-shared";
+import { AccessRuleDialog } from "./profile/property-panels";
+import { useAmcData } from "./use-amc-data";
 import { formatContractDate, formatDateTime } from "./contract-status";
 import { CrewPicker, crewOptions, crewSummary, differsFromSuggested } from "./crew-picker";
 import {
-  ACCESS_TONE,
   CHANNEL_LABELS,
   CHANNELS,
   CONFIRMATION_TONE,
   channelLabel,
-  durationLabel,
   slotDate,
   slotLabel,
   slotTime,
@@ -51,7 +49,7 @@ import {
   type ConfirmationState,
 } from "./visit-status";
 
-export type VisitWorking = "whatsapp" | "email" | "attempt" | "access" | "upload" | "suggest" | "assign" | "pass" | null;
+export type VisitWorking = "whatsapp" | "email" | "attempt" | "access" | "upload" | "suggest" | "assign" | "pass" | "start" | null;
 
 /**
  * The work on one AMC planned visit (Phase 9: DEV-396, 398, 399), as
@@ -112,6 +110,103 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Start visit (17 Nov 2026)                                           */
+/* ------------------------------------------------------------------ */
+
+const START_TAB_LABELS = { crew: "Crew & time", client: "Client", access: "Access" } as const;
+
+/**
+ * The office starts the visit; only then can the inspector fill its job
+ * sheet on the phone. The button opens a check of what must be in place --
+ * crew, time, the client's confirmation, access -- each with the tab where
+ * it is filled in; Start is offered only when nothing is missing (the
+ * server checks the same).
+ */
+export function StartVisitAction({
+  visit: v,
+  canEdit,
+  working,
+  setWorking,
+  changed,
+  onTab,
+}: VisitSectionProps & { onTab: (tab: "crew" | "client" | "access") => void }) {
+  const run = useRun({ setWorking });
+  const contractActive = v.contractStatus === "active";
+  const [open, setOpen] = useState(false);
+  const startable = ["not_scheduled", "scheduled", "rescheduled", "confirmed", "pending_access"].includes(v.status);
+  if (!canEdit || !startable) return null;
+  const problems = startProblems({
+    status: v.status,
+    contractActive,
+    technicianIds: v.technicianIds,
+    scheduledStart: v.scheduledStart,
+    scheduledEnd: v.scheduledEnd,
+    clientConfirmation: v.clientConfirmation,
+    accessStatus: v.accessStatus,
+  });
+  const checks = [
+    { tab: "crew" as const, label: "Crew chosen", ok: v.technicianIds.length > 0 },
+    { tab: "crew" as const, label: "Date and time set", ok: Boolean(v.scheduledStart && v.scheduledEnd) },
+    { tab: "client" as const, label: "Confirmed with the client", ok: v.clientConfirmation === "confirmed" },
+    { tab: "access" as const, label: "Access sorted", ok: v.accessStatus === "approved" || v.accessStatus === "not_required" },
+  ];
+  const start = () =>
+    void run(
+      "start",
+      async () => {
+        await visitsService.visitAction(v.id, { action: "start" });
+        toast.success("Visit started. The inspector can fill in the job sheet now.");
+        setOpen(false);
+        await changed();
+      },
+      "Could not start the visit.",
+    );
+
+  return (
+    <>
+      <Button disabled={working !== null} onClick={() => setOpen(true)}>
+        <Play className="size-4" />
+        Start visit
+      </Button>
+      <SectionDialog
+        open={open}
+        onOpenChange={setOpen}
+        title="Start the visit?"
+        description={problems.length ? "Fill these in first. The inspector can't begin until the visit is started." : "Everything is in place. Once started, the inspector can fill in the job sheet on the phone."}
+        busy={working === "start"}
+        submit={
+          <SubmitButton pending={working === "start"} pendingLabel="Starting…" disabled={working !== null || problems.length > 0} icon={<Play className="size-4" />} onClick={start}>
+            Start visit
+          </SubmitButton>
+        }
+      >
+        <ul className="divide-y rounded-lg border">
+          {checks.map((c) => (
+            <li key={c.label} className="flex items-center gap-3 px-4 py-3 text-sm">
+              {c.ok ? <CheckCircle2 className="text-success size-4 shrink-0" aria-hidden /> : <XCircle className="text-destructive size-4 shrink-0" aria-hidden />}
+              <span className={c.ok ? "flex-1" : "flex-1 font-medium"}>{c.label}</span>
+              {c.ok ? null : (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    setOpen(false);
+                    onTab(c.tab);
+                  }}
+                >
+                  Go to {START_TAB_LABELS[c.tab]}
+                </Button>
+              )}
+            </li>
+          ))}
+        </ul>
+        {!contractActive ? <p className="text-destructive text-sm">The contract is not active, so its visits cannot start.</p> : null}
+      </SectionDialog>
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* Client (DEV-398)                                                    */
 /* ------------------------------------------------------------------ */
 
@@ -167,6 +262,10 @@ export function ConfirmationSection({ visit: v, canEdit, working, setWorking, ch
 
   const state = v.clientConfirmation as ConfirmationState | null;
   const { rule, attemptState: tries } = v;
+  /* Only the contract's channels (Schedule rules), all four when it names none (17 Nov 2026). */
+  const allowedChannels = CHANNELS.filter((c) => rule.attemptChannels.includes(c));
+  const offeredChannels = allowedChannels.length ? allowedChannels : CHANNELS;
+  const attemptChannel: Channel = offeredChannels.includes(channel) ? channel : offeredChannels[0];
 
   /* Asked first (11 Nov 2026): it acts at once, so it is confirmed like every other step. */
   const requestBy = (by: "whatsapp" | "email") =>
@@ -202,7 +301,7 @@ export function ConfirmationSection({ visit: v, canEdit, working, setWorking, ch
     void run(
       "attempt",
       async () => {
-        await visitsService.visitAction(v.id, { action: "attempt", channel, outcome, note: note.trim() || null });
+        await visitsService.visitAction(v.id, { action: "attempt", channel: attemptChannel, outcome, note: note.trim() || null });
         toast.success("Attempt logged");
         setNote("");
         setLogging(false);
@@ -321,12 +420,12 @@ export function ConfirmationSection({ visit: v, canEdit, working, setWorking, ch
       >
         <div className="grid gap-4 sm:grid-cols-2">
           <Field id={ids.channel} label="Channel">
-            <Select value={channel} onValueChange={(c) => setChannel(c as Channel)}>
+            <Select value={attemptChannel} onValueChange={(c) => setChannel(c as Channel)}>
               <SelectTrigger id={ids.channel} className="w-full">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {CHANNELS.map((c) => (
+                {offeredChannels.map((c) => (
                   <SelectItem key={c} value={c}>
                     {CHANNEL_LABELS[c]}
                   </SelectItem>
@@ -363,14 +462,41 @@ export function ConfirmationSection({ visit: v, canEdit, working, setWorking, ch
 
 export function AccessSection({ visit: v, canEdit, working, setWorking, changed }: VisitSectionProps) {
   const run = useRun({ setWorking });
-  const [editing, setEditing] = useState(false);
-  const [status, setStatus] = useState<AccessStatus>(v.accessStatus ?? (v.need.accessTypes.length ? "pending" : "not_required"));
-  const [validUntil, setValidUntil] = useState(v.accessValidUntil ?? "");
-  const [note, setNote] = useState(v.accessNote ?? "");
-  const [passFile, setPassFile] = useState<File | null>(null);
+  const { confirm, dialog: confirmDialog } = useConfirm();
+  /* Add: new files. Edit: one pass's date and note. */
+  const [adding, setAdding] = useState(false);
+  const [editingPass, setEditingPass] = useState<{ id: string; fileName: string } | null>(null);
+  const [passFiles, setPassFiles] = useState<File[]>([]);
+  const [validUntil, setValidUntil] = useState("");
+  const [note, setNote] = useState("");
   /* Bumped after an upload, so the file input starts empty again. */
   const [fileKey, setFileKey] = useState(0);
-  const ids = { status: useId(), until: useId(), note: useId(), file: useId() };
+  const [addingRule, setAddingRule] = useState(0);
+  /* The rule being changed (null: a new one). */
+  const [editingRule, setEditingRule] = useState<AccessRuleRecord | null>(null);
+  const openRule = (rule: AccessRuleRecord | null) => {
+    setEditingRule(rule);
+    setAddingRule((n) => n + 1);
+  };
+  const ids = { until: useId(), note: useId(), file: useId() };
+
+  /*
+    The visit's passes (17 Nov 2026): each one its own file with its own
+    valid-until and note. The visit's access is worked out from them on the
+    server -- approved when one is valid on the visit day -- so there is no
+    separate status, date or note to keep in step.
+  */
+  const passes = useAmcData(() => clientProfileService.documents({ level: "visit", entityId: v.id }), `visit-passes|${v.id}`);
+  /* The property's passes count for this visit too; they are changed on the property's page. */
+  const propertyPasses = useAmcData(
+    () => (v.propertyId ? clientProfileService.documents({ level: "property", entityId: v.propertyId }) : Promise.resolve({ documents: [], migrated: true })),
+    `property-passes|${v.propertyId ?? "none"}`,
+  );
+  const passList = [
+    ...(passes.data?.documents ?? []).filter((d) => d.category === "Gate pass" && !d.superseded),
+    ...(propertyPasses.data?.documents ?? []).filter((d) => d.category === "Gate pass" && !d.superseded),
+  ];
+  const visitDay = v.scheduledStart ? v.scheduledStart.slice(0, 10) : v.targetDate;
 
   const openPass = (documentId: string) =>
     void run(
@@ -382,152 +508,252 @@ export function AccessSection({ visit: v, canEdit, working, setWorking, changed 
       "Could not open the pass.",
     );
 
-  /* One Save: a pass file chosen goes to the visit's documents first, then the access is saved pointing at it. */
-  const save = () =>
+  const startAdd = () => {
+    setPassFiles([]);
+    setValidUntil("");
+    setNote("");
+    setFileKey((k) => k + 1);
+    setAdding(true);
+  };
+  const startEdit = (d: { id: string; fileName: string; expiresOn: string | null; notes: string | null }) => {
+    setValidUntil(d.expiresOn ?? "");
+    setNote(d.notes ?? "");
+    setEditingPass({ id: d.id, fileName: d.fileName });
+  };
+
+  /* Each file is its own pass (titled with its name, so one never replaces another), then the visit's access follows. */
+  const addPasses = () =>
     void run(
       "access",
       async () => {
-        const uploaded = passFile
-          ? (
-              await clientProfileService.uploadDocument({
-                file: passFile,
-                level: "visit",
-                entityId: v.id,
-                category: "Gate pass",
-                title: `Gate pass, visit ${v.visitNo}`,
-              })
-            ).document
-          : null;
-        await visitsService.visitAction(v.id, {
-          action: "access",
-          status,
-          validUntil: status === "approved" && validUntil ? validUntil : null,
-          ...(uploaded ? { documentId: uploaded.id } : {}),
-          note: note.trim() || null,
-        });
-        setPassFile(null);
-        setFileKey((k) => k + 1);
-        setEditing(false);
-        toast.success(uploaded ? "Access saved with the pass" : "Access saved");
+        for (const file of passFiles) {
+          await clientProfileService.uploadDocument({
+            file,
+            level: "visit",
+            entityId: v.id,
+            category: "Gate pass",
+            title: `Gate pass, visit ${v.visitNo}: ${file.name}`,
+            expiresOn: validUntil || null,
+            notes: note.trim() || null,
+          });
+        }
+        await visitsService.visitAction(v.id, { action: "passes_changed" });
+        toast.success(passFiles.length === 1 ? "Pass added" : `${passFiles.length} passes added`);
+        setAdding(false);
+        passes.reload();
         await changed();
       },
-      "Could not save the access.",
+      "Could not add the pass.",
     );
 
-  /* A pass that runs out before the visit day is no pass for it. */
-  const shortPass = status === "approved" && validUntil && validUntil < v.targetDate;
+  const savePass = () =>
+    void run(
+      "access",
+      async () => {
+        await visitsService.visitAction(v.id, { action: "pass", documentId: editingPass!.id, validUntil: validUntil || null, note: note.trim() || null });
+        toast.success("Pass saved");
+        setEditingPass(null);
+        passes.reload();
+        await changed();
+      },
+      "Could not save the pass.",
+    );
+
+  const removePass = (d: { id: string; fileName: string }) =>
+    void confirm({
+      title: `Remove ${d.fileName}?`,
+      description: "It no longer counts for this visit's access. The file stays on record.",
+      confirmText: "Remove pass",
+      action: async () => {
+        await visitsService.visitAction(v.id, { action: "pass_remove", documentId: d.id });
+        toast.success("Pass removed");
+        passes.reload();
+        await changed();
+      },
+    });
+
+  const shortDate = adding || editingPass ? Boolean(validUntil) && validUntil < visitDay : false;
 
   return (
     <>
+      {confirmDialog}
+      {/*
+        One Access card (17 Nov 2026): what the property asks for, then the
+        passes this visit has -- read together, not as two cards.
+      */}
       <Panel
-        title="Access for this visit" icon={<ShieldCheck />}
-        description="The gate pass or permit, how long it is valid and the file."
+        title="Access"
+        icon={<ShieldCheck />}
+        description="What the property asks for before a crew can get in, and the passes for this visit with how long each is valid."
         actions={
           canEdit ? (
-            <Button disabled={working !== null} onClick={() => setEditing(true)}>
-              <ShieldCheck className="size-4" />
-              Update access
-            </Button>
+            <div className="flex flex-wrap items-center gap-2">
+              {v.propertyId ? (
+                <Button variant="outline" disabled={working !== null} onClick={() => openRule(null)}>
+                  <KeyRound className="size-4" />
+                  Add rule
+                </Button>
+              ) : null}
+              <Button disabled={working !== null} onClick={startAdd}>
+                <Plus className="size-4" />
+                Add pass
+              </Button>
+            </div>
           ) : null
         }
       >
-        <Rows>
-          <Row label="Status">
-            {v.accessStatus ? (
-              <Badge variant="secondary" className={`border-0 font-medium ${ACCESS_TONE[v.accessStatus]}`}>
-                {ACCESS_STATUS_LABELS[v.accessStatus]}
-              </Badge>
-            ) : (
-              <Muted>Not set</Muted>
-            )}
-          </Row>
-          <Row label="Valid until">
-            {v.accessValidUntil ? (
-              <span className={v.accessValidUntil < v.targetDate ? "text-warning" : undefined}>
-                {formatContractDate(v.accessValidUntil)}
-                {v.accessValidUntil < v.targetDate ? " (before the visit)" : ""}
-              </span>
-            ) : (
-              <Muted>—</Muted>
-            )}
-          </Row>
-          <Row label="Note">{v.accessNote ?? <Muted>—</Muted>}</Row>
-          <Row label="Pass">
-            {v.accessDocumentId ? (
-              <Button size="sm" variant="outline" disabled={working !== null} onClick={() => openPass(v.accessDocumentId!)}>
-                <FileText className="size-3.5" />
-                Open pass
-              </Button>
-            ) : (
-              <Muted>No pass on file</Muted>
-            )}
-          </Row>
-        </Rows>
+        <div className="grid gap-6">
+          <div className="grid gap-2">
+            <AccessHeading icon={<KeyRound />} title="What the property needs" count={v.accessRules.length} hint="Kept on the property, for every visit there." />
+          {v.accessRules.length === 0 ? (
+            <PanelEmpty icon={<KeyRound />} title="No access rules" description={canEdit && v.propertyId ? "This property asks for no pass or permit yet. Add the gate pass, permit or key collection it needs." : "This property asks for no pass or permit."} />
+          ) : (
+            <ul className="grid gap-2">
+              {v.accessRules.map((r, index) => (
+                <AccessRuleItem
+                  key={r.id ?? `${r.accessType}-${index}`}
+                  rule={r}
+                  onEdit={canEdit && v.propertyId && r.id ? () => openRule(ruleRecord(r, v.propertyId!)) : undefined}
+                  disabled={working !== null}
+                />
+              ))}
+            </ul>
+          )}
+          </div>
+        <div className="grid gap-2">
+          <AccessHeading icon={<ShieldCheck />} title="Passes for this visit" count={passList.length} />
+          {passes.loading && !passes.data ? (
+            <div className="bg-muted/40 h-16 animate-pulse rounded-lg border" />
+          ) : passList.length === 0 ? (
+            <PanelEmpty icon={<FileText />} title="No pass on file" description="Add the gate pass or permit with how long it is valid. A visit can have more than one." />
+          ) : (
+            <ul className="grid gap-2">
+              {passList.map((d) => {
+                const runsOut = d.expiresOn !== null && d.expiresOn < visitDay;
+                const onProperty = d.level === "property";
+                return (
+                  <li key={d.id} className="flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3">
+                    <span aria-hidden className="bg-muted/50 text-muted-foreground flex size-9 shrink-0 items-center justify-center rounded-md border">
+                      <FileText className="size-4" />
+                    </span>
+                    <span className="grid min-w-0 flex-1 gap-0.5">
+                      <span className="flex flex-wrap items-center gap-2">
+                        <span className="truncate text-sm font-medium" title={d.fileName}>{d.fileName}</span>
+                        <Badge
+                          variant="secondary"
+                          className={`border-0 font-medium ${runsOut ? "bg-warning/10 text-warning" : "bg-success/10 text-success"}`}
+                        >
+                          {d.expiresOn ? (runsOut ? `Ran out ${formatContractDate(d.expiresOn)}` : `Valid until ${formatContractDate(d.expiresOn)}`) : "No end date"}
+                        </Badge>
+                        {onProperty ? (
+                          <Badge variant="outline" className="font-normal" title="Held by the property, for every visit there. Change it on the property's page.">
+                            Property pass
+                          </Badge>
+                        ) : null}
+                      </span>
+                      {d.notes ? <span className="text-sm whitespace-pre-wrap">{d.notes}</span> : null}
+                      <span className="text-muted-foreground text-xs">
+                        Added {formatDateTime(d.uploadedAt)}
+                        {d.uploadedBy ? ` by ${d.uploadedBy}` : ""}
+                      </span>
+                    </span>
+                    <span className="flex shrink-0 items-center gap-1">
+                      <Button size="sm" variant="outline" disabled={working !== null} onClick={() => openPass(d.id)}>
+                        Open
+                      </Button>
+                      {canEdit && !onProperty ? (
+                        <>
+                          <Button size="icon" variant="ghost" className="size-8" title="Change the date or note" aria-label={`Change ${d.fileName}`} disabled={working !== null} onClick={() => startEdit(d)}>
+                            <SquarePen className="size-4" />
+                          </Button>
+                          <Button size="icon" variant="ghost" className="text-destructive size-8" title="Remove the pass" aria-label={`Remove ${d.fileName}`} disabled={working !== null} onClick={() => removePass(d)}>
+                            <Trash2 className="size-4" />
+                          </Button>
+                        </>
+                      ) : null}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+        </div>
       </Panel>
 
-      <Panel title="Property access rules" icon={<KeyRound />} description="What the property asks for before a crew can get in: passes, permits, lifts and keys.">
-        {v.accessRules.length === 0 ? (
-          <PanelEmpty icon={<KeyRound />} title="No access rules" description="This property asks for no pass or permit. Rules are kept on the property's page." />
-        ) : (
-          <ul className="grid gap-2">
-            {v.accessRules.map((r, index) => (
-              <AccessRuleItem key={`${r.accessType}-${index}`} rule={r} />
-            ))}
-          </ul>
-        )}
-      </Panel>
+      {v.propertyId ? (
+        <AccessRuleDialog
+          key={addingRule}
+          open={addingRule > 0}
+          onOpenChange={(open) => !open && setAddingRule(0)}
+          initial={editingRule}
+          onSave={async (input) => {
+            if (editingRule) await clientProfileService.updateAccessRule(v.propertyId!, editingRule.id, { ...input, active: editingRule.active });
+            else await clientProfileService.addAccessRule(v.propertyId!, input);
+            await clientProfileService.refreshPropertyAccess(v.propertyId!).catch(() => undefined);
+            toast.success(editingRule ? "Access rule saved on the property" : "Access rule added to the property");
+            setAddingRule(0);
+            setEditingRule(null);
+            await changed();
+          }}
+        />
+      ) : null}
+
 
       <SectionDialog
-        open={editing}
-        onOpenChange={setEditing}
-        title="Update access"
-        description="Where the gate pass stands for this visit. Approved or not required closes the access to-do."
+        open={adding || editingPass !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setAdding(false);
+            setEditingPass(null);
+          }
+        }}
+        title={editingPass ? "Change the pass" : "Add pass"}
+        description={editingPass ? editingPass.fileName : "The gate pass or permit for this visit. Several files can share one date and note."}
         busy={working === "access"}
         submit={
-          <SubmitButton pending={working === "access"} pendingLabel={passFile ? "Uploading and saving…" : "Saving…"} disabled={working !== null} icon={<ShieldCheck className="size-4" />} onClick={save}>
-            Save access
+          <SubmitButton
+            pending={working === "access"}
+            pendingLabel={editingPass ? "Saving…" : "Uploading…"}
+            disabled={working !== null || (!editingPass && passFiles.length === 0)}
+            icon={editingPass ? <Save className="size-4" /> : <Plus className="size-4" />}
+            onClick={editingPass ? savePass : addPasses}
+          >
+            {editingPass ? "Save pass" : passFiles.length > 1 ? `Add ${passFiles.length} passes` : "Add pass"}
           </SubmitButton>
         }
       >
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field id={ids.status} label="Status">
-            <Select value={status} onValueChange={(s) => setStatus(s as AccessStatus)}>
-              <SelectTrigger id={ids.status} className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {ACCESS_STATUSES.map((s) => (
-                  <SelectItem key={s} value={s}>
-                    {ACCESS_STATUS_LABELS[s]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+        {editingPass ? null : (
+          <Field id={ids.file} label="Files" hint={passFiles.length ? passFiles.map((p) => p.name).join(", ") : "Choose one or more: PDF or photos."}>
+            <Input key={fileKey} id={ids.file} type="file" multiple accept=".pdf,.png,.jpg,.jpeg,.webp" disabled={working !== null} onChange={(e) => setPassFiles(Array.from(e.target.files ?? []))} />
           </Field>
-          <Field
-            id={ids.until}
-            label="Valid until"
-            hint={shortPass ? <span className="text-warning">Runs out before the visit ({formatContractDate(v.targetDate)}).</span> : "Only for an approved pass."}
-          >
-            <DateSelect id={ids.until} value={validUntil} disabled={status !== "approved"} onChange={setValidUntil} />
-          </Field>
-        </div>
-        <Field id={ids.note} label="Note (optional)">
-          <Textarea id={ids.note} rows={2} value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} />
-        </Field>
+        )}
         <Field
-          id={ids.file}
-          label="Pass file (optional)"
-          hint={
-            passFile
-              ? `${passFile.name} is uploaded when you save${v.accessDocumentId ? ", replacing the pass on file" : ""}.`
-              : `${v.accessDocumentId ? "A new file replaces the pass on file. " : ""}PDF or a photo; kept with the visit's documents.`
-          }
+          id={ids.until}
+          label="Valid until (optional)"
+          hint={shortDate ? <span className="text-warning">Runs out before the visit ({formatContractDate(visitDay)}).</span> : "Leave empty if it has no end date."}
         >
-          <Input key={fileKey} id={ids.file} type="file" accept=".pdf,.png,.jpg,.jpeg,.webp" disabled={working !== null} onChange={(e) => setPassFile(e.target.files?.[0] ?? null)} />
+          <DateSelect id={ids.until} value={validUntil} onChange={setValidUntil} />
+        </Field>
+        <Field id={ids.note} label="Note (optional)">
+          <Textarea id={ids.note} rows={2} value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} placeholder="Gate number, who issued it, anything the crew should know" />
         </Field>
       </SectionDialog>
     </>
+  );
+}
+
+/* A part of the Access card: icon, title, how many, and a line of help. */
+function AccessHeading({ icon, title, count, hint }: { icon: ReactNode; title: string; count: number; hint?: string }) {
+  return (
+    <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+      <span className="text-muted-foreground flex items-center gap-1.5 text-sm font-medium [&_svg]:size-3.5">
+        {icon}
+        {title}
+        {count ? <span className="tabular-nums">({count})</span> : null}
+      </span>
+      {hint ? <span className="text-muted-foreground text-xs">{hint}</span> : null}
+    </div>
   );
 }
 
@@ -536,7 +762,26 @@ const dayList = (days: string[]) =>
   days.length === 0 || days.length === 7 ? "Any day" : days.map((d) => (/^[0-6]$/.test(d) ? WEEKDAY_SHORT[Number(d)] : d)).join(", ");
 const hhmm = (time: string | null) => (time ? time.slice(0, 5) : null);
 
-function AccessRuleItem({ rule: r }: { rule: VisitDetail["accessRules"][number] }) {
+/* A visit's rule as the property's rule record, for the shared rule dialog. */
+function ruleRecord(r: VisitDetail["accessRules"][number], propertyId: string): AccessRuleRecord {
+  return {
+    id: r.id,
+    propertyId,
+    accessType: r.accessType,
+    issuer: r.issuer,
+    leadTimeDays: r.leadTimeDays ?? 0,
+    permittedDays: r.permittedDays.map(Number).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6),
+    permittedFrom: hhmm(r.permittedFrom),
+    permittedTo: hhmm(r.permittedTo),
+    parking: r.parking,
+    contactName: r.contactName,
+    contactPhone: r.contactPhone,
+    notes: r.notes,
+    active: true,
+  };
+}
+
+function AccessRuleItem({ rule: r, onEdit, disabled }: { rule: VisitDetail["accessRules"][number]; onEdit?: () => void; disabled?: boolean }) {
   const from = hhmm(r.permittedFrom);
   const to = hhmm(r.permittedTo);
   const hours = from && to ? `, ${from}–${to}` : from ? `, from ${from}` : to ? `, until ${to}` : "";
@@ -552,12 +797,17 @@ function AccessRuleItem({ rule: r }: { rule: VisitDetail["accessRules"][number] 
       <span className="bg-muted/50 text-muted-foreground flex size-9 shrink-0 items-center justify-center rounded-md border [&_svg]:size-4">
         <KeyRound />
       </span>
-      <span className="grid min-w-0 gap-0.5">
+      <span className="grid min-w-0 flex-1 gap-0.5">
         <span className="font-medium">{ACCESS_TYPE_LABELS[r.accessType as keyof typeof ACCESS_TYPE_LABELS] ?? r.accessType}</span>
         <span className="text-muted-foreground text-xs">{facts.join(" · ")}</span>
         {contact ? <span className="text-xs">Contact: {contact}</span> : null}
         {r.notes ? <span className="text-muted-foreground text-xs whitespace-pre-wrap">{r.notes}</span> : null}
       </span>
+      {onEdit ? (
+        <Button size="icon" variant="ghost" className="size-8 shrink-0 self-center" title="Change the rule" aria-label="Change the rule" disabled={disabled} onClick={onEdit}>
+          <SquarePen className="size-4" />
+        </Button>
+      ) : null}
     </li>
   );
 }
@@ -582,6 +832,8 @@ export function AssignmentSection({ visit: v, canEdit, working, setWorking, chan
   const [override, setOverride] = useState("");
   const [suggestion, setSuggestion] = useState<{ key: string; data: VisitSuggestion } | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
+  /* Chosen technicians still without a mobile login (the crew list creates them). */
+  const [missingLogins, setMissingLogins] = useState(0);
   const ids = { date: useId(), time: useId(), duration: useId(), reason: useId(), override: useId() };
 
   const plannable = PLANNABLE_STATUSES.includes(v.status);
@@ -637,7 +889,7 @@ export function AssignmentSection({ visit: v, canEdit, working, setWorking, chan
       "Could not assign the crew.",
     );
 
-  const canSave = fresh !== null && picked.length > 0 && (!differs || override.trim().length >= 3) && (!outsideWindow || crewOnly || reason.trim().length >= 3);
+  const canSave = fresh !== null && picked.length > 0 && missingLogins === 0 && (!differs || override.trim().length >= 3) && (!outsideWindow || crewOnly || reason.trim().length >= 3);
 
   return (
     <>
@@ -670,7 +922,8 @@ export function AssignmentSection({ visit: v, canEdit, working, setWorking, chan
             <TradeBadges trades={v.need.trades} />
           </Row>
           <Row label="Needs">
-            {durationLabel(v.need.durationMinutes)}, {v.need.headcount} {v.need.headcount === 1 ? "person" : "people"}
+            {/* The time is hidden for now (17 Nov 2026); it still sets the default length when the crew is placed. */}
+            {v.need.headcount} {v.need.headcount === 1 ? "person" : "people"}
           </Row>
           <Row label="Access types">{v.need.accessTypes.length ? v.need.accessTypes.join(", ") : <Muted>None</Muted>}</Row>
         </Rows>
@@ -726,7 +979,7 @@ export function AssignmentSection({ visit: v, canEdit, working, setWorking, chan
             Find technicians
           </SubmitButton>
         </div>
-        {options ? <CrewPicker options={options} picked={picked} onPickedChange={setPicked} disabled={working !== null} /> : null}
+        {options ? <CrewPicker options={options} picked={picked} onPickedChange={setPicked} disabled={working !== null} onMissingLoginsChange={setMissingLogins} /> : null}
         {differs ? (
           <Field id={ids.override} label="Override reason" hint="This crew is not the one suggested: say why.">
             <Textarea id={ids.override} rows={2} value={override} maxLength={500} onChange={(e) => setOverride(e.target.value)} />

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Pencil, Plus } from "lucide-react";
+import { SquarePen, Plus } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -50,7 +50,7 @@ export function NoteEditButton({
         aria-label={`Edit ${noun}`}
         className="text-muted-foreground hover:text-foreground hover:bg-muted focus-visible:ring-ring inline-flex size-4 shrink-0 items-center justify-center rounded-sm transition-colors focus-visible:ring-2 focus-visible:outline-none"
       >
-        <Pencil className="size-3" strokeWidth={1.75} />
+        <SquarePen className="size-3" strokeWidth={1.75} />
       </button>
     </Hint>
   ) : (

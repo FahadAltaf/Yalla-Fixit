@@ -7,7 +7,9 @@ import { templateText } from "@/lib/amc/message-templates";
 import { PLANNABLE_STATUSES, classifyMove, windowAfterMove, type VisitStatus } from "@/lib/amc/ppm";
 import {
   accessAlertDue,
+  accessFromPasses,
   assignmentProblems,
+  startProblems,
   attemptState,
   confirmationDue,
   crewNeed,
@@ -85,7 +87,7 @@ export interface TechnicianRecord extends TechnicianFacts {
 async function technicianFacts(admin: Admin, onlyActive = true, onlyId?: string): Promise<TechnicianRecord[]> {
   let q = admin
     .from("technician_reference")
-    .select("fsm_resource_id, display_name, is_active, shift, role:lookup_options!technician_reference_role_id_fkey(name)")
+    .select("fsm_resource_id, display_name, is_active, shift, email, user_profile_id, role:lookup_options!technician_reference_role_id_fkey(name)")
     .order("display_name");
   if (onlyActive) q = q.eq("is_active", true);
   let profileQ = admin.from("amc_technician_profiles").select("fsm_resource_id, areas, has_vehicle, is_driver, tools, access_permissions, notes");
@@ -123,6 +125,8 @@ async function technicianFacts(admin: Admin, onlyActive = true, onlyId?: string)
       tools: strings(p?.tools),
       accessPermissions: strings(p?.access_permissions),
       notes: str(p?.notes),
+      accountId: str(t.user_profile_id),
+      email: str(t.email),
     };
   });
 }
@@ -224,6 +228,7 @@ interface VisitContext {
 
 /** A property access rule, as the visit shows it: what is needed, from whom, how early, when. */
 export interface AccessRuleView {
+  id: string;
   accessType: string;
   issuer: string | null;
   leadTimeDays: number | null;
@@ -234,6 +239,90 @@ export interface AccessRuleView {
   contactName: string | null;
   contactPhone: string | null;
   notes: string | null;
+}
+
+/* ------------------------------------------------------------------ */
+/* Access from passes (17 Nov 2026)                                    */
+/* ------------------------------------------------------------------ */
+
+type AccessWrite = { status: AccessStatus; validUntil: string | null; documentId: string | null; note?: string | null };
+
+/** A visit's access, with what follows: the visit waits for access or is released, and the access to-do closes. */
+async function writeVisitAccess(admin: Admin, v: Row, input: AccessWrite, nowIso: string) {
+  const visitId = String(v.id);
+  const waiting = ["scheduled", "rescheduled", "confirmed", "not_scheduled"].includes(String(v.status));
+  const statusChange =
+    input.status === "pending" || input.status === "rejected" || input.status === "expired"
+      ? waiting
+        ? { status: "pending_access" }
+        : {}
+      : v.status === "pending_access"
+        ? { status: v.client_confirmation === "confirmed" ? "confirmed" : v.scheduled_start ? "scheduled" : "not_scheduled" }
+        : {};
+  const { error } = await admin
+    .from("amc_visits")
+    .update({
+      access_status: input.status,
+      access_valid_until: input.validUntil,
+      access_document_id: input.documentId,
+      ...(input.note !== undefined ? { access_note: input.note } : {}),
+      ...statusChange,
+      updated_at: nowIso,
+    })
+    .eq("id", visitId);
+  if (error) throw fail(error);
+  if (input.status === "approved" || input.status === "not_required") {
+    await closeAmcTodos(admin, { entityType: "visit", entityId: visitId, kind: "access_gate_pass" }, { status: "done", reason: `Access ${input.status.replace("_", " ")}` }).catch(() => 0);
+  }
+}
+
+/** Gate pass documents still in use, on the visits given and on the property (a property pass counts for every visit there). */
+async function passDocuments(admin: Admin, visitIds: string[], propertyId: string | null) {
+  const read = (level: "visit" | "property", ids: string[]) =>
+    ids.length
+      ? admin.from("amc_documents").select("id, level, entity_id, expires_on, uploaded_at").eq("level", level).in("entity_id", ids).eq("category", "Gate pass").is("superseded_by", null)
+      : Promise.resolve({ data: [] as Row[], error: null });
+  const [onVisits, onProperty] = await Promise.all([read("visit", visitIds), read("property", propertyId ? [propertyId] : [])]);
+  if (onVisits.error) throw fail(onVisits.error);
+  if (onProperty.error) throw fail(onProperty.error);
+  const pass = (d: Row) => ({ id: String(d.id), validUntil: str(d.expires_on), uploadedAt: String(d.uploaded_at) });
+  return {
+    forVisit: (visitId: string) => ((onVisits.data ?? []) as Row[]).filter((d) => String(d.entity_id) === visitId).map(pass),
+    property: ((onProperty.data ?? []) as Row[]).map(pass),
+  };
+}
+
+const visitDay = (v: Row) => (v.scheduled_start ? String(v.scheduled_start).slice(0, 10) : String(v.target_date));
+
+/**
+ * After a property's passes change: every visit there not yet started has
+ * its access worked out again from its own passes and the property's.
+ * Returns how many visits changed.
+ */
+export async function refreshPropertyVisitsAccess(admin: Admin, propertyId: string, now = new Date()): Promise<number> {
+  const { data: contracts, error: contractError } = await admin.from("amc_contracts").select("id").eq("property_id", propertyId);
+  if (contractError) throw fail(contractError);
+  const contractIds = ((contracts ?? []) as Row[]).map((c) => String(c.id));
+  if (!contractIds.length) return 0;
+  const { data: visits, error } = await admin
+    .from("amc_visits")
+    .select("id, status, target_date, scheduled_start, client_confirmation, access_status, access_valid_until, access_document_id")
+    .in("contract_id", contractIds)
+    .in("status", [...PLANNABLE_STATUSES]);
+  if (error) throw fail(error);
+  const rows = (visits ?? []) as Row[];
+  if (!rows.length) return 0;
+  const { count: ruleCount } = await admin.from("amc_property_access_rules").select("id", { count: "exact", head: true }).eq("property_id", propertyId).eq("active", true);
+  const docs = await passDocuments(admin, rows.map((r) => String(r.id)), propertyId);
+  const nowIso = now.toISOString();
+  let changed = 0;
+  for (const v of rows) {
+    const next = accessFromPasses([...docs.forVisit(String(v.id)), ...docs.property], visitDay(v), (ruleCount ?? 0) > 0);
+    if (next.status === v.access_status && next.validUntil === str(v.access_valid_until) && next.documentId === str(v.access_document_id)) continue;
+    await writeVisitAccess(admin, v, next, nowIso);
+    changed += 1;
+  }
+  return changed;
 }
 
 async function loadVisitContext(admin: Admin, visitId: string, date: string | null, config: AmcConfig): Promise<VisitContext> {
@@ -251,7 +340,7 @@ async function loadVisitContext(admin: Admin, visitId: string, date: string | nu
     propertyId
       ? admin
           .from("amc_property_access_rules")
-          .select("access_type, issuer, lead_time_days, permitted_days, permitted_from, permitted_to, parking, contact_name, contact_phone, notes")
+          .select("id, access_type, issuer, lead_time_days, permitted_days, permitted_from, permitted_to, parking, contact_name, contact_phone, notes")
           .eq("property_id", propertyId)
           .eq("active", true)
       : Promise.resolve({ data: [] as Row[] }),
@@ -286,6 +375,7 @@ async function loadVisitContext(admin: Admin, visitId: string, date: string | nu
     headcount: crew.headcount,
     accessRuleCount: ((rules ?? []) as Row[]).length,
     accessRules: ((rules ?? []) as Row[]).map((r) => ({
+      id: String(r.id),
       accessType: String(r.access_type),
       issuer: str(r.issuer),
       leadTimeDays: r.lead_time_days === null || r.lead_time_days === undefined ? null : Number(r.lead_time_days),
@@ -319,11 +409,18 @@ interface BusyBlock {
  */
 async function busyOn(admin: Admin, date: string, technicianIds: string[] | null, options: { skipAmc?: boolean } = {}): Promise<BusyBlock[]> {
   const { start, end } = dayBounds(date);
+  /*
+    A slot lasts at most a day (1440 minutes), so anything overlapping this day
+    started at most two days before it. The lower bound keeps the slot index
+    to a short range instead of every slot ever placed (13 Nov 2026).
+  */
+  const earliest = new Date(Date.parse(start) - 2 * 86_400_000).toISOString();
   const blocks: BusyBlock[] = [];
   /* The four sources are independent: read together, not one after another. The board skips the AMC ones (it shows them itself). */
   let amc = admin
     .from("amc_visits")
     .select("id, visit_no, scheduled_start, scheduled_end, technician_ids, contract:amc_contracts!amc_visits_contract_id_fkey(customer_name, contract_number)")
+    .gte("scheduled_start", earliest)
     .lt("scheduled_start", end)
     .gt("scheduled_end", start)
     .not("status", "in", "(cancelled,completed,completed_with_additional_work,not_completed)");
@@ -331,6 +428,7 @@ async function busyOn(admin: Admin, date: string, technicianIds: string[] | null
   let calls = admin
     .from("amc_call_outs")
     .select("id, call_out_no, priority, scheduled_start, scheduled_end, technician_ids, contract:amc_contracts!amc_call_outs_contract_id_fkey(customer_name)")
+    .gte("scheduled_start", earliest)
     .lt("scheduled_start", end)
     .gt("scheduled_end", start)
     .not("status", "in", "(cancelled,closed,resolved)");
@@ -340,20 +438,20 @@ async function busyOn(admin: Admin, date: string, technicianIds: string[] | null
     .from("amc_additional_works")
     .select("id, work_no, scheduled_start, scheduled_end, technician_ids, contract:amc_contracts!amc_additional_works_contract_id_fkey(customer_name)")
     .eq("status", "scheduled")
+    .gte("scheduled_start", earliest)
     .lt("scheduled_start", end)
     .gt("scheduled_end", start);
   if (technicianIds?.length) works = works.overlaps("technician_ids", technicianIds);
   let leave = admin.from("leave_records").select("technician_fsm_id, leave_type, start_at, end_at").eq("status", "active").lt("start_at", end).gt("end_at", start);
   if (technicianIds?.length) leave = leave.in("technician_fsm_id", technicianIds);
   /* The live board's current version for the day, then its entries (read only). */
+  /* One query with the day's current version joined in (16 Nov 2026): it used to be two, one after the other. */
   const jobs = (async () => {
-    const { data: versions } = await admin.from("schedule_versions").select("id").eq("schedule_date", date).eq("is_current", true);
-    const versionIds = ((versions ?? []) as Row[]).map((v) => String(v.id));
-    if (!versionIds.length) return [] as Row[];
     const { data: entries } = await admin
       .from("schedule_entries")
-      .select("id, start_at, end_at, title, client_name, assignments:schedule_entry_assignments(technician_fsm_id)")
-      .in("schedule_version_id", versionIds)
+      .select("id, start_at, end_at, title, client_name, assignments:schedule_entry_assignments(technician_fsm_id), schedule_versions!inner(schedule_date, is_current)")
+      .eq("schedule_versions.schedule_date", date)
+      .eq("schedule_versions.is_current", true)
       .not("start_at", "is", null);
     return (entries ?? []) as unknown as Row[];
   })();
@@ -425,6 +523,121 @@ function busyFor(blocks: BusyBlock[], technicianId: string, slot: { start: strin
     overlaps: slot ? mine.filter((b) => b.kind !== "leave" && slotsOverlap(b, slot)).length : 0,
     workloadMinutes: mine.filter((b) => b.kind !== "leave").reduce((m, b) => m + Math.max(0, (Date.parse(b.end) - Date.parse(b.start)) / 60_000), 0),
   };
+}
+
+/* ------------------------------------------------------------------ */
+/* Who is free to inspect at one time (site visits, 13-16 Nov 2026)    */
+/* ------------------------------------------------------------------ */
+
+/** A site visit is booked as a time, not a slot: it is taken to last this long. */
+export const SITE_VISIT_MINUTES = 60;
+
+export interface AvailableInspectors {
+  /** Technicians free then; `login: "none"` gets a login when picked. */
+  technicians: Array<{ fsmId: string; name: string; email: string | null; userId: string | null; login: "none" | "ready" }>;
+  /** Other active portal users free then. */
+  staff: Array<{ id: string; name: string; email: string | null }>;
+  /** How many were left out as booked then. */
+  busy: number;
+  /** What the person asked about (`currentUserId`) is booked on then; empty when free. */
+  currentBusy: string[];
+}
+
+/**
+ * The people who could inspect a site visit at `startIso` for `minutes`, and
+ * are free then: technicians (their AMC work, live jobs and leave) and the
+ * rest of the team (their other open site visits). Everything is read at
+ * once in one round of queries, for everybody, then filtered in memory:
+ * the Find button waits on one request, not one per person (16 Nov 2026).
+ */
+export async function availableInspectors(
+  admin: Admin,
+  startIso: string,
+  minutes: number,
+  options: { ignoreAssessmentId?: string | null; currentUserId?: string | null } = {},
+): Promise<AvailableInspectors> {
+  const start = Date.parse(startIso);
+  const end = start + minutes * 60_000;
+  const overlaps = (s: number, e: number) => s < end && e > start;
+  const fmt = (ms: number) => dubaiTime(new Date(ms).toISOString());
+
+  const [blocks, siteVisitsRead, techsRead, usersRead] = await Promise.all([
+    busyOn(admin, dubaiDate(startIso), null),
+    admin
+      .from("amc_assessments")
+      .select("id, assessment_number, assessor_id, scheduled_at, customer:snagging_clients(name)")
+      .eq("status", "draft")
+      .not("assessor_id", "is", null)
+      .gte("scheduled_at", new Date(start - SITE_VISIT_MINUTES * 60_000).toISOString())
+      .lt("scheduled_at", new Date(end).toISOString()),
+    admin.from("technician_reference").select("fsm_resource_id, display_name, email, user_profile_id, hidden_from_lists").eq("is_active", true).order("display_name"),
+    admin.from("user_profile").select("id, full_name, email, is_active, hidden_from_lists").order("full_name").limit(2000),
+  ]);
+  if (techsRead.error) throw fail(techsRead.error);
+  if (usersRead.error) throw fail(usersRead.error);
+
+  const busyTech = new Map<string, string[]>();
+  for (const b of blocks) {
+    const s = Date.parse(b.start);
+    const e = Date.parse(b.end);
+    if (!overlaps(s, e)) continue;
+    const list = busyTech.get(b.technicianId) ?? [];
+    list.push(b.kind === "leave" ? b.title : `${b.title} (${fmt(s)}–${fmt(e)})`);
+    busyTech.set(b.technicianId, list);
+  }
+  const busyUser = new Map<string, string[]>();
+  /* Before the site visit columns exist the read fails: nobody is busy with one. */
+  for (const a of (siteVisitsRead.error ? [] : (siteVisitsRead.data ?? [])) as unknown as Row[]) {
+    if (options.ignoreAssessmentId && String(a.id) === options.ignoreAssessmentId) continue;
+    const s = Date.parse(String(a.scheduled_at));
+    if (!overlaps(s, s + SITE_VISIT_MINUTES * 60_000)) continue;
+    const who = one(a.customer)?.name;
+    const list = busyUser.get(String(a.assessor_id)) ?? [];
+    list.push(`Site visit ${String(a.assessment_number ?? "")}${who ? `: ${String(who)}` : ""} (${fmt(s)})`);
+    busyUser.set(String(a.assessor_id), list);
+  }
+
+  const users = new Map(((usersRead.data ?? []) as Row[]).map((u) => [String(u.id), u]));
+  const activeUser = (id: string | null) => {
+    const u = id ? users.get(id) : undefined;
+    return u && u.is_active !== false ? u : null;
+  };
+  const technicians: AvailableInspectors["technicians"] = [];
+  const technicianUsers = new Set<string>();
+  const techOfUser = new Map<string, string>();
+  let busy = 0;
+  for (const t of (techsRead.data ?? []) as Row[]) {
+    if (t.hidden_from_lists === true) continue;
+    const fsmId = String(t.fsm_resource_id);
+    const linked = str(t.user_profile_id);
+    if (linked) {
+      technicianUsers.add(linked);
+      techOfUser.set(linked, fsmId);
+    }
+    /* A login that is switched off can't be given the visit. */
+    if (linked && users.has(linked) && !activeUser(linked)) continue;
+    const userId = activeUser(linked) ? linked : null;
+    if (busyTech.has(fsmId) || (userId && busyUser.has(userId))) {
+      busy += 1;
+      continue;
+    }
+    technicians.push({ fsmId, name: str(t.display_name) ?? "Technician", email: str(t.email), userId, login: userId ? "ready" : "none" });
+  }
+  const staff: AvailableInspectors["staff"] = [];
+  for (const u of users.values()) {
+    const id = String(u.id);
+    if (u.is_active === false || u.hidden_from_lists === true || technicianUsers.has(id)) continue;
+    if (busyUser.has(id)) {
+      busy += 1;
+      continue;
+    }
+    staff.push({ id, name: str(u.full_name) ?? str(u.email) ?? "User", email: str(u.email) });
+  }
+
+  const current = options.currentUserId ?? null;
+  const currentTech = current ? techOfUser.get(current) : undefined;
+  const currentBusy = current ? [...(currentTech ? (busyTech.get(currentTech) ?? []) : []), ...(busyUser.get(current) ?? [])] : [];
+  return { technicians, staff, busy, currentBusy };
 }
 
 /**
@@ -548,7 +761,7 @@ function boardVisit(v: Row): BoardVisit {
 export interface BoardData {
   migrated: boolean;
   date: string;
-  technicians: Array<Pick<TechnicianRecord, "fsmId" | "name" | "shift" | "role"> & { trades: Trade[] }>;
+  technicians: Array<Pick<TechnicianRecord, "fsmId" | "name" | "shift" | "role"> & { trades: Trade[]; accountId: string | null; email: string | null }>;
   /** AMC visits placed on this day. */
   placed: BoardVisit[];
   /** Live jobs and leave that day (read only), for who is busy. */
@@ -630,7 +843,15 @@ export async function boardData(admin: Admin, date: string, now = new Date()): P
   return {
     migrated: true,
     date,
-    technicians: techs.map((t) => ({ fsmId: t.fsmId, name: t.name, shift: t.shift, role: t.role, trades: [...new Set(t.skills.filter((s) => s.level !== "trainee").map((s) => s.trade))] })),
+    technicians: techs.map((t) => ({
+      fsmId: t.fsmId,
+      name: t.name,
+      shift: t.shift,
+      role: t.role,
+      trades: [...new Set(t.skills.filter((s) => s.level !== "trainee").map((s) => s.trade))],
+      accountId: t.accountId ?? null,
+      email: t.email ?? null,
+    })),
     placed: ((placedResult.data ?? []) as unknown as Row[]).filter(live).map(boardVisit),
     busy: blocks.filter((b) => b.kind !== "amc"),
     toPlace: ((toPlaceResult.data ?? []) as unknown as Row[]).filter((r) => one(r.contract)?.status === "active").map(boardVisit),
@@ -824,6 +1045,10 @@ export interface VisitDetail extends BoardVisit {
   accessValidUntil: string | null;
   accessNote: string | null;
   accessDocumentId: string | null;
+  /** The contract's property: access rules added from the visit go to it. */
+  propertyId: string | null;
+  /** The contract's status: a visit starts only on an active contract. */
+  contractStatus: string;
   lines: VisitContext["lines"];
   need: { trades: Trade[]; durationMinutes: number; headcount: number; accessTypes: string[] };
   /* Every access rule of the property (gate pass, permit, lift, keys...), not only the clearances. */
@@ -875,6 +1100,8 @@ export async function visitDetail(admin: Admin, visitId: string, config: AmcConf
     accessValidUntil: str(v.access_valid_until),
     accessNote: str(v.access_note),
     accessDocumentId: str(v.access_document_id),
+    propertyId: str(ctx.contract.property_id),
+    contractStatus: String(ctx.contract.status ?? ""),
     lines: ctx.lines,
     need: { trades: ctx.need.trades, durationMinutes: ctx.durationMinutes, headcount: ctx.headcount, accessTypes: ctx.need.accessTypes },
     accessRules: ctx.accessRules,
@@ -933,6 +1160,22 @@ export async function performVisitAction(
   const v = ctx.visit;
   const contractId = String(v.contract_id);
   const nowIso = now.toISOString();
+  /* The visit's access, with what follows from it: the visit waits for access or is released, and the access to-do closes. */
+  const saveAccess = (input: AccessWrite) => writeVisitAccess(admin, v, input, nowIso);
+  const refreshAccess = async () => {
+    const propertyId = str(ctx.contract.property_id);
+    const docs = await passDocuments(admin, [visitId], propertyId);
+    const next = accessFromPasses([...docs.forVisit(visitId), ...docs.property], visitDay(v), ctx.accessRuleCount > 0);
+    await saveAccess(next);
+    return next;
+  };
+  const passOf = async (documentId: string) => {
+    const { data } = await admin.from("amc_documents").select("id, level, entity_id, category, superseded_by").eq("id", documentId).maybeSingle<Row>();
+    if (!data || data.level !== "visit" || String(data.entity_id) !== visitId || data.category !== "Gate pass" || data.superseded_by) {
+      throw new ContractError("That pass is not on this visit.", 404);
+    }
+    return data;
+  };
   const logAttempt = async (channel: string, outcome: AttemptOutcome, note: string | null) => {
     const { error } = await admin.from("amc_visit_attempts").insert({
       visit_id: visitId,
@@ -981,6 +1224,11 @@ export async function performVisitAction(
     }
     case "attempt": {
       if (action.outcome === "no_answer" || action.outcome === "message_sent") {
+        /* The contract's channels (Schedule rules), as its count and interval are (17 Nov 2026). */
+        const channels = ruleOf(ctx.contract, config).attemptChannels;
+        if (channels.length && !channels.includes(action.channel)) {
+          throw new ContractError(`This contract's attempts are by ${channels.join(", ")}: change its schedule rules to use ${action.channel}.`, 400);
+        }
         const { data: earlier } = await admin.from("amc_visit_attempts").select("outcome, attempted_at").eq("visit_id", visitId);
         const before = attemptState(
           ((earlier ?? []) as Row[]).map((a) => ({ outcome: a.outcome as AttemptOutcome, attemptedAt: String(a.attempted_at) })),
@@ -1045,31 +1293,52 @@ export async function performVisitAction(
         const ok = doc && ((doc.level === "visit" && String(doc.entity_id) === visitId) || (doc.level === "contract" && String(doc.entity_id) === contractId));
         if (!ok) throw new ContractError("Upload the pass to this visit or its contract first.", 400);
       }
-      const waiting = ["scheduled", "rescheduled", "confirmed", "not_scheduled"].includes(String(v.status));
-      const statusChange =
-        action.status === "pending" || action.status === "rejected" || action.status === "expired"
-          ? waiting
-            ? { status: "pending_access" }
-            : {}
-          : v.status === "pending_access"
-            ? { status: v.client_confirmation === "confirmed" ? "confirmed" : v.scheduled_start ? "scheduled" : "not_scheduled" }
-            : {};
-      const { error } = await admin
-        .from("amc_visits")
-        .update({
-          access_status: action.status,
-          access_valid_until: action.validUntil ?? null,
-          access_document_id: action.documentId ?? str(v.access_document_id),
-          access_note: action.note,
-          ...statusChange,
-          updated_at: nowIso,
-        })
-        .eq("id", visitId);
-      if (error) throw fail(error);
-      if (action.status === "approved" || action.status === "not_required") {
-        await closeAmcTodos(admin, { entityType: "visit", entityId: visitId, kind: "access_gate_pass" }, { status: "done", reason: `Access ${action.status.replace("_", " ")}` }).catch(() => 0);
-      }
+      await saveAccess({ status: action.status, validUntil: action.validUntil ?? null, documentId: action.documentId ?? str(v.access_document_id), note: action.note });
       await recordAmcAudit(admin, { entityType: "contract", entityId: contractId, eventType: "visit_access_updated", actorId: actor.id, actorLabel: actor.label, payload: { visitNo: v.visit_no, status: action.status } });
+      return { ok: true };
+    }
+    case "pass": {
+      await passOf(action.documentId);
+      const { error } = await admin.from("amc_documents").update({ expires_on: action.validUntil, notes: action.note }).eq("id", action.documentId);
+      if (error) throw fail(error);
+      const next = await refreshAccess();
+      await recordAmcAudit(admin, { entityType: "contract", entityId: contractId, eventType: "visit_pass_updated", actorId: actor.id, actorLabel: actor.label, payload: { visitNo: v.visit_no, documentId: action.documentId, validUntil: action.validUntil, access: next.status } });
+      return { ok: true };
+    }
+    case "pass_remove": {
+      await passOf(action.documentId);
+      /* Taken out of use, the file kept: marked as replaced by itself, so every list leaves it out. */
+      const { error } = await admin.from("amc_documents").update({ superseded_by: action.documentId }).eq("id", action.documentId);
+      if (error) throw fail(error);
+      const next = await refreshAccess();
+      await recordAmcAudit(admin, { entityType: "contract", entityId: contractId, eventType: "visit_pass_removed", actorId: actor.id, actorLabel: actor.label, payload: { visitNo: v.visit_no, documentId: action.documentId, access: next.status } });
+      return { ok: true };
+    }
+    case "start": {
+      const problems = startProblems({
+        status: String(v.status),
+        contractActive: ctx.contract.status === "active",
+        technicianIds: strings(v.technician_ids),
+        scheduledStart: str(v.scheduled_start),
+        scheduledEnd: str(v.scheduled_end),
+        clientConfirmation: str(v.client_confirmation),
+        accessStatus: str(v.access_status),
+      });
+      if (problems.length) throw new ContractError(`Before starting the visit: ${problems.map((p) => p.text.replace(/\.$/, "").toLowerCase()).join("; ")}.`, 400);
+      const { data: started, error } = await admin
+        .from("amc_visits")
+        .update({ status: "in_progress", updated_at: nowIso })
+        .eq("id", visitId)
+        .in("status", ["not_scheduled", "scheduled", "rescheduled", "confirmed", "pending_access"])
+        .select("id");
+      if (error) throw fail(error);
+      if (!started?.length) throw new ContractError("This visit changed a moment ago. Refresh the page.", 409);
+      await recordAmcAudit(admin, { entityType: "contract", entityId: contractId, eventType: "visit_started", actorId: actor.id, actorLabel: actor.label, payload: { visitNo: v.visit_no } });
+      return { ok: true };
+    }
+    case "passes_changed": {
+      const next = await refreshAccess();
+      await recordAmcAudit(admin, { entityType: "contract", entityId: contractId, eventType: "visit_access_updated", actorId: actor.id, actorLabel: actor.label, payload: { visitNo: v.visit_no, status: next.status, fromPasses: true } });
       return { ok: true };
     }
   }

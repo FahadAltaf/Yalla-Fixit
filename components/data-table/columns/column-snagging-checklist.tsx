@@ -1,7 +1,7 @@
 "use client";
 
 import { ColumnDef } from "@tanstack/react-table";
-import { FolderOpen, Home, Pencil } from "lucide-react";
+import { FolderOpen, Home, SquarePen } from "lucide-react";
 
 import { IconText } from "@/components/data-table/columns/icon-text";
 import { Badge } from "@/components/ui/badge";
@@ -126,7 +126,7 @@ export function getSnaggingChecklistColumns({
                 onClick={() => onEdit(item)}
                 aria-label={`Edit ${item.label}`}
               >
-                <Pencil className="size-3.5" />
+                <SquarePen className="size-3.5" />
               </Button>
             ) : null}
           </div>

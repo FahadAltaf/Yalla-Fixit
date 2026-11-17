@@ -7,7 +7,7 @@ import {
   Loader2,
   Mail,
   MapPin,
-  Pencil,
+  SquarePen,
   Phone,
   Plus,
   Users,
@@ -321,7 +321,7 @@ export default function ClientsAdmin({
                 }}
                 aria-label={`Edit ${row.original.client_name}`}
               >
-                <Pencil className="size-4" />
+                <SquarePen className="size-4" />
               </Button>
             </Hint>
           ) : null,

@@ -8,21 +8,20 @@ import {
   ArrowLeft,
   Boxes,
   Building2,
-  CalendarCheck,
   CalendarClock,
-  Check,
   CheckCircle2,
-  ChevronDown,
   ClipboardCheck,
   EllipsisVerticalIcon,
   FileSignature,
   Inbox,
   MapPin,
-  Pencil,
+  SquarePen,
   Plus,
+  Lock,
   SearchX,
-  Trash2,
   TriangleAlert,
+  ShieldCheck,
+  Undo2,
   UserRound,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -42,7 +41,6 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { IdentityCell } from "@/components/ui/entity-avatar";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
@@ -51,24 +49,25 @@ import { GoogleLocationMap, hasGoogleMapsKey } from "@/components/dashboard/snag
 import { LocationMap } from "@/components/dashboard/snagging/location-map";
 import { PageHeading, SectionCard, StatCard, StatCardGrid, SubHeading } from "@/components/dashboard/shared/kaizen";
 import { ActionDialogContent, ErrorState, ListSkeleton, SectionSkeleton, StatGridSkeleton, SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
-import { DatePickerField } from "@/components/dashboard/extensions/amc/components/date-picker-field";
-import { assessmentSummary, checkAssessmentCompletion, type AssessmentResult } from "@/lib/amc/business";
-import { ATTENDANCE_LABELS, SITE_VISIT_ATTENDANCE, type SiteVisitAttendance } from "@/lib/amc/enquiries";
+import { assessmentSummary, type AssessmentResult } from "@/lib/amc/business";
+import { ATTENDANCE_LABELS, type SiteVisitAttendance } from "@/lib/amc/enquiries";
 import { cn } from "@/lib/utils";
 import { useDebounce } from "@/hooks/use-debounce";
 import { amcContractsService, type AssessmentRecord, type CustomerRecord } from "@/modules/amc-contracts/amc-contracts-service";
 import { fieldVisitsService } from "@/modules/amc-contracts/field-visits-service";
 
 import { AssessmentPhotos } from "./assessment-photos";
+import { ApproverSelect } from "./approver-field";
+import { SendBackDialog, SiteVisitChangesCard, SiteVisitPropertyLists } from "./site-visit-changes";
 import { CustomerSearch, UNIT_TYPE_LABELS } from "./customer-pickers";
-import { UNIT_TYPE_CATEGORY } from "@/lib/amc/client-profile";
 import { formatContractDate, formatDateTime } from "./contract-status";
 import { AddressDialog, useAddressFormAccess } from "./address-dialog";
 import { DetailHeaderCard, DetailHeaderSkeleton, DetailToolbar, shortPlace } from "./detail-header";
 import { EditClientDialog } from "./edit-client-dialog";
 import { EnquiryPropertySelect } from "./enquiries/enquiry-property-select";
 import { PropertyPickerField } from "./property-picker-field";
-import { DetailList, HeadingIconButton, HeadingWithActions, PersonSelect, SiteVisitStatusBadge, clientRows, fromLocalInput, propertyRows, toLocalInput } from "./enquiries/enquiry-ui";
+import { AssessorPicker } from "./assessor-picker";
+import { DetailList, HeadingIconButton, HeadingWithActions, SiteVisitStatusBadge, clientRows, fromLocalInput, propertyRows, toLocalInput } from "./enquiries/enquiry-ui";
 import { ListToolbar } from "./enquiries/list-toolbar";
 import { useUrlTab } from "./profile/use-url-tab";
 import { useAmcData } from "./use-amc-data";
@@ -177,7 +176,7 @@ export function AssessmentsPage() {
       },
       {
         id: "assessor",
-        header: "Assessor",
+        header: "Inspector",
         enableSorting: false,
         cell: ({ row }) =>
           row.original.assessorName ? (
@@ -424,12 +423,8 @@ type Draft = Omit<AssessmentRecord, "customer" | "property" | "proposal"> & {
   propertyId: string | null;
 };
 
-/** The day a visit took place, as YYYY-MM-DD: the booked day once it has passed, today otherwise. */
-function visitDay(scheduledAt: string | null): string {
-  const booked = scheduledAt ? new Date(scheduledAt) : null;
-  const d = booked && !Number.isNaN(booked.getTime()) && booked.getTime() <= Date.now() ? booked : new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
+/** A checklist group: the office's category, or the name the inspector gave an on-site one. */
+const checkGroup = (i: { categoryKey: string; categoryLabel: string }) => (i.categoryKey === "custom" ? `custom:${i.categoryLabel}` : i.categoryKey);
 
 function toDraft(a: AssessmentRecord): Draft {
   return {
@@ -439,7 +434,7 @@ function toDraft(a: AssessmentRecord): Draft {
   };
 }
 
-const TABS = ["details", "checklist", "findings", "photos", "history"] as const;
+const TABS = ["details", "report", "property", "history"] as const;
 
 export function AssessmentDetail({ id }: { id: string }) {
   const router = useRouter();
@@ -472,6 +467,10 @@ export function AssessmentDetail({ id }: { id: string }) {
   /* The shared client or address record, edited in place as on the job's Setup tab. */
   const [editingRecord, setEditingRecord] = useState<"client" | "property" | null>(null);
   /* The section being edited in its dialog. */
+  /* Whether the chosen inspector has been found free at the time in the Edit the visit dialog. */
+  const [inspectorReady, setInspectorReady] = useState(false);
+  /* The approver's Send back dialog (16 Nov 2026). */
+  const [sendingBack, setSendingBack] = useState(false);
   const [section, setSection] = useState<"visit" | "checklist" | "services" | "findings" | null>(null);
 
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -518,17 +517,10 @@ export function AssessmentDetail({ id }: { id: string }) {
   const a = data?.assessment ?? null;
   const ready = Boolean(a && draft && summary) && !error;
   const editable = Boolean(data?.canEdit);
+  /* Completed but not approved: only the approver can change, in Edit the visit (16 Nov 2026). */
+  const canChangeApprover = Boolean(data?.canChangeApprover);
+  const completedVisit = data?.assessment.status === "completed";
   const busy = pending !== null;
-  const completion =
-    a && draft
-      ? checkAssessmentCompletion({
-          status: a.status,
-          assessedOn: draft.assessedOn,
-          propertyId: draft.propertyId,
-          items: draft.items,
-          attendance: draft.attendance,
-        })
-      : { ok: false, errors: [] as string[] };
 
   /* A draft as the server takes it; throws on failure. */
   const persistDraft = (draft: Draft) =>
@@ -557,7 +549,30 @@ export function AssessmentDetail({ id }: { id: string }) {
         notes: i.notes,
       })),
     });
-  const persist = () => (draft ? persistDraft(draft) : Promise.resolve());
+  /*
+    Edit the visit saves only what it edits (16 Nov 2026). Sending the whole
+    draft wrote back the checklist, attendance and findings as this page last
+    read them, over anything the inspector had since saved on the phone.
+  */
+  const saveVisit = async (next: Draft) => {
+    if (completedVisit) {
+      await amcContractsService.updateAssessment(id, { approverId: next.approverId });
+      setDraft(next);
+      toast.success("Approver changed");
+      reload();
+      return;
+    }
+    await amcContractsService.updateAssessment(id, {
+      ...(next.assessorId !== (data?.assessment.assessorId ?? null) && next.assessorId ? { assessorId: next.assessorId } : {}),
+      ...(next.approverId !== (data?.assessment.approverId ?? null) ? { approverId: next.approverId } : {}),
+      scheduledAt: next.scheduledAt,
+      accessNotes: next.accessNotes,
+      exclusions: next.exclusions,
+    });
+    setDraft(next);
+    toast.success("Site visit saved");
+    reload();
+  };
   /* A section's dialog saves the visit with its changes straight away; the page shows what is saved. */
   const saveSection = async (next: Draft) => {
     await persistDraft(next);
@@ -565,20 +580,33 @@ export function AssessmentDetail({ id }: { id: string }) {
     toast.success("Site visit saved");
     reload();
   };
-  /* Saves first, then completes, while the confirmation stays open. */
-  const complete = () =>
+  /* Asked first (11 Nov 2026): it acts at once, so it is confirmed like every other step. */
+  /*
+    The named approver approves a completed visit: the scope and asset
+    changes the inspector made on site go onto the property (16 Nov 2026).
+  */
+  const changes = data?.changes ?? [];
+  const canApprove = Boolean(data?.canApprove);
+  const awaitingApproval = Boolean(a && a.status === "completed" && a.approverId && !a.approvedAt);
+  const stage = a ? siteVisitStage(a) : { label: "", tone: "neutral" as const, caption: "" };
+  const approve = () =>
     void confirm({
-      title: "Complete this site visit?",
-      description: "It becomes history: its answers cannot be changed afterwards.",
-      confirmText: "Complete",
+      title: "Approve this site visit?",
+      description: changes.length
+        ? `The ${changes.length} change${changes.length === 1 ? "" : "s"} to the property's scope and assets recorded on site go onto the property, and the visit is closed. This can't be undone.`
+        : "The visit is closed. Nothing on the property changes: no scope or asset changes were recorded on site.",
+      confirmText: "Approve",
       action: async () => {
-        await persist();
-        await amcContractsService.completeAssessment(id);
-        toast.success("Site visit completed");
+        await amcContractsService.approveAssessment(id);
+        toast.success(changes.length ? "Site visit approved; the property is updated" : "Site visit approved");
         reload();
       },
     });
-  /* Asked first (11 Nov 2026): it acts at once, so it is confirmed like every other step. */
+  const sendBack = async (reason: string) => {
+    await amcContractsService.sendBackAssessment(id, reason);
+    toast.success("Sent back to the inspector");
+    reload();
+  };
   const createProposal = () =>
     void confirm({ title: "Create an AMC proposal from this site visit?", description: "Starts a draft proposal with this visit's client, property and recommended services, then opens it to enter the prices. Nothing is sent to the client.", confirmText: "Create proposal" }).then((ok) => {
       if (ok) void createProposalNow();
@@ -592,50 +620,6 @@ export function AssessmentDetail({ id }: { id: string }) {
       router.push(`/extensions/amc/${result.submissionId}/edit`);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not create the proposal.");
-      setPending(null);
-    }
-  };
-  const remove = () =>
-    void confirm({
-      title: "Delete this draft?",
-      description: "Drafts can be deleted; completed site visits are kept.",
-      confirmText: "Delete",
-      variant: "destructive",
-      action: async () => {
-        await amcContractsService.deleteAssessment(id);
-        toast.success("Draft deleted");
-        router.push("/extensions/amc-contracts/assessments");
-      },
-    });
-  /*
-   * Attendance from the header or the banner, saved straight away. Attended
-   * also fills in "Visited on" when it is empty (the booked day once it has
-   * passed, today otherwise), so the visit can be completed.
-   */
-  /* Asked first (11 Nov 2026): it acts at once, so it is confirmed like every other step. */
-  const recordAttendance = (attendance: SiteVisitAttendance) =>
-    void confirm({ title: `Record the visit as ${ATTENDANCE_LABELS[attendance].toLowerCase()}?`, description: attendance === "attended" ? "The site visit took place. Visited on is set to the booked day (or today) if it is empty, so the visit can be completed." : "The site visit is recorded as not taking place this way. It can be changed later.", confirmText: "Record attendance" }).then((ok) => {
-      if (ok) void recordAttendanceNow(attendance);
-    });
-  const recordAttendanceNow = async (attendance: SiteVisitAttendance) => {
-    if (!draft || pending) return;
-    const visitedOn = attendance === "attended" && !draft.assessedOn ? visitDay(draft.scheduledAt) : null;
-    setPending("attendance");
-    try {
-      await amcContractsService.updateAssessment(id, {
-        attendance,
-        ...(visitedOn ? { assessedOn: visitedOn } : {}),
-      });
-      setDraft({
-        ...draft,
-        attendance,
-        ...(visitedOn ? { assessedOn: visitedOn } : {}),
-      });
-      toast.success(`Attendance recorded: ${ATTENDANCE_LABELS[attendance].toLowerCase()}`);
-      reload();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not record the attendance.");
-    } finally {
       setPending(null);
     }
   };
@@ -655,9 +639,20 @@ export function AssessmentDetail({ id }: { id: string }) {
   };
 
   const people = assessors.data?.people ?? [];
-  const categories = draft ? [...new Map(draft.items.map((i) => [i.categoryKey, i.categoryLabel])).entries()] : [];
+  /* In progress once the inspector records it as attended (as AMC -> Visits): its time and inspector are then fixed. */
+  const inProgress = data?.assessment.attendance === "attended";
+  const movesOrReassigns = (d: Draft) =>
+    (d.assessorId ?? null) !== (data?.assessment.assessorId ?? null) ||
+    (d.scheduledAt ? Date.parse(d.scheduledAt) : null) !== (data?.assessment.scheduledAt ? Date.parse(data.assessment.scheduledAt) : null);
+  /*
+    Groups as the inspector named them: checks added on the mobile app all
+    have the key "custom" with their own category name, so grouping by key
+    alone put every one of them under a single heading (16 Nov 2026).
+  */
+  /* The checklist items flagged as needing attention, with their notes (the Report tab). */
+  const attentionItems = draft ? draft.items.filter((i) => i.result === "attention") : [];
+  const categories = draft ? [...new Map(draft.items.map((i) => [checkGroup(i), i.categoryLabel])).entries()] : [];
   const services = catalogue.data?.catalogue ?? [];
-  const answered = summary ? summary.total - summary.unanswered : 0;
   const panel = (value: (typeof TABS)[number], children: React.ReactNode) =>
     isOpened(value) ? (
       <TabsContent value={value} forceMount className="mt-4 flex flex-col gap-4 data-[state=inactive]:hidden">
@@ -688,11 +683,16 @@ export function AssessmentDetail({ id }: { id: string }) {
             </>
           }
           title={a.customer?.name || "Site visit"}
-          status={<SiteVisitStatusBadge status={a.status} />}
+          status={
+            <Badge variant="secondary" className={cn("border-0 font-medium", STAGE_TONE_CLASSES[stage.tone])}>
+              {stage.label}
+            </Badge>
+          }
           subline={[
             shortPlace(a.property?.label) ?? "No property yet",
             a.scheduledAt ? formatDateTime(a.scheduledAt) : "Not booked yet",
             a.assessorName ?? null,
+            a.approverName ? `Approver: ${a.approverName}` : null,
           ]
             .filter(Boolean)
             .join(" · ")}
@@ -716,42 +716,35 @@ export function AssessmentDetail({ id }: { id: string }) {
                       </Link>
                     </Button>
                   ) : null}
-                  {editable && draft ? (
+                  {(editable || canChangeApprover) && draft ? (
                     <>
-                      {/* Attendance in one click; the visit's full edit is at the foot of the menu. */}
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="outline" disabled={busy}>
-                            <CalendarCheck className="size-4" />
-                            {draft.attendance ? (ATTENDANCE_LABELS[draft.attendance as SiteVisitAttendance] ?? draft.attendance) : "Record attendance"}
-                            <ChevronDown className="size-4 opacity-60" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end" className="min-w-52">
-                          {SITE_VISIT_ATTENDANCE.map((v) => (
-                            <DropdownMenuItem key={v} onClick={() => void recordAttendance(v)} disabled={draft.attendance === v}>
-                              <Check className={cn("size-4", draft.attendance === v ? "opacity-100" : "opacity-0")} />
-                              {ATTENDANCE_LABELS[v]}
-                            </DropdownMenuItem>
-                          ))}
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem onClick={() => setSection("visit")}>
-                            <Pencil className="size-4" />
-                            Edit the visit…
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                      <Button variant="outline" onClick={remove} disabled={busy} className="text-destructive hover:text-destructive">
-                        <Trash2 className="size-4" />
-                        Delete draft
+                      {/*
+                        Attendance, the checklist, counts, findings and photos come from
+                        the inspector's mobile app (16 Nov 2026): no attendance menu
+                        here. The office can still move the visit or change who goes.
+                      */}
+                      <Button variant="outline" onClick={() => setSection("visit")} disabled={busy}>
+                        <SquarePen className="size-4" />
+                        Edit the visit
                       </Button>
-                      <Button onClick={complete} disabled={busy || !completion.ok}>
-                        <CheckCircle2 className="size-4" />
-                        Complete
+                      {/* No Delete draft for now (16 Nov 2026). */}
+                      {/* No Complete here (16 Nov 2026): the inspector completes the visit on the mobile app. */}
+                    </>
+                  ) : null}
+                  {canApprove ? (
+                    <>
+                      <Button variant="outline" onClick={() => setSendingBack(true)} disabled={busy}>
+                        <Undo2 className="size-4" />
+                        Send back
+                      </Button>
+                      <Button onClick={approve} disabled={busy}>
+                        <ShieldCheck className="size-4" />
+                        Approve
                       </Button>
                     </>
                   ) : null}
-                  {a.status === "completed" && !a.proposal ? (
+                  {/* A proposal once the visit is approved (or, for a visit booked before approvals, once complete). */}
+                  {a.status === "completed" && !a.proposal && (!a.approverId || a.approvedAt) ? (
                     <SubmitButton onClick={() => void createProposal()} pending={pending === "proposal"} pendingLabel="Creating…" icon={<FileSignature className="size-4" />}>
                       Create AMC proposal
                     </SubmitButton>
@@ -769,31 +762,31 @@ export function AssessmentDetail({ id }: { id: string }) {
         <SiteVisitBodySkeleton tab={tab} />
       ) : (
         <div className="flex flex-col gap-4">
-          {/* What is still needed, as a quotation shows what is holding it up. */}
-          {editable && !completion.ok ? (
+          {a.status === "draft" && a.sentBackReason ? (
             <Alert>
-              <TriangleAlert />
-              <AlertTitle>To complete this site visit</AlertTitle>
-              <AlertDescription className="flex flex-col gap-3">
-                <span>{completion.errors.join(" ")}</span>
-                {notAttended ? (
-                  <div className="flex flex-wrap gap-2">
-                    <SubmitButton size="sm" onClick={() => void recordAttendance("attended")} pending={pending === "attendance"} pendingLabel="Saving…" icon={<CalendarCheck className="size-4" />}>
-                      Mark as attended
-                    </SubmitButton>
-                    <Button size="sm" variant="outline" onClick={() => setSection("visit")} disabled={busy}>
-                      <Pencil className="size-4" />
-                      Edit the visit
-                    </Button>
-                  </div>
-                ) : null}
+              <Undo2 />
+              <AlertTitle>Sent back by {a.approverName ?? "the approver"}</AlertTitle>
+              <AlertDescription>
+                {a.sentBackReason}
+                {a.sentBackAt ? ` (${formatDateTime(a.sentBackAt)})` : ""}. The inspector puts it right on the app and completes it again.
               </AlertDescription>
             </Alert>
           ) : null}
-          {a.status === "completed" && !a.proposal ? (
+          {awaitingApproval ? (
+            <Alert>
+              <ShieldCheck />
+              <AlertTitle>{canApprove ? "Ready for your approval" : `Waiting for ${a.approverName ?? "the approver"} to approve`}</AlertTitle>
+              <AlertDescription>
+                {canApprove
+                  ? `${a.assessorName ?? "The inspector"} completed the visit. Check its changes on the Scope and assets tab, then approve it (they go onto the property) or send it back.`
+                  : `${a.assessorName ?? "The inspector"} completed the visit. The changes to the property's scope and assets (Scope and assets tab) go onto it once ${a.approverName ?? "the approver"} approves.`}
+              </AlertDescription>
+            </Alert>
+          ) : null}
+          {a.status === "completed" && !a.proposal && (!a.approverId || a.approvedAt) ? (
             <Alert>
               <CheckCircle2 />
-              <AlertTitle>The site visit is complete</AlertTitle>
+              <AlertTitle>{a.approvedAt ? "The site visit is approved" : "The site visit is complete"}</AlertTitle>
               {/* Create AMC proposal is in the header; the banner only says what it does. */}
               <AlertDescription>Use Create AMC proposal above: the recommended services are ticked, with the units counted on site.</AlertDescription>
             </Alert>
@@ -802,9 +795,8 @@ export function AssessmentDetail({ id }: { id: string }) {
           <Tabs value={tab} onValueChange={setTab}>
             <TabsList className="h-auto w-full flex-wrap justify-start gap-1 group-data-horizontal/tabs:h-auto">
               <TabsTrigger value="details">Details</TabsTrigger>
-              <TabsTrigger value="checklist">Checklist</TabsTrigger>
-              <TabsTrigger value="findings">Findings and services</TabsTrigger>
-              <TabsTrigger value="photos">Photos</TabsTrigger>
+              <TabsTrigger value="report">Report</TabsTrigger>
+              <TabsTrigger value="property">Scope and assets</TabsTrigger>
               <TabsTrigger value="history">History</TabsTrigger>
             </TabsList>
 
@@ -815,19 +807,17 @@ export function AssessmentDetail({ id }: { id: string }) {
                 <StatCardGrid columns={4}>
                   <StatCard
                     label="Status"
-                    value={a.status === "completed" ? "Completed" : "Draft"}
-                    headline={`Site visit ${a.assessmentNumber}${a.enquiryId ? " · from an enquiry" : ""}`}
-                    caption={draft.scheduledAt ? `Booked for ${formatDateTime(draft.scheduledAt)}` : "Not booked for a time"}
-                    tone={a.status === "completed" ? "good" : "progress"}
+                    value={stage.label}
+                    headline={stage.caption}
+                    caption={a.approverName ? `Approver: ${a.approverName}` : `Site visit ${a.assessmentNumber}${a.enquiryId ? " · from an enquiry" : ""}`}
+                    tone={stage.tone === "good" ? "good" : stage.tone === "bad" ? "bad" : stage.tone === "neutral" ? "neutral" : "progress"}
                   />
                   <StatCard
-                    label="Checklist"
-                    value={`${answered}/${summary.total}`}
-                    tone={summary.total > 0 && summary.unanswered === 0 ? "good" : "neutral"}
-                    headline={summary.unanswered ? `${summary.unanswered} unanswered` : "Every item answered"}
-                    caption={`${summary.ok} OK · ${summary.notApplicable} not applicable`}
-                    onSelect={() => setTab("checklist")}
-                    selectLabel="Open the checklist"
+                    label="Attendance"
+                    value={draft.attendance ? (ATTENDANCE_LABELS[draft.attendance as SiteVisitAttendance] ?? draft.attendance) : "Not yet"}
+                    tone={draft.attendance === "attended" ? "good" : notAttended ? "bad" : "neutral"}
+                    headline={draft.attendance ? "Recorded on the mobile app" : `Recorded by ${a.assessorName ?? "the inspector"} on site`}
+                    caption={draft.assessedOn ? `Visited on ${formatContractDate(draft.assessedOn)}` : "No visit date yet"}
                   />
                   <StatCard
                     label="Needs attention"
@@ -835,7 +825,7 @@ export function AssessmentDetail({ id }: { id: string }) {
                     tone={summary.attention ? "progress" : "neutral"}
                     headline={summary.attention ? "Items to put right" : "Nothing flagged"}
                     caption="From the checklist"
-                    onSelect={() => setTab("findings")}
+                    onSelect={() => setTab("report")}
                     selectLabel="Open the findings"
                   />
                   <StatCard
@@ -843,10 +833,11 @@ export function AssessmentDetail({ id }: { id: string }) {
                     value={draft.recommendedServiceIds.length}
                     headline="Ticked on the proposal it starts"
                     caption="Prices are entered in the proposal"
-                    onSelect={() => setTab("findings")}
+                    onSelect={() => setTab("report")}
                     selectLabel="Open the recommended services"
                   />
                 </StatCardGrid>
+
 
                 <SectionCard title="Client & property" icon={<Building2 />} description="Who the visit is for and the property being assessed." bodyClassName="px-5 pb-5">
                   {/* As the enquiry and the job's Setup tab: the lists stacked on the left, the map filling the right. */}
@@ -855,7 +846,7 @@ export function AssessmentDetail({ id }: { id: string }) {
                       <div className="space-y-3">
                         <SubHeading>
                           <HeadingWithActions label="Client">
-                            {a.customer ? <HeadingIconButton label="Edit client" icon={<Pencil />} onClick={() => setEditingRecord("client")} /> : null}
+                            {a.customer ? <HeadingIconButton label="Edit client" icon={<SquarePen />} onClick={() => setEditingRecord("client")} /> : null}
                           </HeadingWithActions>
                         </SubHeading>
                         {/* As the job's Setup tab: who the client is and how to reach them. The enquiry and the proposal are in the card above. */}
@@ -887,7 +878,7 @@ export function AssessmentDetail({ id }: { id: string }) {
                           }
                         >
                           <HeadingWithActions label="Property">
-                            {a.property && addressForm && a.customer ? <HeadingIconButton label="Edit property" icon={<Pencil />} onClick={() => setEditingRecord("property")} /> : null}
+                            {a.property && addressForm && a.customer ? <HeadingIconButton label="Edit property" icon={<SquarePen />} onClick={() => setEditingRecord("property")} /> : null}
                           </HeadingWithActions>
                         </SubHeading>
                         {a.property ? (
@@ -953,75 +944,56 @@ export function AssessmentDetail({ id }: { id: string }) {
                 <SectionCard
                   title="Visit"
                   icon={<CalendarClock />}
-                  description={
-                    a.enquiryId
-                      ? "Booked from an enquiry: whether it took place, what the unit is, how to get in and what is left out."
-                      : "When the visit is, whether it took place, what the unit is, how to get in and what is left out."
-                  }
-                  bodyClassName="px-5 pb-5"
-                  action={
-                    editable ? (
-                      <Button variant="outline" size="sm" onClick={() => setSection("visit")}>
-                        <Pencil className="size-4" />
-                        Edit
-                      </Button>
-                    ) : null
-                  }
+                  description={`${a.enquiryId ? "Booked from an enquiry. " : ""}When it is, who goes and who approves; the attendance and the notes come from the inspector's app.`}
+                  bodyClassName="px-5 pb-5 grid gap-5"
                 >
-                  {/* Read as the job's Setup tab reads; Edit opens the fields in a dialog. */}
-                  <div className="grid gap-6 lg:grid-cols-2">
-                    <div className="min-w-0 space-y-3">
-                      <SubHeading>When and who</SubHeading>
-                      <DetailList
-                        rows={[
-                          {
-                            label: "Visit date and time",
-                            value: draft.scheduledAt ? formatDateTime(draft.scheduledAt) : null,
-                          },
-                          {
-                            label: "Attendance",
-                            value: draft.attendance ? (ATTENDANCE_LABELS[draft.attendance as keyof typeof ATTENDANCE_LABELS] ?? draft.attendance) : null,
-                          },
-                          {
-                            label: "Visited on",
-                            value: draft.assessedOn ? formatContractDate(draft.assessedOn) : null,
-                          },
-                          { label: "Assessor", value: draft.assessorName },
-                        ]}
-                      />
-                    </div>
-                    <div className="min-w-0 space-y-3">
-                      <SubHeading>The unit on the day</SubHeading>
-                      <DetailList
-                        rows={[
-                          {
-                            label: "Unit type",
-                            value: unitLabel(draft.unitType),
-                          },
-                          {
-                            label: "Occupancy",
-                            value: draft.occupancy ? (OCCUPANCY_LABELS[draft.occupancy] ?? draft.occupancy) : null,
-                          },
-                          ...(isCommercial(draft)
-                            ? []
-                            : [
-                                {
-                                  label: "Bedrooms",
-                                  value: draft.bedrooms != null ? String(draft.bedrooms) : null,
-                                },
-                              ]),
-                          {
-                            label: "Size",
-                            value: draft.sizeSqft ? `${draft.sizeSqft.toLocaleString("en-US")} sq ft` : null,
-                          },
-                        ]}
-                      />
-                    </div>
-                    <div className="flex min-w-0 flex-col space-y-3">
+                  {/*
+                    Redesigned (16 Nov 2026): the four facts someone opens a visit
+                    for as tiles, then the notes.
+                    Read only here; Edit the visit in the header changes the time,
+                    inspector, approver and notes.
+                  */}
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                    <VisitFact
+                      icon={<CalendarClock />}
+                      label="Booked for"
+                      value={draft.scheduledAt ? formatDateTime(draft.scheduledAt) : null}
+                      empty="Not booked yet"
+                      sub={a.enquiryId ? "From an enquiry" : "Booked from the client or property"}
+                    />
+                    <VisitFact icon={<UserRound />} label="Inspector" value={draft.assessorName} empty="Not assigned" sub="Records the visit on the mobile app" />
+                    <VisitFact
+                      icon={<ShieldCheck />}
+                      label="Approver"
+                      value={a.approverName}
+                      empty="Not set"
+                      sub={
+                        a.approvedAt
+                          ? `Approved ${formatDateTime(a.approvedAt)}`
+                          : awaitingApproval
+                            ? "Waiting for their approval"
+                            : a.approverId
+                              ? "Approves it once completed"
+                              : "Set one in Edit the visit"
+                      }
+                      tone={a.approvedAt ? "good" : awaitingApproval ? "warn" : undefined}
+                    />
+                    <VisitFact
+                      icon={<CheckCircle2 />}
+                      label="Attendance"
+                      value={draft.attendance ? (ATTENDANCE_LABELS[draft.attendance as SiteVisitAttendance] ?? draft.attendance) : null}
+                      empty="Not recorded yet"
+                      sub={draft.assessedOn ? `Visited on ${formatContractDate(draft.assessedOn)}` : "Recorded on site"}
+                      tone={draft.attendance === "attended" ? "good" : notAttended ? "bad" : undefined}
+                    />
+                  </div>
+
+                  <div className="grid gap-5 lg:grid-cols-2">
+                    <div className="flex min-w-0 flex-col space-y-2">
                       <SubHeading>Access notes</SubHeading>
                       <TextBlock empty="No access notes.">{draft.accessNotes}</TextBlock>
                     </div>
-                    <div className="flex min-w-0 flex-col space-y-3">
+                    <div className="flex min-w-0 flex-col space-y-2">
                       <SubHeading>Exclusions</SubHeading>
                       <TextBlock empty="Nothing left out.">{draft.exclusions}</TextBlock>
                     </div>
@@ -1030,187 +1002,255 @@ export function AssessmentDetail({ id }: { id: string }) {
               </>,
             )}
 
+            {/*
+              The inspector's report in one place (16 Nov 2026): what they
+              concluded first (findings and the services to recommend), then
+              the checklist behind it, then the photos. It was three tabs.
+            */}
             {panel(
-              "checklist",
-              <SectionCard
-                title="Checklist"
-                description={`${summary.ok} OK · ${summary.attention} attention · ${summary.notApplicable} n/a · ${summary.unanswered} unanswered`}
-                icon={<CheckCircle2 />}
-                bodyClassName={draft.items.length === 0 ? "border-t" : "px-5 pb-5 space-y-5"}
-                action={
-                  draft.items.length ? (
-                    editable ? (
-                      <Button variant="outline" size="sm" onClick={() => setSection("checklist")}>
-                        <Pencil className="size-4" />
-                        Answer
-                      </Button>
-                    ) : null
-                  ) : null
-                }
-              >
-                {draft.items.length === 0 ? <EmptyState icon={<CheckCircle2 className="size-5" />} title="The checklist is empty" description="An approver can add items in Settings." /> : null}
-                {categories.map(([key, label]) => (
-                  <div key={key} className="space-y-2">
-                    <SubHeading>{label}</SubHeading>
-                    <ul className="divide-y rounded-lg border">
-                      {draft.items
-                        .filter((i) => i.categoryKey === key)
-                        .map((i) => (
-                          <li key={i.itemKey} className="grid gap-1 px-3 py-2.5 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:gap-3">
-                            <div className="text-sm">{i.label}</div>
-                            <Badge variant="secondary" className={cn("h-fit w-fit border-0 font-medium", i.result ? RESULT_TONES[i.result] : "bg-mist text-ink-soft")}>
-                              {i.result ? RESULT_LABELS[i.result] : "Not answered"}
-                            </Badge>
-                            {i.notes ? <p className="text-muted-foreground text-xs sm:col-span-2">{i.notes}</p> : null}
-                          </li>
-                        ))}
-                    </ul>
-                  </div>
-                ))}
-              </SectionCard>,
-            )}
-
-            {panel(
-              "findings",
-              <div className="grid gap-4 lg:grid-cols-2">
-                <SectionCard
-                  title="Recommended services"
-                  description="Ticked on the proposal it starts, with the units counted on site. Prices are entered in the proposal."
-                  icon={<FileSignature />}
-                  bodyClassName="px-5 pb-5"
-                  /* With nothing ticked, the empty state's own button is the way in. */
-                  action={
-                    editable && draft.recommendedServiceIds.length > 0 ? (
-                      <Button variant="outline" size="sm" onClick={() => setSection("services")}>
-                        <Pencil className="size-4" />
-                        Edit
-                      </Button>
-                    ) : null
-                  }
-                >
-                  {services.length === 0 ? (
-                    <ListSkeleton rows={3} />
-                  ) : draft.recommendedServiceIds.length === 0 ? (
-                    /* The same empty state as the other cards, in a dashed box under the heading. */
-                    <div className="rounded-lg border border-dashed">
-                      <EmptyState
-                        icon={<FileSignature className="size-5" />}
-                        title="No services recommended yet"
-                        description={editable ? "Tick the services to offer and the units counted on site. They are ticked on the proposal this visit starts." : "None were ticked on this visit."}
-                        action={
-                          editable
-                            ? {
-                                label: "Recommend services",
-                                onClick: () => setSection("services"),
-                                variant: "outline",
-                              }
-                            : undefined
-                        }
-                      />
-                    </div>
-                  ) : (
-                    <DetailList
-                      rows={draft.recommendedServiceIds.map((sid) => ({
-                        label: services.find((s) => s.id === sid)?.label ?? sid,
-                        value: `${draft.assetCounts[sid] ?? 1} unit${(draft.assetCounts[sid] ?? 1) === 1 ? "" : "s"}`,
-                      }))}
-                    />
-                  )}
-                </SectionCard>
+              "report",
+              <>
+                {/*
+                  Redesigned (16 Nov 2026): the inspector's own words across the
+                  top, what they recommend beside what they flagged, then the
+                  checklist behind it, then the photos.
+                */}
                 <SectionCard
                   title="Summary and findings"
                   icon={<ClipboardCheck />}
-                  bodyClassName="px-5 pb-5 grid gap-5"
-                  action={
-                    editable ? (
-                      <Button variant="outline" size="sm" onClick={() => setSection("findings")}>
-                        <Pencil className="size-4" />
-                        Edit
-                      </Button>
-                    ) : null
-                  }
+                  description="Written by the inspector on site."
+                  bodyClassName="px-5 pb-5"
                 >
-                  <div className="space-y-3">
-                    <SubHeading>Summary</SubHeading>
-                    <TextBlock empty="No summary yet.">{draft.summary}</TextBlock>
+                  <div className="grid gap-4 md:grid-cols-3">
+                    {[
+                      { label: "Summary", value: draft.summary, empty: "No summary yet." },
+                      { label: "Findings", value: draft.findings, empty: "No findings recorded." },
+                      { label: "Notes", value: draft.notes, empty: "No notes." },
+                    ].map((block) => (
+                      <div key={block.label} className="flex min-w-0 flex-col space-y-2">
+                        <SubHeading>{block.label}</SubHeading>
+                        <TextBlock empty={block.empty}>{block.value}</TextBlock>
+                      </div>
+                    ))}
                   </div>
-                  <div className="space-y-3">
-                    <SubHeading>Findings</SubHeading>
-                    <TextBlock empty="No findings recorded.">{draft.findings}</TextBlock>
-                  </div>
-                  <div className="space-y-3">
-                    <SubHeading>Notes</SubHeading>
-                    <TextBlock empty="No notes.">{draft.notes}</TextBlock>
-                  </div>
-                  {summary.attentionItems.length ? (
-                    <div className="border-warning/30 bg-warning/5 rounded-md border px-3 py-2 text-sm">
-                      <div className="font-medium">Needs attention</div>
-                      <ul className="text-muted-foreground list-disc pl-5">
-                        {summary.attentionItems.map((x) => (
-                          <li key={x}>{x}</li>
+                </SectionCard>
+
+                <div className="grid items-stretch gap-4 lg:grid-cols-2">
+                  <SectionCard
+                    title="Recommended services"
+                    description="Ticked on the proposal it starts, with the units counted on site."
+                    icon={<FileSignature />}
+                    className="h-full"
+                    bodyClassName="px-5 pb-5"
+                    action={draft.recommendedServiceIds.length ? <Badge variant="secondary">{draft.recommendedServiceIds.length}</Badge> : undefined}
+                  >
+                    {services.length === 0 ? (
+                      <ListSkeleton rows={3} />
+                    ) : draft.recommendedServiceIds.length === 0 ? (
+                      <div className="rounded-lg border border-dashed">
+                        <EmptyState
+                          icon={<FileSignature className="size-5" />}
+                          title="No services recommended yet"
+                          description={a.status === "draft" ? "The inspector recommends them on the mobile app, with the units counted on site." : "None were recommended on this visit."}
+                        />
+                      </div>
+                    ) : (
+                      <ul className="divide-y rounded-lg border">
+                        {draft.recommendedServiceIds.map((sid) => {
+                          const units = draft.assetCounts[sid] ?? 1;
+                          const svc = services.find((x) => x.id === sid);
+                          return (
+                            <li key={sid} className="flex items-center gap-3 px-3 py-2.5">
+                              <span aria-hidden className="bg-brand-50 text-brand flex size-8 shrink-0 items-center justify-center rounded-md [&_svg]:size-4">
+                                <FileSignature />
+                              </span>
+                              <span className="min-w-0 flex-1 truncate text-sm font-medium">{svc?.label ?? sid}</span>
+                              <Badge variant="secondary" className="shrink-0 tabular-nums">
+                                {units} unit{units === 1 ? "" : "s"}
+                              </Badge>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                  </SectionCard>
+
+                  <SectionCard
+                    title="Needs attention"
+                    description="What the inspector flagged on the checklist, with their notes."
+                    icon={<TriangleAlert />}
+                    className="h-full"
+                    bodyClassName="px-5 pb-5"
+                    action={attentionItems.length ? <Badge variant="secondary" className="bg-warning/10 text-warning border-0">{attentionItems.length}</Badge> : undefined}
+                  >
+                    {attentionItems.length === 0 ? (
+                      <div className="rounded-lg border border-dashed">
+                        <EmptyState icon={<CheckCircle2 className="size-5" />} title="Nothing flagged" description={draft.items.length ? "No checklist item needs attention." : "Items the inspector flags on the checklist show here."} />
+                      </div>
+                    ) : (
+                      <ul className="divide-y rounded-lg border">
+                        {attentionItems.map((i) => (
+                          <li key={i.itemKey} className="flex items-start gap-3 px-3 py-2.5">
+                            <span aria-hidden className="bg-warning/10 text-warning mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md [&_svg]:size-4">
+                              <TriangleAlert />
+                            </span>
+                            <span className="min-w-0 flex-1 text-sm">
+                              <span className="block font-medium">{i.label}</span>
+                              <span className="text-muted-foreground block text-xs">{i.categoryLabel}</span>
+                              {i.notes ? <span className="mt-1 block text-sm">{i.notes}</span> : null}
+                            </span>
+                          </li>
                         ))}
                       </ul>
+                    )}
+                  </SectionCard>
+                </div>
+
+                <SectionCard
+                  title="Checklist"
+                  description="Built and answered by the inspector on site."
+                  icon={<CheckCircle2 />}
+                  bodyClassName="px-5 pb-5"
+                  action={
+                    draft.items.length ? (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Badge variant="secondary" className={cn("border-0 font-medium tabular-nums", RESULT_TONES.ok)}>{summary.ok} OK</Badge>
+                        <Badge variant="secondary" className={cn("border-0 font-medium tabular-nums", RESULT_TONES.attention)}>{summary.attention} attention</Badge>
+                        {summary.notApplicable ? <Badge variant="secondary" className={cn("border-0 font-medium tabular-nums", RESULT_TONES.not_applicable)}>{summary.notApplicable} n/a</Badge> : null}
+                        {summary.unanswered ? <Badge variant="outline" className="font-normal tabular-nums">{summary.unanswered} unanswered</Badge> : null}
+                      </div>
+                    ) : undefined
+                  }
+                >
+                  {draft.items.length === 0 ? (
+                    <div className="rounded-lg border border-dashed">
+                      <EmptyState icon={<CheckCircle2 className="size-5" />} title="No checklist yet" description="The inspector builds the checklist on site in the mobile app; it shows here as their phone syncs." />
                     </div>
-                  ) : null}
+                  ) : (
+                    /* Groups side by side on a wide screen, each one list. */
+                    <div className="grid items-start gap-4 lg:grid-cols-2">
+                      {categories.map(([key, label]) => {
+                        const rows = draft.items.filter((i) => checkGroup(i) === key);
+                        return (
+                          <div key={key} className="min-w-0 space-y-2">
+                            <div className="flex items-center justify-between gap-2">
+                              <SubHeading>{label}</SubHeading>
+                              <span className="text-muted-foreground text-xs tabular-nums">{rows.length} item{rows.length === 1 ? "" : "s"}</span>
+                            </div>
+                            <ul className="divide-y rounded-lg border">
+                              {rows.map((i) => (
+                                <li key={i.itemKey} className="flex items-start gap-3 px-3 py-2.5">
+                                  <span className="min-w-0 flex-1">
+                                    <span className="block text-sm font-medium">{i.label}</span>
+                                    {i.notes ? <span className="text-muted-foreground mt-0.5 block text-xs leading-relaxed">{i.notes}</span> : null}
+                                  </span>
+                                  <Badge variant="secondary" className={cn("shrink-0 border-0 font-medium", i.result ? RESULT_TONES[i.result] : "bg-mist text-ink-soft")}>
+                                    {i.result ? RESULT_LABELS[i.result] : "Not answered"}
+                                  </Badge>
+                                </li>
+                              ))}
+                            </ul>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </SectionCard>
-              </div>,
+                <AssessmentPhotos assessmentId={a.id} editable={false} completed={a.status === "completed"} />
+              </>,
             )}
 
-            {panel("photos", <AssessmentPhotos assessmentId={a.id} editable={editable} completed={a.status === "completed"} />)}
+            {panel(
+              "property",
+              <>
+                {/* What the visit changes on the property, beside what was, for the approver (16 Nov 2026). */}
+                {changes.length ? (
+                  <SiteVisitChangesCard
+                    changes={changes}
+                    approved={Boolean(a.approvedAt)}
+                    approverName={a.approverName}
+                    serviceLabel={(sid) => services.find((x) => x.id === sid)?.label ?? sid}
+                  />
+                ) : null}
+                {/* The property's scope and assets as the inspector recorded them on the mobile app. */}
+                <SiteVisitPropertyLists
+                  assets={data?.siteAssets ?? []}
+                  scope={data?.siteScope ?? []}
+                  serviceLabel={(sid) => services.find((x) => x.id === sid)?.label ?? sid}
+                  pendingFor={a.approverId && !a.approvedAt ? (a.approverName ?? "the approver") : null}
+                />
+              </>,
+            )}
             {panel("history", <HistoryPanel data={history} description="Everything that happened to this site visit, newest first: when it was created, booked, attended and completed." />)}
           </Tabs>
         </div>
       )}
 
+      {canApprove && a ? <SendBackDialog open={sendingBack} onOpenChange={setSendingBack} inspectorName={a.assessorName} onSend={sendBack} /> : null}
       {draft ? (
         <>
           <SectionDialog
             open={section === "visit"}
             onOpenChange={(open) => !open && setSection(null)}
             title="Edit the visit"
-            description="When it is, whether it took place, the unit as found, how to get in and what is left out."
+            description={
+              completedVisit
+                ? "The inspector has completed the visit, so only its approver can change until it is approved."
+                : inProgress
+                  ? "The visit is in progress, so its date, time and inspector stay as they are. How to get in and what is left out can still change."
+                  : "When it is, who goes, how to get in and what is left out. The rest is recorded by the inspector on the mobile app."
+            }
             initial={draft}
-            onSave={saveSection}
+            onSave={saveVisit}
+            canSave={(d) =>
+              completedVisit ? Boolean(d.approverId) && d.approverId !== (data?.assessment.approverId ?? null) : inProgress || !movesOrReassigns(d) || inspectorReady
+            }
+            saveHint={completedVisit ? "Choose a different approver to save." : "Find available inspectors first: the inspector has to be free at the new time."}
           >
             {(d, set) => (
               <div className="grid gap-4">
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <div className="grid min-w-0 content-start gap-2 sm:col-span-2">
-                    <Label htmlFor="as-visit-at">Visit date and time</Label>
-                    <DateTimeSelect id="as-visit-at" value={toLocalInput(d.scheduledAt)} onChange={(value) => set({ ...d, scheduledAt: fromLocalInput(value) })} />
+                {inProgress || completedVisit ? (
+                  /* Attended or completed on the phone: shown, not changed (the server refuses it too). */
+                  <div className="bg-muted/30 grid gap-3 rounded-lg border px-4 py-3 sm:grid-cols-2">
+                    <div className="grid gap-1">
+                      <span className="text-muted-foreground text-xs">Visit date and time</span>
+                      <span className="text-sm font-medium">{d.scheduledAt ? formatDateTime(d.scheduledAt) : "Not booked"}</span>
+                    </div>
+                    <div className="grid gap-1">
+                      <span className="text-muted-foreground text-xs">Inspector</span>
+                      <span className="text-sm font-medium">{d.assessorName ?? "Not assigned"}</span>
+                    </div>
+                    <p className="text-muted-foreground flex items-center gap-1.5 text-xs sm:col-span-2">
+                      <Lock className="size-3.5 shrink-0" aria-hidden />
+                      {completedVisit ? "Locked: the inspector has completed the visit on the mobile app." : "Locked: the inspector has recorded the visit as attended."}
+                    </p>
                   </div>
-                  <SelectField label="Attendance" editable value={d.attendance} options={SITE_VISIT_ATTENDANCE.map((v) => [v, ATTENDANCE_LABELS[v]])} onChange={(v) => set({ ...d, attendance: v })} />
-                  <div className="grid min-w-0 content-start gap-2">
-                    <Label htmlFor="as-date">Visited on</Label>
-                    <DatePickerField id="as-date" value={d.assessedOn ?? ""} onChange={(v) => set({ ...d, assessedOn: v || null })} />
-                  </div>
-                  {/* Always the list, as on Book site visit; the visit's assessor shows even if no longer in it. */}
-                  <div className="grid min-w-0 content-start gap-2">
-                    <Label>Assessor</Label>
-                    <PersonSelect
-                      label="Assessor"
-                      people={people}
-                      value={d.assessorId}
-                      placeholder={d.assessorName ?? "Choose the assessor"}
-                      onChange={(pid) =>
-                        set({
-                          ...d,
-                          assessorId: pid,
-                          assessorName: people.find((p) => p.id === pid)?.name ?? d.assessorName,
-                        })
-                      }
-                    />
-                  </div>
-                  <SelectField label="Unit type" editable value={d.unitType} options={Object.entries(UNIT_TYPE_LABELS)} onChange={(v) => set({ ...d, unitType: v })} />
-                  <SelectField label="Occupancy on the day" editable value={d.occupancy} options={Object.entries(OCCUPANCY_LABELS)} onChange={(v) => set({ ...d, occupancy: v })} />
-                  {/* Bedrooms describe a home; a shop or office is sized by its area. */}
-                  {!isCommercial(d) ? (
-                    <Field label="Bedrooms" type="number" editable value={d.bedrooms?.toString() ?? ""} onChange={(v) => set({ ...d, bedrooms: v === "" ? null : Number(v) })} />
-                  ) : null}
-                  <Field label="Size (sq ft)" type="number" editable value={d.sizeSqft?.toString() ?? ""} onChange={(v) => set({ ...d, sizeSqft: v === "" ? null : Number(v) })} />
+                ) : (
+                  <>
+                    <div className="grid min-w-0 content-start gap-2">
+                      <Label htmlFor="as-visit-at">Visit date and time</Label>
+                      <DateTimeSelect id="as-visit-at" value={toLocalInput(d.scheduledAt)} onChange={(value) => set({ ...d, scheduledAt: fromLocalInput(value) })} />
+                    </div>
+                    <div className="grid min-w-0 content-start gap-2">
+                      <Label>Inspector</Label>
+                      <AssessorPicker
+                        people={people}
+                        value={d.assessorId}
+                        scheduledAt={d.scheduledAt}
+                        ignoreAssessmentId={data?.assessment.id ?? null}
+                        onChange={(pid, name) => set({ ...d, assessorId: pid, assessorName: name })}
+                        onReadyChange={setInspectorReady}
+                      />
+                    </div>
+                  </>
+                )}
+                <div className="grid min-w-0 content-start gap-2">
+                  <Label>Approver</Label>
+                  <ApproverSelect value={d.approverId} onChange={(pid) => set({ ...d, approverId: pid })} />
+                  <p className="text-muted-foreground text-xs">Approves the visit once the inspector completes it; the scope and assets recorded on site go onto the property then.</p>
                 </div>
-                <Area label="Access notes" editable value={d.accessNotes ?? ""} onChange={(v) => set({ ...d, accessNotes: v })} rows={2} />
-                <Area label="Exclusions" editable value={d.exclusions ?? ""} onChange={(v) => set({ ...d, exclusions: v })} rows={2} />
+                <Area label="Access notes" editable={!completedVisit} value={d.accessNotes ?? ""} onChange={(v) => set({ ...d, accessNotes: v })} rows={3} />
+                <Area label="Exclusions" editable={!completedVisit} value={d.exclusions ?? ""} onChange={(v) => set({ ...d, exclusions: v })} rows={3} />
               </div>
             )}
           </SectionDialog>
@@ -1231,7 +1271,7 @@ export function AssessmentDetail({ id }: { id: string }) {
                     <SubHeading>{label}</SubHeading>
                     <ul className="divide-y rounded-lg border">
                       {d.items
-                        .filter((i) => i.categoryKey === key)
+                        .filter((i) => checkGroup(i) === key)
                         .map((i) => {
                           const patch = (next: Partial<Draft["items"][number]>) =>
                             set({
@@ -1385,6 +1425,73 @@ export function AssessmentDetail({ id }: { id: string }) {
 }
 
 /** The loading shape of the tab being opened, so the page does not jump when it lands. */
+type StageTone = "neutral" | "progress" | "warn" | "good" | "bad";
+const STAGE_TONE_CLASSES: Record<StageTone, string> = {
+  neutral: "bg-muted text-muted-foreground",
+  progress: "bg-brand-50 text-brand",
+  warn: "bg-warning/10 text-warning",
+  good: "bg-success/10 text-success",
+  bad: "bg-danger/10 text-danger",
+};
+
+/**
+ * Where a site visit stands (16 Nov 2026), from everything known about it
+ * rather than its bare draft/completed status: booked, in progress on site,
+ * sent back by the approver, awaiting approval, approved; or what the
+ * inspector recorded instead (client not there, cancelled, rescheduled).
+ */
+function siteVisitStage(a: AssessmentRecord): { label: string; tone: StageTone; caption: string } {
+  if (a.approvedAt) return { label: "Approved", tone: "good", caption: `Approved ${formatDateTime(a.approvedAt)}` };
+  if (a.status === "completed") {
+    return a.approverId
+      ? { label: "Awaiting approval", tone: "warn", caption: `Completed${a.completedAt ? ` ${formatDateTime(a.completedAt)}` : ""}; waiting for ${a.approverName ?? "the approver"}` }
+      : { label: "Completed", tone: "good", caption: a.completedAt ? `Completed ${formatDateTime(a.completedAt)}` : "Completed on site" };
+  }
+  if (a.sentBackAt) return { label: "Sent back", tone: "warn", caption: `By ${a.approverName ?? "the approver"} ${formatDateTime(a.sentBackAt)}; the inspector is putting it right` };
+  if (a.attendance === "attended") return { label: "In progress", tone: "progress", caption: "Attended; the inspector is filling it in on site" };
+  if (a.attendance === "cancelled") return { label: "Cancelled", tone: "bad", caption: "Recorded as cancelled on site" };
+  if (a.attendance === "client_no_show") return { label: "Client not available", tone: "bad", caption: "The client was not there on the day" };
+  if (a.attendance === "rescheduled") return { label: "Rescheduled", tone: "warn", caption: "To be booked again" };
+  if (a.scheduledAt) return { label: "Booked", tone: "neutral", caption: `For ${formatDateTime(a.scheduledAt)}` };
+  return { label: "To book", tone: "neutral", caption: "No date yet" };
+}
+
+/** One fact about the visit, as a tile: an icon, what it is, the answer and a line under it. */
+function VisitFact({
+  icon,
+  label,
+  value,
+  empty,
+  sub,
+  tone,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  value: string | null | undefined;
+  empty: string;
+  sub?: string;
+  tone?: "good" | "warn" | "bad";
+}) {
+  return (
+    <div className="flex min-w-0 items-start gap-3 rounded-lg border px-4 py-3">
+      <span
+        aria-hidden
+        className={cn(
+          "flex size-9 shrink-0 items-center justify-center rounded-md border [&_svg]:size-4",
+          tone === "good" ? "border-success/30 bg-success/10 text-success" : tone === "warn" ? "border-warning/30 bg-warning/10 text-warning" : tone === "bad" ? "border-danger/30 bg-danger/10 text-danger" : "bg-muted/50 text-muted-foreground",
+        )}
+      >
+        {icon}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="text-muted-foreground block text-xs">{label}</span>
+        <span className={cn("block truncate text-sm font-medium", !value && "text-muted-foreground font-normal")}>{value || empty}</span>
+        {sub ? <span className="text-muted-foreground block truncate text-xs">{sub}</span> : null}
+      </span>
+    </div>
+  );
+}
+
 function SiteVisitBodySkeleton({ tab }: { tab: (typeof TABS)[number] }) {
   return (
     <div className="flex flex-col gap-4" aria-label="Loading the site visit">
@@ -1415,15 +1522,6 @@ function BackToSiteVisits() {
   );
 }
 
-const OCCUPANCY_LABELS: Record<string, string> = {
-  occupied: "Occupied",
-  vacant: "Vacant",
-  unknown: "Unknown",
-};
-
-/** Whether the unit is a shop, office or the like: sized by area, with no bedrooms. */
-const isCommercial = (d: Pick<Draft, "unitType" | "propertyCategory">) => (UNIT_TYPE_CATEGORY[d.unitType as keyof typeof UNIT_TYPE_CATEGORY] ?? d.propertyCategory) === "commercial";
-
 /** A paragraph the visit recorded, in a box the height of its column, as the enquiry shows what the client needs. */
 function TextBlock({ children, empty }: { children: string | null | undefined; empty: string }) {
   return children?.trim() ? (
@@ -1446,6 +1544,8 @@ function SectionDialog({
   initial,
   onSave,
   wide = false,
+  canSave,
+  saveHint,
   children,
 }: {
   open: boolean;
@@ -1455,6 +1555,9 @@ function SectionDialog({
   initial: Draft;
   onSave: (draft: Draft) => Promise<void>;
   wide?: boolean;
+  /** Save waits until this says yes (with `saveHint` saying why). */
+  canSave?: (draft: Draft) => boolean;
+  saveHint?: string;
   children: (draft: Draft, set: (next: Draft | ((current: Draft) => Draft)) => void) => React.ReactNode;
 }) {
   const [local, setLocal] = useState(initial);
@@ -1484,11 +1587,12 @@ function SectionDialog({
           {description ? <DialogDescription>{description}</DialogDescription> : null}
         </DialogHeader>
         <div className="-mx-6 min-h-0 flex-1 overflow-y-auto px-6 py-1">{children(local, setLocal)}</div>
-        <DialogFooter>
+        <DialogFooter className="items-center">
+          {canSave && !canSave(local) && saveHint ? <p className="text-muted-foreground mr-auto text-xs">{saveHint}</p> : null}
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             Cancel
           </Button>
-          <SubmitButton onClick={() => void save()} pending={busy} pendingLabel="Saving…">
+          <SubmitButton onClick={() => void save()} pending={busy} pendingLabel="Saving…" disabled={canSave ? !canSave(local) : false}>
             Save
           </SubmitButton>
         </DialogFooter>
@@ -1506,15 +1610,6 @@ function ReadValue({ children, multiline = false }: { children: React.ReactNode;
   );
 }
 
-function Field({ label, value, onChange, editable, type = "text" }: { label: string; value: string; onChange: (v: string) => void; editable: boolean; type?: string }) {
-  return (
-    <div className="grid min-w-0 content-start gap-2">
-      <Label>{label}</Label>
-      {editable ? <Input type={type} value={value} onChange={(e) => onChange(e.target.value)} aria-label={label} /> : <ReadValue>{value}</ReadValue>}
-    </div>
-  );
-}
-
 function Area({ label, value, onChange, editable, rows, className }: { label: string; value: string; onChange: (v: string) => void; editable: boolean; rows: number; className?: string }) {
   return (
     <div className={cn("grid gap-2", className)}>
@@ -1524,38 +1619,3 @@ function Area({ label, value, onChange, editable, rows, className }: { label: st
   );
 }
 
-function SelectField({
-  label,
-  value,
-  options,
-  onChange,
-  editable,
-}: {
-  label: string;
-  value: string | null;
-  options: Array<[string, string]>;
-  onChange: (v: string | null) => void;
-  editable: boolean;
-}) {
-  return (
-    <div className="grid gap-2">
-      <Label>{label}</Label>
-      {editable ? (
-        <Select value={value ?? ""} onValueChange={(v) => onChange(v || null)}>
-          <SelectTrigger className="w-full" aria-label={label}>
-            <SelectValue placeholder="Choose" />
-          </SelectTrigger>
-          <SelectContent>
-            {options.map(([k, l]) => (
-              <SelectItem key={k} value={k}>
-                {l}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      ) : (
-        <ReadValue>{options.find(([k]) => k === value)?.[1]}</ReadValue>
-      )}
-    </div>
-  );
-}

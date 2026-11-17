@@ -26,6 +26,10 @@ export type SnaggingStaff = {
 };
 
 /** The roles that can open Snagging: admin, and any role granted its View. */
+export async function snaggingRoleIds(admin: SupabaseClient): Promise<string[]> {
+  return rolesWithAccess(admin);
+}
+
 async function rolesWithAccess(admin: SupabaseClient): Promise<string[]> {
   const [{ data: adminRoles, error: roleError }, { data: grants, error: grantError }] =
     await Promise.all([

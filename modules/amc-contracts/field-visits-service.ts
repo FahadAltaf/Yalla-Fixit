@@ -16,7 +16,7 @@ export interface FieldVisitsResponse {
 
 export interface FieldVisitQuery {
   kind?: FieldVisitKind | null;
-  stage?: FieldVisitStage | "open" | "all";
+  stage?: FieldVisitStage | "open" | "active" | "all";
   when?: FieldVisitWhen;
   technician?: string | null;
   contract?: string | null;

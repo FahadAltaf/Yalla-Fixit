@@ -15,7 +15,7 @@ import {
   FileText,
   Mail,
   MessageCircle,
-  Pencil,
+  SquarePen,
   Plus,
   Send,
   TriangleAlert,
@@ -505,7 +505,7 @@ export default function QuotationDetail({ id }: { id: string }) {
                       });
                     }}
                   >
-                    <Pencil className="size-4" />
+                    <SquarePen className="size-4" />
                     Edit
                   </Button>
                 ) : null}

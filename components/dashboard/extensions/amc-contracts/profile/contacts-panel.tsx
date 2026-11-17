@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { EllipsisVerticalIcon, Mail, MessageCircle, Pencil, Phone, Plus, UserRound, UserX } from "lucide-react";
+import { EllipsisVerticalIcon, Mail, MessageCircle, SquarePen, Phone, Plus, UserRound, UserX } from "lucide-react";
 import { toast } from "sonner";
 
 import { SectionCard } from "@/components/dashboard/shared/kaizen";
@@ -129,7 +129,7 @@ export function ContactsPanel({ customerId, canEdit }: { customerId: string; can
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
                       <DropdownMenuItem onClick={() => editing.show(c)}>
-                        <Pencil className="size-4" />
+                        <SquarePen className="size-4" />
                         Edit
                       </DropdownMenuItem>
                       {c.active ? (

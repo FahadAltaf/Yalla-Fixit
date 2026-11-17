@@ -11,6 +11,7 @@ import {
   type FieldVisitStage,
   type FieldVisitWhen,
 } from "@/lib/amc/field-visits";
+import { ACTIVE_FIELD_VISIT_STAGES } from "@/lib/amc/visit-list-scope";
 import { addDays } from "@/lib/amc/ppm";
 import { safeTerm } from "@/lib/server/amc/business";
 import { ContractError, isMissingTable } from "@/lib/server/amc/contracts";
@@ -66,7 +67,8 @@ export interface FieldVisitRow {
 export interface FieldVisitFilters {
   kind?: FieldVisitKind | null;
   /** "open" (default) = every stage still to be done; "all" = no stage filter. */
-  stage?: FieldVisitStage | "open" | "all";
+  /** "active": ready, in progress, awaiting review and done (the Visits page's default). */
+  stage?: FieldVisitStage | "open" | "active" | "all";
   when?: FieldVisitWhen;
   technicianId?: string | null;
   contractId?: string | null;
@@ -120,6 +122,7 @@ function applyFilters<Q extends { eq: any; in: any; or: any; lt: any; gte: any; 
 
 function stageFilter<Q extends { in: (c: string, v: string[]) => Q; eq: (c: string, v: string) => Q }>(q: Q, stage: FieldVisitFilters["stage"]): Q {
   if (!stage || stage === "open") return q.in("stage", OPEN_FIELD_VISIT_STAGES as string[]);
+  if (stage === "active") return q.in("stage", ACTIVE_FIELD_VISIT_STAGES as string[]);
   if (stage === "all") return q;
   return q.eq("stage", stage);
 }
@@ -131,11 +134,14 @@ export async function listFieldVisits(
 ): Promise<{ migrated: boolean; visits: FieldVisitRow[]; total: number; stageCounts: Record<FieldVisitStage, number>; today: string }> {
   const today = todayInDubai();
   const emptyCounts = Object.fromEntries(FIELD_VISIT_STAGES.map((s) => [s, 0])) as Record<FieldVisitStage, number>;
-  /* Open work soonest first; finished or everything, newest first. */
-  const ascending = !filters.stage || filters.stage === "open" || OPEN_FIELD_VISIT_STAGES.includes(filters.stage as FieldVisitStage);
-
+  /*
+    Newest created first, whatever the stage (16 Nov 2026). Visits made
+    together (a contract's whole schedule is created at once) then follow
+    their day and number, so a contract's visits still read in order.
+  */
   const page = stageFilter(applyFilters(admin.from(VIEW).select(COLUMNS, { count: "exact" }), filters, viewer, today), filters.stage)
-    .order("day", { ascending })
+    .order("created_at", { ascending: false })
+    .order("day", { ascending: true })
     .order("ref", { ascending: true })
     .range(filters.from, filters.to);
   /* How many in each stage under the same filters, for the stage filter's labels: one small count per stage, in parallel. */

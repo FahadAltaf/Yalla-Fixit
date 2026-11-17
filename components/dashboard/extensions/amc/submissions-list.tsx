@@ -16,7 +16,7 @@ import {
   FileText,
   Info,
   Loader2,
-  PencilIcon,
+  SquarePen,
   ScrollText,
   Trash2,
   Undo2,
@@ -353,7 +353,7 @@ export function SubmissionsList() {
                 {canEdit ? (
                   <DropdownMenuItem asChild>
                     <Link href={`/extensions/amc/${submission.id}/edit`}>
-                      <PencilIcon className="size-4" />
+                      <SquarePen className="size-4" />
                       Edit
                     </Link>
                   </DropdownMenuItem>

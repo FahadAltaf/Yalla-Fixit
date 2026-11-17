@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { amcFresh } from "@/lib/amc/http-cache";
 import { useRouter, useSearchParams } from "next/navigation";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
@@ -233,7 +234,8 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
   const cardInputs = JSON.stringify([
     unitType,
     watchedValues.discountPercent ?? 0,
-    (watchedValues.serviceRows ?? []).map((row) => [row.serviceId, row.included, row.units, row.frequency, row.free]),
+    /* A changed rate (16 Nov 2026) is priced again too: its floor check, or the card's rate once it is put back. */
+    (watchedValues.serviceRows ?? []).map((row) => [row.serviceId, row.included, row.units, row.frequency, row.free, row.rateOverride === true, row.rateOverride ? row.basePrice : null]),
   ]);
   useEffect(() => {
     const card = rules?.rateCard;
@@ -266,10 +268,19 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
     is where the team reads the wording before it goes out.
   */
   const onReviewStep = currentStep === STEPS.length;
+  /*
+    When the settings were last fetched. Leaving Review used to fetch again
+    (the flag flipped back), and an edit link opening on Review fetched twice
+    in a row (13 Nov 2026): now on opening, and on reaching Review when the
+    last fetch is more than a moment old, then from the server, not the cache.
+  */
+  const settingsAt = useRef(0);
   useEffect(() => {
+    const opening = settingsAt.current === 0;
+    if (!opening && (!onReviewStep || Date.now() - settingsAt.current < 15_000)) return;
+    settingsAt.current = Date.now();
     let cancelled = false;
-    amcSettingsService
-      .getSettings()
+    (opening ? amcSettingsService.getSettings() : amcFresh(() => amcSettingsService.getSettings()))
       .then((response) => {
         if (!cancelled) setLiveSettings(response.settings);
       })

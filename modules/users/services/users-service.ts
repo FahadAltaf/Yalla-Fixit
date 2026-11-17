@@ -142,6 +142,10 @@ export const usersService = {
       staffInFlight = null;
     }
   },
+  /** Drop the cached staff list, so a login made a moment ago is in the next one. */
+  forgetStaff: () => {
+    staffCache = null;
+  },
   /**
    * Get a user by id (yourself, or Users: View).
    */

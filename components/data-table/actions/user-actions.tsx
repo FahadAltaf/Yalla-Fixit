@@ -14,7 +14,7 @@ import {
   CheckCircle2,
   EllipsisVerticalIcon,
   LockIcon,
-  PencilIcon,
+  SquarePen,
   Trash2Icon,
 } from "lucide-react";
 import { User } from "@/types/types";
@@ -134,7 +134,7 @@ export function UserRowActions({
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-max">
           <DropdownMenuItem onClick={() => setIsEditOpen(true)}>
-            <PencilIcon className="mr-2 h-4 w-4" />
+            <SquarePen className="mr-2 h-4 w-4" />
             Edit
           </DropdownMenuItem>
           {isAdmin && (

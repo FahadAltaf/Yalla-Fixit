@@ -9,7 +9,8 @@ import type { AmcConfigSection } from "@/lib/amc/config";
 export type FieldDef =
   | { key: string; label: string; kind: "number"; unit?: string; min?: number; max?: number; step?: number; nullable?: boolean; hint?: string }
   | { key: string; label: string; kind: "text"; hint?: string }
-  | { key: string; label: string; kind: "boolean"; hint?: string }
+  /* `label` sits above, as on every other field; `toggle` is the words beside the switch. */
+  | { key: string; label: string; kind: "boolean"; toggle: string; hint?: string }
   | { key: string; label: string; kind: "select"; options: Array<{ value: string; label: string }>; numeric?: boolean; hint?: string }
   | { key: string; label: string; kind: "multi"; options: Array<{ value: string; label: string }>; numeric?: boolean; hint?: string }
   | { key: string; label: string; kind: "users"; hint?: string }
@@ -47,7 +48,7 @@ export const SECTION_DEFS: SectionDef[] = [
     section: "approvals",
     title: "Approval ladder",
     description:
-      "BRD 5.5. Who approves at each level, and which discount, value, payment plan or below-floor price sends a proposal up. Approvers are named people, as in Snagging. Nobody approves their own proposal.",
+      "BRD 5.5. Who approves at each level, and which discount, value, payment plan or below-floor price sends a proposal up. A level that names approvers here is decided by them alone. A level that names nobody (or only the proposal's owner) is decided by the approvers ticked in AMC Settings → Approvers. Nobody approves their own proposal. Changes apply to proposals submitted after saving.",
     fields: [
       { key: "level1Name", label: "Level 1 name", kind: "text" },
       { key: "level1ApproverIds", label: "Level 1 approvers", kind: "users" },
@@ -61,9 +62,9 @@ export const SECTION_DEFS: SectionDef[] = [
       { key: "valueLevel1AboveAed", label: "Final value above (level 1)", kind: "number", unit: "AED", min: 0, nullable: true },
       { key: "valueLevel2AboveAed", label: "Final value above (level 2)", kind: "number", unit: "AED", min: 0, nullable: true },
       { key: "valueLevel3AboveAed", label: "Final value above (level 3)", kind: "number", unit: "AED", min: 0, nullable: true },
-      { key: "nonStandardPlanLevel", label: "Non-standard payment plan goes to", kind: "select", options: LEVELS, numeric: true },
-      { key: "belowFloorLevel", label: "Price below the floor rate goes to", kind: "select", options: LEVELS, numeric: true },
-      { key: "escalateAfterHours", label: "Escalate an open approval after", kind: "number", unit: "hours", min: 1, max: 720 },
+      { key: "nonStandardPlanLevel", label: "Non-standard payment plan goes to", kind: "select", options: LEVELS, numeric: true, hint: "A Custom plan, or a plan the Payments section does not allow at this value." },
+      { key: "belowFloorLevel", label: "Price below the floor rate goes to", kind: "select", options: LEVELS, numeric: true, hint: "Any line priced under its floor rate after the discount, or a rate typed in under the floor." },
+      { key: "escalateAfterHours", label: "Escalate an open approval after", kind: "number", unit: "hours", min: 1, max: 720, hint: "If nobody decides in this time, the next level's approvers can decide it too, and are told. It keeps climbing to level 3." },
     ],
   },
   {
@@ -74,7 +75,7 @@ export const SECTION_DEFS: SectionDef[] = [
       { key: "singlePaymentBelowAed", label: "Single payment below", kind: "number", unit: "AED", min: 0 },
       { key: "plansAboveBand", label: "Plans allowed above the band", kind: "multi", options: PLANS },
       { key: "defaultPlanAboveBand", label: "Plan proposed above the band", kind: "select", options: PLANS },
-      { key: "customPlanAllowed", label: "Allow another plan (always approved first)", kind: "boolean" },
+      { key: "customPlanAllowed", label: "Other payment plans", kind: "boolean", toggle: "Allow another plan", hint: "Always goes for approval first." },
       { key: "lateFirstPaymentDays", label: "Alert when the first payment is late by", kind: "number", unit: "days", min: 1, max: 90 },
       { key: "chequeAlertDaysBefore", label: "Alert before a cheque date", kind: "number", unit: "days", min: 0, max: 60 },
       { key: "dueReminderDaysBefore", label: "Remind the client before an instalment is due", kind: "number", unit: "days", min: 0, max: 60 },
@@ -186,9 +187,9 @@ export const SECTION_DEFS: SectionDef[] = [
     fields: [
       { key: "emergencyLogMinutes", label: "Emergency logged within", kind: "number", unit: "minutes", min: 1, max: 1440 },
       { key: "emergencyAttendMinutes", label: "Emergency attended within", kind: "number", unit: "minutes", min: 1, max: 1440 },
-      { key: "nonEmergencyScheduleHours", label: "Non-emergency scheduled within", kind: "number", unit: "hours", min: 1, max: 720 },
+      { key: "nonEmergencyScheduleHours", label: "Non-emergency scheduled within", kind: "number", unit: "hours", min: 1, max: 720, hint: "If nobody decides in this time, the next level's approvers can decide it too, and are told. It keeps climbing to level 3." },
       { key: "minorFixHours", label: "Minor fix up to", kind: "number", unit: "hours", min: 1, max: 24 },
-      { key: "serviceReportHours", label: "Service report sent within", kind: "number", unit: "hours", min: 1, max: 720 },
+      { key: "serviceReportHours", label: "Service report sent within", kind: "number", unit: "hours", min: 1, max: 720, hint: "If nobody decides in this time, the next level's approvers can decide it too, and are told. It keeps climbing to level 3." },
       { key: "atRiskPercent", label: "Warn when this much of the time has passed", kind: "number", unit: "%", min: 1, max: 99 },
     ],
   },
@@ -215,7 +216,7 @@ export const SECTION_DEFS: SectionDef[] = [
     description: "BRD 5.16. The reminder before expiry (30 to 60 days), escalation when nothing happens, and the price escalation on the renewal draft.",
     fields: [
       { key: "leadDays", label: "Remind before expiry", kind: "number", unit: "days", min: 30, max: 60 },
-      { key: "notifyManagement", label: "Also remind management", kind: "boolean" },
+      { key: "notifyManagement", label: "Management", kind: "boolean", toggle: "Also remind management" },
       { key: "idleEscalationDays", label: "Escalate to management after", kind: "number", unit: "idle days", min: 1, max: 60 },
       { key: "escalationPercent", label: "Price escalation on the renewal draft", kind: "number", unit: "%", min: 0, max: 100, step: 0.5 },
     ],
@@ -243,8 +244,9 @@ export const SECTION_DEFS: SectionDef[] = [
     fields: [
       {
         key: "emailReminders",
-        label: "Email reminders for AMC to-dos",
+        label: "Email reminders",
         kind: "boolean",
+        toggle: "Email reminders for AMC to-dos",
         hint: "Off for the demo: while the demo uses the live database, the live Todos reminder job would email the real assignees.",
       },
     ],

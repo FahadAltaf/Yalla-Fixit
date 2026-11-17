@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Pencil, Save, Search, Trash2, TriangleAlert, Workflow } from "lucide-react";
+import { SquarePen, Save, Search, Trash2, TriangleAlert, Workflow } from "lucide-react";
 import { toast } from "sonner";
 
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
@@ -134,7 +134,7 @@ export function FsmServiceMapping() {
                     open(row.original);
                   }}
                 >
-                  <Pencil className="size-3.5" />
+                  <SquarePen className="size-3.5" />
                   Edit
                 </Button>
               </div>

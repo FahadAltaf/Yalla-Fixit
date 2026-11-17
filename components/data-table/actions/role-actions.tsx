@@ -9,7 +9,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { EllipsisVerticalIcon, PencilIcon, Trash2Icon } from "lucide-react";
+import { EllipsisVerticalIcon, SquarePen, Trash2Icon } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -128,7 +128,7 @@ export function RoleRowActions({ role, fetchRoles }: RoleRowActionsProps) {
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-max">
           <DropdownMenuItem onClick={handleOpenEdit}>
-            <PencilIcon className="mr-2 h-4 w-4" />
+            <SquarePen className="mr-2 h-4 w-4" />
             Edit
           </DropdownMenuItem>
           <DropdownMenuSeparator />

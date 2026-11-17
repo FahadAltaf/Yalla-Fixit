@@ -85,6 +85,8 @@ export const updateAssessmentSchema = z
     assessorName: optionalText(200),
     /* Site visit (DEV-362). */
     assessorId: z.string().uuid().nullable().optional(),
+    /* Who approves the visit once the inspector completes it (16 Nov 2026). */
+    approverId: z.string().uuid().nullable().optional(),
     scheduledAt: z.string().datetime({ offset: true }).nullable().optional(),
     attendance: z.enum(SITE_VISIT_ATTENDANCE).nullable().optional(),
     assetCounts: z.record(z.string().min(1).max(100), z.number().int().min(0).max(10_000)).optional(),

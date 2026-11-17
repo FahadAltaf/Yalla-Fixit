@@ -29,6 +29,7 @@ import {
   type FieldVisitStage,
   type FieldVisitWhen,
 } from "@/lib/amc/field-visits";
+import { ACTIVE_FIELD_VISIT_STAGES } from "@/lib/amc/visit-list-scope";
 import { cn } from "@/lib/utils";
 import { fieldVisitsService, type FieldVisitRow } from "@/modules/amc-contracts/field-visits-service";
 
@@ -79,7 +80,7 @@ const WHEN_LABELS: Record<FieldVisitWhen, string> = {
   past30: "Last 30 days",
 };
 
-type StageFilter = FieldVisitStage | "open" | "all";
+type StageFilter = FieldVisitStage | "open" | "active" | "all";
 
 const time = (iso: string) => new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Dubai" }).format(new Date(iso));
 
@@ -156,20 +157,7 @@ function columns(): ColumnDef<FieldVisitRow>[] {
       header: "When",
       cell: ({ row }) => <When v={row.original} />,
     },
-    {
-      id: "crew",
-      header: "Crew",
-      cell: ({ row }) => {
-        const crew = row.original.crew;
-        if (!crew.length) return <span className="text-muted-foreground text-sm">{row.original.kind === "site_visit" ? "Assessor on the visit" : "Not assigned"}</span>;
-        return (
-          <span className="flex max-w-[200px] flex-col text-sm">
-            <TruncatedText text={crew[0].name} />
-            {crew.length > 1 ? <span className="text-muted-foreground text-xs">+{crew.length - 1} more</span> : null}
-          </span>
-        );
-      },
-    },
+    /* No Crew column (16 Nov 2026): who goes is on the visit itself; the Technician filter still finds a person's visits. */
     {
       id: "stage",
       header: "Stage",
@@ -197,7 +185,7 @@ export function VisitsPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [kind, setKind] = useState<FieldVisitKind | "any">(() => pickFrom(searchParams.get("kind"), [...FIELD_VISIT_KINDS, "any"] as const, "any"));
-  const [stage, setStage] = useState<StageFilter>(() => pickFrom(searchParams.get("stage"), [...FIELD_VISIT_STAGES, "open", "all"] as const, "open"));
+  const [stage, setStage] = useState<StageFilter>(() => pickFrom(searchParams.get("stage"), [...FIELD_VISIT_STAGES, "open", "active", "all"] as const, "active"));
   const [when, setWhen] = useState<FieldVisitWhen>(() => pickFrom(searchParams.get("when"), FIELD_VISIT_WHEN, "any"));
   const [technician, setTechnician] = useState<string>(() => searchParams.get("technician") ?? "any");
   const [search, setSearch] = useState("");
@@ -211,7 +199,7 @@ export function VisitsPage() {
     const params = new URLSearchParams(window.location.search);
     const set = (key: string, value: string, fallback: string) => (value === fallback ? params.delete(key) : params.set(key, value));
     set("kind", kind, "any");
-    set("stage", stage, "open");
+    set("stage", stage, "active");
     set("when", when, "any");
     set("technician", technician, "any");
     const next = params.toString();
@@ -233,16 +221,19 @@ export function VisitsPage() {
 
   const counts = data?.stageCounts;
   const openCount = counts ? OPEN_FIELD_VISIT_STAGES.reduce((sum, s) => sum + (counts[s] ?? 0), 0) : null;
+  const activeCount = counts ? ACTIVE_FIELD_VISIT_STAGES.reduce((sum, s) => sum + (counts[s] ?? 0), 0) : null;
   const allCount = counts ? FIELD_VISIT_STAGES.reduce((sum, s) => sum + (counts[s] ?? 0), 0) : null;
   const withCount = (label: string, n: number | null | undefined) => (n === null || n === undefined ? label : `${label} (${n})`);
 
   const stageOptions = useMemo(
     () => [
+      /* The default (16 Nov 2026): what is ready, under way or done; to plan and cancelled are one pick away. */
+      { value: "active", label: withCount("Ready, in progress and done", activeCount) },
       { value: "open", label: withCount("Open", openCount) },
       ...FIELD_VISIT_STAGES.map((s) => ({ value: s, label: withCount(FIELD_VISIT_STAGE_LABELS[s], counts?.[s]) })),
       { value: "all", label: withCount("All stages", allCount) },
     ],
-    [counts, openCount, allCount],
+    [counts, openCount, activeCount, allCount],
   );
   const technicianOptions = useMemo(
     () => [{ value: "any", label: "Any technician" }, ...(roster.data?.technicians ?? []).map((t) => ({ value: t.id, label: t.name }))],
@@ -250,7 +241,7 @@ export function VisitsPage() {
   );
   const cols = useMemo(() => columns(), []);
   const rows = data?.visits ?? [];
-  const filtered = kind !== "any" || stage !== "open" || when !== "any" || technician !== "any" || Boolean(q);
+  const filtered = kind !== "any" || stage !== "active" || when !== "any" || technician !== "any" || Boolean(q);
 
   const reset = <T,>(apply: (v: T) => void) => (v: T) => {
     apply(v);
@@ -258,7 +249,7 @@ export function VisitsPage() {
   };
   const clearFilters = () => {
     setKind("any");
-    setStage("open");
+    setStage("active");
     setWhen("any");
     setTechnician("any");
     setSearch("");
@@ -320,14 +311,14 @@ export function VisitsPage() {
                   filters={{ kind: kind === "any" ? "" : kind, stage, when: when === "any" ? "" : when, technician: technician === "any" ? "" : technician }}
                   onFiltersChange={(next) => {
                     setKind((next.kind || "any") as FieldVisitKind | "any");
-                    setStage((next.stage || "open") as StageFilter);
+                    setStage((next.stage || "active") as StageFilter);
                     setWhen((next.when || "any") as FieldVisitWhen);
                     setTechnician(next.technician || "any");
                     setPage(0);
                   }}
                   selects={[
                     { key: "kind", allLabel: "All types", options: FIELD_VISIT_KINDS.map((k) => ({ value: k, label: FIELD_VISIT_KIND_LABELS[k] })) },
-                    { key: "stage", allLabel: "Stage", required: true, defaultValue: "open", options: stageOptions },
+                    { key: "stage", allLabel: "Stage", required: true, defaultValue: "active", options: stageOptions },
                     { key: "when", allLabel: "Any day", options: FIELD_VISIT_WHEN.filter((w) => w !== "any").map((w) => ({ value: w, label: WHEN_LABELS[w] })) },
                     { key: "technician", allLabel: "All technicians", options: technicianOptions.filter((o) => o.value !== "any") },
                   ]}

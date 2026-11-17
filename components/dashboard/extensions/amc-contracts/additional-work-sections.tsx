@@ -664,6 +664,8 @@ export function WorkScheduleSection({ data, working, setWorking, changed }: Work
   const [duration, setDuration] = useState(String(placedMinutes ?? 120));
   const [suggestion, setSuggestion] = useState<{ key: string; data: WorkCrewSuggestion } | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
+  /* Chosen technicians still without a mobile login (the crew list creates them). */
+  const [missingLogins, setMissingLogins] = useState(0);
   const [override, setOverride] = useState("");
   const ids = { date: useId(), time: useId(), duration: useId(), override: useId() };
   const [editing, setEditing] = useState(false);
@@ -777,7 +779,7 @@ export function WorkScheduleSection({ data, working, setWorking, changed }: Work
             <SubmitButton
               pending={working === "schedule"}
               pendingLabel="Saving…"
-              disabled={working !== null || !fresh || picked.length === 0 || picked.length > 10 || reasonMissing}
+              disabled={working !== null || !fresh || picked.length === 0 || picked.length > 10 || reasonMissing || missingLogins > 0}
               icon={<CalendarCheck className="size-4" />}
               onClick={() => save(false)}
             >
@@ -813,7 +815,7 @@ export function WorkScheduleSection({ data, working, setWorking, changed }: Work
               Find technicians
             </SubmitButton>
           </div>
-          {options ? <CrewPicker options={options} picked={picked} onPickedChange={setPicked} disabled={working !== null} /> : null}
+          {options ? <CrewPicker options={options} picked={picked} onPickedChange={setPicked} disabled={working !== null} onMissingLoginsChange={setMissingLogins} /> : null}
           {fresh && differs && picked.length ? (
             <Field
               id={ids.override}

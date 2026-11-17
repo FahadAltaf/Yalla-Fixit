@@ -350,7 +350,7 @@ export function ContractCallOutsPanel({ contractId, contractOpen }: { contractId
         contractId={contractId}
         source="manual"
         onRaised={(w) => {
-          reloadAll();
+          /* Straight to the new work's page: a reload here was thrown away by the navigation (13 Nov 2026). */
           openWork(w.id);
         }}
       />

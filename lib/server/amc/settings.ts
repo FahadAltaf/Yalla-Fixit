@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { cachedRead, forgetCachedRead } from "@/lib/server/amc/read-cache";
 
 
 import {
@@ -41,11 +42,18 @@ export async function readAmcSettingsOverrides(
 }
 
 /** The live settings: shipped defaults with the admin's edits applied. */
+/**
+ * The settings as documents render them, kept for a few seconds per server
+ * (read-cache.ts): every AMC request's access gate reads them. A save, and
+ * the settings page (readAmcSettingsOverrides), read them fresh.
+ */
 export async function readAmcSettings(
   admin: SupabaseClient,
 ): Promise<AmcSettings> {
-  const overrides = await readAmcSettingsOverrides(admin);
-  return mergeAmcSettings(getAmcSettingsDefaults(), overrides);
+  return cachedRead(admin, "amc_settings", async () => {
+    const overrides = await readAmcSettingsOverrides(admin);
+    return mergeAmcSettings(getAmcSettingsDefaults(), overrides);
+  });
 }
 
 export async function writeAmcSettingsOverrides(
@@ -76,6 +84,7 @@ export async function writeAmcSettingsOverrides(
     .single();
 
   if (error) throw new Error(error.message);
+  forgetCachedRead("amc_settings");
   return (data?.overrides ?? {}) as AmcSettingsOverrides;
 }
 

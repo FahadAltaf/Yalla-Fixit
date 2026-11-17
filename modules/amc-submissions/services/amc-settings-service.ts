@@ -1,11 +1,12 @@
-import { clearAmcCache } from "@/lib/amc/http-cache";
-import { executeRESTBackend as rest } from "@/lib/rest-server";
+import { amcRest as executeRESTBackend } from "@/lib/amc/http-cache";
 
-/* A proposal or AMC settings save can change what the AMC pages show (a site visit's proposal, the catalogue): their cached reads go. */
-function executeRESTBackend<T = unknown>(endpoint: string, options: Parameters<typeof rest>[1] = {}): Promise<T> {
-  const call = rest<T>(endpoint, options);
-  return options?.method && options.method !== "GET" ? call.finally(() => clearAmcCache()) : call;
-}
+/*
+  Through the AMC cache (13 Nov 2026): reads asked for at once share one
+  request and are answered from memory for a moment. A save drops every
+  cached record (a site visit's proposal included), and a settings save the
+  stable lists too, but a draft save no longer empties the rarely-changing
+  ones (rules, rate card, technicians).
+*/
 
 import type {
   AmcSettings,

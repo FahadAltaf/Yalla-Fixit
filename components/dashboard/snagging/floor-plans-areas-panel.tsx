@@ -10,7 +10,7 @@ import {
   Map,
   MapPin,
   MoreHorizontal,
-  Pencil,
+  SquarePen,
   Plus,
   Shapes,
   Trash2,
@@ -717,7 +717,7 @@ export function FloorPlansAreasPanel({
                 if (ok) setUnlocked(true);
               }}
             >
-              <Pencil className="size-4" />
+              <SquarePen className="size-4" />
               Edit plan and areas
             </Button>
           )
@@ -916,7 +916,7 @@ export function FloorPlansAreasPanel({
                               aria-label={`Rename ${plan.label}`}
                               onClick={() => setRenamingPlan({ id: plan.id, label: plan.label })}
                             >
-                              <Pencil className="size-3" />
+                              <SquarePen className="size-3" />
                             </button>
                           </Hint>
                         ) : null}
@@ -1292,7 +1292,7 @@ export function FloorPlansAreasPanel({
                             <DropdownMenuItem
                               onClick={() => setRenaming({ id: a.id, name: a.name })}
                             >
-                              <Pencil className="size-4" />
+                              <SquarePen className="size-4" />
                               Rename
                             </DropdownMenuItem>
                             <DropdownMenuSeparator />

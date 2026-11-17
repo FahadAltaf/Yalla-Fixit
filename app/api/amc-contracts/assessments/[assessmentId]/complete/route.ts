@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { contractErrorResponse, requireContractAccess } from "@/lib/server/amc/contract-access";
 import { completeAssessment } from "@/lib/server/amc/business";
+import { notifyApproverReady } from "@/lib/server/amc/site-visit-approval";
 import { UUID } from "@/lib/server/amc/business-schemas";
 
 /** Completes an assessment: dated, placed, every checklist item answered. It cannot be changed afterwards. */
@@ -17,6 +18,8 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ assessmen
       assessmentId,
       { id: gate.userId, label: gate.label },
     );
+    /* Its approver is told it is ready for them. */
+    await notifyApproverReady(gate.admin, assessment).catch(() => undefined);
     return NextResponse.json({ assessment });
   } catch (error) {
     return contractErrorResponse(error, "Could not complete the assessment");

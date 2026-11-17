@@ -144,6 +144,8 @@ export const amcServiceRowSchema = z.object({
   promotionId: z.string().nullable().optional(),
   promotionPercent: z.number().nullable().optional(),
   belowFloor: z.boolean().optional(),
+  /* The rate was changed on this proposal (16 Nov 2026): kept, not set from the card; below its floor it needs approval. */
+  rateOverride: z.boolean().optional(),
   /*
     What the service covers on this property, as signed contracts name it
     ("10 FCU", "3 kitchen hoods") (DEV-261). Optional, free text, and
@@ -625,6 +627,8 @@ export interface AmcSubmission {
     come only with the whole list.
   */
   viewer_can_approve?: boolean;
+  /** Who decides the open approval level (null names: anyone with AMC approve). */
+  approval_deciders?: { levelName: string; names: string[] | null } | null;
   /* The operational contract made from this proposal (Active AMC), on the
      single-proposal read only. null: none yet; absent: not checked or the
      contracts table does not exist yet. */

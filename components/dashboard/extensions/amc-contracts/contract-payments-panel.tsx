@@ -262,30 +262,16 @@ const CHEQUE_COLUMNS: ColumnDef<ChequeRecord>[] = [
   { id: "actions", header: actionsHeader, cell: ({ row }) => <ChequeActionsCell cheque={row.original} /> },
 ];
 
-const RECEIPT_COLUMNS: ColumnDef<ReceiptRecord>[] = [
-  { id: "received", header: "Received", cell: ({ row }) => <ReceiptReceivedCell payment={row.original} /> },
-  {
-    id: "mode",
-    header: "Mode",
-    cell: ({ row }) => <span className={cn("text-sm", struckClass(row.original))}>{PAYMENT_MODE_LABELS[row.original.mode] ?? row.original.mode}</span>,
-  },
-  {
-    id: "amount",
-    header: "Amount",
-    cell: ({ row }) => <Money value={row.original.amount} className={cn("text-sm font-medium", struckClass(row.original))} />,
-  },
-  {
-    id: "reference",
-    header: "Reference / receipt",
-    cell: ({ row }) => {
-      const p = row.original;
-      return (
-        <span className={cn("text-sm", struckClass(p))}>
-          {[p.reference, p.receiptNo ? `Receipt ${p.receiptNo}` : null].filter(Boolean).join(" · ") || "—"}
-        </span>
-      );
-    },
-  },
+/*
+  Collected by / Handed over are hidden for now (17 Nov 2026): they only
+  mean something for cash, and showed "—" on every transfer. Cash is still
+  recorded with its collector, and the handover is still in the receipt's
+  menu. Set true to show them again.
+*/
+const SHOW_CASH_COLUMNS = false;
+
+/* Cash only: who took it from the client, and when it reached Finance. */
+const CASH_COLUMNS: ColumnDef<ReceiptRecord>[] = [
   {
     id: "collector",
     header: "Collected by",
@@ -312,6 +298,33 @@ const RECEIPT_COLUMNS: ColumnDef<ReceiptRecord>[] = [
       );
     },
   },
+];
+
+const RECEIPT_COLUMNS: ColumnDef<ReceiptRecord>[] = [
+  { id: "received", header: "Received", cell: ({ row }) => <ReceiptReceivedCell payment={row.original} /> },
+  {
+    id: "mode",
+    header: "Mode",
+    cell: ({ row }) => <span className={cn("text-sm", struckClass(row.original))}>{PAYMENT_MODE_LABELS[row.original.mode] ?? row.original.mode}</span>,
+  },
+  {
+    id: "amount",
+    header: "Amount",
+    cell: ({ row }) => <Money value={row.original.amount} className={cn("text-sm font-medium", struckClass(row.original))} />,
+  },
+  {
+    id: "reference",
+    header: "Reference / receipt",
+    cell: ({ row }) => {
+      const p = row.original;
+      return (
+        <span className={cn("text-sm", struckClass(p))}>
+          {[p.reference, p.receiptNo ? `Receipt ${p.receiptNo}` : null].filter(Boolean).join(" · ") || "—"}
+        </span>
+      );
+    },
+  },
+  ...(SHOW_CASH_COLUMNS ? CASH_COLUMNS : []),
   {
     id: "recorder",
     header: "Recorded by",

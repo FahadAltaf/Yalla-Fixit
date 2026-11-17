@@ -33,6 +33,7 @@ import { readAmcConfig } from "@/lib/server/amc/config";
 import { rateCardInForce } from "@/lib/server/amc/rate-card";
 import { snapToCardFrequencies } from "@/lib/amc/rate-card";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
+import { approverName } from "@/lib/server/amc/site-visit-approvers";
 import { hasColumn } from "@/lib/server/snagging/columns";
 import {
   createClientWithFsm,
@@ -240,11 +241,14 @@ const missingColumn = (error: { code?: string } | null | undefined) => error?.co
 async function withColumns<T>(
   run: (columns: string) => PromiseLike<{ data: T | null; error: { code?: string; message: string } | null }>,
   columns: string,
-  legacy: string,
+  ...legacy: string[]
 ): Promise<{ data: T | null; error: { code?: string; message: string } | null }> {
-  const first = await run(columns);
-  if (first.error && missingColumn(first.error)) return run(legacy);
-  return first;
+  let result = await run(columns);
+  for (const older of legacy) {
+    if (!(result.error && missingColumn(result.error))) break;
+    result = await run(older);
+  }
+  return result;
 }
 
 export function mapCustomer(r: Row): CustomerRecord {
@@ -1162,6 +1166,13 @@ export interface AssessmentRecord {
   completedAt: string | null;
   createdBy: string | null;
   createdAt: string;
+  /* Approval (20261116110000; empty before it): who approves, when they did, and the last send-back. */
+  approverId: string | null;
+  approverName: string | null;
+  approvedAt: string | null;
+  approvedBy: string | null;
+  sentBackAt: string | null;
+  sentBackReason: string | null;
   items: Array<{
     itemKey: string;
     categoryKey: string;
@@ -1176,7 +1187,10 @@ const ASSESSMENT_JOINS = `customer:snagging_clients(${CLIENT_EMBED}, email, phon
 const ASSESSMENT_COLUMNS_V1 = `id, assessment_number, status, customer_id, property_id, contract_id, submission_id, assessed_on, assessor_id, assessor_name, property_category, unit_type, bedrooms, size_sqft, occupancy, summary, findings, notes, recommended_service_ids, completed_at, created_by, created_at, ${ASSESSMENT_JOINS}`;
 /* The site-visit columns (20261007130000). */
 const SITE_VISIT_COLUMNS = ["enquiry_id", "scheduled_at", "attendance", "asset_counts", "access_notes", "exclusions"] as const;
-const ASSESSMENT_COLUMNS = `${ASSESSMENT_COLUMNS_V1}, ${SITE_VISIT_COLUMNS.join(", ")}`;
+const ASSESSMENT_COLUMNS_V2 = `${ASSESSMENT_COLUMNS_V1}, ${SITE_VISIT_COLUMNS.join(", ")}`;
+/* The approval columns (20261116110000). */
+const APPROVAL_COLUMNS = ["approver_id", "approver_name", "approved_at", "approved_by", "sent_back_at", "sent_back_reason"] as const;
+const ASSESSMENT_COLUMNS = `${ASSESSMENT_COLUMNS_V2}, ${APPROVAL_COLUMNS.join(", ")}`;
 
 function mapAssessment(r: Row, items: Row[] = []): AssessmentRecord {
   const c = embeddedClient(r.customer);
@@ -1211,6 +1225,12 @@ function mapAssessment(r: Row, items: Row[] = []): AssessmentRecord {
     completedAt: str(r.completed_at),
     createdBy: str(r.created_by),
     createdAt: String(r.created_at),
+    approverId: str(r.approver_id),
+    approverName: str(r.approver_name),
+    approvedAt: str(r.approved_at),
+    approvedBy: str(r.approved_by),
+    sentBackAt: str(r.sent_back_at),
+    sentBackReason: str(r.sent_back_reason),
     items: items
       .sort((a, b) => Number(a.sort_order ?? 0) - Number(b.sort_order ?? 0))
       .map((i) => ({
@@ -1269,6 +1289,7 @@ export async function listAssessments(
     return q;
   };
   let result = await run(ASSESSMENT_COLUMNS);
+  if (result.error && missingColumn(result.error)) result = await run(ASSESSMENT_COLUMNS_V2);
   if (result.error && missingColumn(result.error)) result = await run(ASSESSMENT_COLUMNS_V1);
   const { data, error, count } = result;
   if (error) throw fail(error);
@@ -1277,7 +1298,7 @@ export async function listAssessments(
 
 export async function getAssessment(admin: Admin, id: string): Promise<AssessmentRecord> {
   const [{ data, error }, { data: items, error: itemsError }] = await Promise.all([
-    withColumns<Row>((columns) => admin.from("amc_assessments").select(columns).eq("id", id).maybeSingle<Row>(), ASSESSMENT_COLUMNS, ASSESSMENT_COLUMNS_V1),
+    withColumns<Row>((columns) => admin.from("amc_assessments").select(columns).eq("id", id).maybeSingle<Row>(), ASSESSMENT_COLUMNS, ASSESSMENT_COLUMNS_V2, ASSESSMENT_COLUMNS_V1),
     admin
       .from("amc_assessment_items")
       .select("item_key, category_key, category_label, label, sort_order, result, notes")
@@ -1349,6 +1370,7 @@ export async function createAssessment(
 }
 
 export interface AssessmentPatch {
+  approverId?: string | null;
   customerId?: string | null;
   propertyId?: string | null;
   assessedOn?: string | null;
@@ -1374,8 +1396,43 @@ export interface AssessmentPatch {
 
 export async function updateAssessment(admin: Admin, who: Visibility, id: string, patch: AssessmentPatch): Promise<AssessmentRecord> {
   const current = await getAssessment(admin, id);
-  if (current.status !== "draft") throw new ContractError("A completed assessment cannot be changed.", 409);
-  if (!canEditAssessment(who, current)) throw new ContractError("Only its assessor or an AMC approver can edit this assessment.", 403);
+  if (current.status !== "draft") {
+    /*
+      Completed but not yet approved: its approver can still change (16 Nov
+      2026), say when the one named is away. Nothing else about it can.
+    */
+    const asked = (Object.keys(patch) as Array<keyof AssessmentPatch>).filter((k) => patch[k] !== undefined);
+    const onlyApprover = asked.length > 0 && asked.every((k) => k === "approverId");
+    if (current.status !== "completed" || current.approvedAt || !onlyApprover) {
+      throw new ContractError(current.approvedAt ? "An approved site visit cannot be changed." : "A completed site visit cannot be changed; only its approver can, until it is approved.", 409);
+    }
+    if (!canEditAssessment(who, current)) throw new ContractError("Only its inspector or an AMC approver can edit this site visit.", 403);
+    if (!patch.approverId) throw new ContractError("A completed site visit needs an approver.", 400);
+    if (patch.approverId === current.approverId) return current;
+    const name = await approverName(admin, patch.approverId);
+    const { error } = await admin
+      .from("amc_assessments")
+      .update({ approver_id: patch.approverId, approver_name: name, updated_at: new Date().toISOString() })
+      .eq("id", id)
+      .eq("status", "completed")
+      .is("approved_at", null);
+    if (error) throw fail(error);
+    return getAssessment(admin, id);
+  }
+  if (!canEditAssessment(who, current)) throw new ContractError("Only its inspector or an AMC approver can edit this assessment.", 403);
+  /*
+    Once the inspector has recorded the visit as attended it is in progress
+    (as AMC -> Visits shows it): its time and its inspector stay as they are
+    (16 Nov 2026). A save that sends them unchanged is fine.
+  */
+  if (current.attendance === "attended") {
+    const sameTime = (x: string | null | undefined, y: string | null) => (x ? Date.parse(x) : null) === (y ? Date.parse(y) : null);
+    const movesTime = patch.scheduledAt !== undefined && !sameTime(patch.scheduledAt, current.scheduledAt);
+    const changesInspector = patch.assessorId !== undefined && (patch.assessorId ?? null) !== (current.assessorId ?? null);
+    if (movesTime || changesInspector) {
+      throw new ContractError("The site visit is in progress: its date, time and inspector can no longer be changed.", 409);
+    }
+  }
   if (patch.recommendedServiceIds) {
     const settings = await readAmcSettings(admin);
     const known = new Set(settings.services.map((s) => s.id));
@@ -1410,9 +1467,13 @@ export async function updateAssessment(admin: Admin, who: Visibility, id: string
     row.assessor_id = patch.assessorId;
     if (patch.assessorId) {
       const { data: person } = await admin.from("user_profile").select("full_name, email, is_active").eq("id", patch.assessorId).maybeSingle<Row>();
-      if (!person || person.is_active === false) throw new ContractError("The assessor must be an active portal user.", 400);
+      if (!person || person.is_active === false) throw new ContractError("The inspector must be an active portal user.", 400);
       row.assessor_name = str(person.full_name) ?? str(person.email);
     }
+  }
+  if (patch.approverId !== undefined && (patch.approverId ?? null) !== (current.approverId ?? null)) {
+    row.approver_id = patch.approverId;
+    row.approver_name = patch.approverId ? await approverName(admin, patch.approverId) : null;
   }
   if (patch.scheduledAt !== undefined) row.scheduled_at = patch.scheduledAt;
   if (patch.attendance !== undefined) row.attendance = patch.attendance;
@@ -1444,7 +1505,7 @@ export async function updateAssessment(admin: Admin, who: Visibility, id: string
 
 export async function completeAssessment(admin: Admin, who: Visibility, id: string, actor: Actor): Promise<AssessmentRecord> {
   const a = await getAssessment(admin, id);
-  if (!canEditAssessment(who, a)) throw new ContractError("Only its assessor or an AMC approver can complete this assessment.", 403);
+  if (!canEditAssessment(who, a)) throw new ContractError("Only its inspector or an AMC approver can complete this assessment.", 403);
   const check = checkAssessmentCompletion({ status: a.status, assessedOn: a.assessedOn, propertyId: a.property?.id ?? null, items: a.items, attendance: a.attendance });
   if (!check.ok) throw new ContractError(check.errors.join(" "), 409);
   const { error } = await admin
@@ -1468,7 +1529,7 @@ export async function completeAssessment(admin: Admin, who: Visibility, id: stri
 export async function deleteDraftAssessment(admin: Admin, who: Visibility, id: string, actor: Actor) {
   const a = await getAssessment(admin, id);
   if (a.status !== "draft") throw new ContractError("A completed assessment is kept as history.", 409);
-  if (!canEditAssessment(who, a)) throw new ContractError("Only its assessor or an AMC approver can delete this draft.", 403);
+  if (!canEditAssessment(who, a)) throw new ContractError("Only its inspector or an AMC approver can delete this draft.", 403);
   /* A draft's photos go with it: the files here, the rows by cascade. */
   await removeDraftPhotoFiles(admin, id);
   const { error } = await admin.from("amc_assessments").delete().eq("id", id).eq("status", "draft");

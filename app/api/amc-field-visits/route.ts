@@ -32,7 +32,7 @@ export async function GET(req: NextRequest) {
       gate.admin,
       {
         kind: pick<FieldVisitKind>(p.get("kind"), FIELD_VISIT_KINDS),
-        stage: stage === "all" ? "all" : (pick<FieldVisitStage>(stage, FIELD_VISIT_STAGES) ?? "open"),
+        stage: stage === "all" || stage === "active" ? stage : (pick<FieldVisitStage>(stage, FIELD_VISIT_STAGES) ?? "open"),
         when: pick<FieldVisitWhen>(p.get("when"), FIELD_VISIT_WHEN) ?? "any",
         technicianId: p.get("technician")?.trim().slice(0, 40) || null,
         contractId: contract && UUID.test(contract) ? contract : null,

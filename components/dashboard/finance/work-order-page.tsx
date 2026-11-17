@@ -15,7 +15,7 @@ import {
   MessageSquareReply,
   Paperclip,
   PauseCircle,
-  Pencil,
+  SquarePen,
   Percent,
   PlayCircle,
   ReceiptText,
@@ -905,7 +905,7 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
                                   setPartialFor({ lines: [line] });
                                 }}
                               >
-                                {completionOf(line) === "not_started" ? <Percent className="size-4" /> : <Pencil className="size-4" />}
+                                {completionOf(line) === "not_started" ? <Percent className="size-4" /> : <SquarePen className="size-4" />}
                                 {completionOf(line) === "not_started" ? "Partial" : "Change"}
                               </Button>
                             </div>
