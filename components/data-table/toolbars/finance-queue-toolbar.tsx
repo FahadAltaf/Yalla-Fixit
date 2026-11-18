@@ -9,7 +9,6 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 
-import { DateRangePicker } from "./date-range-picker";
 
 /* An FSM status in the one status dropdown: "fsm:Completed". */
 const FSM_PREFIX = "fsm:";
@@ -41,9 +40,7 @@ export function FinanceQueueToolbar({
   filters,
   onFiltersChange,
   agedAfterDays,
-  dateLabel = "Entered",
   initialSearch = "",
-  dateBounds,
   activeFilters = 0,
 }: {
   onSearchChange: (value: string) => void;
@@ -58,11 +55,7 @@ export function FinanceQueueToolbar({
   filters: FinanceQueueToolbarFilters;
   onFiltersChange: (next: FinanceQueueToolbarFilters) => void;
   agedAfterDays: number;
-  /** What the date range filters on ("Raised" for work orders). */
-  dateLabel?: string;
   initialSearch?: string;
-  /** The earliest and latest dates that may be picked. */
-  dateBounds?: { min: string; max: string };
   /** How many of the dates and Aged only are in use: "Clear" shows when any is. */
   activeFilters?: number;
 }) {
@@ -117,15 +110,7 @@ export function FinanceQueueToolbar({
           </SelectContent>
         </Select>
 
-        {/* The dates beside the status (27 Oct): shadcn's range picker, two months. */}
-        <DateRangePicker
-          from={filters.from}
-          to={filters.to}
-          min={dateBounds?.min}
-          max={dateBounds?.max}
-          label={`${dateLabel} dates`}
-          onChange={(from, to) => set({ from, to })}
-        />
+        {/* The dates are in the page header, as on the reports (18 Nov); Clear still resets them. */}
         <label className="flex items-center gap-2 text-sm whitespace-nowrap" title={`Pending over ${agedAfterDays} days`}>
           <Switch checked={filters.aged} onCheckedChange={(aged) => set({ aged })} aria-label="Aged only" />
           Aged only

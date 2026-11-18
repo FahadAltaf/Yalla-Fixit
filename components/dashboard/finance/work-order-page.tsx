@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
 import {
   CheckCheck,
   ChevronDown,
@@ -153,6 +154,8 @@ const formatWhen = (value: string) =>
 export function FinanceWorkOrderPage({ id }: { id: string }) {
   const url = `/api/finance/work-orders/${encodeURIComponent(id)}`;
   const { data, loading, error, reload } = useSection<Detail>(url, { staleMs: DETAIL_STALE_MS });
+  /* Opened from Operations' menu (/finance/operations/...) or Finance's (/finance/queue/...). */
+  const openedAs: "finance" | "operations" = usePathname()?.startsWith("/finance/operations") ? "operations" : "finance";
   /* 2 Nov: this work order's queries, every one, with the people each side may tag. */
   const queries = useSection<Queries>(`/api/finance/queries?view=all&workOrder=${encodeURIComponent(id)}&pageSize=100`, { staleMs: 60_000 });
   const [raising, setRaising] = useState(false);
@@ -241,13 +244,23 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
     );
   }
 
-  const { workOrder: wo, quotation, lines, invoicing, can: allowed, workflow } = data;
+  const { workOrder: wo, quotation, lines, invoicing, can: held, workflow } = data;
   /*
-    The roles decide (2 Nov, no tabs): Finance records invoices; Operations
-    records % done and marks ready; both raise queries, hold and mark not
-    invoiceable. Someone in both gets both sets of buttons, writes as Finance
-    and, on a query waiting on Operations, answers as Operations.
+    The roles decide (2 Nov): Finance records invoices; Operations records %
+    done and marks ready; both raise queries, hold and mark not invoiceable.
+    Someone in both teams (18 Nov) sees only the side of the menu the work
+    order was opened from: Operations' view never offers Record invoice or
+    Finance's query, Finance's view never offers % done or Complete. The
+    server still checks each action against the person's permissions.
   */
+  const heldFinance = held.invoice || held.query;
+  const heldOperations = held.progress || held.markReady || held.answer;
+  const allowed: Can =
+    heldFinance && heldOperations
+      ? openedAs === "operations"
+        ? { ...held, invoice: false, query: false }
+        : { ...held, progress: false, markReady: false, answer: false }
+      : held;
   const financeSide = allowed.invoice || allowed.query;
   const operationsSide = allowed.progress || allowed.markReady || allowed.answer;
   const bothTeams = financeSide && operationsSide;
@@ -469,7 +482,7 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
               answers.length === 1
                 ? [{ line: null, percent: 100, purpose: answers[0] }]
                 : billable.map((l) => ({ line: l.id, percent: 100, purpose: l.progress?.purpose ?? ("invoice" as const) }));
-            void run("Work order marked complete", async () => toastFsm((await financeService.recordProgress(id, { entries, note: "Work order marked complete" })).data.fsm));
+            void run("Work order marked complete", async () => toastFsm((await financeService.recordProgress(id, { entries, note: "Work order marked complete" })).fsm));
           }
         }}
       >
@@ -1497,7 +1510,7 @@ function ProgressDialog({
     try {
       const result = await financeService.recordProgress(workOrderId, { entries, note: [said, note.trim()].filter(Boolean).join(": ") });
       toast.success(said);
-      toastFsm(result.data.fsm);
+      toastFsm(result.fsm);
       onRecorded();
     } catch (e) {
       setProblem(e instanceof Error ? e.message : "Nothing was recorded");
@@ -1647,7 +1660,7 @@ function CompleteDialog({
         note: [said, note.trim()].filter(Boolean).join(": "),
       });
       toast.success(said);
-      toastFsm(result.data.fsm);
+      toastFsm(result.fsm);
       onRecorded();
     } catch (e) {
       setProblem(e instanceof Error ? e.message : "Nothing was recorded");

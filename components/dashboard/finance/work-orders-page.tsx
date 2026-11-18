@@ -10,6 +10,7 @@ import { ErrorState, StatGridSkeleton } from "@/components/dashboard/shared/kaiz
 import { refreshAll, useSection } from "@/components/dashboard/snagging/overview/use-section";
 import { DataTable } from "@/components/data-table";
 import { getWorkOrderQueueColumns } from "@/components/data-table/columns/column-finance-work-orders";
+import { DateRangePicker } from "@/components/data-table/toolbars/date-range-picker";
 import { FinanceQueueToolbar, type FinanceQueueToolbarFilters } from "@/components/data-table/toolbars/finance-queue-toolbar";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Card } from "@/components/ui/card";
@@ -217,6 +218,24 @@ export function FinanceWorkOrdersPage({ view: askedView }: { view?: "finance" | 
             ? "Every FSM work order. Mark finished work Completed, or record how far it has got."
             : "Completed or partly done work to invoice. Record the MAHER invoice or raise a query."
         }
+        /* The dates at the end of the header, as on the reports (18 Nov). */
+        actions={
+          <DateRangePicker
+            from={dates.from}
+            to={dates.to}
+            min={dates.min}
+            max={dates.max}
+            label="Raised dates"
+            onChange={(from, to) =>
+              filterBy({
+                /* A date left at its default stays out of the URL. */
+                from: from === dates.from && !filters.from ? "" : from,
+                to: to === dates.to && !filters.to ? "" : to,
+                page: 0,
+              })
+            }
+          />
+        }
       />
 
       {loading || refreshing ? (
@@ -336,10 +355,8 @@ export function FinanceWorkOrdersPage({ view: askedView }: { view?: "finance" | 
                   page: 0,
                 })
               }
-              dateBounds={{ min: dates.min, max: dates.max }}
               activeFilters={(filters.from || filters.to ? 1 : 0) + (filters.aged ? 1 : 0)}
               agedAfterDays={data?.agedAfterDays ?? 7}
-              dateLabel="Raised"
             />
           }
           onGlobalFilterChange={() => undefined}

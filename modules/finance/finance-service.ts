@@ -11,7 +11,8 @@ export type FinanceMetricsResponse = { summary: QueueSummary; metrics: QueueMetr
 export const financeService = {
   /** One work order read again from Zoho FSM (one or two calls). */
   refreshWorkOrder: (id: string) =>
-    executeRESTBackend<{ data: WorkOrderDetail }>(`/api/finance/work-orders/${id}`, { params: { refresh: "1" } }).then((r) => r.data),
+    /* executeRESTBackend already takes the answer out of its { data } envelope. */
+    executeRESTBackend<WorkOrderDetail>(`/api/finance/work-orders/${id}`, { params: { refresh: "1" } }),
 
   /** Lines (or, with none given, the whole work order) Ready to invoice, or not. */
   setReady: (workOrderId: string, input: { lines?: string[]; ready: boolean; note?: string | null }) =>
@@ -38,16 +39,16 @@ export const financeService = {
     workOrderId: string,
     input: { entries: Array<{ line: string | null; percent: number; purpose: "invoice" | "revenue_only" }>; note?: string | null },
   ) =>
-    executeRESTBackend<{ data: { recorded: number; fsm: FsmCompletionResult | null } }>(`/api/finance/work-orders/${workOrderId}/progress`, {
+    executeRESTBackend<{ recorded: number; fsm: FsmCompletionResult | null }>(`/api/finance/work-orders/${workOrderId}/progress`, {
       method: "POST",
       body: input,
     }),
 
   /** The files on a work order and its appointments (service reports), from FSM. */
   workOrderFiles: (workOrderId: string, refresh = false) =>
-    executeRESTBackend<{ data: { serviceReports: LiveServiceReport[]; files: LiveAttachment[]; appointments: number } }>(`/api/finance/work-orders/${workOrderId}/attachments`, {
+    executeRESTBackend<{ serviceReports: LiveServiceReport[]; files: LiveAttachment[]; appointments: number }>(`/api/finance/work-orders/${workOrderId}/attachments`, {
       params: refresh ? { refresh: "1" } : undefined,
-    }).then((r) => r.data),
+    }),
 
   /** Where a recorded MAHER invoice's file opens (a short-lived link to it). */
   invoiceFileUrl: (workOrderId: string, invoiceId: string) =>

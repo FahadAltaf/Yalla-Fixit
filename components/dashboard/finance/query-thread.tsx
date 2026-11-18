@@ -152,7 +152,8 @@ export function QueryThreadView({
   };
 
   const lines = thread.lineIds.map((id) => lineNames?.get(id) ?? null).filter(Boolean);
-  const woHref = `/finance/queue/${thread.workOrderId}`;
+  /* 18 Nov: the work order opens on the side this person acts for here, so it shows that side's buttons. */
+  const woHref = `${side === "operations" ? "/finance/operations" : "/finance/queue"}/${thread.workOrderId}`;
 
   return (
     <div className="flex flex-col gap-3">

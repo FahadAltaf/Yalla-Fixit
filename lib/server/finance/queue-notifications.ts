@@ -129,7 +129,9 @@ type ThreadNotice = {
 };
 
 const SIDE_WORD = { finance: "Finance", operations: "Operations" } as const;
-const queryLink = (input: Pick<ThreadNotice, "workOrderId">) => `/finance/queue/${input.workOrderId}`;
+/* 18 Nov: a notice opens the work order on the side it was sent to (Operations' or Finance's page and buttons). */
+const workOrderLink = (workOrderId: string, side: "finance" | "operations") =>
+  `${side === "operations" ? "/finance/operations" : "/finance/queue"}/${workOrderId}`;
 const clip = (text: string | null, max = 240) => (text && text.length > max ? `${text.slice(0, max - 1)}…` : (text ?? ""));
 
 async function sideRecipients(admin: SupabaseClient, side: "finance" | "operations"): Promise<string[]> {
@@ -157,7 +159,7 @@ export async function notifyQueryOpened(admin: SupabaseClient, input: ThreadNoti
         input.kind === "not_invoiceable"
           ? `${input.author.label} says ${wo} is not invoiceable: ${clip(input.body)}. Correct the completion or withdraw the request to invoice, or reply.`
           : `${input.author.label} asks on ${wo}: ${clip(input.body)}`,
-      link: queryLink(input),
+      link: workOrderLink(input.workOrderId, to),
       requiresAction: true,
     });
   } catch (error) {
@@ -197,7 +199,7 @@ export async function notifyQueryReply(
       channels: ["in_app"],
       title: input.resolved ? `Query on ${wo} closed` : `${SIDE_WORD[input.side]} replied on ${wo}`,
       body: `${input.author.label} ${what}${input.body ? `: ${clip(input.body)}` : "."}`,
-      link: queryLink(input),
+      link: workOrderLink(input.workOrderId, to),
       requiresAction: !input.resolved,
     });
   } catch (error) {
@@ -248,7 +250,7 @@ export async function notifyWorkOrderChange(
       channels: ["in_app"],
       title: `${wo} ${words.title}`,
       body: `${input.author.label} (${SIDE_WORD[input.side]}) ${words.did.replace("{wo}", wo)}${input.reason ? `: ${clip(input.reason)}` : "."}`,
-      link: `/finance/queue/${input.workOrderId}`,
+      link: workOrderLink(input.workOrderId, to),
       requiresAction: false,
     });
   } catch (error) {
