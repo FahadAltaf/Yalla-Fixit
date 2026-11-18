@@ -29,6 +29,8 @@ import { recordSend } from "@/lib/server/amc/proposal-share";
 import { AMC_DOCUMENTS_BUCKET, renderPdf } from "@/lib/server/amc/signed-archive";
 import { recordStatusChange } from "@/lib/server/amc/status-history";
 import { sendEmail } from "@/lib/server/send-email";
+import { initialOutcome, type SendChannel } from "@/lib/amc/send-channels";
+import { readCharge, recordChargePayment, syncWorkCharge } from "@/lib/server/amc/visit-charges";
 
 /**
  * Additional works on the server (Phase 11: DEV-407). Raised from a PPM
@@ -368,6 +370,14 @@ async function followCallOut(admin: Admin, callOutId: string | null, actor: Acto
   if (data?.length) await recordStatusChange(admin, { entityType: "call_out", entityId: callOutId, from, to, reason: "Additional work", actor, origin: "system" });
 }
 
+/* Start visit (17 Nov 2026): the office starts the work, as a planned visit, before it is completed. */
+async function startedByOffice(admin: Admin, id: string): Promise<boolean> {
+  const { data, error } = await admin.from("amc_additional_works").select("started_at").eq("id", id).maybeSingle<Row>();
+  if (error && (error.code === "42703" || error.code === "PGRST204" || /started_at/.test(error.message ?? ""))) return true;
+  if (error) throw fail(error);
+  return Boolean(data?.started_at);
+}
+
 export async function performWorkAction(admin: Admin, id: string, action: AdditionalWorkAction, actor: Actor, config: AmcConfig) {
   const row = await loadWork(admin, id);
   const status = row.status as AdditionalWorkStatus;
@@ -407,7 +417,7 @@ export async function performWorkAction(admin: Admin, id: string, action: Additi
     }
     case "share": {
       if (!canMoveWork(status, "shared")) throw new ContractError(`${String(row.work_no)} is ${ADDITIONAL_WORK_STATUS_LABELS[status].toLowerCase()}: prepare the quotation first.`, 409);
-      const sent = await shareQuotation(admin, row, actor);
+      const sent = await shareQuotation(admin, row, actor, action.channel);
       await moveTo(admin, row, "shared", { shared_at: now }, actor);
       await followCallOut(admin, str(row.call_out_id), actor);
       const owner = str(one(one(row.contract)?.submission)?.owner_id);
@@ -428,6 +438,8 @@ export async function performWorkAction(admin: Admin, id: string, action: Additi
     }
     case "approve":
       await moveTo(admin, row, "approved", { approved_at: now, approval_evidence: `${action.evidence}${action.approvedBy ? ` (approved by ${action.approvedBy})` : ""}` }, actor);
+      /* Approved: what the client pays, from the quotation, on the contract's Payments tab (18 Nov 2026). */
+      await syncWorkCharge(admin, id, actor).catch(() => null);
       return { ok: true as const };
     case "reject":
       await moveTo(admin, row, "rejected", { rejected_at: now, rejection_reason: action.reason }, actor, action.reason);
@@ -470,18 +482,35 @@ export async function performWorkAction(admin: Admin, id: string, action: Additi
         },
         actor,
       );
+      /* A new slot is asked again (17 Nov 2026); the column is missing before 20261117130000. */
+      if (slot.start !== str(row.scheduled_start)) {
+        await admin.from("amc_additional_works").update({ client_confirmation: null, confirmed_at: null }).eq("id", id).is("started_at", null);
+      }
       return { ok: true as const };
     }
     case "complete":
+      if (!(await startedByOffice(admin, id))) throw new ContractError(`${String(row.work_no)} has not been started: start the visit first (crew, time, client and access in place).`, 409);
       await moveTo(admin, row, "completed", { completed_at: action.completedAt ?? now }, actor);
       await followCallOut(admin, str(row.call_out_id), actor);
       return { ok: true as const };
     case "invoice":
       await moveTo(admin, row, "invoiced", { invoice_number: action.invoiceNumber, invoiced_at: action.invoicedAt ?? now }, actor);
       return { ok: true as const };
-    case "pay":
+    case "pay": {
       await moveTo(admin, row, "paid", { paid_at: action.paidAt ?? now, payment_reference: action.reference }, actor);
+      /* Paid here: the visit charge too, when it was still to pay (18 Nov 2026). */
+      const { charge } = await readCharge(admin, "additional_work", id).catch(() => ({ charge: null }));
+      if (charge?.status === "due") {
+        await recordChargePayment(
+          admin,
+          "additional_work",
+          id,
+          { amount: charge.total, paidOn: (action.paidAt ?? now).slice(0, 10), mode: "transfer", reference: action.reference ?? "Marked paid on the work", note: null },
+          actor,
+        ).catch(() => null);
+      }
       return { ok: true as const };
+    }
   }
 }
 
@@ -529,7 +558,7 @@ function quotationHtml(w: AdditionalWorkRecord): string {
   </body></html>`;
 }
 
-async function shareQuotation(admin: Admin, row: Row, actor: Actor) {
+async function shareQuotation(admin: Admin, row: Row, actor: Actor, channel: SendChannel = "email") {
   const w = mapWork(row);
   if (!w.quotationLines.length) throw new ContractError("Prepare the quotation before sharing it.", 409);
   const html = quotationHtml(w);
@@ -565,8 +594,9 @@ async function shareQuotation(admin: Admin, row: Row, actor: Actor) {
   const to = approver?.email ?? null;
   const cc = [...new Set([w.parties.payer?.email, w.parties.invoiceRecipient?.email].filter((e): e is string => Boolean(e) && e !== to))];
   const intro = `Our technician found the following at ${w.propertyLabel}: ${w.finding}`;
-  let outcome: "sent" | "failed" | "no_recipient" = "no_recipient";
-  if (to) {
+  const phone = approver?.phone ?? null;
+  let outcome = initialOutcome(channel);
+  if (channel === "email" && to) {
     try {
       await sendEmail({
         to,
@@ -596,21 +626,28 @@ async function shareQuotation(admin: Admin, row: Row, actor: Actor) {
     }
   }
   const { data: link } = await admin.storage.from(AMC_DOCUMENTS_BUCKET).createSignedUrl(path, 14 * 86_400);
-  const message = `Dear ${approver?.name ?? w.customerName}, our technician found: ${w.finding.slice(0, 300)}. Quotation ${w.workNo}: AED ${money(w.totals.total)} incl. VAT${link?.signedUrl ? `: ${link.signedUrl}` : ""}. Please reply to approve.`;
+  /* No link in the text (18 Nov 2026): the coordinator attaches the quotation PDF. */
+  const message = `Dear ${approver?.name ?? w.customerName}, our technician found: ${w.finding.slice(0, 300)}. Please find attached quotation ${w.workNo}: AED ${money(w.totals.total)} incl. VAT. Please reply to approve.`;
   const submissionId = str(one(contract.submission)?.id);
   if (submissionId) {
     await recordSend(admin, {
       submissionId,
       versionNo: 1,
       document: "additional_work_quotation",
-      channel: "email",
-      recipients: to ? [{ name: approver?.name ?? "", address: to }] : [],
-      cc,
+      channel,
+      recipients: channel === "email" ? (to ? [{ name: approver?.name ?? "", address: to }] : []) : channel === "whatsapp" && phone ? [{ name: approver?.name ?? "", address: phone }] : [],
+      cc: channel === "email" ? cc : [],
       outcome,
       detail: `Quotation ${w.workNo}`,
       sentBy: actor.id,
     });
   }
-  const phone = approver?.phone ?? null;
-  return { outcome, documentId, message, whatsapp: phone ? whatsappUrl(phone, message) : null };
+  return {
+    outcome,
+    documentId,
+    message,
+    whatsapp: phone ? whatsappUrl(phone, message) : null,
+    link: link?.signedUrl ?? null,
+    file: link?.signedUrl ? { url: link.signedUrl, name: `quotation-${w.workNo}.${path.endsWith(".pdf") ? "pdf" : "html"}` } : null,
+  };
 }

@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { CalendarClock, CalendarDays, ExternalLink, FileText, History, Receipt, Siren, Wrench, type LucideIcon } from "lucide-react";
+import { useState } from "react";
+import { CalendarClock, CalendarDays, ChevronDown, Download, Eye, FileText, History, Receipt, Siren, Wrench, type LucideIcon } from "lucide-react";
 import type { ColumnDef } from "@tanstack/react-table";
 
 import { DataTable } from "@/components/data-table";
@@ -9,6 +10,7 @@ import { SectionCard, StatCard, StatCardGrid } from "@/components/dashboard/shar
 import { ErrorState, ListSkeleton, StatGridSkeleton } from "@/components/dashboard/shared/kaizen-states";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { EmptyState } from "@/components/ui/empty-state";
 import { IdentityCell } from "@/components/ui/entity-avatar";
 import { Money } from "@/components/ui/money";
@@ -19,6 +21,8 @@ import { clientHistoryService, type ClientScheduleVisit, type ServiceHistoryEntr
 import { CallOutStatusBadge, WorkStatusBadge } from "../call-out-shared";
 import { formatContractDate } from "../contract-status";
 import { useAmcData } from "../use-amc-data";
+import { ServiceReportViewer, downloadServiceReport } from "../service-report-viewer";
+import { jobSheetsService } from "@/modules/amc-contracts/job-sheets-service";
 import { slotLabel, visitStatusTone } from "../visit-status";
 import { TruncatedText } from "@/components/ui/truncated-text";
 
@@ -220,17 +224,39 @@ const SERVICE_COLUMNS: ColumnDef<ServiceHistoryEntry>[] = [
     id: "report",
     header: "",
     cell: ({ row }) =>
-      row.original.kind === "visit" && row.original.hasReport ? (
-        <Button asChild variant="ghost" size="sm">
-          <a href={clientHistoryService.visitReportUrl(row.original.id)} target="_blank" rel="noopener noreferrer">
-            <FileText className="size-4" />
-            Report
-            <ExternalLink className="size-3" aria-hidden />
-          </a>
-        </Button>
-      ) : null,
+      row.original.kind === "visit" && row.original.hasReport ? <VisitReportCell visitId={row.original.id} /> : null,
   },
 ];
+
+/** A visit's service report (18 Nov 2026): viewed as the client receives it, or downloaded as the branded PDF. */
+function VisitReportCell({ visitId }: { visitId: string }) {
+  const [viewing, setViewing] = useState(false);
+  const load = () => jobSheetsService.reportFacts(visitId);
+  return (
+    <>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="sm">
+            <FileText className="size-4" />
+            Report
+            <ChevronDown className="size-3" aria-hidden />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="w-44">
+          <DropdownMenuItem onClick={() => setViewing(true)}>
+            <Eye className="size-4" />
+            View report
+          </DropdownMenuItem>
+          <DropdownMenuItem onClick={() => void downloadServiceReport(load)}>
+            <Download className="size-4" />
+            Download PDF
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <ServiceReportViewer open={viewing} onOpenChange={setViewing} loadFacts={load} cacheKey={visitId} />
+    </>
+  );
+}
 
 /** Visits done, call outs and additional work across the client's contracts, newest first. */
 export function ServiceHistoryPanel({ customerId }: { customerId: string }) {

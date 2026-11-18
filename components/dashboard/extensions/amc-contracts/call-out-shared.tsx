@@ -7,7 +7,6 @@ import { Copy, ExternalLink, ImagePlus, LoaderCircleIcon, RefreshCwIcon, SearchI
 import { toast } from "sonner";
 
 import { StatusSelect } from "@/components/data-table/toolbars/status-select";
-import { PillTabs } from "@/components/dashboard/shared/kaizen";
 import { ActionDialogContent, SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -452,7 +451,6 @@ export function PhotosPanel<K extends string>({
   const kindId = useId();
   const { confirm, dialog } = useConfirm();
   const labelOf = (k: string) => labels[k as K] ?? k;
-  const [shownKind, setShownKind] = useState<string>("all");
 
   const add = async (files: FileList | null) => {
     if (!files?.length) return;
@@ -489,8 +487,8 @@ export function PhotosPanel<K extends string>({
       },
     });
 
-  const present = kinds.filter((k) => photos.some((p) => p.kind === k));
-  const shown = shownKind === "all" ? photos : photos.filter((p) => p.kind === shownKind);
+  /* Every photo at once (18 Nov 2026): no filter tabs; each photo carries its category. */
+  const shown = photos;
 
   return (
     <Panel
@@ -528,13 +526,6 @@ export function PhotosPanel<K extends string>({
         />
       ) : (
         <div className="grid gap-4">
-          {present.length > 1 ? (
-            <PillTabs
-              value={shownKind}
-              onChange={setShownKind}
-              tabs={[{ value: "all", label: "All", count: photos.length }, ...present.map((k) => ({ value: k as string, label: labels[k], count: photos.filter((p) => p.kind === k).length }))]}
-            />
-          ) : null}
           <ul className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
             {shown.map((p) => (
               <li key={p.id} className="group bg-card relative overflow-hidden rounded-xl border shadow-xs">

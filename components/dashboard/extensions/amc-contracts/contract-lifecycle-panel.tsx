@@ -14,7 +14,7 @@ import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } fr
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ListTable } from "./list-table";
 import { Textarea } from "@/components/ui/textarea";
 import DateSelect from "@/components/ui/date-select";
 import { CONTRACT_STATUS_NAMES, MATERIAL_LABELS, expiryFromCommencement, type ContractStatus, type LifecycleAction } from "@/lib/amc/contract-lifecycle";
@@ -553,64 +553,61 @@ export function EntitlementTermsCard({ data, onChanged }: { data: ContractDetail
       icon={<ScrollText />}
       title="What each service covers"
       description="Labour, materials, value limits and exclusions per service. Set before activation; checked when a call out or extra work is assessed. Exclusions start from the Scope of Works Library until changed here."
-      bodyClassName="pb-2"
+      bodyClassName="border-t"
     >
-      <div className="overflow-x-auto">
-        <Table className="min-w-[640px]">
-          <TableHeader>
-            <TableRow>
-              <TableHead className="pl-5">Service</TableHead>
-              <TableHead>Labour</TableHead>
-              <TableHead>Materials</TableHead>
-              <TableHead>Value limit</TableHead>
-              <TableHead>Exclusions</TableHead>
-              {canEdit ? (
-                <TableHead className="pr-5">
-                  <span className="sr-only">Actions</span>
-                </TableHead>
-              ) : null}
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rows.map((e) => (
-              <TableRow key={e.id}>
-                <TableCell className="pl-5 text-sm font-medium">{e.serviceLabel}</TableCell>
-                <TableCell className="text-sm">{e.labourCovered ? "Covered" : "Chargeable"}</TableCell>
-                <TableCell className="text-sm">{MATERIAL_LABELS[e.materialCoverage ?? "consumables"]}</TableCell>
-                <TableCell className="text-sm tabular-nums">{e.valueLimitAed != null ? `AED ${e.valueLimitAed.toLocaleString("en-AE")}` : "—"}</TableCell>
-                <TableCell className="max-w-[280px] text-sm">
-                  {(() => {
-                    /* The contract's own text, else the library's standard exclusions for the service (marked). */
-                    const ex = effectiveExclusions(e.serviceId, e.exclusions);
-                    return ex.text ? (
-                      <div className="grid gap-0.5">
-                        <TruncatedText>{ex.text}</TruncatedText>
-                        {ex.standard ? <span className="text-muted-foreground text-xs">Standard (Scope of Works Library {libraryEntry(e.serviceId)?.ref})</span> : null}
-                      </div>
-                    ) : (
-                      "—"
-                    );
-                  })()}
-                </TableCell>
-                {canEdit ? (
-                  <TableCell className="pr-5 text-right">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => {
-                        setEditing(e);
-                        setEditOpen(true);
-                      }}
-                    >
-                      Edit
-                    </Button>
-                  </TableCell>
-                ) : null}
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </div>
+      {/* The house table (18 Nov 2026), as every list. */}
+      <ListTable<Entitlement>
+        data={rows}
+        columns={[
+          { id: "service", header: "Service", cell: ({ row }) => <span className="text-sm font-medium">{row.original.serviceLabel}</span> },
+          { id: "labour", header: "Labour", cell: ({ row }) => <span className="text-sm">{row.original.labourCovered ? "Covered" : "Chargeable"}</span> },
+          { id: "materials", header: "Materials", cell: ({ row }) => <span className="text-sm">{MATERIAL_LABELS[row.original.materialCoverage ?? "consumables"]}</span> },
+          {
+            id: "limit",
+            header: "Value limit",
+            cell: ({ row }) => <span className="text-sm tabular-nums">{row.original.valueLimitAed != null ? `AED ${row.original.valueLimitAed.toLocaleString("en-AE")}` : "—"}</span>,
+          },
+          {
+            id: "exclusions",
+            header: "Exclusions",
+            cell: ({ row }) => {
+              /* The contract's own text, else the library's standard exclusions for the service (marked). */
+              const e = row.original;
+              const ex = effectiveExclusions(e.serviceId, e.exclusions);
+              return ex.text ? (
+                <div className="grid max-w-[280px] gap-0.5 text-sm">
+                  <TruncatedText>{ex.text}</TruncatedText>
+                  {ex.standard ? <span className="text-muted-foreground text-xs">Standard (Scope of Works Library {libraryEntry(e.serviceId)?.ref})</span> : null}
+                </div>
+              ) : (
+                <span className="text-sm">—</span>
+              );
+            },
+          },
+          ...(canEdit
+            ? [
+                {
+                  id: "actions",
+                  header: () => <span className="sr-only">Actions</span>,
+                  cell: ({ row }: { row: { original: Entitlement } }) => (
+                    <div className="flex justify-end">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          setEditing(row.original);
+                          setEditOpen(true);
+                        }}
+                      >
+                        Edit
+                      </Button>
+                    </div>
+                  ),
+                },
+              ]
+            : []),
+        ]}
+      />
       {editing ? (
         <TermsDialog
           open={editOpen}

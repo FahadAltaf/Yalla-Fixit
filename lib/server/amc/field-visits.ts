@@ -11,7 +11,7 @@ import {
   type FieldVisitStage,
   type FieldVisitWhen,
 } from "@/lib/amc/field-visits";
-import { ACTIVE_FIELD_VISIT_STAGES } from "@/lib/amc/visit-list-scope";
+import { ACTIVE_FIELD_VISIT_FILTER } from "@/lib/amc/visit-list-scope";
 import { addDays } from "@/lib/amc/ppm";
 import { safeTerm } from "@/lib/server/amc/business";
 import { ContractError, isMissingTable } from "@/lib/server/amc/contracts";
@@ -120,9 +120,10 @@ function applyFilters<Q extends { eq: any; in: any; or: any; lt: any; gte: any; 
   return q;
 }
 
-function stageFilter<Q extends { in: (c: string, v: string[]) => Q; eq: (c: string, v: string) => Q }>(q: Q, stage: FieldVisitFilters["stage"]): Q {
+function stageFilter<Q extends { in: (c: string, v: string[]) => Q; eq: (c: string, v: string) => Q; or: (f: string) => Q }>(q: Q, stage: FieldVisitFilters["stage"]): Q {
   if (!stage || stage === "open") return q.in("stage", OPEN_FIELD_VISIT_STAGES as string[]);
-  if (stage === "active") return q.in("stage", ACTIVE_FIELD_VISIT_STAGES as string[]);
+  /* The default: ready, in progress, review and done, and a call out (or other non-planned visit) still to plan. */
+  if (stage === "active") return q.or(ACTIVE_FIELD_VISIT_FILTER);
   if (stage === "all") return q;
   return q.eq("stage", stage);
 }
@@ -131,7 +132,7 @@ export async function listFieldVisits(
   admin: Admin,
   filters: FieldVisitFilters,
   viewer: FieldVisitViewer,
-): Promise<{ migrated: boolean; visits: FieldVisitRow[]; total: number; stageCounts: Record<FieldVisitStage, number>; today: string }> {
+): Promise<{ migrated: boolean; visits: FieldVisitRow[]; total: number; stageCounts: Record<FieldVisitStage, number>; activeCount: number; today: string }> {
   const today = todayInDubai();
   const emptyCounts = Object.fromEntries(FIELD_VISIT_STAGES.map((s) => [s, 0])) as Record<FieldVisitStage, number>;
   /*
@@ -148,9 +149,11 @@ export async function listFieldVisits(
   const counts = FIELD_VISIT_STAGES.map((stage) =>
     applyFilters(admin.from(VIEW).select("id", { count: "exact", head: true }), filters, viewer, today).eq("stage", stage),
   );
-  const [pageRes, ...countRes] = await Promise.all([page, ...counts]);
+  /* The default listing's own count: its stages and the call outs still to plan. */
+  const active = stageFilter(applyFilters(admin.from(VIEW).select("id", { count: "exact", head: true }), filters, viewer, today), "active");
+  const [pageRes, activeRes, ...countRes] = await Promise.all([page, active, ...counts]);
   if (pageRes.error) {
-    if (isMissingTable(pageRes.error)) return { migrated: false, visits: [], total: 0, stageCounts: emptyCounts, today };
+    if (isMissingTable(pageRes.error)) return { migrated: false, visits: [], total: 0, stageCounts: emptyCounts, activeCount: 0, today };
     throw new ContractError(pageRes.error.message, 500);
   }
   const rows = (pageRes.data ?? []) as unknown as Row[];
@@ -158,7 +161,7 @@ export async function listFieldVisits(
 
   const visits = await enrichRows(admin, rows, today);
 
-  return { migrated: true, visits, total: pageRes.count ?? visits.length, stageCounts, today };
+  return { migrated: true, visits, total: pageRes.count ?? visits.length, stageCounts, activeCount: activeRes.count ?? 0, today };
 }
 
 /* Rows of the view as the screens read them: the crew's names and a planned visit's services, in two batched reads for these rows only. */

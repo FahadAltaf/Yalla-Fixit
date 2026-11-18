@@ -275,14 +275,27 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
     last fetch is more than a moment old, then from the server, not the cache.
   */
   const settingsAt = useRef(0);
+  /*
+    Whether the wizard is still open (18 Nov 2026). A fetch's answer is kept
+    while it is: dropping it when this effect re-ran (React runs it twice in
+    development, and again on reaching Review) left the settings unread for
+    good -- the account managers said "Loading…" forever -- because the run
+    after it skipped fetching, seeing one already made.
+  */
+  const open = useRef(true);
+  useEffect(() => {
+    open.current = true;
+    return () => {
+      open.current = false;
+    };
+  }, []);
   useEffect(() => {
     const opening = settingsAt.current === 0;
     if (!opening && (!onReviewStep || Date.now() - settingsAt.current < 15_000)) return;
     settingsAt.current = Date.now();
-    let cancelled = false;
     (opening ? amcSettingsService.getSettings() : amcFresh(() => amcSettingsService.getSettings()))
       .then((response) => {
-        if (!cancelled) setLiveSettings(response.settings);
+        if (open.current) setLiveSettings(response.settings);
       })
       .catch((error) => {
         console.error(error);
@@ -292,11 +305,8 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
         /* Rows still have to follow some catalogue, or a ticked service the
            server will refuse could never be unticked. The shipped list is
            what the previews already fall back to. */
-        if (!cancelled) setLiveSettings((current) => current ?? getAmcSettingsDefaults());
+        if (open.current) setLiveSettings((current) => current ?? getAmcSettingsDefaults());
       });
-    return () => {
-      cancelled = true;
-    };
   }, [onReviewStep]);
 
   const loadSubmission = useCallback(

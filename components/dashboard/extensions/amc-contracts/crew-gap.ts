@@ -5,7 +5,7 @@ import { TRADE_LABELS } from "@/lib/amc/client-profile";
 /**
  * Why no crew covers a trade, in words: nobody on the roster, nobody with
  * the trade on their AMC profile (the usual reason: skills are recorded
- * under AMC → Technicians), or everyone who has it is busy or away.
+ * under Workforce → People → AMC skills), or everyone who has it is busy or away.
  */
 export function crewGapMessages(s: Pick<VisitSuggestion, "suggested" | "skilledByTrade" | "rosterSize">): string[] {
   if (!s.suggested.uncovered.length) return [];
@@ -15,7 +15,7 @@ export function crewGapMessages(s: Pick<VisitSuggestion, "suggested" | "skilledB
   const busy = s.suggested.uncovered.filter((t) => (s.skilledByTrade?.[t] ?? 0) > 0);
   return [
     ...(none.length
-      ? [`No technician has ${none.map(label).join(", ")} confirmed on their AMC profile (trainee or expired certificate does not count). Add the skill under AMC → Technicians.`]
+      ? [`No technician has ${none.map(label).join(", ")} confirmed on their AMC profile (trainee or expired certificate does not count). Add the skill under Workforce → People → AMC skills.`]
       : []),
     ...busy.map((t) => `All ${s.skilledByTrade[t]} technician${s.skilledByTrade[t] === 1 ? "" : "s"} with ${label(t)} are booked, on leave or lack the site's access at that time. Try another time or day.`),
   ];

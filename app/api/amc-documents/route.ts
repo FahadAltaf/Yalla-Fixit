@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { AMC_DOCUMENT_MAX_BYTES, DOCUMENT_LEVELS, documentMetaSchema, type DocumentLevel } from "@/lib/amc/client-profile";
 import { UUID } from "@/lib/server/amc/business-schemas";
+import { canReadAssessment } from "@/lib/amc/access";
 import { listDocuments, uploadDocument, type DocumentRecord } from "@/lib/server/amc/client-profile";
 import { contractErrorResponse, requireContractAccess, requireManagedContract, type ContractGate } from "@/lib/server/amc/contract-access";
 import { refuseCustomerEdit } from "@/lib/server/amc/customer-access";
@@ -68,23 +69,32 @@ async function authorise(
     if (!(mode === "read" ? canRead : canWrite)) return notFound;
     return { ok: true, customerId: data.customer_id };
   }
-  if (level === "visit" || level === "call_out") {
-    /* A visit's or call out's documents (gate pass, permit, service report) follow its contract; AMC Visits / Call outs rights also write. */
-    const table = level === "visit" ? "amc_visits" : "amc_call_outs";
+  if (level === "visit" || level === "call_out" || level === "additional_work") {
+    /* A visit's, call out's or additional work's documents (gate pass, permit, service report) follow its contract; their own page rights also write. */
+    const table = level === "visit" ? "amc_visits" : level === "call_out" ? "amc_call_outs" : "amc_additional_works";
     const { data } = await gate.admin.from(table).select("contract_id").eq("id", entityId).maybeSingle<{ contract_id: string }>();
-    if (!data) return { ok: false, response: NextResponse.json({ error: level === "visit" ? "Visit not found." : "Call out not found." }, { status: 404 }) };
+    if (!data) return { ok: false, response: NextResponse.json({ error: level === "visit" ? "Visit not found." : level === "call_out" ? "Call out not found." : "Additional work not found." }, { status: 404 }) };
     const fieldRight =
       level === "visit"
         ? mode === "read"
           ? gate.visits.view
           : gate.visits.create || gate.visits.edit
-        : gate.can(ResourceType.AMC_CALL_OUTS, mode === "read" ? ActionType.VIEW : ActionType.EDIT);
+        : gate.can(level === "call_out" ? ResourceType.AMC_CALL_OUTS : ResourceType.AMC_ADDITIONAL_WORKS, mode === "read" ? ActionType.VIEW : ActionType.EDIT);
     if (!fieldRight) {
       const managed = await requireManagedContract(gate, data.contract_id, mode);
       if (!managed.ok) return managed;
     }
     const { data: c } = await gate.admin.from("amc_contracts").select("customer_id").eq("id", data.contract_id).maybeSingle<{ customer_id: string | null }>();
     return { ok: true, customerId: c?.customer_id ?? null };
+  }
+  if (level === "site_visit") {
+    /* A site visit's passes (17 Nov 2026): read as the site visit is read; added by whoever may change it. */
+    const { data } = await gate.admin.from("amc_assessments").select("customer_id, created_by, assessor_id").eq("id", entityId).maybeSingle<{ customer_id: string | null; created_by: string | null; assessor_id: string | null }>();
+    const notFound = { ok: false as const, response: NextResponse.json({ error: "Site visit not found." }, { status: 404 }) };
+    if (!data || !canReadAssessment(gate.actor, data.created_by, data.assessor_id)) return notFound;
+    const mayEdit = gate.canApprove || gate.actor.ops.edit || data.created_by === gate.userId || data.assessor_id === gate.userId;
+    if (mode === "write" && !mayEdit) return { ok: false, response: NextResponse.json({ error: "You cannot change this site visit." }, { status: 403 }) };
+    return { ok: true, customerId: data.customer_id };
   }
   return { ok: false, response: NextResponse.json({ error: "Documents for this kind of record arrive in a later phase." }, { status: 400 }) };
 }

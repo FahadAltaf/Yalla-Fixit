@@ -407,6 +407,10 @@ function renderBlock(block: Block, photos: Photos): (Paragraph | Table)[] {
         ),
       ];
 
+    /* Service reports only: they are not exported to Word. */
+    case "photos":
+      return [];
+
     case "signatures": {
       const side = (party: string) =>
         new TableCell({

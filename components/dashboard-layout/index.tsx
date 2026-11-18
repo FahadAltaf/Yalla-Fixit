@@ -183,12 +183,8 @@ const CHROMELESS_ROUTES = ["/scheduling/display"];
 const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
   const { userProfile } = useAuth();
   const unread = useUnreadNotifications(Boolean(userProfile));
-  const nav = getNavData(userProfile || ({} as User)).navMain;
-  /* 30 Oct: the inbox's unread count beside Notifications. */
-  const navMain = nav.map((section) => ({
-    ...section,
-    items: section.items.map((item) => (item.url === "/notifications" ? { ...item, unreadCount: unread || undefined } : item)),
-  }));
+  /* Notifications and its unread count are in the navbar (17 Nov 2026). */
+  const navMain = getNavData(userProfile || ({} as User)).navMain;
   const layoutPathname = usePathname();
 
   // Full-bleed routes (the scheduling wall display) still need the auth gate
@@ -271,7 +267,7 @@ const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
               <SidebarTrigger className="[&_svg]:!size-5" />
             </div>
           </header> */}
-          <DashboardHeader />
+          <DashboardHeader unread={unread} />
 
           <main className="@container/main mx-auto size-full flex-1 px-4 py-6 sm:px-6">
             {children}

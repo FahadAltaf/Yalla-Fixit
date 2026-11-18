@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { accessFromPasses, startProblems } from "@/lib/amc/visits";
+import { accessFromPasses, defaultPassStatus, startProblems } from "@/lib/amc/visits";
 import { refreshPropertyVisitsAccess } from "@/lib/server/amc/visits";
 import { fakeSupabase } from "./fake-supabase";
 
@@ -51,4 +51,41 @@ test("a property pass valid on the visit day approves the visits there", async (
   const v = w.table("amc_visits")[0];
   assert.equal(v.access_status, "approved");
   assert.equal(v.status, "confirmed", "released from waiting for access");
+});
+
+/* 17 Nov 2026: each pass has an access type and a status. */
+const typed = (id: string, status: "approved" | "pending" | "rejected" | "expired" | "not_required", validUntil: string | null = null, uploadedAt = "2026-11-17T10:00:00Z") => ({ id, validUntil, uploadedAt, status });
+
+test("a pass for an access rule starts approved; one for no rule starts pending", () => {
+  assert.equal(defaultPassStatus("rule-1"), "approved");
+  assert.equal(defaultPassStatus(null), "pending");
+});
+
+test("only an approved pass valid on the day approves the visit", () => {
+  assert.equal(accessFromPasses([typed("a", "pending"), typed("b", "approved", "2026-11-25")], day, true).status, "approved");
+  assert.deepEqual(accessFromPasses([typed("a", "pending", "2026-11-25")], day, true), { status: "pending", validUntil: "2026-11-25", documentId: "a" });
+  assert.equal(accessFromPasses([typed("a", "rejected")], day, true).status, "rejected");
+  assert.equal(accessFromPasses([typed("a", "not_required")], day, true).status, "not_required");
+});
+
+test("pending beats rejected; approved passes that ran out leave it expired", () => {
+  assert.equal(accessFromPasses([typed("a", "rejected"), typed("b", "pending")], day, true).status, "pending");
+  assert.equal(accessFromPasses([typed("a", "approved", "2026-11-10")], day, true).status, "expired");
+  assert.equal(accessFromPasses([typed("a", "expired")], day, true).status, "expired");
+});
+
+test("a pass from before statuses counts as approved", () => {
+  assert.equal(accessFromPasses([{ ...pass("a", null), status: null }], day, true).status, "approved");
+});
+
+test("a visit starts only with an approved pass valid on the day; the message says what is wrong", () => {
+  const base = { status: "confirmed", contractActive: true, technicianIds: ["t1"], scheduledStart: "2026-11-20T05:00:00Z", scheduledEnd: "2026-11-20T07:00:00Z", clientConfirmation: "confirmed" };
+  assert.deepEqual(startProblems({ ...base, accessStatus: "approved" }), []);
+  assert.deepEqual(startProblems({ ...base, accessStatus: "not_required" }), []);
+  for (const [status, word] of [["pending", "approved"], ["rejected", "rejected"], ["expired", "runs out"]] as const) {
+    const problems = startProblems({ ...base, accessStatus: status });
+    assert.equal(problems.length, 1);
+    assert.equal(problems[0].tab, "access");
+    assert.match(problems[0].text, new RegExp(word));
+  }
 });

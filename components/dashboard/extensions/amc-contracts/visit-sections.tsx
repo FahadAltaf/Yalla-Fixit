@@ -2,7 +2,7 @@
 
 import { useId, useState, type ReactNode } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
-import { CalendarCheck, CheckCircle2, Copy, ExternalLink, FileText, KeyRound, Mail, MessageCircle, MessageSquare, PhoneCall, Play, Plus, Save, Search, ShieldCheck, SquarePen, Trash2, Users, XCircle, type LucideIcon } from "lucide-react";
+import { CalendarCheck, CheckCircle2, FileText, KeyRound, Mail, MessageCircle, MessageSquare, PhoneCall, Play, Plus, Save, Search, Send, ShieldCheck, SquarePen, Trash2, Users, XCircle, type LucideIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
@@ -34,7 +34,8 @@ import { visitsService, type VisitDetail, type VisitSuggestion } from "@/modules
 
 import { Field, Muted, Panel, PanelEmpty, SectionDialog } from "./call-out-shared";
 import { AccessRuleDialog } from "./profile/property-panels";
-import { useAmcData } from "./use-amc-data";
+import { SendDialog } from "./send-options";
+import { PassTypeBadges, PassTypeFields, newPassType, passTypeOf, type PassType } from "./pass-fields";
 import { formatContractDate, formatDateTime } from "./contract-status";
 import { CrewPicker, crewOptions, crewSummary, differsFromSuggested } from "./crew-picker";
 import {
@@ -134,6 +135,15 @@ export function StartVisitAction({
   const contractActive = v.contractStatus === "active";
   const [open, setOpen] = useState(false);
   const startable = ["not_scheduled", "scheduled", "rescheduled", "confirmed", "pending_access"].includes(v.status);
+  /* Started by the office (18 Nov 2026): said in the header; in progress once the crew arrives on the phone. */
+  if (v.startedAt) {
+    return (
+      <Badge variant="secondary" className="bg-success/10 text-success h-9 gap-1.5 border-0 px-3 font-medium" title={`Started ${formatDateTime(v.startedAt)}`}>
+        <Play className="size-3.5" />
+        Started {formatDateTime(v.startedAt)}
+      </Badge>
+    );
+  }
   if (!canEdit || !startable) return null;
   const problems = startProblems({
     status: v.status,
@@ -155,7 +165,7 @@ export function StartVisitAction({
       "start",
       async () => {
         await visitsService.visitAction(v.id, { action: "start" });
-        toast.success("Visit started. The inspector can fill in the job sheet now.");
+        toast.success("Visit started. It shows on the crew's phone, and is in progress once they arrive.");
         setOpen(false);
         await changed();
       },
@@ -252,9 +262,10 @@ const attemptColumns: ColumnDef<Attempt>[] = [
 
 export function ConfirmationSection({ visit: v, canEdit, working, setWorking, changed }: VisitSectionProps) {
   const run = useRun({ setWorking });
-  const [prepared, setPrepared] = useState<{ text: string; link: string | null } | null>(null);
+  /* Asking the client to confirm: WhatsApp or email, as the contract allows (17 Nov 2026). */
+  const [requesting, setRequesting] = useState(false);
   const [logging, setLogging] = useState(false);
-  const { confirm, dialog: confirmDialog } = useConfirm();
+  const { dialog: confirmDialog } = useConfirm();
   const [channel, setChannel] = useState<Channel>("call");
   const [outcome, setOutcome] = useState<AttemptOutcome>("no_answer");
   const [note, setNote] = useState("");
@@ -267,35 +278,9 @@ export function ConfirmationSection({ visit: v, canEdit, working, setWorking, ch
   const offeredChannels = allowedChannels.length ? allowedChannels : CHANNELS;
   const attemptChannel: Channel = offeredChannels.includes(channel) ? channel : offeredChannels[0];
 
-  /* Asked first (11 Nov 2026): it acts at once, so it is confirmed like every other step. */
-  const requestBy = (by: "whatsapp" | "email") =>
-    void confirm({ title: by === "email" ? "Email the client to confirm the visit?" : "Send the confirmation request by WhatsApp?", description: by === "email" ? "Emails the client asking them to confirm the day and time. It counts as one of the attempts to reach them." : "Records the request (it counts as an attempt) and opens WhatsApp with the message ready to send.", confirmText: by === "email" ? "Send email" : "Open WhatsApp" }).then((ok) => {
-      if (ok) void requestByNow(by);
-    });
-  const requestByNow = (by: "whatsapp" | "email") =>
-    void run(
-      by,
-      async () => {
-        const result = await visitsService.visitAction(v.id, { action: "request_confirmation", channel: by });
-        if (by === "whatsapp") {
-          setPrepared({ text: result.message ?? "", link: result.whatsapp ?? null });
-          if (result.whatsapp) {
-            window.open(result.whatsapp, "_blank", "noopener");
-            toast.success("WhatsApp message prepared");
-          } else {
-            toast.warning("The client has no phone number on file: copy the message and send it yourself.");
-          }
-        } else if (result.outcome === "sent") {
-          toast.success("Confirmation request emailed");
-        } else if (result.outcome === "no_recipient") {
-          toast.error("The client has no email address on file.");
-        } else {
-          toast.error("The email could not be sent. Try again, or send it by WhatsApp.");
-        }
-        await changed();
-      },
-      "Could not send the request.",
-    );
+  /* The request goes by the contract's channels; with neither WhatsApp nor email allowed, both are offered. */
+  const requestChannels = (["whatsapp", "email"] as const).filter((c) => offeredChannels.includes(c));
+  const sendChannels = requestChannels.length ? requestChannels : (["whatsapp", "email"] as const);
 
   const logAttempt = () =>
     void run(
@@ -310,15 +295,6 @@ export function ConfirmationSection({ visit: v, canEdit, working, setWorking, ch
       "Could not log the attempt.",
     );
 
-  const copy = async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      toast.success("Message copied");
-    } catch {
-      toast.error("Could not copy the message.");
-    }
-  };
-
   return (
     <>
       <Panel
@@ -331,12 +307,10 @@ export function ConfirmationSection({ visit: v, canEdit, working, setWorking, ch
                 <PhoneCall className="size-4" />
                 Log an attempt
               </Button>
-              <SubmitButton variant="outline" pending={working === "email"} pendingLabel="Sending…" disabled={working !== null} icon={<Mail className="size-4" />} onClick={() => requestBy("email")}>
-                Send by email
-              </SubmitButton>
-              <SubmitButton pending={working === "whatsapp"} pendingLabel="Preparing…" disabled={working !== null} icon={<MessageCircle className="size-4" />} onClick={() => requestBy("whatsapp")}>
-                Send by WhatsApp
-              </SubmitButton>
+              <Button disabled={working !== null} onClick={() => setRequesting(true)}>
+                <Send className="size-4" />
+                Ask to confirm
+              </Button>
             </>
           ) : null
         }
@@ -368,26 +342,22 @@ export function ConfirmationSection({ visit: v, canEdit, working, setWorking, ch
         </Rows>
       </Panel>
 
-      {prepared ? (
-        <div className="border-brand/30 bg-brand-50 grid gap-3 rounded-xl border px-5 py-4">
-          <p className="text-sm font-medium">The WhatsApp message</p>
-          <p className="text-sm whitespace-pre-wrap">{prepared.text}</p>
-          <div className="flex flex-wrap gap-2">
-            <Button size="sm" variant="outline" onClick={() => void copy(prepared.text)}>
-              <Copy className="size-3.5" />
-              Copy
-            </Button>
-            {prepared.link ? (
-              <Button size="sm" variant="outline" asChild>
-                <a href={prepared.link} target="_blank" rel="noopener noreferrer">
-                  <ExternalLink className="size-3.5" />
-                  Open WhatsApp
-                </a>
-              </Button>
-            ) : null}
-          </div>
-        </div>
-      ) : null}
+      <SendDialog
+        open={requesting}
+        onOpenChange={setRequesting}
+        title="Ask the client to confirm the visit"
+        description="Asks the client to confirm the day and time. It counts as one of the attempts to reach them."
+        what="the confirmation request"
+        noun="Confirmation request"
+        channels={sendChannels}
+        hasLink={false}
+        defaultChannel="whatsapp"
+        onSend={async (channel) => {
+          const r = await visitsService.visitAction(v.id, { action: "request_confirmation", channel: channel === "email" ? "email" : "whatsapp" });
+          return { outcome: (r.outcome as "sent" | "failed" | "no_recipient" | "prepared" | undefined) ?? "prepared", message: r.message ?? "", whatsapp: r.whatsapp ?? null, link: null };
+        }}
+        onDone={changed}
+      />
 
       {/* The attempts as every list in the product: a data table in its card (11 Nov 2026). */}
       <SectionCard title="Attempts" icon={<PhoneCall />} description="Every request and call to the client about this visit, newest first." bodyClassName="border-t">
@@ -479,23 +449,16 @@ export function AccessSection({ visit: v, canEdit, working, setWorking, changed 
     setAddingRule((n) => n + 1);
   };
   const ids = { until: useId(), note: useId(), file: useId() };
+  /* Which access rule the pass is for, and its status (17 Nov 2026). */
+  const [passType, setPassType] = useState<PassType>(() => newPassType(v.accessRules));
 
   /*
     The visit's passes (17 Nov 2026): each one its own file with its own
-    valid-until and note. The visit's access is worked out from them on the
-    server -- approved when one is valid on the visit day -- so there is no
-    separate status, date or note to keep in step.
+    valid-until, note, access type and status, then the property's, which
+    count for this visit too (changed on the property's page). The visit's
+    access is worked out from them on the server.
   */
-  const passes = useAmcData(() => clientProfileService.documents({ level: "visit", entityId: v.id }), `visit-passes|${v.id}`);
-  /* The property's passes count for this visit too; they are changed on the property's page. */
-  const propertyPasses = useAmcData(
-    () => (v.propertyId ? clientProfileService.documents({ level: "property", entityId: v.propertyId }) : Promise.resolve({ documents: [], migrated: true })),
-    `property-passes|${v.propertyId ?? "none"}`,
-  );
-  const passList = [
-    ...(passes.data?.documents ?? []).filter((d) => d.category === "Gate pass" && !d.superseded),
-    ...(propertyPasses.data?.documents ?? []).filter((d) => d.category === "Gate pass" && !d.superseded),
-  ];
+  const passList = v.passes;
   const visitDay = v.scheduledStart ? v.scheduledStart.slice(0, 10) : v.targetDate;
 
   const openPass = (documentId: string) =>
@@ -512,12 +475,14 @@ export function AccessSection({ visit: v, canEdit, working, setWorking, changed 
     setPassFiles([]);
     setValidUntil("");
     setNote("");
+    setPassType(newPassType(v.accessRules));
     setFileKey((k) => k + 1);
     setAdding(true);
   };
-  const startEdit = (d: { id: string; fileName: string; expiresOn: string | null; notes: string | null }) => {
+  const startEdit = (d: VisitDetail["passes"][number]) => {
     setValidUntil(d.expiresOn ?? "");
     setNote(d.notes ?? "");
+    setPassType(passTypeOf(d));
     setEditingPass({ id: d.id, fileName: d.fileName });
   };
 
@@ -527,7 +492,7 @@ export function AccessSection({ visit: v, canEdit, working, setWorking, changed 
       "access",
       async () => {
         for (const file of passFiles) {
-          await clientProfileService.uploadDocument({
+          const { document } = await clientProfileService.uploadDocument({
             file,
             level: "visit",
             entityId: v.id,
@@ -536,11 +501,14 @@ export function AccessSection({ visit: v, canEdit, working, setWorking, changed 
             expiresOn: validUntil || null,
             notes: note.trim() || null,
           });
+          /* Its access type and status; the visit's access follows. */
+          if (v.passTypes) {
+            await visitsService.visitAction(v.id, { action: "pass", documentId: document.id, validUntil: validUntil || null, note: note.trim() || null, accessRuleId: passType.ruleId, accessStatus: passType.status });
+          }
         }
-        await visitsService.visitAction(v.id, { action: "passes_changed" });
+        if (!v.passTypes) await visitsService.visitAction(v.id, { action: "passes_changed" });
         toast.success(passFiles.length === 1 ? "Pass added" : `${passFiles.length} passes added`);
         setAdding(false);
-        passes.reload();
         await changed();
       },
       "Could not add the pass.",
@@ -550,10 +518,15 @@ export function AccessSection({ visit: v, canEdit, working, setWorking, changed 
     void run(
       "access",
       async () => {
-        await visitsService.visitAction(v.id, { action: "pass", documentId: editingPass!.id, validUntil: validUntil || null, note: note.trim() || null });
+        await visitsService.visitAction(v.id, {
+          action: "pass",
+          documentId: editingPass!.id,
+          validUntil: validUntil || null,
+          note: note.trim() || null,
+          ...(v.passTypes ? { accessRuleId: passType.ruleId, accessStatus: passType.status } : {}),
+        });
         toast.success("Pass saved");
         setEditingPass(null);
-        passes.reload();
         await changed();
       },
       "Could not save the pass.",
@@ -567,7 +540,6 @@ export function AccessSection({ visit: v, canEdit, working, setWorking, changed 
       action: async () => {
         await visitsService.visitAction(v.id, { action: "pass_remove", documentId: d.id });
         toast.success("Pass removed");
-        passes.reload();
         await changed();
       },
     });
@@ -622,9 +594,7 @@ export function AccessSection({ visit: v, canEdit, working, setWorking, changed 
           </div>
         <div className="grid gap-2">
           <AccessHeading icon={<ShieldCheck />} title="Passes for this visit" count={passList.length} />
-          {passes.loading && !passes.data ? (
-            <div className="bg-muted/40 h-16 animate-pulse rounded-lg border" />
-          ) : passList.length === 0 ? (
+          {passList.length === 0 ? (
             <PanelEmpty icon={<FileText />} title="No pass on file" description="Add the gate pass or permit with how long it is valid. A visit can have more than one." />
           ) : (
             <ul className="grid gap-2">
@@ -645,6 +615,7 @@ export function AccessSection({ visit: v, canEdit, working, setWorking, changed 
                         >
                           {d.expiresOn ? (runsOut ? `Ran out ${formatContractDate(d.expiresOn)}` : `Valid until ${formatContractDate(d.expiresOn)}`) : "No end date"}
                         </Badge>
+                        {v.passTypes ? <PassTypeBadges pass={d} rules={v.accessRules} /> : null}
                         {onProperty ? (
                           <Badge variant="outline" className="font-normal" title="Held by the property, for every visit there. Change it on the property's page.">
                             Property pass
@@ -735,6 +706,7 @@ export function AccessSection({ visit: v, canEdit, working, setWorking, changed 
         >
           <DateSelect id={ids.until} value={validUntil} onChange={setValidUntil} />
         </Field>
+        {v.passTypes ? <PassTypeFields rules={v.accessRules} value={passType} onChange={setPassType} disabled={working !== null} /> : null}
         <Field id={ids.note} label="Note (optional)">
           <Textarea id={ids.note} rows={2} value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} placeholder="Gate number, who issued it, anything the crew should know" />
         </Field>
@@ -763,7 +735,7 @@ const dayList = (days: string[]) =>
 const hhmm = (time: string | null) => (time ? time.slice(0, 5) : null);
 
 /* A visit's rule as the property's rule record, for the shared rule dialog. */
-function ruleRecord(r: VisitDetail["accessRules"][number], propertyId: string): AccessRuleRecord {
+export function ruleRecord(r: VisitDetail["accessRules"][number], propertyId: string): AccessRuleRecord {
   return {
     id: r.id,
     propertyId,
@@ -781,7 +753,7 @@ function ruleRecord(r: VisitDetail["accessRules"][number], propertyId: string): 
   };
 }
 
-function AccessRuleItem({ rule: r, onEdit, disabled }: { rule: VisitDetail["accessRules"][number]; onEdit?: () => void; disabled?: boolean }) {
+export function AccessRuleItem({ rule: r, onEdit, disabled }: { rule: VisitDetail["accessRules"][number]; onEdit?: () => void; disabled?: boolean }) {
   const from = hhmm(r.permittedFrom);
   const to = hhmm(r.permittedTo);
   const hours = from && to ? `, ${from}–${to}` : from ? `, from ${from}` : to ? `, until ${to}` : "";

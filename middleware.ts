@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { crossSiteRejected } from "@/lib/server/request-origin";
 
 /**
- * CORS for the snagging API.
+ * CORS for the mobile app's API (Snagging and AMC visits).
  *
  * The inspector app calls these routes from another origin — the Expo
  * web build in the browser, and eventually the packaged app. Those calls
@@ -15,6 +15,12 @@ import { crossSiteRejected } from "@/lib/server/request-origin";
  * Preflight (OPTIONS) is answered here directly; every other response to
  * a snagging route gets the same allow headers stamped on it.
  */
+/*
+  The routes the mobile app calls with its bearer token: Snagging, and the
+  AMC visits it fills in (/api/amc-sync, the AMC visits workstream phase 5).
+*/
+const MOBILE_API_PREFIXES = ["/api/snagging/", "/api/amc-sync/"];
+
 const ALLOW_HEADERS = "authorization, content-type, x-client-info, apikey";
 const ALLOW_METHODS = "GET, POST, PATCH, PUT, DELETE, OPTIONS";
 
@@ -38,7 +44,7 @@ export function middleware(req: NextRequest) {
     cookie: a state-changing request from another site is refused here
     (lib/server/request-origin.ts).
   */
-  if (!req.nextUrl.pathname.startsWith("/api/snagging/")) {
+  if (!MOBILE_API_PREFIXES.some((prefix) => req.nextUrl.pathname.startsWith(prefix))) {
     if (crossSiteRejected({ method: req.method, origin, host: req.headers.get("host"), appUrl: process.env.NEXT_PUBLIC_APP_URL })) {
       return NextResponse.json({ error: "Cross-site request refused" }, { status: 403 });
     }

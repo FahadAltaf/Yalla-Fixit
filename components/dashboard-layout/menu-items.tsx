@@ -8,7 +8,6 @@ import {
 } from "@/types/types";
 import {
   BadgeCheck,
-  Bell,
   CalendarClock,
   ReceiptText,
   ChartColumn,
@@ -161,13 +160,6 @@ export const baseSectionsItems: MenuItem[] = [
     icon: <LayoutDashboard className="size-4 text-primary" />,
     isActive: false,
     resource: ResourceType.DASHBOARD,
-  },
-  /* Everyone's own inbox (BRD §6.2); no resource, so always shown. */
-  {
-    title: "Notifications",
-    url: "/notifications",
-    icon: <Bell className="size-4 text-primary" />,
-    isActive: false,
   },
   /* A technician's own compliance (BRD §6.7); those who can open the full report use that instead. */
   {

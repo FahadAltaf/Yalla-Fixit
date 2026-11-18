@@ -363,6 +363,14 @@ async function visitOf(admin: Admin, contractId: string, visitId: string): Promi
   return data;
 }
 
+/* Started by the office (18 Nov 2026): no longer moved, clubbed or removed. Nothing is refused before migration 20261118120000. */
+async function assertNotStarted(admin: Admin, visits: Row[]) {
+  const { data, error } = await admin.from("amc_visits").select("visit_no, started_at").in("id", visits.map((v) => String(v.id)));
+  if (error) return;
+  const started = ((data ?? []) as Row[]).find((r) => r.started_at);
+  if (started) throw new ContractError(`Visit ${String(started.visit_no)} has been started, so it can no longer be changed here.`, 409);
+}
+
 function assertPlannable(v: Row) {
   if (!PLANNABLE_STATUSES.includes(v.status as VisitStatus)) {
     throw new ContractError(`Visit ${String(v.visit_no)} is ${String(v.status).replace(/_/g, " ")} and can no longer be changed here.`, 409);
@@ -657,6 +665,7 @@ async function runPpmAction(admin: Admin, contractId: string, action: PpmAction,
     case "move": {
       const v = await visitOf(admin, contractId, action.visitId);
       assertPlannable(v);
+      await assertNotStarted(admin, [v]);
       const from = String(v.target_date);
       if (action.date === from) return { ok: true };
       const move = classifyMove({ windowStart: String(v.window_start), windowEnd: String(v.window_end) }, action.date, confirmed);
@@ -742,6 +751,7 @@ async function runPpmAction(admin: Admin, contractId: string, action: PpmAction,
     case "remove": {
       const v = await visitOf(admin, contractId, action.visitId);
       assertPlannable(v);
+      await assertNotStarted(admin, [v]);
       const { error } = await admin
         .from("amc_visits")
         .update({ status: "cancelled", status_reason: action.reason, updated_at: now })
@@ -778,6 +788,7 @@ async function runPpmAction(admin: Admin, contractId: string, action: PpmAction,
       if (!line || String(line.contract_id) !== contractId) throw new ContractError("That trade is not on this contract.", 404);
       const host = await visitOf(admin, contractId, String(line.visit_id));
       assertPlannable(host);
+      await assertNotStarted(admin, [host]);
       if (((host.lines ?? []) as Row[]).length < 2) throw new ContractError("That visit has only one trade: nothing to separate.", 409);
       const { data: visit, error: insertError } = await admin
         .from("amc_visits")
@@ -823,6 +834,7 @@ async function clubVisits(admin: Admin, contractId: string, visitIds: string[], 
   const visits = await Promise.all([...new Set(visitIds)].map((id) => visitOf(admin, contractId, id)));
   if (visits.length < 2) throw new ContractError("Choose at least two visits to club.", 400);
   visits.forEach(assertPlannable);
+  await assertNotStarted(admin, visits);
   const lineSets = visits.map((v) => ((v.lines ?? []) as Row[]).map((l) => String(l.entitlement_id)));
   const all = lineSets.flat();
   if (new Set(all).size !== all.length) throw new ContractError("Two visits of the same service cannot be clubbed.", 409);

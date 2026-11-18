@@ -3,6 +3,7 @@ import { z } from "zod";
 import { AMC_VAT_RATE_BP, filsToAed, toFils } from "@/lib/amc/pricing";
 import { TRADES } from "@/lib/amc/client-profile";
 import type { Trade } from "@/lib/amc/visits";
+import { sendChannelSchema } from "./send-channels";
 
 /**
  * AMC call outs, additional works and allowances (BRD v0.3 5.13, 5.14;
@@ -292,6 +293,8 @@ export interface QuotationLine {
   kind: "labour" | "material";
   quantity: number;
   unitPrice: number;
+  /** The rate card service it was priced from (18 Nov 2026), when picked from the card. */
+  serviceId?: string | null;
 }
 
 /**
@@ -376,6 +379,8 @@ export const callOutActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("cancel"), reason }).strict(),
   z.object({ action: z.literal("flag_misuse"), note: text(1000).min(3, "Say why the emergency line was misused") }).strict(),
   z.object({ action: z.literal("acknowledged") }).strict(),
+  /* The acknowledgement by WhatsApp, email or copied text (17 Nov 2026); it then counts as sent. */
+  z.object({ action: z.literal("send_acknowledgement"), channel: sendChannelSchema }).strict(),
 ]);
 export type CallOutAction = z.infer<typeof callOutActionSchema>;
 
@@ -405,6 +410,8 @@ const quotationLine = z
     kind: z.enum(["labour", "material"]),
     quantity: z.number().positive().max(10_000),
     unitPrice: z.number().min(0).max(1_000_000),
+    /* Picked from the rate card (18 Nov 2026); a typed line has none. */
+    serviceId: text(100).nullable().optional(),
   })
   .strict();
 
@@ -438,7 +445,7 @@ export const additionalWorkActionSchema = z.discriminatedUnion("action", [
     })
     .strict(),
   z.object({ action: z.literal("quote"), lines: z.array(quotationLine).min(1).max(60) }).strict(),
-  z.object({ action: z.literal("share") }).strict(),
+  z.object({ action: z.literal("share"), channel: sendChannelSchema.optional() }).strict(),
   z.object({ action: z.literal("approve"), evidence: text(1000).min(3, "Say how the client approved (email, signed quotation, WhatsApp)") , approvedBy: optionalText(160) }).strict(),
   z.object({ action: z.literal("reject"), reason }).strict(),
   /*

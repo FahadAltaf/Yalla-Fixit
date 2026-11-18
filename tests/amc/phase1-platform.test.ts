@@ -192,7 +192,9 @@ test("templates: saved changes override defaults; unknown templates are refused"
   assert.equal(templatesConfigSchema.safeParse({ emailServiceReport: { subject: "S", body: "B" } }).success, true);
   assert.equal(templatesConfigSchema.safeParse({ nope: { body: "B" } }).success, false);
   assert.equal(templateText("messageServiceReport", { messageServiceReport: { body: "Custom" } })?.body, "Custom");
-  assert.match(templateText("messageServiceReport", {})?.body ?? "", /\{Report link\}/);
+  /* No link in the WhatsApp text (18 Nov 2026): the PDF is attached by hand. */
+  assert.doesNotMatch(templateText("messageServiceReport", {})?.body ?? "", /\{Report link\}/);
+  assert.match(templateText("messageServiceReport", {})?.body ?? "", /attached/);
   assert.equal(templateText("missing", {}), null);
 });
 

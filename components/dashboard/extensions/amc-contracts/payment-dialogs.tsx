@@ -7,7 +7,6 @@ import {
   BellRing,
   CheckCheck,
   EllipsisVertical,
-  ExternalLink,
   HandCoins,
   Megaphone,
   Landmark,
@@ -52,6 +51,7 @@ import {
 import { formatContractDate } from "./contract-status";
 import { isSettled } from "./payment-status";
 import { StaffSelect } from "./people-pickers";
+import { SendDialog } from "./send-options";
 
 /**
  * Every AMC payment dialog (Phase 7), owned by whichever screen offers the
@@ -78,10 +78,11 @@ export function usePaymentDialogs(onChanged: () => unknown) {
   /* Kept after a dialog closes, so it animates out with its content. */
   const [current, setCurrent] = useState<Current | null>(null);
   const [openKind, setOpenKind] = useState<Kind | null>(null);
-  const [whatsapp, setWhatsapp] = useState<{ text: string; url: string } | null>(null);
-  const [whatsappOpen, setWhatsappOpen] = useState(false);
-  const [reminding, setReminding] = useState<string | null>(null);
-  const { confirm, dialog: confirmDialog } = useConfirm();
+  /* The reminder being sent: by WhatsApp, email or copied text (17 Nov 2026). */
+  const [reminder, setReminder] = useState<{ contractId: string; instalment: Pick<InstalmentRecord, "id" | "instalmentNo"> } | null>(null);
+  const [reminderOpen, setReminderOpen] = useState(false);
+  const reminding: string | null = null;
+  const { dialog: confirmDialog } = useConfirm();
 
   const open = (contractId: string, request: PaymentDialogRequest) => {
     setCurrent({ contractId, request });
@@ -98,29 +99,10 @@ export function usePaymentDialogs(onChanged: () => unknown) {
     setOpenKind(null);
   };
 
-  /* Email 4 goes from the server; the WhatsApp text comes back for the coordinator to send. */
-  /* Asked first (11 Nov 2026): it acts at once, so it is confirmed like every other step. */
-  const sendReminder = (contractId: string, instalment: Pick<InstalmentRecord, "id" | "instalmentNo">) =>
-    void confirm({ title: `Send a reminder for instalment ${instalment.instalmentNo}?`, description: "Emails the client a payment reminder and prepares a WhatsApp message to send yourself.", confirmText: "Send reminder" }).then((ok) => {
-      if (ok) void sendReminderNow(contractId, instalment);
-    });
-  const sendReminderNow = async (contractId: string, instalment: Pick<InstalmentRecord, "id" | "instalmentNo">) => {
-    setReminding(instalment.id);
-    try {
-      const result = await paymentsService.paymentAction(contractId, { action: "send_reminder", instalmentId: instalment.id });
-      if (result.outcome === "sent") toast.success(`Reminder emailed for instalment ${instalment.instalmentNo}`);
-      else if (result.outcome === "failed") toast.error("The reminder email could not be sent. Try again, or send the WhatsApp message.");
-      else toast.warning("The client has no email address, so no email was sent.");
-      if (result.whatsapp) {
-        setWhatsapp({ text: result.message ?? "", url: result.whatsapp });
-        setWhatsappOpen(true);
-      }
-      await onChanged();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Could not send the reminder.");
-    } finally {
-      setReminding(null);
-    }
+  /* Email 4 from the server, or the text for WhatsApp or to copy: the coordinator picks. */
+  const sendReminder = (contractId: string, instalment: Pick<InstalmentRecord, "id" | "instalmentNo">) => {
+    setReminder({ contractId, instalment });
+    setReminderOpen(true);
   };
 
   const request = current?.request;
@@ -165,7 +147,22 @@ export function usePaymentDialogs(onChanged: () => unknown) {
       />
       <HandoverDialog open={openKind === "handover"} onOpenChange={close} payment={payment} submit={submit} />
       {confirmDialog}
-      <WhatsappDialog open={whatsappOpen} onOpenChange={setWhatsappOpen} message={whatsapp} />
+      <SendDialog
+        open={reminderOpen}
+        onOpenChange={setReminderOpen}
+        title={`Send a reminder for instalment ${reminder?.instalment.instalmentNo ?? ""}`}
+        description="A payment reminder for the client. Email copies the account manager and Finance."
+        what="the payment reminder"
+        noun="Reminder"
+        hasLink={false}
+        onSend={async (channel) => {
+          const r = await paymentsService.paymentAction(reminder!.contractId, { action: "send_reminder", instalmentId: reminder!.instalment.id, channel });
+          return { outcome: r.outcome ?? "prepared", message: r.message ?? "", whatsapp: r.whatsapp ?? null, link: null };
+        }}
+        onDone={async () => {
+          await onChanged();
+        }}
+      />
     </>
   );
 
@@ -983,40 +980,3 @@ function EscalateDialog({ open, onOpenChange, instalment, submit }: BaseProps & 
   );
 }
 
-/** The reminder's WhatsApp text, ready for the coordinator to send from their own phone. */
-function WhatsappDialog({
-  open,
-  onOpenChange,
-  message,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  message: { text: string; url: string } | null;
-}) {
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <ActionDialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle>WhatsApp message</DialogTitle>
-          <DialogDescription>The reminder text is ready. Open WhatsApp to send it to the client.</DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-4 py-2">
-          <Textarea readOnly rows={8} value={message?.text ?? ""} aria-label="Prepared WhatsApp message" className="text-sm" />
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>
-            Close
-          </Button>
-          {message?.url ? (
-            <Button asChild>
-              <a href={message.url} target="_blank" rel="noreferrer" onClick={() => onOpenChange(false)}>
-                <ExternalLink className="size-4" />
-                Open WhatsApp
-              </a>
-            </Button>
-          ) : null}
-        </DialogFooter>
-      </ActionDialogContent>
-    </Dialog>
-  );
-}

@@ -46,6 +46,7 @@ import { formatContractDate } from "../contract-status";
 import { useAmcData } from "../use-amc-data";
 import { AssetHistoryDialog } from "./asset-history-dialog";
 import { useDialog } from "./use-dialog";
+import { PassTypeBadges, PassTypeFields, newPassType, passTypeOf, type PassType } from "../pass-fields";
 import { formatPhone } from "@/lib/phone/format-phone";
 import { AmcPhoneInput } from "@/components/dashboard/extensions/amc/components/amc-phone-input";
 import { TruncatedText } from "@/components/ui/truncated-text";
@@ -652,8 +653,12 @@ export function AccessRulesPanel({ propertyId, canEdit }: { propertyId: string; 
  * valid-until and note; visits count them with their own passes.
  */
 export function PropertyPassesPanel({ propertyId, canEdit }: { propertyId: string; canEdit: boolean }) {
-  const { data, error, loading, reload } = useAmcData(() => clientProfileService.documents({ level: "property", entityId: propertyId }), `property-passes|${propertyId}`);
-  const passes = (data?.documents ?? []).filter((d) => d.category === "Gate pass" && !d.superseded);
+  const { data, error, loading, reload } = useAmcData(() => clientProfileService.propertyPasses(propertyId), `property-pass-list|${propertyId}`);
+  const passes = data?.passes ?? [];
+  /* The rules a pass can be for (17 Nov 2026). */
+  const rulesData = useAmcData(() => clientProfileService.accessRules(propertyId), `property-pass-rules|${propertyId}`);
+  const rules = (rulesData.data?.rules ?? []).filter((r) => r.active).map((r) => ({ id: r.id, accessType: r.accessType, issuer: r.issuer }));
+  const [passType, setPassType] = useState<PassType>({ ruleId: null, status: "pending", touched: false });
   const { confirm, dialog } = useConfirm();
   const [open, setOpen] = useState<"new" | { id: string; fileName: string } | null>(null);
   const [files, setFiles] = useState<File[]>([]);
@@ -666,20 +671,23 @@ export function PropertyPassesPanel({ propertyId, canEdit }: { propertyId: strin
     setFiles([]);
     setValidUntil("");
     setNote("");
+    setPassType(newPassType(rules));
     setOpen("new");
   };
-  const startEdit = (d: { id: string; fileName: string; expiresOn: string | null; notes: string | null }) => {
+  const startEdit = (d: (typeof passes)[number]) => {
     setValidUntil(d.expiresOn ?? "");
     setNote(d.notes ?? "");
+    setPassType(passTypeOf(d));
     setOpen({ id: d.id, fileName: d.fileName });
   };
+  const typeInput = () => (data?.passTypes ? { accessRuleId: passType.ruleId, accessStatus: passType.status } : {});
   const save = () =>
     runSave(
       setBusy,
       async () => {
         if (open === "new") {
           for (const file of files) {
-            await clientProfileService.uploadDocument({
+            const { document } = await clientProfileService.uploadDocument({
               file,
               level: "property",
               entityId: propertyId,
@@ -688,11 +696,13 @@ export function PropertyPassesPanel({ propertyId, canEdit }: { propertyId: strin
               expiresOn: validUntil || null,
               notes: note.trim() || null,
             });
+            /* Its access type and status; the visits there follow. */
+            if (data?.passTypes) await clientProfileService.updatePropertyPass(propertyId, { documentId: document.id, validUntil: validUntil || null, note: note.trim() || null, ...typeInput() });
           }
-          await clientProfileService.refreshPropertyAccess(propertyId);
+          if (!data?.passTypes) await clientProfileService.refreshPropertyAccess(propertyId);
           toast.success(files.length === 1 ? "Pass added" : `${files.length} passes added`);
         } else if (open) {
-          await clientProfileService.updatePropertyPass(propertyId, { documentId: open.id, validUntil: validUntil || null, note: note.trim() || null });
+          await clientProfileService.updatePropertyPass(propertyId, { documentId: open.id, validUntil: validUntil || null, note: note.trim() || null, ...typeInput() });
           toast.success("Pass saved");
         }
         reload();
@@ -763,6 +773,7 @@ export function PropertyPassesPanel({ propertyId, canEdit }: { propertyId: strin
                     <Badge variant="secondary" className={`border-0 font-medium ${ranOut ? "bg-warning/10 text-warning" : "bg-success/10 text-success"}`}>
                       {d.expiresOn ? (ranOut ? `Ran out ${formatContractDate(d.expiresOn)}` : `Valid until ${formatContractDate(d.expiresOn)}`) : "No end date"}
                     </Badge>
+                    {data?.passTypes ? <PassTypeBadges pass={d} rules={rules} /> : null}
                   </div>
                   {d.notes ? <p className="mt-0.5 text-sm whitespace-pre-wrap">{d.notes}</p> : null}
                 </div>
@@ -806,6 +817,7 @@ export function PropertyPassesPanel({ propertyId, canEdit }: { propertyId: strin
               <DateSelect id="property-pass-until" value={validUntil} onChange={setValidUntil} />
               <p className="text-muted-foreground text-xs">Leave empty if it has no end date.</p>
             </div>
+            {data?.passTypes ? <PassTypeFields rules={rules} value={passType} onChange={setPassType} disabled={busy} /> : null}
             <div className="grid gap-1.5">
               <Label htmlFor="property-pass-note">Note (optional)</Label>
               <Textarea id="property-pass-note" rows={2} maxLength={500} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Gate number, who issued it, anything the crew should know" />

@@ -4,7 +4,8 @@ import { z } from "zod";
 import { UUID } from "@/lib/server/amc/business-schemas";
 import { contractErrorResponse, requireContractAccess } from "@/lib/server/amc/contract-access";
 import { refuseCustomerEdit } from "@/lib/server/amc/customer-access";
-import { refreshPropertyVisitsAccess } from "@/lib/server/amc/visits";
+import { ACCESS_STATUSES } from "@/lib/amc/visits";
+import { readPasses, refreshPropertyVisitsAccess, writePassType } from "@/lib/server/amc/visits";
 
 /*
   A property's gate passes (17 Nov 2026): uploaded as the property's "Gate
@@ -12,8 +13,10 @@ import { refreshPropertyVisitsAccess } from "@/lib/server/amc/visits";
   counts for every visit there, so after any change the visits not yet
   started have their access worked out again.
 
+  GET                                           -- the passes, with their access type and status
   POST  {}                                      -- after uploads: refresh the visits
-  PATCH { documentId, validUntil, note }        -- change one pass's date or note
+  PATCH { documentId, validUntil, note, accessRuleId?, accessStatus? }
+                                                -- change one pass (17 Nov 2026: its access type and status too)
   DELETE ?documentId=                           -- take one out of use (the file is kept)
 */
 
@@ -22,6 +25,8 @@ const patchSchema = z
     documentId: z.string().regex(UUID),
     validUntil: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use a date").nullable(),
     note: z.string().trim().max(500).nullable(),
+    accessRuleId: z.string().regex(UUID).nullable().optional(),
+    accessStatus: z.enum(ACCESS_STATUSES).optional(),
   })
   .strict();
 
@@ -38,6 +43,19 @@ async function passOf(admin: Parameters<typeof refreshPropertyVisitsAccess>[0], 
   const { data } = await admin.from("amc_documents").select("id, level, entity_id, category, superseded_by").eq("id", documentId).maybeSingle();
   const row = data as { level?: string; entity_id?: string; category?: string; superseded_by?: string | null } | null;
   return Boolean(row && row.level === "property" && String(row.entity_id) === propertyId && row.category === "Gate pass" && !row.superseded_by);
+}
+
+export async function GET(_req: NextRequest, ctx: { params: Promise<{ propertyId: string }> }) {
+  const { propertyId } = await ctx.params;
+  const gate = await requireContractAccess();
+  if (!gate.ok) return gate.response;
+  if (!UUID.test(propertyId)) return NextResponse.json({ error: "Property not found." }, { status: 404 });
+  try {
+    const { passes, typed } = await readPasses(gate.admin, "property", [propertyId]);
+    return NextResponse.json({ passes, passTypes: typed }, { headers: { "Cache-Control": "no-store" } });
+  } catch (error) {
+    return contractErrorResponse(error, "Could not load the passes");
+  }
 }
 
 export async function POST(_req: NextRequest, ctx: { params: Promise<{ propertyId: string }> }) {
@@ -64,6 +82,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ propertyI
       .update({ expires_on: parsed.data.validUntil, notes: parsed.data.note || null })
       .eq("id", parsed.data.documentId);
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    await writePassType(gate.admin, parsed.data.documentId, { accessRuleId: parsed.data.accessRuleId, accessStatus: parsed.data.accessStatus }, propertyId);
     return NextResponse.json({ visits: await refreshPropertyVisitsAccess(gate.admin, propertyId) });
   } catch (error) {
     return contractErrorResponse(error, "Could not save the pass");

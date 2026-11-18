@@ -134,10 +134,11 @@ export const AMC_TEMPLATE_DEFINITIONS: AmcTemplateDefinition[] = [
   {
     id: "messageServiceReport",
     kind: "message",
-    label: "WhatsApp: Service report link",
+    label: "WhatsApp: Service report",
     source: "BRD 5.12, 6.3 (workbook text pending)",
     draft: true,
-    body: "Dear {Client name}, the report of your {Service} visit on {Visit date} is ready: {Report link}",
+    /* No link (18 Nov 2026): the coordinator attaches the PDF to the WhatsApp message. */
+    body: "Dear {Client name}, please find attached the report of your {Service} visit on {Visit date}.",
   },
   {
     id: "messageRenewalProposal",

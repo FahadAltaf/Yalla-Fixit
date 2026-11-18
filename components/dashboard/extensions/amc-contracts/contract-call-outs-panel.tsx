@@ -6,6 +6,29 @@ import { ChevronDown, Database, Gauge, Hammer, History, PhoneCall, Plus } from "
 import type { ColumnDef } from "@tanstack/react-table";
 
 import { DataTable } from "@/components/data-table";
+import { ListTable } from "./list-table";
+import type { CallOutAllowance } from "@/modules/amc-contracts/call-outs-service";
+
+/* The house table (18 Nov 2026), as every list. */
+const ALLOWANCE_COLUMNS: ColumnDef<CallOutAllowance>[] = [
+  { id: "service", header: "Service", cell: ({ row }) => <span className="text-sm font-medium">{row.original.serviceLabel}</span> },
+  { id: "included", header: "Included", cell: ({ row }) => <span className="text-sm tabular-nums">{row.original.unlimited ? "Unlimited" : (row.original.included ?? "—")}</span> },
+  { id: "used", header: "Used", cell: ({ row }) => <span className="text-sm tabular-nums">{row.original.used}</span> },
+  { id: "booked", header: "Booked", cell: ({ row }) => <span className="text-sm tabular-nums">{row.original.reserved}</span> },
+  { id: "remaining", header: "Remaining", cell: ({ row }) => <span className="text-sm tabular-nums">{row.original.unlimited ? "Unlimited" : (row.original.remaining ?? "—")}</span> },
+  {
+    id: "state",
+    header: () => <span className="sr-only">State</span>,
+    cell: ({ row }) => {
+      const a = row.original;
+      return a.nearZero ? (
+        <Badge variant="secondary" className={cn("border-0 font-medium", a.remaining === 0 ? "bg-danger/10 text-danger" : "bg-warning/10 text-warning")}>
+          {a.remaining === 0 ? "Used up" : "Nearly used up"}
+        </Badge>
+      ) : null;
+    },
+  },
+];
 import { SectionCard, StatCard, StatCardGrid } from "@/components/dashboard/shared/kaizen";
 import { ErrorState, SectionSkeleton, StatGridSkeleton } from "@/components/dashboard/shared/kaizen-states";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -14,7 +37,6 @@ import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Money } from "@/components/ui/money";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { additionalWorkPageHref, visitPageHref } from "@/lib/amc/field-visits";
 import { cn } from "@/lib/utils";
 import { additionalWorksService } from "@/modules/amc-contracts/additional-works-service";
@@ -150,43 +172,12 @@ export function ContractCallOutsPanel({ contractId, contractOpen }: { contractId
           title="Allowances"
           description="Per service: included, used, booked by open call outs, and what is left."
           icon={<Gauge />}
-          bodyClassName="pb-2"
+          bodyClassName="border-t"
         >
           {allowances.data.allowances.length === 0 ? (
-            <p className="text-muted-foreground px-5 pb-4 text-sm">This contract has no counted services.</p>
+            <p className="text-muted-foreground px-5 py-4 text-sm">This contract has no counted services.</p>
           ) : (
-            <div className="overflow-x-auto">
-              <Table className="min-w-[620px]">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead className="pl-5">Service</TableHead>
-                    <TableHead>Included</TableHead>
-                    <TableHead>Used</TableHead>
-                    <TableHead>Booked</TableHead>
-                    <TableHead>Remaining</TableHead>
-                    <TableHead className="pr-5" />
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {allowances.data.allowances.map((a) => (
-                    <TableRow key={a.entitlementId}>
-                      <TableCell className="pl-5 font-medium">{a.serviceLabel}</TableCell>
-                      <TableCell className="tabular-nums">{a.unlimited ? "Unlimited" : (a.included ?? <Muted>—</Muted>)}</TableCell>
-                      <TableCell className="tabular-nums">{a.used}</TableCell>
-                      <TableCell className="tabular-nums">{a.reserved}</TableCell>
-                      <TableCell className="tabular-nums">{a.unlimited ? "Unlimited" : (a.remaining ?? <Muted>—</Muted>)}</TableCell>
-                      <TableCell className="pr-5">
-                        {a.nearZero ? (
-                          <Badge variant="secondary" className={cn("border-0 font-medium", a.remaining === 0 ? "bg-danger/10 text-danger" : "bg-warning/10 text-warning")}>
-                            {a.remaining === 0 ? "Used up" : "Nearly used up"}
-                          </Badge>
-                        ) : null}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+            <ListTable columns={ALLOWANCE_COLUMNS} data={allowances.data.allowances} />
           )}
         </SectionCard>
       ) : null}

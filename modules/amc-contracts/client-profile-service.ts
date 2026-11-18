@@ -8,6 +8,8 @@ import type {
 } from "@/lib/server/amc/client-profile";
 import type { DocumentLevel } from "@/lib/amc/client-profile";
 import { amcRequest } from "@/lib/amc/http-cache";
+import type { AccessStatus } from "@/lib/amc/visits";
+import type { PassView } from "@/lib/server/amc/visits";
 
 /** Browser calls for the client profile, property extras and documents (Phase 2). */
 
@@ -109,7 +111,8 @@ export const clientProfileService = {
     request<{ rule: AccessRuleRecord }>(`${p(propertyId)}/access-rules/${ruleId}`, json("PATCH", input)),
   /* A property's gate passes (17 Nov 2026): after uploads or rule changes, its visits' access is worked out again. */
   refreshPropertyAccess: (propertyId: string) => request<{ visits: number }>(`${p(propertyId)}/passes`, json("POST", {})),
-  updatePropertyPass: (propertyId: string, input: { documentId: string; validUntil: string | null; note: string | null }) =>
+  propertyPasses: (propertyId: string) => request<{ passes: PassView[]; passTypes: boolean }>(`${p(propertyId)}/passes`),
+  updatePropertyPass: (propertyId: string, input: { documentId: string; validUntil: string | null; note: string | null; accessRuleId?: string | null; accessStatus?: AccessStatus }) =>
     request<{ visits: number }>(`${p(propertyId)}/passes`, json("PATCH", input)),
   removePropertyPass: (propertyId: string, documentId: string) =>
     request<{ visits: number }>(`${p(propertyId)}/passes?documentId=${encodeURIComponent(documentId)}`, { method: "DELETE" }),

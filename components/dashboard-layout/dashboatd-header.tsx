@@ -3,6 +3,7 @@ import { SidebarTrigger } from "../ui/sidebar";
 import { Separator } from "../ui/separator";
 import { HomeIcon } from "lucide-react";
 import { ThemeToggle } from "./theme-toggle";
+import { NotificationsButton } from "./notifications-button";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -73,7 +74,7 @@ function crumbsFor(segments: string[]): Crumb[] {
   return [...crumbs, ...rest];
 }
 
-const DashboardHeader = () => {
+const DashboardHeader = ({ unread = 0 }: { unread?: number }) => {
   const pathname = usePathname();
 
   const segments = React.useMemo(
@@ -207,6 +208,7 @@ const DashboardHeader = () => {
           {/* The account moved to the foot of the sidebar, where it
               can carry a name and an email. What is left here is the one
               control that belongs to the view rather than the account. */}
+          <NotificationsButton unread={unread} />
           <ThemeToggle />
         </div>
       </div>

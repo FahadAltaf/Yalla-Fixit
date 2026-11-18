@@ -55,7 +55,8 @@ test("review is mandatory for pending works, quality concerns, missing evidence 
   assert.deepEqual(reviewReasons(facts()), []);
   assert.deepEqual(reviewReasons(facts({ pendingWorks: [{ description: "Replace valve", reason: "Part on order" }] })), ["pending_works"]);
   assert.deepEqual(reviewReasons(facts({ qualityConcern: true })), ["quality_concern"]);
-  assert.deepEqual(reviewReasons(facts({ photos: [{ kind: "before" }] })), ["missing_evidence"], "no after photo");
+  assert.deepEqual(reviewReasons(facts({ photos: [{ kind: "other" }] })), [], "any photo is evidence (the app files them by category)");
+  assert.deepEqual(reviewReasons(facts({ photos: [] })), ["missing_evidence"], "work done with no photo at all");
   assert.deepEqual(reviewReasons(facts({ clientSignatureName: null })), ["missing_evidence"], "no client signature");
   assert.deepEqual(reviewReasons(facts({ lines: [{ outcome: "completed" }, { outcome: "not_completed" }] })), ["incomplete_scope"]);
   assert.deepEqual(reviewReasons(facts({ lines: [{ outcome: "not_completed" }], photos: [], clientSignatureName: null })), ["incomplete_scope"], "nothing done needs no evidence");

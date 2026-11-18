@@ -241,6 +241,42 @@ export interface AccessRuleView {
   notes: string | null;
 }
 
+/** A property access rule row as a visit (or a site visit) shows it. */
+export const accessRuleView = (r: Row): AccessRuleView => ({
+  id: String(r.id),
+  accessType: String(r.access_type),
+  issuer: str(r.issuer),
+  leadTimeDays: r.lead_time_days === null || r.lead_time_days === undefined ? null : Number(r.lead_time_days),
+  permittedDays: strings(r.permitted_days),
+  permittedFrom: str(r.permitted_from),
+  permittedTo: str(r.permitted_to),
+  parking: str(r.parking),
+  contactName: str(r.contact_name),
+  contactPhone: str(r.contact_phone),
+  notes: str(r.notes),
+});
+
+/**
+ * A site visit's access (17 Nov 2026), the same way as a planned visit's:
+ * the property's active access rules, the site visit's own passes and the
+ * property's passes (which count for every visit there), and the status
+ * worked out from them for the visit day. Read when shown; nothing stored.
+ */
+export async function siteVisitAccess(admin: Admin, siteVisit: { id: string; propertyId: string | null; day: string }) {
+  const [{ data: rules, error }, own, onProperty] = await Promise.all([
+    siteVisit.propertyId
+      ? admin.from("amc_property_access_rules").select("id, access_type, issuer, lead_time_days, permitted_days, permitted_from, permitted_to, parking, contact_name, contact_phone, notes").eq("property_id", siteVisit.propertyId).eq("active", true)
+      : Promise.resolve({ data: [] as Row[], error: null }),
+    readPasses(admin, "site_visit", [siteVisit.id]),
+    readPasses(admin, "property", siteVisit.propertyId ? [siteVisit.propertyId] : []),
+  ]);
+  if (error) throw fail(error);
+  const accessRules = ((rules ?? []) as Row[]).map(accessRuleView);
+  const passes = [...own.passes, ...onProperty.passes];
+  const access = accessFromPasses(passes.map(passInput), siteVisit.day, accessRules.length > 0);
+  return { accessRules, passes, passTypes: own.typed && onProperty.typed, status: access.status, validUntil: access.validUntil };
+}
+
 /* ------------------------------------------------------------------ */
 /* Access from passes (17 Nov 2026)                                    */
 /* ------------------------------------------------------------------ */
@@ -276,19 +312,84 @@ async function writeVisitAccess(admin: Admin, v: Row, input: AccessWrite, nowIso
   }
 }
 
+/** A gate pass as the visit and the property show it (17 Nov 2026). */
+export interface PassView {
+  id: string;
+  /** visit: this visit's own; property: the property's, for every visit there. */
+  level: "visit" | "property" | "site_visit" | "call_out" | "additional_work";
+  entityId: string;
+  fileName: string;
+  expiresOn: string | null;
+  notes: string | null;
+  uploadedAt: string;
+  uploadedBy: string | null;
+  /** The property access rule it is for, or null. */
+  accessRuleId: string | null;
+  /** Where it stands; null on a pass from before statuses (counts as approved). */
+  accessStatus: AccessStatus | null;
+}
+
+const PASS_COLUMNS = "id, level, entity_id, file_name, expires_on, notes, uploaded_at, uploader:user_profile!amc_documents_uploaded_by_fkey(full_name, email)";
+/* Until 20261117120000 the columns are missing: the passes are read without them. */
+const missingPassColumns = (e: { code?: string; message?: string } | null) =>
+  Boolean(e && (e.code === "42703" || e.code === "PGRST204" || /access_(rule_id|status)/.test(e.message ?? "")));
+
+/** Gate passes still in use on the entities given, newest first. */
+export async function readPasses(admin: Admin, level: PassView["level"], ids: string[]): Promise<{ passes: PassView[]; typed: boolean }> {
+  if (!ids.length) return { passes: [], typed: true };
+  const query = (columns: string) =>
+    admin.from("amc_documents").select(columns).eq("level", level).in("entity_id", ids).eq("category", "Gate pass").is("superseded_by", null).order("uploaded_at", { ascending: false });
+  let typed = true;
+  let { data, error } = await query(`${PASS_COLUMNS}, access_rule_id, access_status`);
+  if (missingPassColumns(error)) {
+    typed = false;
+    ({ data, error } = await query(PASS_COLUMNS));
+  }
+  if (error) throw fail(error);
+  return {
+    typed,
+    passes: ((data ?? []) as unknown as Row[]).map((d) => {
+      const uploader = one(d.uploader);
+      return {
+        id: String(d.id),
+        level,
+        entityId: String(d.entity_id),
+        fileName: String(d.file_name),
+        expiresOn: str(d.expires_on),
+        notes: str(d.notes),
+        uploadedAt: String(d.uploaded_at),
+        uploadedBy: str(uploader?.full_name) ?? str(uploader?.email),
+        accessRuleId: str(d.access_rule_id),
+        accessStatus: (str(d.access_status) as AccessStatus | null) ?? null,
+      };
+    }),
+  };
+}
+
+/** A pass's access type and status. Throws a plain message before 20261117120000. */
+export async function writePassType(admin: Admin, documentId: string, input: { accessRuleId?: string | null; accessStatus?: AccessStatus }, propertyId: string | null) {
+  if (input.accessRuleId) {
+    const { data: rule } = await admin.from("amc_property_access_rules").select("id, property_id").eq("id", input.accessRuleId).maybeSingle<Row>();
+    if (!rule || str(rule.property_id) !== propertyId) throw new ContractError("That access rule is not on this property.", 400);
+  }
+  const changes: Row = {};
+  if (input.accessRuleId !== undefined) changes.access_rule_id = input.accessRuleId;
+  if (input.accessStatus !== undefined) changes.access_status = input.accessStatus;
+  if (!Object.keys(changes).length) return;
+  const { error } = await admin.from("amc_documents").update(changes).eq("id", documentId);
+  if (missingPassColumns(error)) throw new ContractError("A pass's access type and status need the database update 20261117120000 first.", 503);
+  if (error) throw fail(error);
+}
+
+/** For accessFromPasses. */
+const passInput = (p: PassView) => ({ id: p.id, validUntil: p.expiresOn, uploadedAt: p.uploadedAt, status: p.accessStatus });
+
 /** Gate pass documents still in use, on the visits given and on the property (a property pass counts for every visit there). */
 async function passDocuments(admin: Admin, visitIds: string[], propertyId: string | null) {
-  const read = (level: "visit" | "property", ids: string[]) =>
-    ids.length
-      ? admin.from("amc_documents").select("id, level, entity_id, expires_on, uploaded_at").eq("level", level).in("entity_id", ids).eq("category", "Gate pass").is("superseded_by", null)
-      : Promise.resolve({ data: [] as Row[], error: null });
-  const [onVisits, onProperty] = await Promise.all([read("visit", visitIds), read("property", propertyId ? [propertyId] : [])]);
-  if (onVisits.error) throw fail(onVisits.error);
-  if (onProperty.error) throw fail(onProperty.error);
-  const pass = (d: Row) => ({ id: String(d.id), validUntil: str(d.expires_on), uploadedAt: String(d.uploaded_at) });
+  const [onVisits, onProperty] = await Promise.all([readPasses(admin, "visit", visitIds), readPasses(admin, "property", propertyId ? [propertyId] : [])]);
   return {
-    forVisit: (visitId: string) => ((onVisits.data ?? []) as Row[]).filter((d) => String(d.entity_id) === visitId).map(pass),
-    property: ((onProperty.data ?? []) as Row[]).map(pass),
+    forVisit: (visitId: string) => onVisits.passes.filter((d) => d.entityId === visitId).map(passInput),
+    property: onProperty.passes.map(passInput),
   };
 }
 
@@ -374,19 +475,7 @@ async function loadVisitContext(admin: Admin, visitId: string, date: string | nu
     durationMinutes: crew.durationMinutes,
     headcount: crew.headcount,
     accessRuleCount: ((rules ?? []) as Row[]).length,
-    accessRules: ((rules ?? []) as Row[]).map((r) => ({
-      id: String(r.id),
-      accessType: String(r.access_type),
-      issuer: str(r.issuer),
-      leadTimeDays: r.lead_time_days === null || r.lead_time_days === undefined ? null : Number(r.lead_time_days),
-      permittedDays: strings(r.permitted_days),
-      permittedFrom: str(r.permitted_from),
-      permittedTo: str(r.permitted_to),
-      parking: str(r.parking),
-      contactName: str(r.contact_name),
-      contactPhone: str(r.contact_phone),
-      notes: str(r.notes),
-    })),
+    accessRules: ((rules ?? []) as Row[]).map(accessRuleView),
   };
 }
 
@@ -910,20 +999,35 @@ async function crewFits(admin: Admin, ctx: VisitContext, technicianIds: string[]
   return chosen.map((t) => fitFor(t, { ...ctx.need, date }, busyFor(blocks, t.fsmId, slot, [String(ctx.visit.id)])));
 }
 
+/**
+ * When the office started a planned visit (Start visit, 18 Nov 2026), read
+ * on its own so nothing else depends on the column: ready is false before
+ * migration 20261118120000, when a visit in progress was the started one.
+ */
+export async function visitStartedAt(admin: Admin, visitId: string): Promise<{ startedAt: string | null; ready: boolean }> {
+  const { data, error } = await admin.from("amc_visits").select("started_at").eq("id", visitId).maybeSingle<Row>();
+  if (error) return { startedAt: null, ready: false };
+  return { startedAt: str(data?.started_at), ready: true };
+}
+
 export async function performBoardAction(admin: Admin, action: BoardAction, actor: Actor, config: AmcConfig, canChange: (contractOwnerId: string | null) => boolean) {
   const now = new Date().toISOString();
-  const guard = (ctx: VisitContext) => {
+  const guard = async (ctx: VisitContext) => {
     if (!canChange(ctx.ownerId)) throw new ContractError("You cannot change this contract's visits.", 403);
     if (!["active", "on_hold"].includes(String(ctx.contract.status))) throw new ContractError("Visits are placed while the contract is active.", 409);
     if (!PLANNABLE_STATUSES.includes(ctx.visit.status as VisitStatus)) {
       throw new ContractError(`Visit ${String(ctx.visit.visit_no)} is ${String(ctx.visit.status).replace(/_/g, " ")}.`, 409);
+    }
+    /* Started by the office (18 Nov 2026): the crew is on its way, so the slot and crew stay as they are. */
+    if ((await visitStartedAt(admin, String(ctx.visit.id))).startedAt) {
+      throw new ContractError(`Visit ${String(ctx.visit.visit_no)} has been started, so it can no longer be moved or changed here.`, 409);
     }
   };
 
   switch (action.action) {
     case "place": {
       const ctx = await loadVisitContext(admin, action.visitId, action.date, config);
-      guard(ctx);
+      await guard(ctx);
       const duration = action.durationMinutes ?? ctx.durationMinutes;
       const slot = { start: slotIso(action.date, action.startTime), end: new Date(Date.parse(slotIso(action.date, action.startTime)) + duration * 60_000).toISOString() };
       const fits = await crewFits(admin, ctx, action.technicianIds, slot, action.date);
@@ -969,7 +1073,7 @@ export async function performBoardAction(admin: Admin, action: BoardAction, acto
       let changed = 0;
       for (const visitId of action.visitIds) {
         const ctx = await loadVisitContext(admin, visitId, action.date, config);
-        guard(ctx);
+        await guard(ctx);
         const placed = str(ctx.visit.scheduled_start);
         const duration = placed ? (Date.parse(String(ctx.visit.scheduled_end)) - Date.parse(placed)) / 60_000 : ctx.durationMinutes;
         const time = action.startTime ?? (placed ? dubaiTime(placed) : null);
@@ -994,7 +1098,7 @@ export async function performBoardAction(admin: Admin, action: BoardAction, acto
       let changed = 0;
       for (const visitId of action.visitIds) {
         const ctx = await loadVisitContext(admin, visitId, null, config);
-        guard(ctx);
+        await guard(ctx);
         const placed = str(ctx.visit.scheduled_start);
         if (!placed) throw new ContractError(`Visit ${String(ctx.visit.visit_no)} is not on the board yet: place it first.`, 409);
         const date = dubaiDate(placed);
@@ -1018,7 +1122,7 @@ export async function performBoardAction(admin: Admin, action: BoardAction, acto
     }
     case "unplace": {
       const ctx = await loadVisitContext(admin, action.visitId, null, config);
-      guard(ctx);
+      await guard(ctx);
       const { error } = await admin
         .from("amc_visits")
         .update({ scheduled_start: null, scheduled_end: null, technician_ids: [], lead_technician_id: null, headcount: null, updated_at: now })
@@ -1053,6 +1157,11 @@ export interface VisitDetail extends BoardVisit {
   need: { trades: Trade[]; durationMinutes: number; headcount: number; accessTypes: string[] };
   /* Every access rule of the property (gate pass, permit, lift, keys...), not only the clearances. */
   accessRules: AccessRuleView[];
+  /* The visit's own passes, then the property's (17 Nov 2026); passTypes: the access type and status can be stored. */
+  passes: PassView[];
+  /** When the office pressed Start visit (18 Nov 2026); the visit is in progress once the crew arrives. */
+  startedAt: string | null;
+  passTypes: boolean;
   rule: { attemptCount: number; attemptIntervalDays: number; attemptChannels: string[] };
   attempts: Array<{ id: string; attemptNo: number; channel: string; outcome: AttemptOutcome; note: string | null; attemptedAt: string; actorLabel: string | null }>;
   attemptState: ReturnType<typeof attemptState>;
@@ -1068,8 +1177,21 @@ function ruleOf(c: Row, config: AmcConfig) {
   };
 }
 
-export async function visitDetail(admin: Admin, visitId: string, config: AmcConfig, now = new Date()): Promise<VisitDetail> {
-  const ctx = await loadVisitContext(admin, visitId, null, config);
+export async function visitDetail(admin: Admin, visitId: string, config: AmcConfig, now = new Date(), recheck = true): Promise<VisitDetail> {
+  const [ctx, started] = await Promise.all([loadVisitContext(admin, visitId, null, config), visitStartedAt(admin, visitId)]);
+  /*
+    A visit not yet started shows its access as its passes say today
+    (17 Nov 2026): a pass that ran out, or a visit moved past a pass's date,
+    is caught here rather than when a pass changes. Written once, then read again.
+  */
+  if (recheck && !started.startedAt && (PLANNABLE_STATUSES as readonly string[]).includes(String(ctx.visit.status))) {
+    const docs = await passDocuments(admin, [visitId], str(ctx.contract.property_id));
+    const live = accessFromPasses([...docs.forVisit(visitId), ...docs.property], visitDay(ctx.visit), ctx.accessRuleCount > 0);
+    if (live.status !== ctx.visit.access_status || live.validUntil !== str(ctx.visit.access_valid_until) || live.documentId !== str(ctx.visit.access_document_id)) {
+      await writeVisitAccess(admin, ctx.visit, live, now.toISOString());
+      return visitDetail(admin, visitId, config, now, false);
+    }
+  }
   const [{ data: attempts, error }, techs] = await Promise.all([
     admin.from("amc_visit_attempts").select("id, attempt_no, channel, outcome, note, attempted_at, actor_label").eq("visit_id", visitId).order("attempt_no"),
     technicianFacts(admin, false),
@@ -1087,6 +1209,8 @@ export async function visitDetail(admin: Admin, visitId: string, config: AmcConf
   const rule = ruleOf(ctx.contract, config);
   const v = ctx.visit;
   const ids = strings(v.technician_ids);
+  const propertyId = str(ctx.contract.property_id);
+  const [visitPasses, propertyPasses] = await Promise.all([readPasses(admin, "visit", [visitId]), readPasses(admin, "property", propertyId ? [propertyId] : [])]);
   return {
     ...boardVisit(v),
     cycleStart: String(v.cycle_start),
@@ -1105,6 +1229,9 @@ export async function visitDetail(admin: Admin, visitId: string, config: AmcConf
     lines: ctx.lines,
     need: { trades: ctx.need.trades, durationMinutes: ctx.durationMinutes, headcount: ctx.headcount, accessTypes: ctx.need.accessTypes },
     accessRules: ctx.accessRules,
+    passes: [...visitPasses.passes, ...propertyPasses.passes],
+    startedAt: started.startedAt,
+    passTypes: visitPasses.typed && propertyPasses.typed,
     rule,
     attempts: list,
     attemptState: attemptState(list, rule, now),
@@ -1301,8 +1428,9 @@ export async function performVisitAction(
       await passOf(action.documentId);
       const { error } = await admin.from("amc_documents").update({ expires_on: action.validUntil, notes: action.note }).eq("id", action.documentId);
       if (error) throw fail(error);
+      await writePassType(admin, action.documentId, { accessRuleId: action.accessRuleId, accessStatus: action.accessStatus }, str(ctx.contract.property_id));
       const next = await refreshAccess();
-      await recordAmcAudit(admin, { entityType: "contract", entityId: contractId, eventType: "visit_pass_updated", actorId: actor.id, actorLabel: actor.label, payload: { visitNo: v.visit_no, documentId: action.documentId, validUntil: action.validUntil, access: next.status } });
+      await recordAmcAudit(admin, { entityType: "contract", entityId: contractId, eventType: "visit_pass_updated", actorId: actor.id, actorLabel: actor.label, payload: { visitNo: v.visit_no, documentId: action.documentId, validUntil: action.validUntil, passStatus: action.accessStatus ?? null, access: next.status } });
       return { ok: true };
     }
     case "pass_remove": {
@@ -1315,6 +1443,8 @@ export async function performVisitAction(
       return { ok: true };
     }
     case "start": {
+      /* Access as the passes say today, for the visit's current day: a pass may have run out or the visit moved (17 Nov 2026). */
+      const access = await refreshAccess();
       const problems = startProblems({
         status: String(v.status),
         contractActive: ctx.contract.status === "active",
@@ -1322,15 +1452,20 @@ export async function performVisitAction(
         scheduledStart: str(v.scheduled_start),
         scheduledEnd: str(v.scheduled_end),
         clientConfirmation: str(v.client_confirmation),
-        accessStatus: str(v.access_status),
+        accessStatus: access.status,
       });
       if (problems.length) throw new ContractError(`Before starting the visit: ${problems.map((p) => p.text.replace(/\.$/, "").toLowerCase()).join("; ")}.`, 400);
-      const { data: started, error } = await admin
-        .from("amc_visits")
-        .update({ status: "in_progress", updated_at: nowIso })
-        .eq("id", visitId)
-        .in("status", ["not_scheduled", "scheduled", "rescheduled", "confirmed", "pending_access"])
-        .select("id");
+      /*
+        Stamped by the office (18 Nov 2026), the status left as it is: the
+        visit is in progress once the crew records their arrival on the
+        phone. Before migration 20261118120000 it is set in progress, as before.
+      */
+      const startedBefore = await visitStartedAt(admin, visitId);
+      if (startedBefore.startedAt) throw new ContractError(`Visit ${String(v.visit_no)} was already started.`, 409);
+      const startable = ["not_scheduled", "scheduled", "rescheduled", "confirmed", "pending_access"];
+      const { data: started, error } = startedBefore.ready
+        ? await admin.from("amc_visits").update({ started_at: nowIso, started_by: actor.id, updated_at: nowIso }).eq("id", visitId).is("started_at", null).in("status", startable).select("id")
+        : await admin.from("amc_visits").update({ status: "in_progress", updated_at: nowIso }).eq("id", visitId).in("status", startable).select("id");
       if (error) throw fail(error);
       if (!started?.length) throw new ContractError("This visit changed a moment ago. Refresh the page.", 409);
       await recordAmcAudit(admin, { entityType: "contract", entityId: contractId, eventType: "visit_started", actorId: actor.id, actorLabel: actor.label, payload: { visitNo: v.visit_no } });

@@ -16,7 +16,7 @@ import {
   Gauge,
   History,
   ListChecks,
-  MoreHorizontal,
+  ChevronDown,
   Pause,
   PenLine,
   Play,
@@ -26,7 +26,6 @@ import {
   RefreshCw,
   SearchX,
   Send,
-  ShieldCheck,
   XCircle,
   CheckCircle2,
 } from "lucide-react";
@@ -40,7 +39,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -101,7 +99,6 @@ import { UsageHistory } from "./usage-history";
 import { TruncateIfText, TruncatedText } from "@/components/ui/truncated-text";
 import { Fact } from "@/components/dashboard/extensions/amc/steps/review-step";
 import { amcRefresh } from "@/lib/amc/http-cache";
-import { Hint } from "@/components/ui/hint";
 import { useAmcData } from "./use-amc-data";
 import { callOutsService } from "@/modules/amc-contracts/call-outs-service";
 
@@ -410,33 +407,19 @@ function ContractView({
             ? { label: "Record usage", icon: <Plus className="size-4" />, onClick: () => recordUsage(null) }
             : null;
   const recordInMore = canRecord && primary?.label !== "Record usage";
-  const holdItems = [
-    permissions.canRecordScan ? (
-      <DropdownMenuItem key="scan" onClick={() => lifecycleDialogs.open("scan")}>
-        <FileUp className="size-4" />
-        Record signed scan
-      </DropdownMenuItem>
-    ) : null,
-    permissions.canHold && status === "active" ? (
-      <DropdownMenuItem key="hold" onClick={() => lifecycleDialogs.openStatus("on_hold")}>
-        <Pause className="size-4" />
-        Put on hold
-      </DropdownMenuItem>
-    ) : null,
-    awaitingFirst && paymentPerms?.canApprove ? (
-      <DropdownMenuItem key="start" onClick={() => paymentDialogs.open(contract.id, { kind: "override_gate" })}>
-        <Play className="size-4" />
-        Start before payment
-      </DropdownMenuItem>
-    ) : null,
+  /* The other steps, each its own button in the header (18 Nov 2026): no More menu to open. */
+  const stepButtons = [
+    recordInMore ? { key: "usage", label: "Record usage", icon: <Plus className="size-4" />, onClick: () => recordUsage(null) } : null,
+    permissions.canRecordScan ? { key: "scan", label: "Record signed scan", icon: <FileUp className="size-4" />, onClick: () => lifecycleDialogs.open("scan") } : null,
+    permissions.canHold && status === "active" ? { key: "hold", label: "Put on hold", icon: <Pause className="size-4" />, onClick: () => lifecycleDialogs.openStatus("on_hold") } : null,
+    awaitingFirst && paymentPerms?.canApprove
+      ? { key: "start", label: "Start before payment", icon: <Play className="size-4" />, onClick: () => paymentDialogs.open(contract.id, { kind: "override_gate" }) }
+      : null,
     /* To-do 2 (BRD 6.8): the follow-up while the client signs or pays can wait a few days. */
-    permissions.canEditTerms && (status === "pending_client_signature" || awaitingFirst) ? (
-      <DropdownMenuItem key="snooze" onClick={() => lifecycleDialogs.open("snooze")}>
-        <AlarmClock className="size-4" />
-        Snooze follow-up
-      </DropdownMenuItem>
-    ) : null,
-  ].filter(Boolean);
+    permissions.canEditTerms && (status === "pending_client_signature" || awaitingFirst)
+      ? { key: "snooze", label: "Snooze follow-up", icon: <AlarmClock className="size-4" />, onClick: () => lifecycleDialogs.open("snooze") }
+      : null,
+  ].filter((b): b is NonNullable<typeof b> => b !== null);
   const endItems = [
     permissions.canTerminate ? (
       <DropdownMenuItem key="terminate" variant="destructive" onClick={() => lifecycleDialogs.openStatus("terminated")}>
@@ -544,50 +527,58 @@ function ContractView({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            {/* Only an active contract covers anything: before activation (or on hold) every check would answer No active AMC. */}
-            <Hint label={contract.status === "active" ? undefined : "Coverage can be checked once the contract is active."}>
-              <span className="inline-flex" tabIndex={contract.status === "active" ? -1 : 0}>
-                <Button variant="outline" onClick={() => setChecking(true)} disabled={contract.status !== "active"}>
-                  <ShieldCheck className="size-4" />
-                  Check coverage
-                </Button>
-              </span>
-            </Hint>
+            {/*
+              The actions in view (18 Nov 2026): each step its own button, the
+              two client report actions in one dropdown, and the ways to end
+              the contract in another. Check coverage left the header.
+            */}
+            {stepButtons.map((b) => (
+              <Button key={b.key} variant="outline" onClick={b.onClick}>
+                {b.icon}
+                {b.label}
+              </Button>
+            ))}
+            <Button asChild variant="outline">
+              <Link href={`/extensions/amc/${contract.submissionId}`}>
+                <FileSignature className="size-4" />
+                Source proposal
+              </Link>
+            </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="icon" aria-label="More actions">
-                  <MoreHorizontal className="size-4" />
+                <Button variant="outline">
+                  <FileText className="size-4" />
+                  Client report
+                  <ChevronDown className="size-4" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="w-52">
-                {recordInMore ? (
-                  <DropdownMenuItem onClick={() => recordUsage(null)}>
-                    <Plus className="size-4" />
-                    Record usage
-                  </DropdownMenuItem>
-                ) : null}
-                {holdItems}
-                <DropdownMenuItem asChild>
-                  <Link href={`/extensions/amc/${contract.submissionId}`}>
-                    <FileSignature className="size-4" />
-                    Open source proposal
-                  </Link>
-                </DropdownMenuItem>
-                <DropdownMenuSeparator />
+              <DropdownMenuContent align="end" className="w-48">
                 <DropdownMenuItem onClick={() => setViewingReport(true)}>
                   <FileText className="size-4" />
-                  View client report
+                  View report
                 </DropdownMenuItem>
                 {canOperate ? (
                   <DropdownMenuItem onClick={() => setReporting(true)}>
                     <Send className="size-4" />
-                    Send client report
+                    Send to the client
                   </DropdownMenuItem>
                 ) : null}
-                {endItems.length ? <DropdownMenuSeparator /> : null}
-                {endItems}
               </DropdownMenuContent>
             </DropdownMenu>
+            {endItems.length ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" className="text-danger hover:text-danger">
+                    <Power className="size-4" />
+                    End contract
+                    <ChevronDown className="size-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48">
+                  {endItems}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : null}
             {primary ? (
               <Button onClick={primary.onClick}>
                 {primary.icon}
@@ -685,7 +676,7 @@ function ContractView({
               <TabCount value={schedule.data?.progress.remaining} />
             )}
           </TabsTrigger>
-          <TabsTrigger value="call-outs">Call outs</TabsTrigger>
+          <TabsTrigger value="call-outs">Call outs &amp; work</TabsTrigger>
           {!HIDDEN_TABS.has("usage") ? (
             <TabsTrigger value="usage">
               Usage

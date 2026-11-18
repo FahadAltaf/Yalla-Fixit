@@ -91,6 +91,7 @@ import { Card } from "@/components/ui/card";
 import { TablePager } from "@/components/data-table/table-pager";
 import { ManageTechnicianDialog, type TechnicianDialogView } from "./manage-technician-dialog";
 import { AmcSkillsDialog } from "@/components/dashboard/extensions/amc-contracts/amc-skills-dialog";
+import { TRADE_LABELS } from "@/lib/amc/client-profile";
 import { Hint } from "@/components/ui/hint";
 
 /*
@@ -155,8 +156,8 @@ const LEAVE_FILTERS: { value: LeaveFilter; label: string }[] = [
 const COMPLIANCE_FILTER_KEYS = ["employment_status", "item_status", "site"] as const;
 
 // Columns of the technician list that can be filtered like a spreadsheet.
-type FilterColumn = "role" | "service" | "shift" | "supervisor" | "tags" | "availability";
-const FILTER_COLUMNS: FilterColumn[] = ["role", "service", "shift", "supervisor", "tags", "availability"];
+type FilterColumn = "role" | "service" | "shift" | "supervisor" | "tags" | "availability" | "amc";
+const FILTER_COLUMNS: FilterColumn[] = ["role", "service", "shift", "supervisor", "tags", "availability", "amc"];
 const FILTER_LABELS: Record<FilterColumn, string> = {
   role: "Role",
   service: "Service",
@@ -164,7 +165,11 @@ const FILTER_LABELS: Record<FilterColumn, string> = {
   supervisor: "Supervisor",
   tags: "Tags",
   availability: "Availability",
+  amc: "AMC",
 };
+/* AMC access (18 Nov 2026): a confirmed AMC skill (set under AMC skills); they are offered for call outs and additional work. */
+const AMC_YES = "Has AMC access";
+const AMC_NO = "No AMC access";
 // The value a row has when a column is empty for it.
 const BLANK = "(blank)";
 
@@ -271,7 +276,21 @@ export default function WorkforcePeople({ technicians, access }: Props) {
   const [activeTechnician, setActiveTechnician] = useState<{ technician: TechnicianReference; view: TechnicianDialogView } | null>(null);
   /* The technician whose AMC skills are open (moved here from AMC -> Technicians, 11 Nov 2026). */
   const [amcSkills, setAmcSkills] = useState<{ fsmId: string; name: string } | null>(null);
-  const closeAmcSkills = useCallback(() => setAmcSkills(null), []);
+  /* Who has AMC access, by FSM id with their trades; null until read (or for someone without AMC rights). */
+  const [amcTeam, setAmcTeam] = useState<Record<string, string[]> | null>(null);
+  const loadAmcTeam = useCallback(() => {
+    executeRESTBackend<{ team: Record<string, string[]> }>("/api/amc-technicians/team")
+      .then((r) => setAmcTeam(r.team))
+      .catch(() => setAmcTeam(null));
+  }, []);
+  useEffect(() => {
+    loadAmcTeam();
+  }, [loadAmcTeam]);
+  /* Skills changed in the dialog: the AMC column follows. */
+  const closeAmcSkills = useCallback(() => {
+    setAmcSkills(null);
+    loadAmcTeam();
+  }, [loadAmcTeam]);
   // FR-21: the managed list behind the Add Leave dropdown.
   const [leaveTypes, setLeaveTypes] = useState<LeaveType[]>([]);
   const [bulkLeaveOpen, setBulkLeaveOpen] = useState(false);
@@ -402,9 +421,11 @@ export default function WorkforcePeople({ technicians, access }: Props) {
           const leave = leaveOf(t.fsm_resource_id);
           return [leave ? `${leave.current ? "On leave" : "Upcoming leave"} · ${leave.record.leave_type}` : "Available"];
         }
+        case "amc":
+          return [amcTeam ? (amcTeam[t.fsm_resource_id]?.length ? AMC_YES : AMC_NO) : BLANK];
       }
     };
-  }, [assignments, leaveByTechnician]);
+  }, [assignments, leaveByTechnician, amcTeam]);
   const filterOptions = useMemo(() => {
     const out = {} as Record<FilterColumn, { value: string; count: number }[]>;
     FILTER_COLUMNS.forEach((column) => {
@@ -713,6 +734,8 @@ export default function WorkforcePeople({ technicians, access }: Props) {
         <Card className="gap-0 overflow-hidden py-0">
         {/* Toolbar: search on the left, filters / page size / refresh on the right (the house toolbar shape). */}
         <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-4 sm:gap-4 sm:py-6">
+          {/* Search, then what narrows the list (18 Nov 2026): kept together on the left at the controls' height, not floating between the two sides. */}
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
           <div className="relative w-full sm:w-80 sm:flex-none">
             <Input
               placeholder="Search name or Maher ID..."
@@ -726,7 +749,7 @@ export default function WorkforcePeople({ technicians, access }: Props) {
             </div>
           </div>
           {complianceFilter && (
-            <Button asChild variant="outline" size="sm">
+            <Button asChild variant="outline">
               <Link href="/workforce">
                 <X className="size-3.5" />
                 Compliance filter: {Object.values(complianceFilter).join(", ").replaceAll("_", " ")} · {visiblePeople.length} shown
@@ -734,11 +757,13 @@ export default function WorkforcePeople({ technicians, access }: Props) {
             </Button>
           )}
           {activeFilterCount > 0 && (
-            <Button variant="outline" size="sm" onClick={() => setColumnFilters({})}>
-              <X className="size-3.5" />
-              Clear {activeFilterCount} column filter{activeFilterCount === 1 ? "" : "s"} · {visiblePeople.length} shown
+            <Button variant="outline" onClick={() => setColumnFilters({})} title="Show everyone again">
+              <X className="size-4" />
+              Clear {activeFilterCount} column filter{activeFilterCount === 1 ? "" : "s"}
+              <span className="text-muted-foreground font-normal">· {visiblePeople.length} shown</span>
             </Button>
           )}
+          </div>
           <div className="flex items-center gap-2">
             {/* FR-23: active technicians by default; inactive ones (resigned
                 in FSM) stay reachable for their history. */}
@@ -1125,6 +1150,21 @@ export default function WorkforcePeople({ technicians, access }: Props) {
                           state={leave ? (leave.current ? "on-leave" : "upcoming") : "available"}
                           detail={leaveDetail}
                         />
+                      </TableCell>
+                      <TableCell>
+                        {amcTeam === null ? (
+                          <Unset label="—" />
+                        ) : amcTeam[id]?.length ? (
+                          <Badge
+                            variant="secondary"
+                            className="bg-success/10 text-success border-0 font-medium"
+                            title={amcTeam[id].map((trade) => TRADE_LABELS[trade as keyof typeof TRADE_LABELS] ?? trade).join(", ")}
+                          >
+                            AMC · {amcTeam[id].length} {amcTeam[id].length === 1 ? "trade" : "trades"}
+                          </Badge>
+                        ) : (
+                          <Unset label="No" />
+                        )}
                       </TableCell>
                       <TableCell className="text-right">
                         <DropdownMenu>

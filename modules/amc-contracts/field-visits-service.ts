@@ -9,6 +9,8 @@ export interface FieldVisitsResponse {
   visits: FieldVisitRow[];
   total: number;
   stageCounts: Record<FieldVisitStage, number>;
+  /** The default listing's count (its stages and the call outs still to plan). */
+  activeCount?: number;
   today: string;
   page: number;
   pageSize: number;

@@ -195,7 +195,7 @@ export function CrewPicker({
       ))}
       {candidates.length === 0 && blocked.length === 0 ? (
         <p className="text-muted-foreground rounded-lg border border-dashed px-3 py-4 text-center text-sm">
-          No technician is confirmed for this trade. Add the skill under AMC → Technicians.
+          No technician is confirmed for this trade. Add the skill under Workforce → People → AMC skills.
         </p>
       ) : null}
       {candidates.length ? <p className="text-sm font-medium">Available</p> : null}

@@ -22,6 +22,7 @@ import { paymentsService, type ContractPaymentsResponse, type InstalmentRecord }
 import { formatContractDate, formatDateTime } from "./contract-status";
 import { ChequeActions, InstalmentActions, ReceiptActions, type PaymentDialogs } from "./payment-dialogs";
 import { ChequeStatusBadge, DaysOverdue, InstalmentStatusBadge, isSettled } from "./payment-status";
+import { VisitChargesSection } from "./visit-charge";
 import { TruncatedText } from "@/components/ui/truncated-text";
 
 /**
@@ -410,6 +411,8 @@ export function ContractPaymentsPanel({
             action={canMake ? { label: "Make payment schedule", onClick: makeSchedule } : undefined}
           />
         </Card>
+        {/* Call outs and additional work the client pays for (18 Nov 2026), with or without instalments. */}
+        <VisitChargesSection contractId={contractId} canRecord={permissions.canEdit} />
         {confirmDialog}
       </>
     );
@@ -498,6 +501,8 @@ export function ContractPaymentsPanel({
           />
         </SectionCard>
 
+        {/* Only once a cheque is recorded (18 Nov 2026): an empty card said nothing. */}
+        {cheques.length > 0 ? (
         <SectionCard
           title="Cheques"
           description="Held until deposited, then cleared into the instalment or bounced."
@@ -523,7 +528,13 @@ export function ContractPaymentsPanel({
             }
           />
         </SectionCard>
+        ) : null}
 
+        {/* Call outs and additional work the client pays for (18 Nov 2026), beside the instalments. */}
+        <VisitChargesSection contractId={contractId} canRecord={permissions.canEdit} />
+
+        {/* Only once a payment is received (18 Nov 2026), as Cheques. */}
+        {receipts.length > 0 ? (
         <SectionCard
           title="Receipts"
           description="Every payment received, newest first. A voided one stays on record with its reason."
@@ -545,6 +556,7 @@ export function ContractPaymentsPanel({
             }
           />
         </SectionCard>
+        ) : null}
       </PanelCtx.Provider>
       {confirmDialog}
     </>

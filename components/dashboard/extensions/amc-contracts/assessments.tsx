@@ -72,6 +72,7 @@ import { ListToolbar } from "./enquiries/list-toolbar";
 import { useUrlTab } from "./profile/use-url-tab";
 import { useAmcData } from "./use-amc-data";
 import { HistoryPanel } from "./visit-page";
+import { SiteVisitAccessCard } from "./access-card";
 import { ModuleGuide } from "@/components/dashboard/extensions/amc-contracts/module-guide";
 
 const RESULT_LABELS: Record<AssessmentResult, string> = {
@@ -434,7 +435,8 @@ function toDraft(a: AssessmentRecord): Draft {
   };
 }
 
-const TABS = ["details", "report", "property", "history"] as const;
+/* access (17 Nov 2026): the property's access rules and the passes, as a planned visit has. */
+const TABS = ["details", "access", "report", "property", "history"] as const;
 
 export function AssessmentDetail({ id }: { id: string }) {
   const router = useRouter();
@@ -795,6 +797,7 @@ export function AssessmentDetail({ id }: { id: string }) {
           <Tabs value={tab} onValueChange={setTab}>
             <TabsList className="h-auto w-full flex-wrap justify-start gap-1 group-data-horizontal/tabs:h-auto">
               <TabsTrigger value="details">Details</TabsTrigger>
+              <TabsTrigger value="access">Access</TabsTrigger>
               <TabsTrigger value="report">Report</TabsTrigger>
               <TabsTrigger value="property">Scope and assets</TabsTrigger>
               <TabsTrigger value="history">History</TabsTrigger>
@@ -1007,6 +1010,7 @@ export function AssessmentDetail({ id }: { id: string }) {
               concluded first (findings and the services to recommend), then
               the checklist behind it, then the photos. It was three tabs.
             */}
+            {panel("access", <SiteVisitAccessCard assessmentId={a.id} />)}
             {panel(
               "report",
               <>

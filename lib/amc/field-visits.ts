@@ -54,6 +54,20 @@ export function isFieldVisitLate(v: { stage: FieldVisitStage; dueOn: string | nu
   return Boolean(v.dueOn && v.dueOn < today && LATE_CAPABLE_STAGES.includes(v.stage));
 }
 
+/**
+ * A property short enough for a header's line or a phone's card: the part
+ * before " — " (the building or street), else its first part before a
+ * comma, and never more than about 45 characters. The full address is on
+ * the page.
+ */
+export function shortPlace(label: string | null | undefined): string | null {
+  if (!label?.trim()) return null;
+  let s = label.split(" — ")[0].trim();
+  if (s.length > 40) s = s.split(",")[0].trim();
+  if (s.length > 48) s = `${s.slice(0, 45).trimEnd()}…`;
+  return s;
+}
+
 /** A visit's own page (planned visits and call outs). */
 export const visitPageHref = (id: string) => `/extensions/amc-contracts/visits/${id}`;
 

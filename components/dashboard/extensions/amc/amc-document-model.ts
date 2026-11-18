@@ -73,7 +73,9 @@ export type Block =
   | { kind: "bullets"; items: Run[][] }
   | { kind: "numbered"; items: { number: string; runs: Run[] }[] }
   | { kind: "term"; number: string; runs: Run[] }
-  | { kind: "signatures"; left: string; right: string };
+  | { kind: "signatures"; left: string; right: string }
+  /* Photos, three to a row, each the same size with its label and caption under it (a service report). */
+  | { kind: "photos"; items: { url: string; label: string; caption: string | null }[] };
 
 export type AmcDocumentModel = {
   documentType?: string;

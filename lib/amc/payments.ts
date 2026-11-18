@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import type { CustomPlan, PaymentPlan } from "./proposal-rules";
+import { sendChannelSchema } from "./send-channels";
 
 /**
  * AMC payments (BRD v0.3 5.8; Phase 7: DEV-352, 382, 383, 384, 386).
@@ -358,7 +359,7 @@ export const paymentActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("waive"), instalmentId: uuid, reason: reason }).strict(),
   z.object({ action: z.literal("override_gate"), reason: reason }).strict(),
   z.object({ action: z.literal("generate_schedule") }).strict(),
-  z.object({ action: z.literal("send_reminder"), instalmentId: uuid }).strict(),
+  z.object({ action: z.literal("send_reminder"), instalmentId: uuid, channel: sendChannelSchema.optional() }).strict(),
   /* To-do 6 (BRD 6.8): escalate an overdue instalment by hand, before the automatic escalation. */
   z.object({ action: z.literal("escalate"), instalmentId: uuid, note: optionalText(500) }).strict(),
   /* BRD 5.8: how each instalment is expected to be paid. */

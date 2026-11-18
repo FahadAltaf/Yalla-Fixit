@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import type { ColumnDef } from "@tanstack/react-table";
 
 import { DataTable } from "@/components/data-table";
+import { ListTable } from "./list-table";
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -17,7 +18,6 @@ import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } fr
 import { EmptyState } from "@/components/ui/empty-state";
 import { Money } from "@/components/ui/money";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DataRow, PillTabs, SectionCard, StatCard, StatCardGrid, SubHeading, TabCount } from "@/components/dashboard/shared/kaizen";
 import { GoogleLocationMap, hasGoogleMapsKey } from "@/components/dashboard/snagging/google-location-map";
@@ -984,6 +984,30 @@ function PropertyBodySkeleton({ tab }: { tab: (typeof PROPERTY_TABS)[number] }) 
   );
 }
 
+type CurrentEntitlement = NonNullable<PropertyOverview["current"]>["entitlements"][number];
+/* The house table (18 Nov 2026), as every list. */
+const CURRENT_AMC_COLUMNS: ColumnDef<CurrentEntitlement>[] = [
+  { id: "service", header: "Service", cell: ({ row }) => <span className="text-sm font-medium">{row.original.serviceLabel}</span> },
+  {
+    id: "type",
+    header: "Type",
+    cell: ({ row }) => <span className="text-sm capitalize">{row.original.entitlementType === "informational" ? "included" : row.original.entitlementType}</span>,
+  },
+  {
+    id: "used",
+    header: "Used",
+    cell: ({ row }) => <span className="text-sm tabular-nums">{row.original.entitlementType === "informational" ? "—" : formatQuantity(row.original.usedQuantity)}</span>,
+  },
+  {
+    id: "included",
+    header: "Included",
+    cell: ({ row }) => {
+      const e = row.original;
+      return <span className="text-sm tabular-nums">{e.includedQuantity !== null ? formatQuantity(e.includedQuantity) : e.entitlementType === "unlimited" ? "Unlimited" : "—"}</span>;
+    },
+  },
+];
+
 function CurrentAmcCard({ current }: { current: PropertyOverview["current"] }) {
   return (
     <SectionCard
@@ -1010,30 +1034,7 @@ function CurrentAmcCard({ current }: { current: PropertyOverview["current"] }) {
       }
     >
       {current ? (
-        <div className="overflow-x-auto">
-          <Table className="min-w-[520px]">
-            <TableHeader className="[&_th]:text-muted-foreground">
-              <TableRow className="hover:bg-transparent">
-                <TableHead className="pl-5">Service</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Used</TableHead>
-                <TableHead className="pr-5">Included</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {current.entitlements.map((e) => (
-                <TableRow key={`${e.serviceId}-${e.entitlementType}`} className="h-12">
-                  <TableCell className="pl-5">{e.serviceLabel}</TableCell>
-                  <TableCell className="capitalize">{e.entitlementType === "informational" ? "included" : e.entitlementType}</TableCell>
-                  <TableCell className="tabular-nums">{e.entitlementType === "informational" ? "—" : formatQuantity(e.usedQuantity)}</TableCell>
-                  <TableCell className="pr-5 tabular-nums">
-                    {e.includedQuantity !== null ? formatQuantity(e.includedQuantity) : e.entitlementType === "unlimited" ? "Unlimited" : "—"}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+        <ListTable columns={CURRENT_AMC_COLUMNS} data={current.entitlements} />
       ) : (
         <EmptyState icon={<ScrollText className="size-5" />} title="No contract in force" description="This property has no AMC running today. Earlier ones are under Contracts." />
       )}

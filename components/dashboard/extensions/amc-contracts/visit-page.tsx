@@ -26,8 +26,6 @@ import {
   CallOutCrewSection,
   CallOutFindingsSection,
   CallOutNotices,
-  CallOutPhotosSection,
-  CallOutWorksSection,
   useCallOutActions,
   useCallOutWorkDialogs,
   type CallOutWorking,
@@ -37,19 +35,27 @@ import { formatContractDate } from "./contract-status";
 import { DetailHeaderCard, DetailHeaderSkeleton, DetailToolbar, shortPlace } from "./detail-header";
 import { DetailList } from "./enquiries/enquiry-ui";
 import { JobSheetPanel } from "./job-sheet-panel";
+import { fieldJobSheetCalls } from "@/modules/amc-contracts/job-sheets-service";
+
+/* A call out's job sheet (18 Nov 2026): the planned visit's panel on the call out's calls. */
+const CALL_OUT_SHEET = fieldJobSheetCalls("call_out");
 import { HistoryCard, type HistoryEntry } from "./history-card";
 import { useUrlTab } from "./profile/use-url-tab";
 import { useAmcData } from "./use-amc-data";
 import { AccessSection, AssignmentSection, ConfirmationSection, StartVisitAction, type VisitWorking } from "./visit-sections";
 import { channelLabel, slotLabel } from "./visit-status";
+import { FieldStartAction, FieldWorkAccessCard, useFieldWork } from "./field-work-panels";
+import { ChargeCard } from "./visit-charge";
 
-const TABS = ["overview", "crew", "client", "access", "job_sheet", "findings", "photos", "works", "history"] as const;
+const TABS = ["overview", "crew", "client", "access", "services", "job_sheet", "findings", "photos", "works", "history"] as const;
 type Tab = (typeof TABS)[number];
 
 /* The tabs each kind of visit has, in order. */
 const KIND_TABS: Record<"ppm" | "call_out", readonly Tab[]> = {
   ppm: ["overview", "crew", "client", "access", "job_sheet", "history"],
-  call_out: ["overview", "crew", "findings", "photos", "works", "history"],
+  /* Access and Start visit as a planned visit (17 Nov 2026); no client confirmation: the client called. */
+  /* Photos and additional work are part of the job sheet, as a planned visit's (18 Nov 2026). */
+  call_out: ["overview", "crew", "access", "services", "job_sheet", "findings", "history"],
 };
 
 const TAB_LABELS: Record<Tab, string> = {
@@ -61,6 +67,7 @@ const TAB_LABELS: Record<Tab, string> = {
   findings: "Findings",
   photos: "Photos",
   works: "Additional work",
+  services: "Services",
   history: "History",
 };
 
@@ -106,6 +113,8 @@ export function VisitPage({ id }: { id: string }) {
   const ppm = useAmcData(() => (kind === "ppm" ? visitsService.visit(id) : Promise.resolve(null)), kind === "ppm" ? `visit:${id}` : "visit:none");
   const callOut = useAmcData(() => (kind === "call_out" ? callOutsService.callOut(id) : Promise.resolve(null)), kind === "call_out" ? `call-out:${id}` : "call-out:none");
   const { tab, setTab, isOpened } = useUrlTab<Tab>(TABS, "overview");
+  /* A call out's access and start (17 Nov 2026). */
+  const fieldWork = useFieldWork(kind === "call_out" ? "call_out" : null, id);
   /* Where the job sheet puts its Return / Close visit / report buttons. */
   const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
   const history = useAmcData(() => (isOpened("history") ? fieldVisitsService.history(id) : Promise.resolve(null)), isOpened("history") ? `field-visit-history:${id}` : "history:none");
@@ -126,22 +135,34 @@ export function VisitPage({ id }: { id: string }) {
     header.reload();
     ppm.reload();
     callOut.reload();
+    fieldWork.reload();
     history.reload();
   };
   /* After a change in a tab: everything the page shows is read again (the header's stage, the tab, the history). */
   const changed = async () => reloadAll();
   const refresh = () => amcRefresh(reloadAll);
 
-  const callOutActions = useCallOutActions(callOut.data, changed, busy);
+  const callOutActions = useCallOutActions(callOut.data, changed, busy, Boolean(fieldWork.data?.startedAt));
   const works = useCallOutWorkDialogs(callOut.data);
 
-  const tabs = kind ? KIND_TABS[kind] : (["overview", "history"] as const);
+  /* The call out's old Findings record (before the job sheet, 18 Nov 2026) shows only when one was kept, read only. */
+  /* A call out started by the office is recorded on its job sheet; only one from before that keeps its Findings. */
+  const oldFindings = Boolean(callOut.data && (callOut.data.callOut.diagnosis || callOut.data.callOut.resolution) && fieldWork.data && !fieldWork.data.startedAt);
+  const tabs: readonly Tab[] = kind ? KIND_TABS[kind].filter((t) => t !== "findings" || oldFindings) : ["overview", "history"];
   /* A tab in the link this kind does not have (?tab=photos on a planned visit) shows the overview. */
-  const shown: Tab = tabs.includes(tab) ? tab : "overview";
+  /* Old links to the Photos or Additional work tab open the job sheet, where they now are. */
+  const wanted: Tab = kind === "call_out" && (tab === "photos" || tab === "works") ? "job_sheet" : tab;
+  const shown: Tab = tabs.includes(wanted) ? wanted : "overview";
   const notFound = header.error && /not found/i.test(header.error);
 
-  /* The job sheet is mounted (hidden) once it is in review or done, so its buttons are in the header from any tab. */
-  const sheetActive = inReviewOrDone(v?.stage);
+  /*
+    A call out's job sheet submitted by the crew (18 Nov 2026): awaiting the
+    supervisor's review, whatever the visits list says yet.
+  */
+  const crewSubmitted = kind === "call_out" && fieldWork.data?.sheetStatus === "submitted";
+  const stage = crewSubmitted ? "review" : v?.stage;
+  /* The job sheet is mounted (hidden) once started, in review or done, so its Return / Close buttons are in the header from any tab. */
+  const sheetActive = inReviewOrDone(stage) || (kind === "call_out" && Boolean(fieldWork.data?.startedAt));
   const panel = (value: Tab, children: ReactNode) =>
     tabs.includes(value) && (isOpened(value) || shown === value || (value === "job_sheet" && sheetActive)) ? (
       <TabsContent value={value} forceMount className="mt-4 flex flex-col gap-4 data-[state=inactive]:hidden">
@@ -217,10 +238,10 @@ export function VisitPage({ id }: { id: string }) {
           title={v.customerName || "Visit"}
           status={
             <span className="flex items-center gap-2">
-              <Badge variant="secondary" className={cn("border-0 font-medium", STAGE_TONES[v.stage])}>
-                {FIELD_VISIT_STAGE_LABELS[v.stage]}
+              <Badge variant="secondary" className={cn("border-0 font-medium", STAGE_TONES[crewSubmitted ? "review" : v.stage])}>
+                {FIELD_VISIT_STAGE_LABELS[crewSubmitted ? "review" : v.stage]}
               </Badge>
-              <span className="text-muted-foreground text-sm">{v.statusLabel}</span>
+              <span className="text-muted-foreground text-sm">{crewSubmitted ? "Submitted by the crew" : v.statusLabel}</span>
             </span>
           }
           subline={[shortPlace(v.propertyLabel), whenText(v), v.crew.length ? `${v.crew[0].name}${v.crew.length > 1 ? ` +${v.crew.length - 1}` : ""}` : "No crew yet"].filter(Boolean).join(" · ")}
@@ -238,6 +259,7 @@ export function VisitPage({ id }: { id: string }) {
               <span ref={setHeaderSlot} className="contents" />
               {/* The office starts a planned visit; until then the phone keeps its job sheet shut (17 Nov 2026). */}
               {kind === "ppm" && ppm.data ? <StartVisitAction {...ppmProps(ppm.data)} onTab={setTab} /> : null}
+              {kind === "call_out" ? <FieldStartAction kind="call_out" id={id} fw={fieldWork} status={callOut.data?.callOut.status} canEdit={callOut.data?.canEdit} onTab={(t) => setTab(t === "payment" ? "services" : t)} onChanged={changed} disabled={busy} /> : null}
             </>
           }
         />
@@ -261,7 +283,17 @@ export function VisitPage({ id }: { id: string }) {
               ))}
             </TabsList>
 
-            {panel("overview", kind === "ppm" ? <PpmOverview v={v} data={ppm} onTab={setTab} /> : kind === "call_out" ? <CallOutOverview v={v} data={callOut} onTab={setTab} /> : <SectionSkeleton />)}
+            {panel(
+              "overview",
+              kind === "ppm" ? (
+                <PpmOverview v={v} data={ppm} onTab={setTab} />
+              ) : kind === "call_out" ? (
+                /* The additional work card is hidden from the overview (18 Nov 2026). */
+                <CallOutOverview v={v} data={callOut} onTab={setTab} />
+              ) : (
+                <SectionSkeleton />
+              ),
+            )}
 
             {/* Planned visit */}
             {kind === "ppm" ? (
@@ -277,9 +309,12 @@ export function VisitPage({ id }: { id: string }) {
             {kind === "call_out" ? (
               <>
                 {panel("crew", withCallOut((d) => <CallOutCrewSection {...callOutProps(d)} />))}
-                {panel("findings", withCallOut((d) => <CallOutFindingsSection {...callOutProps(d)} onRaise={works.raise} />))}
-                {panel("photos", withCallOut((d) => <CallOutPhotosSection data={d} working={callOutWorking} changed={changed} />))}
-                {panel("works", withCallOut((d) => <CallOutWorksSection data={d} onRaise={works.raise} onOpen={works.open} />))}
+                {panel("access", <FieldWorkAccessCard kind="call_out" id={id} fw={fieldWork} onChanged={changed} />)}
+                {/* The services done and their price, from the rate card, charged or free; paid before or after the visit (18 Nov 2026). */}
+                {panel("services", <ChargeCard kind="call_out" id={id} coverage={callOut.data?.callOut.coverage ?? null} onChanged={changed} refreshKey={sheetVersion} />)}
+                {/* Exactly the planned visit's Job sheet tab (18 Nov 2026): its photos are the crew's, from the phone. */}
+                {panel("job_sheet", <JobSheetPanel visitId={id} calls={CALL_OUT_SHEET} onChanged={changed} readOnly refreshKey={sheetVersion} />)}
+                {oldFindings ? panel("findings", withCallOut((d) => <CallOutFindingsSection {...callOutProps({ ...d, canEdit: false })} onRaise={works.raise} />)) : null}
               </>
             ) : null}
 
@@ -477,7 +512,7 @@ function CallOutOverview({ v, data, onTab }: { v: FieldVisitRow; data: Loaded<Ca
           headline={d.additionalWorks.length ? `${d.additionalWorks.length} additional work` : "No additional work"}
           caption={c.partsNeeded ? `Parts: ${c.partsNeeded}` : undefined}
           tone={c.resolution ? "good" : c.diagnosis ? "progress" : "neutral"}
-          onSelect={() => onTab("findings")}
+          onSelect={() => onTab("job_sheet")}
           selectLabel="Open the findings"
         />
       </StatCardGrid>
@@ -504,10 +539,24 @@ function CallOutOverview({ v, data, onTab }: { v: FieldVisitRow; data: Loaded<Ca
             /* Booked as covered against the check (goodwill): say so, then what the check said. */
             ...(c.coverageOverrideReason ? [{ label: "Booked as covered", value: <span className="text-warning font-medium">{c.coverageOverrideReason}</span> }] : []),
             ...(c.coverageReasons.length ? [{ label: c.coverageOverrideReason ? "The check said" : "Why", value: c.coverageReasons.join(" ") }] : []),
-            ...(c.diagnosis ? [{ label: "Diagnosis", value: c.diagnosis }] : []),
-            ...(c.resolution ? [{ label: "Resolution", value: c.resolution }] : []),
           ]}
         />
+        {/* What the crew wrote (18 Nov 2026): in full, under its label, not cut to one line. */}
+        {c.diagnosis || c.resolution ? (
+          <div className="mt-2 grid gap-4 border-t pt-4">
+            {([
+              ["Diagnosis", c.diagnosis],
+              ["Resolution", c.resolution],
+            ] as const).map(([label, text]) =>
+              text ? (
+                <div key={label} className="grid gap-1">
+                  <p className="text-muted-foreground text-sm">{label}</p>
+                  <p className="text-sm leading-relaxed whitespace-pre-wrap">{text}</p>
+                </div>
+              ) : null,
+            )}
+          </div>
+        ) : null}
       </SectionCard>
     </>
   );

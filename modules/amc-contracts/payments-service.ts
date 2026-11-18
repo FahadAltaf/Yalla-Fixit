@@ -37,8 +37,9 @@ export interface PaymentActionResult {
   message?: string;
   /** For a reminder: a wa.me link with that text, when the client has a phone. */
   whatsapp?: string | null;
-  /** For a reminder: what happened to the email. */
-  outcome?: "sent" | "failed" | "no_recipient" | string;
+  /** For a reminder: what happened (an email, or the text handed over). */
+  outcome?: "sent" | "failed" | "no_recipient" | "prepared" | "link_created";
+  link?: string | null;
 }
 
 export type InstalmentListRow = InstalmentRecord & { contract: ContractRef | null };

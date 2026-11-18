@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useMemo, useState } from "react";
-import { AlertTriangle, CheckCheck, ExternalLink, PhoneCall, ShieldCheck } from "lucide-react";
+import { AlertTriangle, ExternalLink, PhoneCall, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 
 import { ActionDialogContent, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
@@ -21,7 +21,8 @@ import { TRADE_LABELS, TRADES } from "@/lib/amc/client-profile";
 import type { Trade } from "@/lib/amc/visits";
 import { callOutsService, type CoverageResponse, type CreateCallOutResult } from "@/modules/amc-contracts/call-outs-service";
 
-import { ContractPicker, CoverageBadge, Field, PreparedMessage, errorText, fromLocalInput, nowLocalInput, shortDateTime, type PickedContract } from "./call-out-shared";
+import { ContractPicker, CoverageBadge, Field, errorText, fromLocalInput, nowLocalInput, shortDateTime, type PickedContract } from "./call-out-shared";
+import { SendInline } from "./send-options";
 import { AmcPhoneInput } from "@/components/dashboard/extensions/amc/components/amc-phone-input";
 
 const NONE = "__none";
@@ -70,8 +71,6 @@ export function LogCallOutDialog({
   const [preview, setPreview] = useState<Preview | null>(null);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<CreateCallOutResult | null>(null);
-  const [acked, setAcked] = useState(false);
-  const [acking, setAcking] = useState(false);
   const ids = {
     contract: useId(),
     priority: useId(),
@@ -166,22 +165,8 @@ export function LogCallOutDialog({
     }
   };
 
-  const acknowledge = async () => {
-    if (!done) return;
-    setAcking(true);
-    try {
-      await callOutsService.action(done.id, { action: "acknowledged" });
-      setAcked(true);
-      toast.success("Acknowledgement recorded as sent");
-      await onLogged?.();
-    } catch (e) {
-      toast.error(errorText(e, "Could not record the acknowledgement."));
-    } finally {
-      setAcking(false);
-    }
-  };
 
-  const locked = busy || acking;
+  const locked = busy;
 
   return (
     <Dialog open={open} onOpenChange={(next) => !locked && onOpenChange(next)}>
@@ -190,7 +175,7 @@ export function LogCallOutDialog({
           <DialogTitle>{done ? `Call out ${done.callOutNo} logged` : "Log call out"}</DialogTitle>
           <DialogDescription>
             {done
-              ? "Send the client the acknowledgement, then mark it as sent."
+              ? "Send the client the acknowledgement: by WhatsApp, email or copied text."
               : "What the client reported. The answer at the bottom says whether the client pays; tell them before the visit."}
           </DialogDescription>
         </DialogHeader>
@@ -207,19 +192,24 @@ export function LogCallOutDialog({
                 ))}
               </ul>
             </div>
-            <PreparedMessage title="The acknowledgement" message={done.message} whatsapp={done.whatsapp}>
-              <SubmitButton
-                size="sm"
-                variant="outline"
-                pending={acking}
-                pendingLabel="Saving…"
-                disabled={acked}
-                icon={<CheckCheck className="size-3.5" />}
-                onClick={() => void acknowledge()}
-              >
-                {acked ? "Marked as sent" : "Mark as sent"}
-              </SubmitButton>
-            </PreparedMessage>
+            {/* The same three ways as every send (17 Nov 2026); once sent or handed over it counts as acknowledged. */}
+            <div className="grid gap-3 rounded-lg border px-4 py-3">
+              <p className="text-sm font-medium">The acknowledgement</p>
+              <SendInline
+                what="the acknowledgement"
+                noun="Acknowledgement"
+                hasLink={false}
+                defaultChannel="whatsapp"
+                contacts={{ phone: done.whatsapp ? undefined : null }}
+                onSend={async (channel) => {
+                  const r = await callOutsService.action(done.id, { action: "send_acknowledgement", channel });
+                  return { outcome: r.outcome ?? "prepared", message: r.message ?? done.message, whatsapp: r.whatsapp ?? null, link: null };
+                }}
+                onDone={async () => {
+                  await onLogged?.();
+                }}
+              />
+            </div>
           </div>
         ) : (
           <div className="grid gap-4">

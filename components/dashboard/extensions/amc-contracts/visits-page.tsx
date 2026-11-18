@@ -221,14 +221,14 @@ export function VisitsPage() {
 
   const counts = data?.stageCounts;
   const openCount = counts ? OPEN_FIELD_VISIT_STAGES.reduce((sum, s) => sum + (counts[s] ?? 0), 0) : null;
-  const activeCount = counts ? ACTIVE_FIELD_VISIT_STAGES.reduce((sum, s) => sum + (counts[s] ?? 0), 0) : null;
+  const activeCount = data?.activeCount ?? (counts ? ACTIVE_FIELD_VISIT_STAGES.reduce((sum, s) => sum + (counts[s] ?? 0), 0) : null);
   const allCount = counts ? FIELD_VISIT_STAGES.reduce((sum, s) => sum + (counts[s] ?? 0), 0) : null;
   const withCount = (label: string, n: number | null | undefined) => (n === null || n === undefined ? label : `${label} (${n})`);
 
   const stageOptions = useMemo(
     () => [
-      /* The default (16 Nov 2026): what is ready, under way or done; to plan and cancelled are one pick away. */
-      { value: "active", label: withCount("Ready, in progress and done", activeCount) },
+      /* The default (16 Nov 2026): what is ready, under way or done, and call outs still to plan (18 Nov); planned visits to plan and cancelled are one pick away. */
+      { value: "active", label: withCount("Active: call outs to plan, ready, in progress, done", activeCount) },
       { value: "open", label: withCount("Open", openCount) },
       ...FIELD_VISIT_STAGES.map((s) => ({ value: s, label: withCount(FIELD_VISIT_STAGE_LABELS[s], counts?.[s]) })),
       { value: "all", label: withCount("All stages", allCount) },
