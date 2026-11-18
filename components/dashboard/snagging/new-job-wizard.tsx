@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type UIEvent } from 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { LucideIcon } from "lucide-react";
+import { OptionToggle } from "@/components/dashboard/shared/option-toggle";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -13,18 +14,22 @@ import {
   ChevronDown,
   Crosshair,
   Eraser,
+  FileCheck2,
   FileText,
   ImageIcon,
   LayoutGrid,
   ListChecks,
   Loader2,
   MapPin,
-  Pencil,
+  MoonStar,
+  SquarePen,
   Plus,
   Receipt,
   Search,
   Shapes,
+  Sofa,
   StickyNote,
+  Trees,
   Upload,
   UserPlus,
   UserRound,
@@ -2081,45 +2086,6 @@ function FormSection({
   );
 }
 
-/**
- * A yes/no choice as a selectable card: the whole card is the target, and
- * a chosen option is visibly chosen rather than just a ticked box.
- */
-function OptionCard({
-  checked,
-  onChange,
-  title,
-  description,
-}: {
-  checked: boolean;
-  onChange: (checked: boolean) => void;
-  title: React.ReactNode;
-  description?: React.ReactNode;
-}) {
-  return (
-    <label
-      className={cn(
-        "flex cursor-pointer items-start gap-3 rounded-lg border p-3 text-sm transition-colors",
-        checked ? "border-brand bg-brand-50" : "hover:bg-muted/40",
-      )}
-    >
-      <Checkbox
-        checked={checked}
-        onCheckedChange={(v) => onChange(Boolean(v))}
-        className="mt-0.5"
-      />
-      <span>
-        <span className="font-medium">{title}</span>
-        {description ? (
-          <span className="text-muted-foreground mt-0.5 block text-xs leading-relaxed">
-            {description}
-          </span>
-        ) : null}
-      </span>
-    </label>
-  );
-}
-
 function PropertyStep({
   draft,
   set,
@@ -2520,10 +2486,11 @@ function PropertyStep({
         </div>
 
         {hasPlot ? (
-          <OptionCard
+          <OptionToggle
             checked={draft.external_areas_in_scope}
             onChange={(v) => set("external_areas_in_scope", v)}
             title="External areas are in scope"
+            icon={<Trees />}
             description="Garden, pool and landscaping are inspected too."
           />
         ) : null}
@@ -2594,10 +2561,11 @@ function PropertyStep({
         title="Documents"
         description="Optional paperwork. Nothing here blocks the quotation or the job."
       >
-        <OptionCard
+        <OptionToggle
           checked={draft.noc_required}
           onChange={(v) => set("noc_required", v)}
           title="An NOC or authorization letter is required"
+          icon={<FileCheck2 />}
           description="The person requesting the inspection is not the owner."
         />
         <div className="grid gap-4 md:grid-cols-2">
@@ -2982,7 +2950,7 @@ function PlanAreasStep({
                           aria-label={`Rename ${name}`}
                           className="rounded-full p-1 opacity-60 transition-opacity hover:opacity-100 focus-visible:opacity-100"
                         >
-                          <Pencil className="size-3" />
+                          <SquarePen className="size-3" />
                         </button>
                       </Hint>
                       <Hint label="Remove">
@@ -3489,7 +3457,7 @@ function QuotePricingBlock({
       <div className="grid gap-3 md:grid-cols-2">
         {/* The declaration. Not asked on commercial, which is flat. */}
         {!isCommercial ? (
-          <OptionCard
+          <OptionToggle
             checked={draft.furnished}
             onChange={(v) => {
               set("furnished", v);
@@ -3502,14 +3470,16 @@ function QuotePricingBlock({
               set("rate_per_sqft", "");
             }}
             title="Furnished"
+            icon={<Sofa />}
             description="The client declares the property is furnished, so it is charged at the furnished rate. If the inspector finds otherwise on site, the quotation is void and a revised one is needed."
           />
         ) : null}
 
-        <OptionCard
+        <OptionToggle
           checked={draft.out_of_hours}
           onChange={(v) => set("out_of_hours", v)}
           title="Out of hours"
+          icon={<MoonStar />}
           description={
             pricing
               ? `Adds the ${pricing.out_of_hours_percent}% out-of-hours surcharge to the service total, before VAT, as its own line on the quotation.`

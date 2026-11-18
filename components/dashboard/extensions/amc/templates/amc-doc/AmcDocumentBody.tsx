@@ -274,6 +274,44 @@ function renderBlock(block: Block, key: number, keepWithPrevious: boolean, pdf: 
         </p>
       );
 
+    case "photos": {
+      const rows: (typeof block.items)[] = [];
+      for (let i = 0; i < block.items.length; i += 3) rows.push(block.items.slice(i, i + 3));
+      return (
+        <div key={key} style={{ margin: "4px 0 10px" }}>
+          {rows.map((row, rowIndex) => (
+            <div key={rowIndex} {...(rowIndex === 0 ? breakAttr : { "data-amc-break": "" })} style={{ display: "flex", gap: "12px", marginBottom: "12px" }}>
+              {[0, 1, 2].map((k) => {
+                const p = row[k];
+                return p ? (
+                  <div key={k} style={{ flex: "1 1 0", minWidth: 0, border: `1px solid ${AMC_DOC_COLORS.rule}`, borderRadius: "4px", overflow: "hidden", backgroundColor: AMC_DOC_COLORS.white }}>
+                    <div
+                      role="img"
+                      aria-label={p.caption ?? p.label}
+                      style={{
+                        height: "150px",
+                        backgroundColor: "#F2F2F2",
+                        backgroundImage: `url("${p.url}")`,
+                        backgroundSize: "cover",
+                        backgroundPosition: "center",
+                        backgroundRepeat: "no-repeat",
+                      }}
+                    />
+                    <div style={{ padding: "6px 8px 8px" }}>
+                      <div style={{ ...text, fontSize: pt(AMC_DOC_PT.small), fontWeight: 700, color: AMC_DOC_COLORS.brand, margin: 0 }}>{p.label}</div>
+                      {p.caption ? <div style={{ ...text, fontSize: pt(AMC_DOC_PT.small), color: AMC_DOC_COLORS.muted, margin: "2px 0 0", lineHeight: 1.35 }}>{p.caption}</div> : null}
+                    </div>
+                  </div>
+                ) : (
+                  <div key={k} style={{ flex: "1 1 0", minWidth: 0 }} />
+                );
+              })}
+            </div>
+          ))}
+        </div>
+      );
+    }
+
     case "signatures":
       return (
         <div key={key} {...breakAttr} style={{ display: "flex", gap: "40px", marginTop: "28px" }}>

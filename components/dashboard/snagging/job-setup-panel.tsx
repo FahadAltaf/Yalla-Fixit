@@ -11,7 +11,7 @@ import {
   FileText,
   Lock,
   MapPin,
-  Pencil,
+  SquarePen,
   RefreshCw,
   Save,
   ShieldCheck,
@@ -41,7 +41,7 @@ import { Label } from "@/components/ui/label";
 import { compressImage } from "@/lib/media/compress-image";
 import DateSelect from "@/components/ui/date-select";
 import { InspectorAssignmentAlert } from "./inspector-alert";
-import { useActiveStaff } from "./inspector-picker";
+import { InspectorPicker, useActiveStaff } from "./inspector-picker";
 import TimeSelect from "@/components/ui/time-select";
 import { cn } from "@/lib/utils";
 import {
@@ -53,7 +53,6 @@ import {
 } from "@/components/ui/select";
 import { useAuth } from "@/context/AuthContext";
 import { hasResourceAction } from "@/lib/role-permissions";
-import MultipleSelector from "@/components/ui/multiselect";
 import { snaggingService } from "@/modules/snagging";
 import type { AssignableUser } from "@/modules/users/services/users-service";
 
@@ -686,7 +685,7 @@ export function JobSetupPanel({
                 action={
                   canEdit && property?.id ? (
                     <Button variant="ghost" size="sm" onClick={openProperty}>
-                      <Pencil className="size-3.5" />
+                      <SquarePen className="size-3.5" />
                       Edit
                     </Button>
                   ) : null
@@ -760,7 +759,7 @@ export function JobSetupPanel({
                 action={
                   canEdit && property?.client_id ? (
                     <Button variant="ghost" size="sm" onClick={openClient}>
-                      <Pencil className="size-3.5" />
+                      <SquarePen className="size-3.5" />
                       Edit
                     </Button>
                   ) : null
@@ -1061,48 +1060,20 @@ export function JobSetupPanel({
                   plainly.
                 */}
                   {canAssign ? (
-                    <MultipleSelector
-                      value={inspectorIds.map((id) => ({
-                        value: id,
-                        label: nameFor(users, id) || id,
-                      }))}
-                      onChange={(picked) =>
-                        setInspectorIds(picked.map((option) => option.value))
-                      }
-                      options={users.map((u) => {
-                        const busyCode = busyMap[u.id];
-                        /*
-                          Booked elsewhere that day. Someone already on this
-                          job is never greyed out: they are booked BY this
-                          job, and disabling them would make removing them
-                          impossible.
-                        */
-                        const isBusy =
-                          Boolean(busyCode) && !inspectorIds.includes(u.id);
-                        return {
-                          value: u.id,
-                          label:
-                            ((u.full_name || u.email) ?? u.id) +
-                            (isBusy ? ` · busy (${busyCode})` : ""),
-                          disable: isBusy,
-                        };
-                      })}
-                      placeholder="Assign inspectors"
-                      hidePlaceholderWhenSelected
-                      /*
-                        The shared Command root ships `size-full`, which is
-                        right in a popover and wrong here: as a grid item's
-                        child, height:100% resolves against a row height
-                        that is still being measured, so the control stops
-                        contributing its own height and the availability
-                        line underneath lands on top of the next field.
-                      */
-                      commandProps={{ className: "h-auto" }}
-                      emptyIndicator={
-                        <p className="text-muted-foreground py-2 text-center text-sm">
-                          No one else to assign.
-                        </p>
-                      }
+                    /*
+                      Technicians, with a login made on the spot for one
+                      who has none (13 Nov 2026). `busy` greys out who is
+                      booked elsewhere that day; someone already on this
+                      job is never greyed out, or they could not be
+                      taken off.
+                    */
+                    <InspectorPicker
+                      value={inspectorIds}
+                      onChange={setInspectorIds}
+                      names={Object.fromEntries(
+                        inspectorIds.map((id) => [id, nameFor(users, id) ?? ""]).filter(([, name]) => name),
+                      )}
+                      busy={busyMap}
                     />
                   ) : (
                     <ReadOnlyValue

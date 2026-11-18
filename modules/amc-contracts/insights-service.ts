@@ -1,6 +1,7 @@
 import type { ClientReport } from "@/lib/server/amc/client-report";
 import type { commercialReport, managementDashboard, operationalReport } from "@/lib/server/amc/insights";
 import { amcRequest } from "@/lib/amc/http-cache";
+import type { SendChannel, SendOutcome } from "@/lib/amc/send-channels";
 
 /**
  * Browser calls for the AMC management dashboard, the operational and
@@ -14,7 +15,7 @@ export type OperationalReport = Awaited<ReturnType<typeof operationalReport>>;
 export type CommercialReport = Awaited<ReturnType<typeof commercialReport>>;
 export type { ClientReport };
 
-export type ClientReportOutcome = "sent" | "failed" | "no_recipient";
+export type ClientReportOutcome = SendOutcome;
 
 export interface ClientReportSendResult {
   outcome: ClientReportOutcome;
@@ -23,6 +24,8 @@ export interface ClientReportSendResult {
   message: string;
   /** A wa.me link, or null without a phone number on file. */
   whatsapp: string | null;
+  /** The report's own link, to copy. */
+  link: string | null;
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -59,8 +62,8 @@ export const insightsService = {
   },
   /** Without `to`, the server sends to the client's email on file. */
   /** Without `to`, the server sends to the client's email on file. pdfBase64: the branded PDF built in the browser. */
-  sendClientReport(contractId: string, to?: string | null, pdfBase64?: string | null) {
-    return request<ClientReportSendResult>(reportUrl(contractId), { method: "POST", body: JSON.stringify({ ...(to ? { to } : {}), ...(pdfBase64 ? { pdfBase64 } : {}) }) });
+  sendClientReport(contractId: string, to?: string | null, pdfBase64?: string | null, channel: SendChannel = "email") {
+    return request<ClientReportSendResult>(reportUrl(contractId), { method: "POST", body: JSON.stringify({ ...(to ? { to } : {}), ...(pdfBase64 ? { pdfBase64 } : {}), channel }) });
   },
 };
 

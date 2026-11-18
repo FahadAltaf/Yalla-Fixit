@@ -106,7 +106,7 @@ export function ClientReportViewer({
                 <AmcDocumentContinuous model={model} cover={false} />
               </div>
             ) : (
-              <div className="w-[794px] max-w-full space-y-4 rounded bg-white p-10 shadow-lg" aria-label="Loading the client report">
+              <div className="w-[794px] max-w-full space-y-4 rounded border bg-card p-10 shadow-lg" aria-label="Loading the client report">
                 <Skeleton className="h-10 w-48" />
                 <Skeleton className="h-8 w-full" />
                 <Skeleton className="h-32 w-full" />

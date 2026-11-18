@@ -11,6 +11,7 @@ import {
   type FieldVisitStage,
   type FieldVisitWhen,
 } from "@/lib/amc/field-visits";
+import { ACTIVE_FIELD_VISIT_FILTER } from "@/lib/amc/visit-list-scope";
 import { addDays } from "@/lib/amc/ppm";
 import { safeTerm } from "@/lib/server/amc/business";
 import { ContractError, isMissingTable } from "@/lib/server/amc/contracts";
@@ -66,7 +67,8 @@ export interface FieldVisitRow {
 export interface FieldVisitFilters {
   kind?: FieldVisitKind | null;
   /** "open" (default) = every stage still to be done; "all" = no stage filter. */
-  stage?: FieldVisitStage | "open" | "all";
+  /** "active": ready, in progress, awaiting review and done (the Visits page's default). */
+  stage?: FieldVisitStage | "open" | "active" | "all";
   when?: FieldVisitWhen;
   technicianId?: string | null;
   contractId?: string | null;
@@ -118,8 +120,10 @@ function applyFilters<Q extends { eq: any; in: any; or: any; lt: any; gte: any; 
   return q;
 }
 
-function stageFilter<Q extends { in: (c: string, v: string[]) => Q; eq: (c: string, v: string) => Q }>(q: Q, stage: FieldVisitFilters["stage"]): Q {
+function stageFilter<Q extends { in: (c: string, v: string[]) => Q; eq: (c: string, v: string) => Q; or: (f: string) => Q }>(q: Q, stage: FieldVisitFilters["stage"]): Q {
   if (!stage || stage === "open") return q.in("stage", OPEN_FIELD_VISIT_STAGES as string[]);
+  /* The default: ready, in progress, review and done, and a call out (or other non-planned visit) still to plan. */
+  if (stage === "active") return q.or(ACTIVE_FIELD_VISIT_FILTER);
   if (stage === "all") return q;
   return q.eq("stage", stage);
 }
@@ -128,23 +132,28 @@ export async function listFieldVisits(
   admin: Admin,
   filters: FieldVisitFilters,
   viewer: FieldVisitViewer,
-): Promise<{ migrated: boolean; visits: FieldVisitRow[]; total: number; stageCounts: Record<FieldVisitStage, number>; today: string }> {
+): Promise<{ migrated: boolean; visits: FieldVisitRow[]; total: number; stageCounts: Record<FieldVisitStage, number>; activeCount: number; today: string }> {
   const today = todayInDubai();
   const emptyCounts = Object.fromEntries(FIELD_VISIT_STAGES.map((s) => [s, 0])) as Record<FieldVisitStage, number>;
-  /* Open work soonest first; finished or everything, newest first. */
-  const ascending = !filters.stage || filters.stage === "open" || OPEN_FIELD_VISIT_STAGES.includes(filters.stage as FieldVisitStage);
-
+  /*
+    Newest created first, whatever the stage (16 Nov 2026). Visits made
+    together (a contract's whole schedule is created at once) then follow
+    their day and number, so a contract's visits still read in order.
+  */
   const page = stageFilter(applyFilters(admin.from(VIEW).select(COLUMNS, { count: "exact" }), filters, viewer, today), filters.stage)
-    .order("day", { ascending })
+    .order("created_at", { ascending: false })
+    .order("day", { ascending: true })
     .order("ref", { ascending: true })
     .range(filters.from, filters.to);
   /* How many in each stage under the same filters, for the stage filter's labels: one small count per stage, in parallel. */
   const counts = FIELD_VISIT_STAGES.map((stage) =>
     applyFilters(admin.from(VIEW).select("id", { count: "exact", head: true }), filters, viewer, today).eq("stage", stage),
   );
-  const [pageRes, ...countRes] = await Promise.all([page, ...counts]);
+  /* The default listing's own count: its stages and the call outs still to plan. */
+  const active = stageFilter(applyFilters(admin.from(VIEW).select("id", { count: "exact", head: true }), filters, viewer, today), "active");
+  const [pageRes, activeRes, ...countRes] = await Promise.all([page, active, ...counts]);
   if (pageRes.error) {
-    if (isMissingTable(pageRes.error)) return { migrated: false, visits: [], total: 0, stageCounts: emptyCounts, today };
+    if (isMissingTable(pageRes.error)) return { migrated: false, visits: [], total: 0, stageCounts: emptyCounts, activeCount: 0, today };
     throw new ContractError(pageRes.error.message, 500);
   }
   const rows = (pageRes.data ?? []) as unknown as Row[];
@@ -152,7 +161,7 @@ export async function listFieldVisits(
 
   const visits = await enrichRows(admin, rows, today);
 
-  return { migrated: true, visits, total: pageRes.count ?? visits.length, stageCounts, today };
+  return { migrated: true, visits, total: pageRes.count ?? visits.length, stageCounts, activeCount: activeRes.count ?? 0, today };
 }
 
 /* Rows of the view as the screens read them: the crew's names and a planned visit's services, in two batched reads for these rows only. */

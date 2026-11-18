@@ -10,6 +10,7 @@ import { ContractError, loadContract } from "@/lib/server/amc/contracts";
 import { recordSend } from "@/lib/server/amc/proposal-share";
 import { AMC_DOCUMENTS_BUCKET, renderPdf } from "@/lib/server/amc/signed-archive";
 import { sendEmail } from "@/lib/server/send-email";
+import { initialOutcome, type SendChannel } from "@/lib/amc/send-channels";
 
 /**
  * The client report per contract (BRD v0.3 5.15; Phase 12: DEV-410), on
@@ -228,13 +229,14 @@ async function storeReport(admin: Admin, r: ClientReport, actor: Actor, browserP
 }
 
 /** Email (PDF attached) to the client, owner copied; the WhatsApp text with the link comes back prepared. */
-export async function sendClientReport(admin: Admin, contractId: string, actor: Actor, config: AmcConfig, to?: string | null, browserPdf?: Uint8Array | null) {
+export async function sendClientReport(admin: Admin, contractId: string, actor: Actor, config: AmcConfig, to?: string | null, browserPdf?: Uint8Array | null, channel: SendChannel = "email") {
   const r = await clientReportFacts(admin, contractId, config);
   const stored = await storeReport(admin, r, actor, browserPdf);
   const recipient = (to ?? r.contract.customerEmail ?? "").trim();
   const cc = [r.owner?.email].filter((e): e is string => Boolean(e) && e !== recipient);
-  let outcome: "sent" | "failed" | "no_recipient" = "no_recipient";
-  if (recipient) {
+  const phone = r.contract.customerPhone;
+  let outcome = initialOutcome(channel);
+  if (channel === "email" && recipient) {
     try {
       await sendEmail({
         to: recipient,
@@ -266,14 +268,22 @@ export async function sendClientReport(admin: Admin, contractId: string, actor: 
     submissionId: r.contract.submissionId,
     versionNo: 1,
     document: "client_report",
-    channel: "email",
-    recipients: recipient ? [{ name: r.contract.customerName, address: recipient }] : [],
-    cc,
+    channel,
+    recipients: channel === "email" ? (recipient ? [{ name: r.contract.customerName, address: recipient }] : []) : channel === "whatsapp" && phone ? [{ name: r.contract.customerName, address: phone }] : [],
+    cc: channel === "email" ? cc : [],
     outcome,
     detail: `Client report as of ${r.asOf}`,
     sentBy: actor.id,
   });
   await recordAmcAudit(admin, { entityType: "contract", entityId: contractId, eventType: "client_report_sent", actorId: actor.id, actorLabel: actor.label, payload: { outcome, documentId: stored.documentId } });
-  const message = `Dear ${r.contract.customerName}, here is the service report for your AMC ${r.contract.number}: ${r.visitsDone.length} visits done, ${r.visitsRemaining.length} to come, ${r.callOuts.length} call outs attended.${stored.link ? ` ${stored.link}` : ""}`;
-  return { outcome, documentId: stored.documentId, message, whatsapp: r.contract.customerPhone ? whatsappUrl(r.contract.customerPhone, message) : null };
+  /* No link in the text (18 Nov 2026): the coordinator attaches the PDF. */
+  const message = `Dear ${r.contract.customerName}, please find attached the service report for your AMC ${r.contract.number}: ${r.visitsDone.length} visits done, ${r.visitsRemaining.length} to come, ${r.callOuts.length} call outs attended.`;
+  return {
+    outcome,
+    documentId: stored.documentId,
+    message,
+    whatsapp: phone ? whatsappUrl(phone, message) : null,
+    link: stored.link,
+    file: stored.link ? { url: stored.link, name: `client-report-${r.contract.number}-${r.asOf}.${stored.pdf ? "pdf" : "html"}` } : null,
+  };
 }

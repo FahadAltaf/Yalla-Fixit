@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
-import { BellRing, ListChecks, Pencil, Percent, Play, Plus, Save, Tag } from "lucide-react";
+import { BellRing, ListChecks, SquarePen, Percent, Play, Plus, Save, Tag } from "lucide-react";
 import { toast } from "sonner";
 
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
@@ -355,7 +355,7 @@ function ChecklistSettings() {
                     open(row.original);
                   }}
                 >
-                  <Pencil className="size-3.5" />
+                  <SquarePen className="size-3.5" />
                   Edit
                 </Button>
               </div>

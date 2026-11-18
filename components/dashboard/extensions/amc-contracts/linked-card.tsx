@@ -1,6 +1,6 @@
 "use client";
 
-import { Pencil } from "lucide-react";
+import { SquarePen } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { TruncatedText } from "@/components/ui/truncated-text";
@@ -41,7 +41,7 @@ export function LinkedCard({
       <div className="flex shrink-0 items-center gap-1">
         {onEdit ? (
           <Button type="button" variant="ghost" size="sm" onClick={onEdit} disabled={busy}>
-            <Pencil className="size-3.5" />
+            <SquarePen className="size-3.5" />
             {editLabel}
           </Button>
         ) : null}

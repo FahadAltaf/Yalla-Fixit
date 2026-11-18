@@ -20,7 +20,7 @@ import type { ScanProposal } from "@/lib/server/finance/invoice-scan";
 import { cn } from "@/lib/utils";
 import { financeService } from "@/modules/finance/finance-service";
 
-import { InvoiceTotals, LineName, aed } from "./shared";
+import { InvoiceTotals, LineName, MaherTotalFields, maherTotalReady, aed } from "./shared";
 
 /**
  * Upload a MAHER invoice and let the AI read it (decided with the user,
@@ -90,6 +90,9 @@ export function UploadInvoiceDialog({
   const [rows, setRows] = useState<Row[]>([]);
   const [number, setNumber] = useState("");
   const [date, setDate] = useState(() => todayInZone());
+  /* The total printed on the invoice (13 Nov): what the scan read, else typed. */
+  const [maherTotal, setMaherTotal] = useState("");
+  const [varianceReason, setVarianceReason] = useState("");
   const [key] = useState(() => crypto.randomUUID());
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -125,6 +128,7 @@ export function UploadInvoiceDialog({
       setProposal(result);
       setNumber(result.scanned.invoiceNumber ?? "");
       if (result.scanned.invoiceDate) setDate(result.scanned.invoiceDate);
+      if (result.scanned.total !== null && result.scanned.total > 0) setMaherTotal(String(round2(result.scanned.total)));
       const proposed: Row[] = result.proposals.map((p) => ({
         key: p.candidate.lineId,
         candidate: p.candidate,
@@ -175,8 +179,9 @@ export function UploadInvoiceDialog({
   /* Whether the number and date shown are what was read from the file (27 Oct). */
   const numberRead = Boolean(proposal?.scanned.invoiceNumber) && number.trim() === proposal?.scanned.invoiceNumber;
   const dateRead = Boolean(proposal?.scanned.invoiceDate) && date === proposal?.scanned.invoiceDate;
-  const differs = scannedTotal !== null && included.length > 0 && Math.abs(scannedTotal - sumWithVat) > 0.01;
-  const valid = step === "review" && included.length > 0 && !bad && number.trim() && date && sumWithVat > 0;
+  const totalRead = scannedTotal !== null && maherTotal.trim() !== "" && Math.abs(Number(maherTotal) - scannedTotal) < 0.005;
+  const valid =
+    step === "review" && included.length > 0 && !bad && number.trim() && date && sumWithVat > 0 && maherTotalReady(maherTotal, varianceReason, sumWithVat);
 
   const confirm = async () => {
     if (!proposal || !path) return;
@@ -188,6 +193,8 @@ export function UploadInvoiceDialog({
         number: number.trim(),
         date,
         total: sumWithVat,
+        maherTotal: round2(Number(maherTotal)),
+        varianceReason: varianceReason.trim() || null,
         allocations: included.map((r) => ({ line: r.candidate.lineId, workOrder: r.candidate.workOrderId, amount: round2(beforeVatOf(r)) })),
         filePath: path,
         scan: proposal.scanned as unknown as Record<string, unknown>,
@@ -488,15 +495,15 @@ export function UploadInvoiceDialog({
             ) : null}
 
             <InvoiceTotals totals={totals} />
-            {differs ? (
-              <Alert>
-                <TriangleAlert className="size-4" />
-                <AlertTitle>The invoice says {aed(scannedTotal!)}</AlertTitle>
-                <AlertDescription>
-                  The lines ticked come to {aed(sumWithVat)} with VAT on their total. Check the lines and amounts: the total recorded is what the lines come to.
-                </AlertDescription>
-              </Alert>
-            ) : null}
+            <MaherTotalFields
+              id="scan-maher"
+              value={maherTotal}
+              onChange={setMaherTotal}
+              reason={varianceReason}
+              onReasonChange={setVarianceReason}
+              portalTotal={sumWithVat}
+              hint={totalRead ? "Read from the invoice." : scannedTotal === null ? "No total found on the file." : null}
+            />
 
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="grid gap-1.5">

@@ -24,7 +24,11 @@ export type MetricInvoice = {
   queueValue: number;
   recordedAt: string;
   recordedByLabel: string | null;
-  /** When the work it covers was marked ready; days to invoice run from here, else from the item's entry. */
+  /**
+   * When the work it covers became invoiceable; days to invoice run from
+   * here. Left out (undefined): from the item's entry. Null: unknown, and
+   * the invoice is left out of days to invoice (never 0 days).
+   */
   startedAt?: string | null;
 };
 
@@ -42,6 +46,7 @@ const invoiceCount = (invoices: MetricInvoice[]) => new Set(invoices.map((inv, i
 
 /** Days from the work being ready (or entering the queue) to the invoice, null when its item is unknown. */
 function daysToInvoiceOf(inv: MetricInvoice, entered: string | undefined): number | null {
+  if (inv.startedAt === null) return null;
   const start = inv.startedAt ?? entered;
   return start ? Math.max(0, (Date.parse(inv.recordedAt) - Date.parse(start)) / DAY_MS) : null;
 }
@@ -124,7 +129,9 @@ export function computeQueueMetrics(
 
   const spans = invoices
     .filter((inv) => byId.has(inv.queueItemId))
-    .map((inv) => ({ user: inv.recordedByLabel ?? "Unknown", days: daysToInvoiceOf(inv, byId.get(inv.queueItemId)!.enteredAt) as number }));
+    .map((inv) => ({ user: inv.recordedByLabel ?? "Unknown", days: daysToInvoiceOf(inv, byId.get(inv.queueItemId)!.enteredAt) }))
+    /* An invoice whose start is unknown is left out, never counted as 0 days. */
+    .filter((s): s is { user: string; days: number } => s.days !== null);
   const users = [...new Set(spans.map((s) => s.user))].sort();
 
   const excludedReasons = new Map<string, { count: number; value: number }>();
@@ -269,7 +276,9 @@ export function computePeriodMetrics(input: {
 
   const spans = current
     .filter((inv) => byId.has(inv.queueItemId))
-    .map((inv) => ({ user: inv.recordedByLabel ?? "Unknown", days: daysToInvoiceOf(inv, byId.get(inv.queueItemId)!.enteredAt) as number }));
+    .map((inv) => ({ user: inv.recordedByLabel ?? "Unknown", days: daysToInvoiceOf(inv, byId.get(inv.queueItemId)!.enteredAt) }))
+    /* An invoice whose start is unknown is left out, never counted as 0 days. */
+    .filter((s): s is { user: string; days: number } => s.days !== null);
   const users = [...new Set(spans.map((s) => s.user))];
   const variances = current.map((inv) => round2(inv.amount - inv.queueValue));
 

@@ -41,8 +41,17 @@ import { useUrlTab } from "./profile/use-url-tab";
 import { useAmcData } from "./use-amc-data";
 import { HistoryPanel } from "./visit-page";
 import { slotLabel } from "./visit-status";
+import { FieldStartAction, FieldWorkAccessCard, WorkConfirmationCard, useFieldWork } from "./field-work-panels";
+import { HeaderActionsSlot } from "./call-out-shared";
+import { ChargeCard } from "./visit-charge";
+import { JobSheetPanel } from "./job-sheet-panel";
+import { fieldJobSheetCalls } from "@/modules/amc-contracts/job-sheets-service";
 
-const TABS = ["overview", "finding", "quotation", "parties", "crew", "photos", "history"] as const;
+/* The work's job sheet (18 Nov 2026): the planned visit's panel on the work's calls. */
+const WORK_SHEET = fieldJobSheetCalls("additional_work");
+
+/* client, access (17 Nov 2026): once approved, confirmed with the client and access sorted, then Start visit, as a planned visit. */
+const TABS = ["overview", "finding", "quotation", "parties", "crew", "client", "access", "job_sheet", "photos", "history"] as const;
 type Tab = (typeof TABS)[number];
 const TAB_LABELS: Record<Tab, string> = {
   overview: "Overview",
@@ -50,6 +59,9 @@ const TAB_LABELS: Record<Tab, string> = {
   quotation: "Quotation",
   parties: "Parties",
   crew: "Crew & time",
+  client: "Client",
+  access: "Access",
+  job_sheet: "Job sheet",
   photos: "Photos",
   history: "History",
 };
@@ -73,17 +85,31 @@ export function AdditionalWorkPage({ id }: { id: string }) {
   const data = work.data;
   const w = data?.work ?? null;
 
+  /* Once approved it is a visit: its access, client confirmation and start. */
+  const visitLike = Boolean(w && ["approved", "scheduled", "completed", "invoiced", "paid"].includes(w.status));
+  const fieldWork = useFieldWork(visitLike ? "additional_work" : null, id);
+  /* Where the job sheet puts its Return / Close / report buttons; the sheet is read again with everything else. */
+  const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
+  const [sheetVersion, setSheetVersion] = useState(0);
   const reloadAll = () => {
+    setSheetVersion((n) => n + 1);
     work.reload();
+    fieldWork.reload();
     history.reload();
   };
   const changed = async () => reloadAll();
   const refresh = () => amcRefresh(reloadAll);
   const actions = useWorkActions(data, changed, working !== null, () => setTab("crew"));
+  /* Once approved it is a visit: its photos are part of the job sheet, as a planned visit's (18 Nov 2026). */
+  const shownTabs = TABS.filter((t) => (t === "client" || t === "access" || t === "job_sheet" ? visitLike : t === "photos" ? !visitLike : true));
   const notFound = work.error && /not found/i.test(work.error);
 
+  /* Once started (or done), the job sheet is mounted hidden, so its Return / Close / report buttons are in the header from any tab. */
+  const sheetActive = visitLike && (Boolean(fieldWork.data?.startedAt) || ["completed", "invoiced", "paid"].includes(w?.status ?? ""));
+  /* An old link to the Photos tab opens the job sheet once the work is a visit. */
+  const shown: Tab = visitLike && tab === "photos" ? "job_sheet" : tab;
   const panel = (value: Tab, children: ReactNode) =>
-    isOpened(value) ? (
+    isOpened(value) || shown === value || (value === "job_sheet" && sheetActive) ? (
       <TabsContent value={value} forceMount className="mt-4 flex flex-col gap-4 data-[state=inactive]:hidden">
         {children}
       </TabsContent>
@@ -159,6 +185,8 @@ export function AdditionalWorkPage({ id }: { id: string }) {
                 </Button>
               ) : null}
               {actions.buttons}
+              <span ref={setHeaderSlot} className="contents" />
+              {visitLike ? <FieldStartAction kind="additional_work" id={id} fw={fieldWork} status={w.status} canEdit={data.canEdit} onTab={(t) => setTab(t === "services" || t === "payment" ? "quotation" : t)} onChanged={changed} disabled={working !== null} /> : null}
             </>
           }
         />
@@ -176,10 +204,11 @@ export function AdditionalWorkPage({ id }: { id: string }) {
       ) : null}
 
       {w ? (
+        <HeaderActionsSlot.Provider value={headerSlot}>
         <PanelSurface.Provider value="card">
-          <Tabs value={tab} onValueChange={setTab}>
+          <Tabs value={shown} onValueChange={setTab}>
             <TabsList className="h-auto w-full flex-wrap justify-start gap-1 group-data-horizontal/tabs:h-auto">
-              {TABS.map((t) => (
+              {shownTabs.map((t) => (
                 <TabsTrigger key={t} value={t}>
                   {TAB_LABELS[t]}
                   {t === "photos" && data?.photos.length ? <span className="text-muted-foreground ml-1 tabular-nums">({data.photos.length})</span> : null}
@@ -189,13 +218,25 @@ export function AdditionalWorkPage({ id }: { id: string }) {
 
             {panel("overview", withWork((d) => <WorkOverview data={d} onTab={setTab} />))}
             {panel("finding", withWork((d) => <WorkFindingSection {...props(d)} />))}
-            {panel("quotation", withWork((d) => <WorkQuotationSection {...props(d)} />))}
+            {panel(
+              "quotation",
+              <>
+                {withWork((d) => <WorkQuotationSection {...props(d)} />)}
+                {/* What the client pays, from the quotation, before or after the visit (18 Nov 2026). */}
+                {visitLike ? <ChargeCard kind="additional_work" id={id} onChanged={changed} refreshKey={sheetVersion} /> : null}
+              </>,
+            )}
             {panel("parties", withWork((d) => <WorkPartiesSection {...props(d)} />))}
             {panel("crew", withWork((d) => <WorkScheduleSection {...props(d)} />))}
-            {panel("photos", withWork((d) => <WorkPhotosSection data={d} working={working} changed={changed} />))}
+            {visitLike ? panel("client", <WorkConfirmationCard id={id} fw={fieldWork} onChanged={changed} onTab={setTab} />) : null}
+            {visitLike ? panel("access", <FieldWorkAccessCard kind="additional_work" id={id} fw={fieldWork} onChanged={changed} />) : null}
+            {/* Exactly the planned visit's Job sheet tab (18 Nov 2026). */}
+            {visitLike ? panel("job_sheet", <JobSheetPanel visitId={id} calls={WORK_SHEET} onChanged={changed} readOnly refreshKey={sheetVersion} />) : null}
+            {visitLike ? null : panel("photos", withWork((d) => <WorkPhotosSection data={d} working={working} changed={changed} />))}
             {panel("history", <HistoryPanel data={history} description="Everything that happened to this work, newest first: each step from the finding to the payment, and who took it." />)}
           </Tabs>
         </PanelSurface.Provider>
+        </HeaderActionsSlot.Provider>
       ) : null}
 
       {actions.dialogs}

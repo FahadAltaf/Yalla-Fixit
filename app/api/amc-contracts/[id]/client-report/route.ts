@@ -4,6 +4,7 @@ import { z } from "zod";
 import { clientReportFacts, clientReportHtml, sendClientReport } from "@/lib/server/amc/client-report";
 import { readAmcConfig } from "@/lib/server/amc/config";
 import { contractErrorResponse, requireContractAccess, requireManagedContract } from "@/lib/server/amc/contract-access";
+import { sendChannelSchema } from "@/lib/amc/send-channels";
 
 /**
  * The client report of one contract (DEV-410).
@@ -30,7 +31,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
 
 /* pdfBase64: the branded PDF the portal built from the report (as the viewer shows it), at most ~12 MB. */
 const sendSchema = z
-  .object({ to: z.string().trim().email().max(200).optional().nullable(), pdfBase64: z.string().max(16_000_000).optional() })
+  .object({ to: z.string().trim().email().max(200).optional().nullable(), pdfBase64: z.string().max(16_000_000).optional(), channel: sendChannelSchema.optional() })
   .strict();
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -45,7 +46,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const pdf = parsed.data.pdfBase64 ? new Uint8Array(Buffer.from(parsed.data.pdfBase64, "base64")) : null;
     /* Only a real PDF is kept as one; anything else falls back to the PDF printed here. */
     const browserPdf = pdf && pdf.length > 4 && Buffer.from(pdf.subarray(0, 4)).toString("latin1") === "%PDF" ? pdf : null;
-    return NextResponse.json(await sendClientReport(gate.admin, id, { id: gate.userId, label: gate.label }, await readAmcConfig(gate.admin), parsed.data.to, browserPdf));
+    return NextResponse.json(await sendClientReport(gate.admin, id, { id: gate.userId, label: gate.label }, await readAmcConfig(gate.admin), parsed.data.to, browserPdf, parsed.data.channel));
   } catch (error) {
     return contractErrorResponse(error, "Could not send the client report");
   }

@@ -157,7 +157,9 @@ export const siteVisitSchema = z
   .object({
     propertyId: z.string().uuid("Choose the property"),
     scheduledAt: instant,
-    assessorId: z.string().uuid("Choose the assessor"),
+    assessorId: z.string().uuid("Choose the inspector"),
+    /* Who approves it once the inspector completes it (16 Nov 2026). */
+    approverId: z.string().uuid("Choose the approver").nullable().optional(),
   })
   .strict();
 
@@ -167,7 +169,8 @@ export const bookSiteVisitSchema = z
     customerId: z.string().uuid("Choose the client"),
     propertyId: z.string().uuid("Choose the property"),
     scheduledAt: instant,
-    assessorId: z.string().uuid("Choose the assessor"),
+    assessorId: z.string().uuid("Choose the inspector"),
+    approverId: z.string().uuid("Choose the approver").nullable().optional(),
   })
   .strict();
 

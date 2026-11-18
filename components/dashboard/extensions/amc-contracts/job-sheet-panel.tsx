@@ -1,17 +1,18 @@
 "use client";
 
-import { useContext, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { format } from "date-fns";
-import { AlertTriangle, CheckCircle2, CircleDashed, LogIn, Package, Timer, ClipboardCheck, Copy, Database, ExternalLink, FileText, Hammer, ImagePlus, Plus, Save, Send, Trash2, Undo2 } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ChevronDown, CircleDashed, LogIn, Package, Timer, ClipboardCheck, Database, Download, Eye, ExternalLink, FileText, Hammer, ImagePlus, Plus, Save, Send, Trash2, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 
-import { PillTabs, StatCard, StatCardGrid } from "@/components/dashboard/shared/kaizen";
+import { StatCard, StatCardGrid } from "@/components/dashboard/shared/kaizen";
 import { ActionDialogContent, ErrorState, FieldsSkeleton, SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -37,14 +38,18 @@ import { PLANNABLE_STATUSES, type VisitStatus } from "@/lib/amc/ppm";
 import { cn } from "@/lib/utils";
 import {
   jobSheetsService,
+  type JobSheetCalls,
   type JobSheetInput,
   type JobSheetResponse,
   type PhotoKind,
-  type ReportOutcome,
   type ReportState,
 } from "@/modules/amc-contracts/job-sheets-service";
 
-import { Panel, PanelEmpty, PanelSurface } from "./call-out-shared";
+import { HeaderActionsSlot, Panel, PanelEmpty } from "./call-out-shared";
+import { SendChannelNote, SendChannelToggle, SendDialog, SendResultDialog, announceSend } from "./send-options";
+import { ServiceReportViewer, downloadServiceReport, serviceReportPdfBase64 } from "./service-report-viewer";
+import type { SendChannel, SendResult } from "@/lib/amc/send-channels";
+import { createPortal } from "react-dom";
 import { formatDateTime } from "./contract-status";
 import { useDialog } from "./profile/use-dialog";
 import { RaiseAdditionalWorkDialog } from "./raise-additional-work-dialog";
@@ -120,7 +125,8 @@ interface FormState {
   arrivedAt: string;
   completedAt: string;
   lines: Record<string, LineState>;
-  checklist: Array<{ key: string; lineId: string | null; assetId: string | null; label: string; result: CheckResult; note: string }>;
+  /* category: the technician's own grouping from the phone, kept as it is when the office saves. */
+  checklist: Array<{ key: string; lineId: string | null; assetId: string | null; label: string; category: string | null; result: CheckResult; note: string }>;
   faults: string;
   consumables: Array<{ key: string; item: string; quantity: string; unit: string }>;
   additionalWork: Array<{ key: string; description: string; trade: string | null }>;
@@ -142,6 +148,7 @@ function initialForm(data: JobSheetResponse): FormState {
       lineId: c.lineId,
       assetId: c.assetId,
       label: c.label,
+      category: c.category ?? null,
       result: isCheckResult(c.result) ? c.result : "ok",
       note: c.note ?? "",
     })),
@@ -191,7 +198,7 @@ function buildInput(form: FormState, data: JobSheetResponse): { input: JobSheetI
       }),
       checklist: form.checklist
         .filter((c) => c.label.trim())
-        .map((c) => ({ lineId: c.lineId, assetId: c.assetId, label: c.label.trim(), result: c.result, note: c.note.trim() || null })),
+        .map((c) => ({ lineId: c.lineId, assetId: c.assetId, label: c.label.trim(), category: c.category, result: c.result, note: c.note.trim() || null })),
     },
   };
 }
@@ -219,7 +226,8 @@ function sheetChecks(form: FormState, data: JobSheetResponse) {
 /* The panel                                                           */
 /* ------------------------------------------------------------------ */
 
-type Prepared = { message: string; whatsapp: string | null };
+/* A report handed to the coordinator to send (WhatsApp or a link), after closing. */
+type Prepared = { channel: SendChannel; result: SendResult };
 
 /**
  * A visit's job sheet (Phase 10: DEV-402, 403, 404): what the crew did,
@@ -233,8 +241,15 @@ export function JobSheetPanel({
   onChanged,
   readOnly = false,
   refreshKey = 0,
+  calls = jobSheetsService,
+  photos = null,
 }: {
+  /** The planned visit's id, or the call out's / additional work's with `calls`. */
   visitId: string;
+  /** A call out's or additional work's sheet (fieldJobSheetCalls); a planned visit's when left out. */
+  calls?: JobSheetCalls;
+  /** The record's own photos card, in place of the sheet's photos (a call out's, an additional work's). */
+  photos?: ReactNode;
   onChanged?: () => unknown;
   /** Bumped by the page (Refresh, a change elsewhere on it): the sheet is read again. */
   refreshKey?: number;
@@ -257,7 +272,7 @@ export function JobSheetPanel({
 
   useEffect(() => {
     let stale = false;
-    jobSheetsService.jobSheet(visitId).then(
+    calls.jobSheet(visitId).then(
       (data) => !stale && setState((s) => ({ id: visitId, data, error: null, formKey: s.formKey + 1 })),
       (e) =>
         !stale &&
@@ -271,12 +286,12 @@ export function JobSheetPanel({
     return () => {
       stale = true;
     };
-  }, [visitId, attempt, refreshKey]);
+  }, [visitId, attempt, refreshKey, calls]);
 
   /* After a change: the sheet again (a fresh form only when the sheet itself changed), then the screen behind. */
   const refresh = async (resetForm: boolean) => {
     try {
-      const data = await jobSheetsService.jobSheet(visitId);
+      const data = await calls.jobSheet(visitId);
       setState((s) => ({ id: visitId, data, error: null, formKey: resetForm ? s.formKey + 1 : s.formKey }));
     } catch {
       /* The change itself went through; the next open fetches again. */
@@ -299,13 +314,16 @@ export function JobSheetPanel({
         <Database className="text-warning" />
         <AlertTitle>Job sheets need a database update</AlertTitle>
         <AlertDescription>
-          The job sheet tables are not on this database yet (migration 20261012110000). Ask an admin to apply it; until then visits are
-          closed as before.
+          {current.data.visit.kind === "call_out" || current.data.visit.kind === "additional_work"
+            ? "Job sheets for call outs and additional work are not on this database yet (migration 20261118100000). Ask an admin to apply it."
+            : "The job sheet tables are not on this database yet (migration 20261012110000). Ask an admin to apply it; until then visits are closed as before."}
         </AlertDescription>
       </Alert>
     );
   }
   return (
+    <SheetCalls.Provider value={calls}>
+    <SheetPhotos.Provider value={photos}>
     <SheetBody
       key={current.formKey}
       readOnly={readOnly}
@@ -315,10 +333,25 @@ export function JobSheetPanel({
       prepared={prepared?.id === visitId ? prepared.value : null}
       setPrepared={(value) => setPrepared(value ? { id: visitId, value } : null)}
     />
+    </SheetPhotos.Provider>
+    </SheetCalls.Provider>
   );
 }
 
 type Working = "save" | "photo" | "resend" | null;
+
+/* The calls behind the sheet: a planned visit's by default; a call out's or additional work's when the page gives them (18 Nov 2026). */
+const SheetCalls = createContext<JobSheetCalls>(jobSheetsService);
+/* A call out's or additional work's own photos card (with the office's Add photo), shown in place of the sheet's (18 Nov 2026). */
+const SheetPhotos = createContext<ReactNode | null>(null);
+/* "Visit 3", "Call out CO-12". */
+const sheetName = (v: JobSheetResponse["visit"]) => (v.label ? v.label.charAt(0).toUpperCase() + v.label.slice(1) : `Visit ${v.visitNo}`);
+
+/* Into the page header's buttons when the page has a header slot; nothing otherwise. */
+function HeaderPortal({ children }: { children: ReactNode }) {
+  const slot = useContext(HeaderActionsSlot);
+  return slot && children ? createPortal(children, slot) : null;
+}
 
 function SheetBody({
   readOnly,
@@ -335,9 +368,15 @@ function SheetBody({
   prepared: Prepared | null;
   setPrepared: (value: Prepared | null) => void;
 }) {
+  const sheetCalls = useContext(SheetCalls);
+  const photosSlot = useContext(SheetPhotos);
   const [form, setForm] = useState<FormState>(() => initialForm(data));
   const [working, setWorking] = useState<Working>(null);
-  const [dialog, setDialog] = useState<"return" | "close" | null>(null);
+  const [dialog, setDialog] = useState<"return" | "close" | "send" | null>(null);
+  /* The service report on screen, as the proposal and the contract (18 Nov 2026). */
+  const [viewingReport, setViewingReport] = useState(false);
+  const loadReportFacts = () => sheetCalls.reportFacts(visitId);
+  const downloadReport = () => downloadServiceReport(loadReportFacts);
   const { confirm, dialog: confirmDialog } = useConfirm();
   /* Additional work found on a submitted or closed sheet is raised for quoting (Phase 11). */
   const raising = useDialog<JobSheetResponse["sheet"]["additionalWork"][number]>();
@@ -348,6 +387,8 @@ function SheetBody({
   const editableStatus = status === null || status === "draft" || status === "returned";
   const editable = !readOnly && data.canEdit && editableStatus && EDITABLE_VISIT.includes(v.status);
   const busy = working !== null;
+  /* The page header, where the review and report buttons go (17 Nov 2026). */
+  const headerSlot = useContext(HeaderActionsSlot);
   const checks = editable ? sheetChecks(form, data) : null;
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) => setForm((f) => ({ ...f, [key]: value }));
@@ -371,7 +412,7 @@ function SheetBody({
     void run(
       "save",
       async () => {
-        await jobSheetsService.save(visitId, built.input);
+        await sheetCalls.save(visitId, built.input);
         toast.success("Job sheet saved");
         await refresh(true);
       },
@@ -389,7 +430,7 @@ function SheetBody({
         "A supervisor checks it and either returns it to you or closes the visit. Until then it cannot be changed, and neither can its photos.",
       confirmText: "Submit for review",
       action: async () => {
-        const result = await jobSheetsService.submit(visitId, built.input);
+        const result = await sheetCalls.submit(visitId, built.input);
         toast.success(
           "Submitted for review",
           result.reviewReasons.length ? { description: `Needs a close look: ${result.reviewReasons.map((r) => REVIEW_REASON_LABELS[r]).join(", ")}.` } : undefined,
@@ -399,33 +440,60 @@ function SheetBody({
     });
   };
 
-  const showReport = (report: { outcome: ReportOutcome; message: string; whatsapp: string | null }) => {
-    if (report.outcome === "sent") toast.success("Service report emailed to the client");
-    else if (report.outcome === "no_recipient") toast.warning("The client has no email address on file: send the report by WhatsApp.");
-    else toast.error("The service report email could not be sent. Resend it, or send it by WhatsApp.");
-    setPrepared(report.message || report.whatsapp ? { message: report.message, whatsapp: report.whatsapp } : null);
+  /* The report after closing: an email is announced; WhatsApp or a link is shown to send (17 Nov 2026). */
+  const showReport = (channel: SendChannel, report: SendResult) => {
+    if (announceSend(channel, report, "Service report")) setPrepared({ channel, result: report });
   };
 
-  /* Asked first (11 Nov 2026): it acts at once, so it is confirmed like every other step. */
-  const resend = () =>
-    void confirm({ title: v.reportDocumentId ? "Send the service report again?" : "Send the service report?", description: "Emails the service report PDF to the client and prepares a WhatsApp message to send yourself.", confirmText: v.reportDocumentId ? "Resend report" : "Send report" }).then((ok) => {
-      if (ok) void resendNow();
-    });
-  const resendNow = () =>
-    void run(
-      "resend",
-      async () => {
-        const report = await jobSheetsService.resendReport(visitId);
-        showReport(report);
-        await refresh(true);
-      },
-      "Could not send the service report.",
-    );
+  /* WhatsApp, email or a link to copy, like every send (17 Nov 2026). */
+  const resend = () => setDialog("send");
 
   return (
     <div className="grid gap-4">
       {readOnly ? <SheetStats data={data} /> : null}
-      {!readOnly || status === "submitted" || status === "closed" || status === "returned" ? <SheetHeader data={data} /> : null}
+      {/* No status strip (17 Nov 2026): the stat cards say where it stands; the report link is in the page header. */}
+      <HeaderPortal>
+        {/*
+          The report once the crew submitted (18 Nov 2026): viewed as the
+          client receives it, or downloaded as the branded PDF -- the same
+          design as the proposal and the contract.
+        */}
+        {status === "submitted" || status === "closed" ? (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline">
+                <FileText className="size-4" />
+                Service report
+                <ChevronDown className="size-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuItem onClick={() => setViewingReport(true)}>
+                <Eye className="size-4" />
+                View report
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => void downloadReport()}>
+                <Download className="size-4" />
+                Download PDF
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
+      </HeaderPortal>
+      <ServiceReportViewer
+        open={viewingReport}
+        onOpenChange={setViewingReport}
+        loadFacts={loadReportFacts}
+        cacheKey={`${visitId}|${status ?? ""}|${sheet.reviewedAt ?? ""}`}
+        onSend={
+          status === "closed" && data.canReview
+            ? () => {
+                setViewingReport(false);
+                setDialog("send");
+              }
+            : undefined
+        }
+      />
 
       {status === "returned" && sheet.reviewComment ? (
         <Alert className="border-warning/30 bg-warning/5 items-start p-4">
@@ -443,7 +511,7 @@ function SheetBody({
         </div>
       ) : null}
 
-      {prepared ? <PreparedReport prepared={prepared} onDismiss={() => setPrepared(null)} /> : null}
+      <SendResultDialog sent={prepared} onClose={() => setPrepared(null)} download={downloadReport} />
 
       {readOnly && status === null ? (
         <Card className="p-0">
@@ -453,7 +521,9 @@ function SheetBody({
             description="The crew fills it in on the mobile app during the visit: arrival and finish, how each service went, the checklist, photos and the client's sign-off. It shows here as they go, and comes to the supervisor for review when they submit it."
           />
         </Card>
-      ) : !editable && status === null ? (
+      ) : null}
+      {readOnly && status === null && photosSlot ? photosSlot : null}
+      {readOnly && status === null ? null : !editable && status === null ? (
         <p className="text-muted-foreground rounded-lg border px-4 py-6 text-center text-sm">
           {data.canEdit
             ? "No job sheet was filled in, and this visit can no longer take one."
@@ -480,6 +550,7 @@ function SheetBody({
 
           <ChecklistSection data={data} form={form} editable={editable} setChecklist={(rows) => set("checklist", rows)} />
 
+          {photosSlot ?? (
           <PhotosSection
             visitId={visitId}
             data={data}
@@ -491,6 +562,7 @@ function SheetBody({
             confirm={confirm}
             refresh={refresh}
           />
+          )}
 
           <Panel title="Faults found" description="Anything wrong the crew noticed, whether or not it was fixed.">
             {editable ? (
@@ -537,12 +609,25 @@ function SheetBody({
                 </Field>
               </>
             ) : (
-              <dl className="grid gap-2 text-sm">
-                <Fact label="Quality concern">
-                  {sheet.qualityConcern ? <span className="text-warning">Yes{sheet.qualityNote ? `: ${sheet.qualityNote}` : ""}</span> : "No"}
-                </Fact>
+              /* Long text stacked under its label, not squeezed into a right-aligned row (18 Nov 2026). */
+              <dl className="grid gap-4 text-sm">
+                <LongFact label="Quality concern">
+                  {sheet.qualityConcern ? (
+                    <div className="border-warning/30 bg-warning/5 rounded-lg border px-3 py-2.5">
+                      <p className="text-warning flex items-center gap-1.5 font-medium">
+                        <AlertTriangle className="size-4" />
+                        Raised by the crew
+                      </p>
+                      {sheet.qualityNote ? <p className="mt-1 leading-relaxed whitespace-pre-wrap">{sheet.qualityNote}</p> : null}
+                    </div>
+                  ) : (
+                    <span className="font-medium">None</span>
+                  )}
+                </LongFact>
                 <Fact label="Signed by the client">{sheet.clientSignatureName ?? <Muted>Not signed</Muted>}</Fact>
-                <Fact label="Notes">{sheet.notes ? <span className="whitespace-pre-wrap">{sheet.notes}</span> : <Muted>—</Muted>}</Fact>
+                <LongFact label="Notes">
+                  {sheet.notes ? <p className="bg-muted/30 rounded-lg border px-3 py-2.5 leading-relaxed whitespace-pre-wrap">{sheet.notes}</p> : <Muted>None</Muted>}
+                </LongFact>
               </dl>
             )}
           </Panel>
@@ -575,6 +660,29 @@ function SheetBody({
             </SubmitButton>
           </div>
         </div>
+      ) : status === "submitted" && headerSlot ? (
+        data.canReview ? (
+          createPortal(
+            <>
+              <Button variant="outline" disabled={busy} onClick={() => setDialog("return")}>
+                <Undo2 className="size-4" />
+                Return
+              </Button>
+              <Button disabled={busy} onClick={() => setDialog("close")}>
+                <CheckCircle2 className="size-4" />
+                Close visit
+              </Button>
+            </>,
+            headerSlot,
+          )
+        ) : null
+      ) : status === "closed" && headerSlot && data.canReview && (v.reportDocumentId || v.status !== "not_completed") ? (
+        createPortal(
+          <SubmitButton variant="outline" pending={working === "resend"} pendingLabel="Sending…" disabled={busy} icon={<Send className="size-4" />} onClick={resend}>
+            {v.reportDocumentId ? "Resend report" : "Send report"}
+          </SubmitButton>,
+          headerSlot,
+        )
       ) : status === "submitted" ? (
         <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
           <p className="text-muted-foreground text-sm">
@@ -613,7 +721,7 @@ function SheetBody({
         open={dialog === "return"}
         onOpenChange={(open) => !open && setDialog(null)}
         onReturn={async (comment) => {
-          await jobSheetsService.returnSheet(visitId, comment);
+          await sheetCalls.returnSheet(visitId, comment);
           toast.success("Job sheet returned");
           setDialog(null);
           await refresh(true);
@@ -623,26 +731,40 @@ function SheetBody({
         open={dialog === "close"}
         onOpenChange={(open) => !open && setDialog(null)}
         data={data}
-        onClose={async (comment) => {
-          const result = await jobSheetsService.close(visitId, comment);
-          toast.success(`Visit ${v.visitNo} closed`, result.remainderVisitId ? { description: "The remaining trade was planned on a new visit." } : undefined);
-          if (result.report) showReport(result.report);
+        onClose={async (comment, send) => {
+          /* The branded PDF, as the viewer shows it, when a report goes out; else the server prints its own. */
+          const reports = data.lines.some((l) => l.outcome === "completed" || l.outcome === "partially_completed");
+          const pdf = reports ? await serviceReportPdfBase64(loadReportFacts) : null;
+          const result = await sheetCalls.close(visitId, comment, send, pdf);
+          toast.success(`${sheetName(v)} closed`, result.remainderVisitId ? { description: "The remaining trade was planned on a new visit." } : undefined);
+          if (result.report) showReport(send, result.report);
           else toast.warning("The visit is closed, but the service report could not be prepared.");
           setDialog(null);
           await refresh(true);
         }}
+      />
+      <SendDialog
+        open={dialog === "send"}
+        onOpenChange={(open) => !open && setDialog(null)}
+        title={v.reportDocumentId ? "Send the service report again" : "Send the service report"}
+        what="the service report"
+        noun="Service report"
+        download={downloadReport}
+        onSend={async (channel) => sheetCalls.resendReport(visitId, channel, await serviceReportPdfBase64(loadReportFacts))}
+        onDone={() => refresh(true)}
       />
       <RaiseAdditionalWorkDialog
         key={raising.key}
         open={raising.open}
         onOpenChange={raising.onOpenChange}
         contractId={v.contractId}
-        source="visit"
-        visitId={visitId}
+        source={v.kind === "call_out" ? "call_out" : v.kind === "additional_work" ? "manual" : "visit"}
+        visitId={v.kind === "call_out" || v.kind === "additional_work" ? null : visitId}
+        callOutId={v.kind === "call_out" ? visitId : null}
         initialFinding={raising.target?.description}
         initialTrade={raising.target?.trade}
         initialTechnicianId={v.technicianIds[0] ?? sheet.technicianIds[0] ?? null}
-        context={`visit ${v.visitNo}`}
+        context={v.label ?? `visit ${v.visitNo}`}
       />
       {confirmDialog}
     </div>
@@ -652,60 +774,6 @@ function SheetBody({
 /* ------------------------------------------------------------------ */
 /* Header                                                              */
 /* ------------------------------------------------------------------ */
-
-function SheetHeader({ data }: { data: JobSheetResponse }) {
-  const { visit: v, sheet } = data;
-  const status = SHEET_STATUS[sheet.status ?? "none"];
-  const report = v.reportState ? REPORT_STATE[v.reportState] : null;
-  const showReasons = sheet.status === "submitted" || sheet.status === "closed";
-  /* A card of its own on the visit page, a box inside a dialog (as each Panel). */
-  const onPage = useContext(PanelSurface) === "card";
-
-  return (
-    <div
-      className={cn(
-        "flex flex-wrap items-start justify-between gap-3 border",
-        onPage ? "bg-card text-card-foreground rounded-xl p-5 shadow-sm" : "rounded-lg px-4 py-3",
-      )}
-    >
-      <div className="min-w-0 space-y-1.5">
-        <div className="flex flex-wrap items-center gap-1.5">
-          <Badge variant="secondary" className={`border-0 font-medium ${status.tone}`}>
-            {status.label}
-          </Badge>
-          {showReasons ? <ReviewReasonBadges reasons={sheet.reviewReasons} /> : null}
-          {report ? (
-            <Badge
-              variant="secondary"
-              className={`border-0 font-medium ${report.tone}`}
-              title={v.reportDueAt && v.reportState !== "sent" ? `Due ${formatDateTime(v.reportDueAt)}` : undefined}
-            >
-              {report.label}
-            </Badge>
-          ) : null}
-        </div>
-        <p className="text-muted-foreground text-xs">
-          {[
-            sheet.submittedAt ? `Submitted ${formatDateTime(sheet.submittedAt)}` : null,
-            sheet.returnCount ? `Returned ${sheet.returnCount} ${sheet.returnCount === 1 ? "time" : "times"}` : null,
-            v.reportState && v.reportState !== "sent" && v.reportDueAt ? `Report due ${formatDateTime(v.reportDueAt)}` : null,
-            v.reportSentAt ? `Report sent ${formatDateTime(v.reportSentAt)}` : null,
-          ]
-            .filter(Boolean)
-            .join(" · ") || "Filled in by the crew, then reviewed by a supervisor who closes the visit."}
-        </p>
-      </div>
-      {v.reportDocumentId ? (
-        <Button size="sm" variant="outline" asChild>
-          <a href={jobSheetsService.reportHref(v.id)} target="_blank" rel="noopener noreferrer">
-            <FileText className="size-3.5" />
-            Service report
-          </a>
-        </Button>
-      ) : null}
-    </div>
-  );
-}
 
 /** The sheet at a glance, as a Snagging job's figures: where it stands, services done, the checklist, the photos. */
 function SheetStats({ data }: { data: JobSheetResponse }) {
@@ -743,9 +811,9 @@ function SheetStats({ data }: { data: JobSheetResponse }) {
       <StatCard
         label="Photos"
         value={photos.length}
-        headline={!photos.length ? "None yet" : before && after ? "Before and after" : before ? "No after photo" : after ? "No before photo" : "No before or after"}
-        caption={photos.length ? `${before} before · ${after} after` : undefined}
-        tone={!photos.length ? "neutral" : before && after ? "good" : "review"}
+        headline={!photos.length ? "None yet" : before || after ? `${before} before · ${after} after` : "From the mobile app"}
+        caption={photos.length ? `${photos.length} photo${photos.length === 1 ? "" : "s"}` : undefined}
+        tone={photos.length ? "good" : "neutral"}
       />
     </StatCardGrid>
   );
@@ -788,7 +856,6 @@ function TimeTiles({ arrivedAt, completedAt }: { arrivedAt: string | null; compl
   );
 }
 
-const PHOTO_GROUP_ORDER = ["before", "after", "fault", "other"] as const;
 const PHOTO_KIND_TONE: Record<string, string> = {
   before: "bg-background/90 text-foreground",
   after: "bg-success text-white",
@@ -801,18 +868,12 @@ const PHOTO_KIND_TONE: Record<string, string> = {
  * its caption and when it was taken; the pills above narrow it to one kind
  * (Before, After, Fault), with how many of each.
  */
+/* Every photo at once (18 Nov 2026): no filter tabs; each photo carries its category. */
 function PhotoGroups({ photos }: { photos: JobSheetResponse["photos"] }) {
-  const [kind, setKind] = useState<"all" | (typeof PHOTO_GROUP_ORDER)[number]>("all");
   const kindOf = (p: JobSheetResponse["photos"][number]) => (isPhotoKind(p.kind) ? p.kind : "other");
-  const counts = Object.fromEntries(PHOTO_GROUP_ORDER.map((k) => [k, photos.filter((p) => kindOf(p) === k).length])) as Record<(typeof PHOTO_GROUP_ORDER)[number], number>;
-  const shown = kind === "all" ? photos : photos.filter((p) => kindOf(p) === kind);
+  const shown = photos;
   return (
     <div className="grid gap-4">
-      <PillTabs
-        value={kind}
-        onChange={setKind}
-        tabs={[{ value: "all" as const, label: "All", count: photos.length }, ...PHOTO_GROUP_ORDER.filter((k) => counts[k]).map((k) => ({ value: k, label: PHOTO_LABELS[k], count: counts[k] }))]}
-      />
       <ul className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
         {shown.map((p) => {
           const k = kindOf(p);
@@ -827,7 +888,8 @@ function PhotoGroups({ photos }: { photos: JobSheetResponse["photos"] }) {
                     className="aspect-[4/3] w-full object-cover transition-transform duration-200 group-hover:scale-[1.03]"
                     loading="lazy"
                   />
-                  <span className={cn("absolute top-2 left-2 rounded-md px-2 py-0.5 text-xs font-medium shadow-sm", PHOTO_KIND_TONE[k])}>{PHOTO_LABELS[k]}</span>
+                  {/* The category the crew chose on the phone, where there is one. */}
+                  <span className={cn("absolute top-2 left-2 rounded-md px-2 py-0.5 text-xs font-medium shadow-sm", PHOTO_KIND_TONE[k])}>{p.category ?? PHOTO_LABELS[k]}</span>
                   <span className="bg-background/90 text-foreground absolute top-2 right-2 rounded-md p-1 opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
                     <ExternalLink className="size-3.5" />
                   </span>
@@ -895,43 +957,6 @@ export function ReportClockBadge({ state }: { state: ReportState }) {
     <Badge variant="secondary" className={`border-0 font-medium ${r.tone}`}>
       {r.label}
     </Badge>
-  );
-}
-
-function PreparedReport({ prepared, onDismiss }: { prepared: Prepared; onDismiss: () => void }) {
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(prepared.message);
-      toast.success("Message copied");
-    } catch {
-      toast.error("Could not copy the message.");
-    }
-  };
-  return (
-    <div className="border-brand/30 bg-brand-50 grid gap-3 rounded-lg border px-4 py-3">
-      <p className="text-sm font-medium">The service report by WhatsApp</p>
-      {prepared.message ? <p className="text-sm whitespace-pre-wrap">{prepared.message}</p> : null}
-      {!prepared.whatsapp ? <p className="text-muted-foreground text-xs">The client has no phone number on file: copy the message and send it yourself.</p> : null}
-      <div className="flex flex-wrap gap-2">
-        {prepared.whatsapp ? (
-          <Button size="sm" variant="outline" asChild>
-            <a href={prepared.whatsapp} target="_blank" rel="noopener noreferrer">
-              <ExternalLink className="size-3.5" />
-              Send on WhatsApp
-            </a>
-          </Button>
-        ) : null}
-        {prepared.message ? (
-          <Button size="sm" variant="outline" onClick={() => void copy()}>
-            <Copy className="size-3.5" />
-            Copy text
-          </Button>
-        ) : null}
-        <Button size="sm" variant="ghost" onClick={onDismiss}>
-          Dismiss
-        </Button>
-      </div>
-    </div>
   );
 }
 
@@ -1105,13 +1130,13 @@ function ChecklistSection({
   const assetLabel = (id: string | null) => (id ? (data.assets.find((a) => a.id === id)?.label ?? null) : null);
   const rows = form.checklist;
   const update = (key: string, next: Partial<FormState["checklist"][number]>) => setChecklist(rows.map((r) => (r.key === key ? { ...r, ...next } : r)));
-  const add = () => setChecklist([...rows, { key: newKey(), lineId: null, assetId: null, label: "", result: "ok", note: "" }]);
+  const add = () => setChecklist([...rows, { key: newKey(), lineId: null, assetId: null, label: "", category: null, result: "ok", note: "" }]);
   const addAssets = () =>
     setChecklist([
       ...rows,
       ...data.assets
         .filter((a) => !rows.some((r) => r.assetId === a.id))
-        .map((a) => ({ key: newKey(), lineId: null, assetId: a.id, label: a.label || tradeLabel(a.trade) || "Asset", result: "ok" as const, note: "" })),
+        .map((a) => ({ key: newKey(), lineId: null, assetId: a.id, label: a.label || tradeLabel(a.trade) || "Asset", category: null, result: "ok" as const, note: "" })),
     ]);
 
   if (!editable) {
@@ -1128,7 +1153,7 @@ function ChecklistSection({
                   key={c.id}
                   icon={result === "ok" ? <CheckCircle2 className="text-success" /> : result === "fault" || result === "attention" ? <AlertTriangle className="text-warning" /> : <CircleDashed />}
                   title={c.label}
-                  subtitle={[assetLabel(c.assetId), c.note].filter(Boolean).join(" · ") || null}
+                  subtitle={[c.category, assetLabel(c.assetId), c.note].filter(Boolean).join(" · ") || null}
                   trailing={
                     <Badge variant="secondary" className={`border-0 font-medium ${result ? CHECK_TONE[result] : "bg-mist text-ink-soft"}`}>
                       {result ? CHECK_LABELS[result] : c.result}
@@ -1240,6 +1265,7 @@ function PhotosSection({
   confirm: ReturnType<typeof useConfirm>["confirm"];
   refresh: (resetForm: boolean) => Promise<void>;
 }) {
+  const sheetCalls = useContext(SheetCalls);
   const [kind, setKind] = useState<PhotoKind>("before");
   const input = useRef<HTMLInputElement>(null);
   const kindId = useId();
@@ -1248,7 +1274,8 @@ function PhotosSection({
     const outcome = editable ? form.lines[l.id]?.outcome : l.outcome;
     return outcome === "completed" || outcome === "partially_completed";
   });
-  const missing = done ? (["before", "after"] as const).filter((k) => !data.photos.some((p) => p.kind === k)) : [];
+  /* Any photo is evidence (lib/amc/job-sheets reviewReasons): the app files photos by category, not before / after. */
+  const noPhoto = done && data.photos.length === 0;
 
   const add = async (files: FileList | null) => {
     if (!files?.length) return;
@@ -1260,7 +1287,7 @@ function PhotosSection({
           toast.error(`${file.name} is larger than 10 MB.`);
           continue;
         }
-        await jobSheetsService.addPhoto(visitId, { file, kind });
+        await sheetCalls.addPhoto(visitId, { file, kind });
         added += 1;
       }
       if (added) toast.success(added === 1 ? "Photo added" : `${added} photos added`);
@@ -1280,21 +1307,17 @@ function PhotosSection({
       confirmText: "Remove",
       variant: "destructive",
       action: async () => {
-        await jobSheetsService.removePhoto(visitId, photoId);
+        await sheetCalls.removePhoto(visitId, photoId);
         toast.success("Photo removed");
         await refresh(false);
       },
     });
 
   return (
-    <Panel title="Photos" description="A completed trade needs before and after photos, or the supervisor must review it for missing evidence.">
-      {missing.length ? (
-        <p className="text-warning text-xs">
-          No {missing.map((k) => PHOTO_LABELS[k].toLowerCase()).join(" or ")} photo yet: the supervisor will review it for missing evidence.
-        </p>
-      ) : null}
+    <Panel title="Photos" description="Work done needs at least one photo, or the supervisor must review it for missing evidence.">
+      {noPhoto ? <p className="text-warning text-xs">No photo yet: the supervisor will review it for missing evidence.</p> : null}
       {data.photos.length === 0 ? (
-        <PanelEmpty icon={<ImagePlus />} title="No photos yet" description="The crew takes before and after photos on the mobile app; they show here." />
+        <PanelEmpty icon={<ImagePlus />} title="No photos yet" description="The crew takes photos on the mobile app, each with a category and a description; they show here." />
       ) : !editable ? (
         <PhotoGroups photos={data.photos} />
       ) : (
@@ -1310,7 +1333,7 @@ function PhotosSection({
                 <div className="bg-muted text-muted-foreground flex aspect-[4/3] items-center justify-center text-xs">Unavailable</div>
               )}
               <Badge variant="secondary" className="bg-background/90 text-foreground absolute bottom-1.5 left-1.5 border-0 font-medium">
-                {isPhotoKind(p.kind) ? PHOTO_LABELS[p.kind] : p.kind}
+                {p.category ?? (isPhotoKind(p.kind) ? PHOTO_LABELS[p.kind] : p.kind)}
               </Badge>
               {editable ? (
                 <Button
@@ -1610,18 +1633,21 @@ function CloseDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   data: JobSheetResponse;
-  onClose: (comment: string | null) => Promise<void>;
+  onClose: (comment: string | null, send: SendChannel) => Promise<void>;
 }) {
   const [comment, setComment] = useState("");
+  const [send, setSend] = useState<SendChannel>("email");
   const [pending, setPending] = useState(false);
+  /* A report is made when some work was done. */
+  const reports = data.lines.some((l) => l.outcome === "completed" || l.outcome === "partially_completed");
   const id = useId();
   const remaining = data.lines.filter((l) => l.outcome !== "completed");
   const reasons = data.sheet.reviewReasons;
 
-  const send = async () => {
+  const submit = async () => {
     setPending(true);
     try {
-      await onClose(comment.trim() || null);
+      await onClose(comment.trim() || null, send);
       setComment("");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not close the visit.");
@@ -1634,14 +1660,25 @@ function CloseDialog({
     <Dialog open={open} onOpenChange={(next) => !pending && onOpenChange(next)}>
       <ActionDialogContent busy={pending} className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>Close visit {data.visit.visitNo}</DialogTitle>
+          <DialogTitle>Close {data.visit.label ?? `visit ${data.visit.visitNo}`}</DialogTitle>
           <DialogDescription>
-            Closing consumes the visit from the contract, plans any trade not completed on a new visit, and emails the service report to the client.
-            It cannot be undone.
+            {data.visit.kind === "call_out"
+              ? "Closing closes the call out (its allowance is settled as covered or chargeable) and sends the service report to the client the way you pick. It cannot be undone."
+              : data.visit.kind === "additional_work"
+                ? "Closing marks the work completed, ready to invoice, and sends the service report to the client the way you pick. It cannot be undone."
+                : "Closing consumes the visit from the contract, plans any trade not completed on a new visit, and sends the service report to the client the way you pick. It cannot be undone."}
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-2 text-sm">
-          {remaining.length ? (
+          {data.visit.kind === "call_out" || data.visit.kind === "additional_work" ? (
+            <p>
+              {remaining.length
+                ? data.visit.kind === "call_out"
+                  ? "The work was not fully done: any further work goes through additional work."
+                  : "The work was not fully done: raise what is left as new additional work."
+                : "The work was completed."}
+            </p>
+          ) : remaining.length ? (
             <p>
               {remaining.length === 1 ? "1 trade was" : `${remaining.length} trades were`} not completed ({remaining.map((l) => l.serviceLabel).join(", ")}): planned
               again on a new visit, unless the no-show rule consumes it.
@@ -1656,11 +1693,18 @@ function CloseDialog({
         <Field id={id} label="Comment (optional)">
           <Textarea id={id} rows={3} maxLength={1000} value={comment} onChange={(e) => setComment(e.target.value)} />
         </Field>
+        {reports ? (
+          <div className="grid gap-2">
+            <p className="text-sm font-medium">Send the service report by</p>
+            <SendChannelToggle value={send} onChange={setSend} disabled={pending} />
+            <SendChannelNote channel={send} contacts={{}} what="the service report" attach />
+          </div>
+        ) : null}
         <DialogFooter>
           <Button variant="outline" disabled={pending} onClick={() => onOpenChange(false)}>
             Cancel
           </Button>
-          <SubmitButton pending={pending} pendingLabel="Closing…" icon={<CheckCircle2 className="size-4" />} onClick={() => void send()}>
+          <SubmitButton pending={pending} pendingLabel="Closing…" icon={<CheckCircle2 className="size-4" />} onClick={() => void submit()}>
             Close visit
           </SubmitButton>
         </DialogFooter>
@@ -1693,16 +1737,31 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+/** A label over a long value (a note, a concern), left-aligned and full width. */
+function LongFact({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="grid gap-1.5">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="min-w-0">{children}</dd>
+    </div>
+  );
+}
+
 function Muted({ children }: { children: ReactNode }) {
   return <span className="text-muted-foreground font-normal">{children}</span>;
 }
 
+/* An empty section as the AMC empty box (17 Nov 2026): icon, words, dashed border -- not a bare line of grey text. */
+function ReadEmpty({ text }: { text: string }) {
+  return <EmptyState icon={<CircleDashed className="size-5" />} title={text} description="Nothing was recorded here on the visit." className="rounded-lg border border-dashed p-6" />;
+}
+
 function ReadText({ value }: { value: string | null }) {
-  return value ? <p className="text-sm whitespace-pre-wrap">{value}</p> : <p className="text-muted-foreground rounded-lg border border-dashed px-4 py-3 text-center text-sm">None recorded.</p>;
+  return value ? <p className="text-sm whitespace-pre-wrap">{value}</p> : <ReadEmpty text="None recorded" />;
 }
 
 function ReadList({ items, empty }: { items: string[]; empty: string }) {
-  if (!items.length) return <p className="text-muted-foreground rounded-lg border border-dashed px-4 py-3 text-center text-sm">{empty}</p>;
+  if (!items.length) return <ReadEmpty text={empty.replace(/\.$/, "")} />;
   return (
     <ul className="list-disc space-y-1 pl-5 text-sm">
       {items.map((item, i) => (

@@ -32,9 +32,13 @@ import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { ContractError, isMissingTable } from "@/lib/server/amc/contracts";
 import { notifyEntitlementState, notifyUsers } from "@/lib/server/amc/notifications";
 import { recordSend } from "@/lib/server/amc/proposal-share";
+import { noCategoryColumn } from "@/lib/server/amc/assessment-photos";
 import { AMC_DOCUMENTS_BUCKET } from "@/lib/server/amc/signed-archive";
 import { recordStatusChange } from "@/lib/server/amc/status-history";
 import { closeAmcTodos, openAmcTodo } from "@/lib/server/amc/todos";
+import { initialOutcome, type SendChannel } from "@/lib/amc/send-channels";
+import { clientEmailHtml, escapeEmailHtml } from "@/lib/email-brand";
+import { sendEmail } from "@/lib/server/send-email";
 import { crewFitsForSlot, dubaiSlot } from "@/lib/server/amc/visits";
 import { effectiveExclusions } from "@/lib/amc/scope-defaults";
 
@@ -349,7 +353,7 @@ const CALL_OUT_COLUMNS =
   "id, call_out_no, contract_id, entitlement_id, priority, channel, reported_at, issue, trade, on_site_contact_name, on_site_contact_phone, coverage, coverage_reasons, coverage_override_reason, reservation_id, " +
   "status, status_reason, sla_attend_due_at, sla_schedule_due_at, sla_met, scheduled_start, scheduled_end, technician_ids, lead_technician_id, attended_at, diagnosis, resolution, parts_needed, pending_works, " +
   "resolved_at, closed_at, misuse_flag, misuse_note, acknowledged_at, created_at, " +
-  "contract:amc_contracts!amc_call_outs_contract_id_fkey(id, status, contract_number, proposal_number, customer_name, property_label, customer, submission:amc_submissions!amc_contracts_submission_id_fkey(owner_id))";
+  "contract:amc_contracts!amc_call_outs_contract_id_fkey(id, status, contract_number, proposal_number, customer_name, property_label, customer, submission:amc_submissions!amc_contracts_submission_id_fkey(id, owner_id))";
 
 export interface CallOutRecord {
   id: string;
@@ -467,6 +471,67 @@ export async function listCallOuts(
   return { migrated: true, callOuts: rows };
 }
 
+/**
+ * The acknowledgement (BRD 6.3) by the channel the coordinator picks
+ * (17 Nov 2026): emailed, prepared for WhatsApp, or the text to copy. It is
+ * built from the call out as logged; once handed over it counts as sent.
+ */
+async function sendAcknowledgement(admin: Admin, row: Row, channel: SendChannel, config: AmcConfig, actor: Actor) {
+  const contract = one(row.contract) ?? {};
+  const customer = (contract.customer ?? {}) as Row;
+  const reasons = strings(row.coverage_reasons);
+  const callOutNo = String(row.call_out_no);
+  const values = {
+    "Client name": str(customer.customerName) ?? str(contract.customer_name) ?? "customer",
+    "Call out no": callOutNo,
+    Property: String(contract.property_label ?? ""),
+    Priority: CALL_OUT_PRIORITY_LABELS[row.priority as CallOutPriority],
+    "Coverage line":
+      row.coverage === "covered"
+        ? "This visit is covered by your AMC."
+        : `This visit is chargeable${reasons[1] ? ` (${reasons[1].replace(/\.$/, "")})` : ""}; we will confirm the charge before the visit.`,
+  };
+  const message = fillTemplate(templateText("messageCallOutAcknowledgement", config.templates)!.body, values).trim();
+  const phone = str(row.on_site_contact_phone) ?? str(customer.customerPhone);
+  const to = str(customer.customerEmail)?.trim() ?? null;
+  let outcome = initialOutcome(channel);
+  if (channel === "email" && to) {
+    try {
+      await sendEmail({
+        to,
+        subject: `Yalla Fix It call out ${callOutNo}: we have your request`,
+        html: clientEmailHtml({
+          eyebrow: "AMC call out",
+          heading: `Call out ${callOutNo}`,
+          paragraphs: message.split(/\n{2,}/).map((b) => escapeEmailHtml(b).replace(/\n/g, "<br>")),
+          details: [],
+        }),
+      });
+      outcome = "sent";
+    } catch (e) {
+      outcome = "failed";
+      console.error("[amc:call-outs] acknowledgement email failed:", e instanceof Error ? e.message.slice(0, 200) : e);
+    }
+  }
+  if (outcome !== "failed" && outcome !== "no_recipient") {
+    await admin.from("amc_call_outs").update({ acknowledged_at: new Date().toISOString() }).eq("id", String(row.id)).is("acknowledged_at", null);
+  }
+  const submissionId = str(one(contract.submission)?.id);
+  if (submissionId) {
+    await recordSend(admin, {
+      submissionId,
+      versionNo: 1,
+      document: "call_out_acknowledgement",
+      channel,
+      recipients: channel === "email" ? (to ? [{ name: values["Client name"], address: to }] : []) : channel === "whatsapp" && phone ? [{ name: values["Client name"], address: phone }] : [],
+      outcome,
+      detail: `Call out ${callOutNo}`,
+      sentBy: actor.id,
+    });
+  }
+  return { ok: true as const, outcome, message, whatsapp: phone ? whatsappUrl(phone, message) : null, link: null };
+}
+
 async function loadCallOut(admin: Admin, id: string): Promise<Row> {
   const { data, error } = await admin.from("amc_call_outs").select(CALL_OUT_COLUMNS).eq("id", id).maybeSingle<Row>();
   if (error) throw fail(error);
@@ -487,22 +552,33 @@ export async function callOutOwner(admin: Admin, id: string): Promise<{ found: b
 export interface WorkPhoto {
   id: string;
   kind: string;
+  /** What the photo is, as named on the mobile app (migration 20261116100000); older photos have none. */
+  category: string | null;
   caption: string | null;
   url: string | null;
   createdAt: string;
 }
 
-export async function workPhotos(admin: Admin, owner: { callOutId?: string; additionalWorkId?: string }): Promise<WorkPhoto[]> {
-  let q = admin.from("amc_work_photos").select("id, kind, caption, storage_path, created_at").order("created_at");
+/** The links last ten minutes on the portal; the mobile app keeps an opened job, so it asks for longer. */
+export async function workPhotos(admin: Admin, owner: { callOutId?: string; additionalWorkId?: string }, linkSeconds = 600): Promise<WorkPhoto[]> {
+  /* Every column: the category is read once its column exists, without failing before. */
+  let q = admin.from("amc_work_photos").select("*").order("created_at");
   q = owner.callOutId ? q.eq("call_out_id", owner.callOutId) : q.eq("additional_work_id", String(owner.additionalWorkId));
   const { data } = await q;
   const rows = (data ?? []) as Row[];
   const urls = new Map<string, string>();
   if (rows.length) {
-    const { data: signed } = await admin.storage.from(AMC_DOCUMENTS_BUCKET).createSignedUrls(rows.map((p) => String(p.storage_path)), 600);
+    const { data: signed } = await admin.storage.from(AMC_DOCUMENTS_BUCKET).createSignedUrls(rows.map((p) => String(p.storage_path)), linkSeconds);
     for (const s of signed ?? []) if (s.path && s.signedUrl) urls.set(s.path, s.signedUrl);
   }
-  return rows.map((p) => ({ id: String(p.id), kind: String(p.kind), caption: str(p.caption), url: urls.get(String(p.storage_path)) ?? null, createdAt: String(p.created_at) }));
+  return rows.map((p) => ({
+    id: String(p.id),
+    kind: String(p.kind),
+    category: str(p.category),
+    caption: str(p.caption),
+    url: urls.get(String(p.storage_path)) ?? null,
+    createdAt: String(p.created_at),
+  }));
 }
 
 export async function callOutDetail(admin: Admin, id: string, config: AmcConfig, now = new Date()) {
@@ -584,6 +660,8 @@ export async function callOutNeed(admin: Admin, row: Row, trades: Trade[], date:
     date,
     area: str(property.community) ?? str(property.propertyDetail) ?? null,
     accessTypes: ((rules ?? []) as Row[]).filter((r) => r.access_type === "security_clearance").map((r) => str(r.issuer) ?? "Security clearance"),
+    /* Call outs and additional work (18 Nov 2026): access is the visit's pass, so a technician's missing permission does not block them. */
+    accessAsNote: true,
   };
 }
 
@@ -600,8 +678,21 @@ export async function crewSuggestion(
   const trades = input.trade ? [input.trade] : [];
   const need = await callOutNeed(admin, { contract_id: input.contractId }, trades, input.date);
   const fits = await crewFitsForSlot(admin, need, dubaiSlot(input.date, input.time, input.durationMinutes), null, input.ignoreIds);
+  /*
+    No trade (18 Nov 2026): nobody can be checked for it, so the AMC
+    technicians are offered -- whoever has a confirmed AMC skill on their
+    profile (Workforce -> People -> AMC skills); the whole roster when nobody
+    has one yet. Busy or away ones still show why.
+  */
+  let amcTeam: Set<string> | null = null;
+  if (!trades.length) {
+    const { data: skills } = await admin.from("amc_technician_skills").select("fsm_resource_id, level");
+    const ids = new Set(((skills ?? []) as Row[]).filter((s) => s.level !== "trainee").map((s) => String(s.fsm_resource_id)));
+    amcTeam = ids.size ? ids : null;
+  }
   return {
-    fits: fits.filter((f) => f.covers.length > 0 || f.blockers.some((b) => b.startsWith("Certificate"))),
+    noTrade: !trades.length,
+    fits: trades.length ? fits.filter((f) => f.covers.length > 0 || f.blockers.some((b) => b.startsWith("Certificate"))) : fits.filter((f) => !amcTeam || amcTeam.has(f.fsmId)),
     suggested: suggestCrew(fits, trades),
     skilledByTrade: Object.fromEntries(trades.map((trade) => [trade, fits.filter((f) => f.covers.includes(trade)).length])),
     rosterSize: fits.length,
@@ -627,6 +718,14 @@ export async function checkCrewForSlot(
   const same = suggested.length === input.technicianIds.length && suggested.every((t) => input.technicianIds.includes(t));
   if (suggested.length && !same && !input.overrideReason) throw new ContractError("This is not the suggested crew: say why it was chosen instead.", 400);
   return slot;
+}
+
+/* Start visit (17 Nov 2026): the office starts a call out, as a planned visit, before the crew attends it. */
+async function startedByOffice(admin: Admin, id: string): Promise<boolean> {
+  const { data, error } = await admin.from("amc_call_outs").select("started_at").eq("id", id).maybeSingle<Row>();
+  if (error && (error.code === "42703" || error.code === "PGRST204" || /started_at/.test(error.message ?? ""))) return true;
+  if (error) throw fail(error);
+  return Boolean(data?.started_at);
 }
 
 export async function performCallOutAction(admin: Admin, id: string, action: CallOutAction, actor: Actor, config: AmcConfig) {
@@ -663,6 +762,7 @@ export async function performCallOutAction(admin: Admin, id: string, action: Cal
     }
     case "attend": {
       move("attended");
+      if (!(await startedByOffice(admin, id))) throw new ContractError(`Call out ${no} has not been started: start the visit first (crew and access in place).`, 409);
       if (Date.parse(action.attendedAt) < Date.parse(String(row.reported_at))) throw new ContractError("Attendance cannot be before the call.", 400);
       const due = str(row.sla_attend_due_at) ?? str(row.sla_schedule_due_at);
       await setStatus(admin, row, "attended", {
@@ -714,6 +814,11 @@ export async function performCallOutAction(admin: Admin, id: string, action: Cal
     }
     case "cancel": {
       move("cancelled");
+      /* Started by the office (18 Nov 2026): the crew is on the way or on site, so it is finished and closed, not cancelled. */
+      {
+        const { data: started, error: startedError } = await admin.from("amc_call_outs").select("started_at").eq("id", id).maybeSingle<Row>();
+        if (!startedError && str(started?.started_at)) throw new ContractError(`Call out ${no} has been started, so it can no longer be cancelled.`, 409);
+      }
       await setStatus(admin, row, "cancelled", { status_reason: action.reason, closed_at: new Date().toISOString(), closed_by: actor.id }, actor, action.reason);
       await settleReservation(admin, row, "release", `Call out ${no} cancelled: ${action.reason}`, actor);
       await closeAmcTodos(admin, { entityType: "call_out", entityId: id, kind: "call_out" }, { status: "canceled", reason: "Cancelled" }).catch(() => 0);
@@ -731,6 +836,8 @@ export async function performCallOutAction(admin: Admin, id: string, action: Cal
       if (error) throw fail(error);
       return { ok: true as const };
     }
+    case "send_acknowledgement":
+      return sendAcknowledgement(admin, row, action.channel, config, actor);
   }
 }
 
@@ -743,9 +850,26 @@ const PHOTOS_PER_RECORD = 30;
 export async function addWorkPhoto(
   admin: Admin,
   owner: { callOutId: string } | { additionalWorkId: string },
-  input: { bytes: Uint8Array; kind: "reported" | "before" | "after" | "finding" | "other"; caption: string | null },
+  input: {
+    bytes: Uint8Array;
+    kind: "reported" | "before" | "after" | "finding" | "other";
+    caption: string | null;
+    /** What the photo is, named on the mobile app. */
+    category?: string | null;
+    /** The mobile app names its photos, so a replay after a lost response finds the photo already there. */
+    id?: string | null;
+  },
   actor: Actor,
-) {
+): Promise<{ id: string; duplicate?: true }> {
+  const column0 = "callOutId" in owner ? "call_out_id" : "additional_work_id";
+  const owner0 = "callOutId" in owner ? owner.callOutId : owner.additionalWorkId;
+  if (input.id) {
+    const { data: existing } = await admin.from("amc_work_photos").select("id, call_out_id, additional_work_id").eq("id", input.id).maybeSingle<Row>();
+    if (existing) {
+      if (String(existing[column0]) !== owner0) throw new ContractError("That photo belongs to another job.", 409);
+      return { id: input.id, duplicate: true };
+    }
+  }
   if (input.bytes.byteLength === 0) throw new ContractError("The file is empty.", 400);
   if (input.bytes.byteLength > AMC_PHOTO_MAX_BYTES) throw new ContractError("A photo can be at most 10 MB.", 400);
   const type = detectImageType(input.bytes);
@@ -754,11 +878,11 @@ export async function addWorkPhoto(
   const ownerId = "callOutId" in owner ? owner.callOutId : owner.additionalWorkId;
   const { count } = await admin.from("amc_work_photos").select("id", { count: "exact", head: true }).eq(column, ownerId);
   if ((count ?? 0) >= PHOTOS_PER_RECORD) throw new ContractError(`At most ${PHOTOS_PER_RECORD} photos.`, 409);
-  const id = randomUUID();
+  const id = input.id ?? randomUUID();
   const path = `${column === "call_out_id" ? "call-outs" : "additional-works"}/${ownerId}/${id}.${PHOTO_EXTENSION[type]}`;
   const { error: upload } = await admin.storage.from(AMC_DOCUMENTS_BUCKET).upload(path, input.bytes, { contentType: type, upsert: false });
   if (upload) throw new ContractError(`Could not store the photo: ${upload.message}`, 500);
-  const { error } = await admin.from("amc_work_photos").insert({
+  const row = {
     id,
     [column]: ownerId,
     kind: input.kind,
@@ -768,7 +892,11 @@ export async function addWorkPhoto(
     file_sha256: createHash("sha256").update(input.bytes).digest("hex"),
     caption: input.caption,
     uploaded_by: actor.id,
-  });
+  };
+  const category = input.category?.trim().slice(0, 60) || null;
+  let { error } = await admin.from("amc_work_photos").insert(category ? { ...row, category } : row);
+  /* Before migration 20261116100000 there is no category column: the photo still goes in. */
+  if (category && noCategoryColumn(error)) ({ error } = await admin.from("amc_work_photos").insert(row));
   if (error) {
     await admin.storage.from(AMC_DOCUMENTS_BUCKET).remove([path]);
     throw fail(error);

@@ -20,6 +20,8 @@
  * person.
  */
 
+import { SessionExpiredError, extractErrorMessage } from "@/lib/rest-server";
+
 export type AmcJson = { ok: boolean; status: number; body: unknown };
 
 const RECORD_TTL_MS = 15_000;
@@ -38,7 +40,18 @@ const STABLE_READS: readonly RegExp[] = [
   /^\/api\/amc-rate-card(\/|\?|$)/,
   /^\/api\/amc-technicians(\?|$)/,
   /^\/api\/amc-field-visits\/technicians(\?|$)/,
+  /* AMC settings (wording, catalogue, approvers): the wizard and every Preview/Download read them (13 Nov 2026). */
+  /^\/api\/amc-settings(\?|$)/,
+  /* Who can approve a site visit (16 Nov 2026). */
+  /^\/api\/amc-contracts\/assessments\/approvers(\?|$)/,
 ];
+
+/*
+  POSTs that only read (a body too structured for a query string). Sent
+  every time, never cached, and never counted as a write: the call-out
+  coverage preview used to drop every cached record on each change.
+*/
+const READ_POSTS: readonly RegExp[] = [/^\/api\/amc-call-outs\/coverage(\?|$)/];
 
 /* Writes here can change any stable list (a settings change reaches the catalogue, the rules, the people's roles). */
 const SETTINGS_WRITES: readonly RegExp[] = [
@@ -126,6 +139,7 @@ async function send(url: string, init?: RequestInit): Promise<AmcJson> {
 export function amcFetchJson(url: string, init?: RequestInit): Promise<AmcJson> {
   const method = (init?.method ?? "GET").toUpperCase();
   if (method !== "GET") {
+    if (READ_POSTS.some((r) => r.test(pathOf(url)))) return send(url, init);
     return send(url, init).finally(() => afterWrite(url));
   }
 
@@ -167,6 +181,36 @@ export async function amcRequest<T>(url: string, init?: RequestInit): Promise<T>
   const { ok, body } = await amcFetchJson(url, init);
   if (!ok) throw new Error(amcErrorMessage(body));
   return body as T;
+}
+
+/**
+ * The same call as executeRESTBackend (params, a JSON body, `data`
+ * unwrapped, a 401 as SessionExpiredError), through this cache: for the
+ * proposal and settings services, which used executeRESTBackend directly,
+ * so skipped the cache and emptied all of it on every save (13 Nov 2026).
+ */
+export async function amcRest<T = unknown>(
+  endpoint: string,
+  options: {
+    method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+    params?: Record<string, string | number>;
+    body?: Record<string, unknown>;
+  } = {},
+): Promise<T> {
+  const { method = "GET", params, body } = options;
+  let url = endpoint;
+  if (params) {
+    const query = new URLSearchParams(Object.entries(params).map(([k, v]) => [k, String(v)]));
+    url += (url.includes("?") ? "&" : "?") + query.toString();
+  }
+  const result = await amcFetchJson(url, { method, ...(body && method !== "GET" ? { body: JSON.stringify(body) } : {}) });
+  if (!result.ok) {
+    if (result.status === 401) throw new SessionExpiredError();
+    throw new Error(extractErrorMessage(result.body, result.status));
+  }
+  const value = result.body as { data?: unknown; totalCount?: unknown } | null;
+  if (value && value.data !== undefined && value.totalCount !== undefined) return value as T;
+  return (value && value.data !== undefined ? value.data : value) as T;
 }
 
 /** A Refresh button: drops the cached AMC reads, then reloads, so what follows comes from the server. */

@@ -15,7 +15,7 @@ import {
   MessageSquareReply,
   Paperclip,
   PauseCircle,
-  Pencil,
+  SquarePen,
   Percent,
   PlayCircle,
   ReceiptText,
@@ -73,7 +73,7 @@ import { financeService } from "@/modules/finance/finance-service";
 
 import { EvidenceLinks, ExclusionDialog, uploadEvidenceFiles } from "./exclusion-dialog";
 import { QueryThreadView, RaiseQueryDialog, type QueryPeople } from "./query-thread";
-import { InvoiceStatusBadge, InvoiceTotals, LineName, WorkOrderQueueBadge, WorkOrderStatusBadge, aed, daysSince } from "./shared";
+import { InvoiceStatusBadge, InvoiceTotals, LineName, MaherTotalFields, WorkOrderQueueBadge, WorkOrderStatusBadge, aed, daysSince, maherTotalReady } from "./shared";
 import { UploadInvoiceDialog } from "./upload-invoice-dialog";
 
 /**
@@ -905,7 +905,7 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
                                   setPartialFor({ lines: [line] });
                                 }}
                               >
-                                {completionOf(line) === "not_started" ? <Percent className="size-4" /> : <Pencil className="size-4" />}
+                                {completionOf(line) === "not_started" ? <Percent className="size-4" /> : <SquarePen className="size-4" />}
                                 {completionOf(line) === "not_started" ? "Partial" : "Change"}
                               </Button>
                             </div>
@@ -1167,6 +1167,9 @@ function RecordInvoiceDialog({
   const [number, setNumber] = useState("");
   const [date, setDate] = useState(() => todayInZone());
   const [note, setNote] = useState("");
+  /* The total printed on the MAHER invoice (13 Nov), and why it differs, if it does. */
+  const [maherTotal, setMaherTotal] = useState("");
+  const [varianceReason, setVarianceReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const allocations = lines
@@ -1179,7 +1182,8 @@ function RecordInvoiceDialog({
   /* The invoice total: the lines' net total, plus VAT on it (2 Nov); the server works it out the same way. */
   const totals = invoiceTotals(allocations.map((a) => ({ amount: a.amount, line: a.line })));
   const sumWithVat = totals.total;
-  const valid = allocations.length > 0 && !badLine && number.trim() && date && sumWithVat > 0 && file;
+  const valid =
+    allocations.length > 0 && !badLine && number.trim() && date && sumWithVat > 0 && file && maherTotalReady(maherTotal, varianceReason, sumWithVat);
 
   const submit = async () => {
     if (!file) return;
@@ -1194,6 +1198,8 @@ function RecordInvoiceDialog({
         number: number.trim(),
         date,
         total: sumWithVat,
+        maherTotal: round2(Number(maherTotal)),
+        varianceReason: varianceReason.trim() || null,
         note: note.trim() || null,
         allocations: allocations.map((a) => ({ line: a.line.id, workOrder: workOrderId, amount: round2(a.amount) })),
         filePath: signed.path,
@@ -1371,6 +1377,14 @@ function RecordInvoiceDialog({
               <Input id="maher-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
             </div>
           </div>
+          <MaherTotalFields
+            id="maher"
+            value={maherTotal}
+            onChange={setMaherTotal}
+            reason={varianceReason}
+            onReasonChange={setVarianceReason}
+            portalTotal={sumWithVat}
+          />
           <div className="grid gap-1.5">
             <Label htmlFor="maher-note">Note</Label>
             <Textarea id="maher-note" rows={2} maxLength={2000} value={note} onChange={(e) => setNote(e.target.value)} />
@@ -2054,8 +2068,17 @@ function InvoicesCard({ workOrderId, invoices }: { workOrderId: string; invoices
                 <div className="text-right">
                   <p className="text-muted-foreground text-xs">Total incl. VAT</p>
                   <p className="text-lg font-semibold tabular-nums">{aed(inv.total)}</p>
+                  {inv.maherTotal !== null && Math.abs(inv.maherTotal - inv.total) >= 0.005 ? (
+                    <p className="text-muted-foreground text-xs tabular-nums">MAHER {aed(inv.maherTotal)}</p>
+                  ) : null}
                 </div>
               </div>
+              {/* Why MAHER's total differs from the lines' (13 Nov). */}
+              {inv.varianceReason ? (
+                <p className="text-muted-foreground border-t px-4 py-2 text-xs">
+                  <span className="text-foreground font-medium">Difference of {aed(Math.abs((inv.maherTotal ?? inv.total) - inv.total))}:</span> {inv.varianceReason}
+                </p>
+              ) : null}
               <div className="bg-muted/30 border-t">
                 <p className="text-muted-foreground px-4 pt-2.5 pb-1 text-xs font-medium">
                   Covers {inv.allocations.length} {inv.allocations.length === 1 ? "line" : "lines"}

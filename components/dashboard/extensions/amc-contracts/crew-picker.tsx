@@ -1,8 +1,11 @@
 "use client";
 
-import { Star } from "lucide-react";
+import { useEffect, useState } from "react";
+import { KeyRound, Star } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { useTechnicianLogins } from "@/components/dashboard/shared/technician-login";
 import { Checkbox } from "@/components/ui/checkbox";
 import { TRADE_LABELS } from "@/lib/amc/client-profile";
 import type { TechnicianFit, Trade } from "@/lib/amc/visits";
@@ -44,11 +47,24 @@ const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((
 export const differsFromSuggested = (picked: string[], options: CrewOptions | null) =>
   options !== null && options.suggestedIds.length > 0 && !sameSet(picked, options.suggestedIds);
 
+/** Chosen technicians the options know have no login yet (13 Nov 2026). */
+export const crewWithoutLogin = (picked: string[], options: CrewOptions | null, linkedNow: ReadonlySet<string> = new Set()) =>
+  options
+    ? [...options.candidates, ...options.blocked].filter((f) => picked.includes(f.fsmId) && f.accountId === null && !linkedNow.has(f.fsmId))
+    : [];
+
 /**
  * The one crew list (visit page, call out, the board's Place visit): tick
  * technicians; the suggested crew is marked, the lead is the first chosen
  * unless `leadId` says otherwise, and a blocked technician can only be
  * unticked (kept when they were already on the crew).
+ *
+ * A technician with no portal login can't see the visit on the mobile app,
+ * so ticking one creates their login first (Inspector role, their FSM
+ * email) and shows the email and password to hand over. A suggested crew
+ * that includes somebody without a login says so above the list, and
+ * `onMissingLoginsChange` tells the screen, which holds its submit until
+ * the logins exist.
  */
 export function CrewPicker({
   options,
@@ -56,15 +72,47 @@ export function CrewPicker({
   onPickedChange,
   leadId,
   disabled = false,
+  onMissingLoginsChange,
 }: {
   options: CrewOptions;
   picked: string[];
   onPickedChange: (next: string[]) => void;
   leadId?: string | null;
   disabled?: boolean;
+  /** How many chosen technicians still have no login. */
+  onMissingLoginsChange?: (count: number) => void;
 }) {
   const lead = leadId ?? picked[0] ?? null;
-  const toggle = (id: string, on: boolean) => onPickedChange(on ? [...picked.filter((x) => x !== id), id] : picked.filter((x) => x !== id));
+  const { createLogins, dialogs } = useTechnicianLogins();
+  /* Logins made on this screen, until the next "Find technicians" brings them from the server. */
+  const [linkedNow, setLinkedNow] = useState<ReadonlySet<string>>(() => new Set());
+  const [creating, setCreating] = useState(false);
+  const hasLogin = (f: TechnicianFit) => f.accountId !== null || linkedNow.has(f.fsmId);
+  const missing = crewWithoutLogin(picked, options, linkedNow);
+  useEffect(() => {
+    onMissingLoginsChange?.(missing.length);
+  }, [missing.length, onMissingLoginsChange]);
+
+  const makeLogins = async (fits: TechnicianFit[]) => {
+    setCreating(true);
+    try {
+      const made = await createLogins(fits.map((f) => ({ fsmId: f.fsmId, name: f.name, email: f.email })));
+      if (!made) return false;
+      setLinkedNow((prev) => new Set([...prev, ...made.map((r) => r.fsmId)]));
+      return true;
+    } finally {
+      setCreating(false);
+    }
+  };
+  const toggle = (f: TechnicianFit, on: boolean) => {
+    const id = f.fsmId;
+    if (!on) return onPickedChange(picked.filter((x) => x !== id));
+    if (hasLogin(f)) return onPickedChange([...picked.filter((x) => x !== id), id]);
+    /* No login yet: make it first, then tick. */
+    void makeLogins([f]).then((ok) => {
+      if (ok) onPickedChange([...picked.filter((x) => x !== id), id]);
+    });
+  };
   const { candidates, blocked, suggestedIds, gaps } = options;
 
   const row = (f: TechnicianFit, isBlocked: boolean) => {
@@ -81,8 +129,8 @@ export function CrewPicker({
         <Checkbox
           className="mt-0.5"
           checked={checked}
-          disabled={disabled || (isBlocked && !checked)}
-          onCheckedChange={(on) => toggle(f.fsmId, on === true)}
+          disabled={disabled || creating || (isBlocked && !checked)}
+          onCheckedChange={(on) => toggle(f, on === true)}
           aria-label={isBlocked && !checked ? `${f.name} can't be assigned` : f.name}
         />
         <span className="min-w-0 flex-1">
@@ -104,6 +152,13 @@ export function CrewPicker({
                 {TRADE_LABELS[t] ?? t}
               </Badge>
             ))}
+            {/* Only where it can matter: somebody who can be ticked, or is on the crew. */}
+            {hasLogin(f) || (isBlocked && !checked) ? null : (
+              <Badge variant="outline" className="border-warning/40 text-warning font-normal" title="No mobile login yet: ticking creates one">
+                <KeyRound className="size-3" />
+                No login
+              </Badge>
+            )}
           </span>
           {isBlocked ? (
             <span className="text-danger block text-xs">{f.blockers.join(" · ")}</span>
@@ -119,6 +174,20 @@ export function CrewPicker({
 
   return (
     <div className="grid gap-2">
+      {dialogs}
+      {missing.length ? (
+        <div className="border-warning/30 bg-warning/5 flex flex-wrap items-center justify-between gap-3 rounded-lg border px-3 py-2.5">
+          <p className="text-warning min-w-0 flex-1 text-sm">
+            {missing.length === 1
+              ? `${missing[0].name} has no mobile login yet. Create it before assigning them.`
+              : `${missing.length} chosen technicians have no mobile login yet. Create them before assigning.`}
+          </p>
+          <Button type="button" size="sm" variant="outline" disabled={disabled || creating} onClick={() => void makeLogins(missing)}>
+            <KeyRound className="size-4" />
+            {missing.length === 1 ? "Create login" : "Create logins"}
+          </Button>
+        </div>
+      ) : null}
       {gaps.map((message) => (
         <p key={message} className="border-warning/30 bg-warning/5 text-warning rounded-lg border px-3 py-2 text-sm">
           {message}
@@ -126,7 +195,7 @@ export function CrewPicker({
       ))}
       {candidates.length === 0 && blocked.length === 0 ? (
         <p className="text-muted-foreground rounded-lg border border-dashed px-3 py-4 text-center text-sm">
-          No technician is confirmed for this trade. Add the skill under AMC → Technicians.
+          No technician is confirmed for this trade. Add the skill under Workforce → People → AMC skills.
         </p>
       ) : null}
       {candidates.length ? <p className="text-sm font-medium">Available</p> : null}

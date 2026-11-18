@@ -5,6 +5,7 @@ import { approversForLevel, type AmcConfig } from "@/lib/amc/config";
 import { fillTemplate, whatsappUrl } from "@/lib/amc/approval-ladder";
 import { todayInDubai } from "@/lib/amc/contracts";
 import {
+  LINE_OUTCOME_LABELS,
   OUTCOME_GROUPS,
   closedStatus,
   noShowConsumesVisit,
@@ -23,12 +24,15 @@ import { PHOTO_EXTENSION, detectImageType, AMC_PHOTO_MAX_BYTES } from "@/lib/amc
 import { addDays, firstWorkingDay, PLANNABLE_STATUSES, type VisitStatus } from "@/lib/amc/ppm";
 import { clientEmailHtml, escapeEmailHtml } from "@/lib/email-brand";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
+import { noCategoryColumn } from "@/lib/server/amc/assessment-photos";
 import { ContractError, isMissingTable, recordUsage } from "@/lib/server/amc/contracts";
 import { notifyUsers } from "@/lib/server/amc/notifications";
 import { recordSend } from "@/lib/server/amc/proposal-share";
-import { AMC_DOCUMENTS_BUCKET, renderPdf } from "@/lib/server/amc/signed-archive";
+import { buildServiceReportModel, serviceReportTitle, type ServiceReportFacts } from "@/lib/amc/service-report";
+import { AMC_DOCUMENTS_BUCKET, renderAmcDocumentHtml, renderPdf } from "@/lib/server/amc/signed-archive";
 import { closeAmcTodos, openAmcTodo } from "@/lib/server/amc/todos";
 import { sendEmail } from "@/lib/server/send-email";
+import { initialOutcome, sendDelivered, type SendChannel } from "@/lib/amc/send-channels";
 
 /**
  * Visit execution and closure on the server (Phase 10: DEV-402, 403, 404,
@@ -54,9 +58,19 @@ const one = (v: unknown): Row | null => (Array.isArray(v) ? ((v[0] as Row | unde
 const strings = (v: unknown): string[] => (Array.isArray(v) ? (v as unknown[]).map(String) : []);
 const fmtDay = (iso: string) => new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Dubai" }).format(new Date(iso));
 const fmtTime = (iso: string) => new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: "Asia/Dubai" }).format(new Date(iso));
-const escapeHtml = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
 const EDITABLE_VISIT: readonly VisitStatus[] = [...PLANNABLE_STATUSES, "in_progress"];
+/*
+  The office starts the visit (Start visit on the portal, 17 Nov 2026);
+  only a started visit's job sheet and photos can be filled in. Before
+  that the phone shows the visit but keeps its sheet shut.
+*/
+const NOT_STARTED = "The office has not started this visit yet. Ask them to start it, then fill in the job sheet.";
+/* Started by the office (18 Nov 2026): its own column; before migration 20261118120000 a visit in progress was the started one. */
+async function officeStarted(admin: Admin, visitId: string): Promise<boolean> {
+  const { data, error } = await admin.from("amc_visits").select("started_at").eq("id", visitId).maybeSingle<Row>();
+  return !error && Boolean(str(data?.started_at));
+}
 const PHOTOS_PER_VISIT = 40;
 
 /* ------------------------------------------------------------------ */
@@ -138,6 +152,9 @@ export interface JobSheetView {
     reportDueAt: string | null;
     reportState: ReturnType<typeof reportState>;
     remainderOfVisitId: string | null;
+    /** A call out's or additional work's sheet (18 Nov 2026): its kind and how to name it ("call out CO-12"). */
+    kind?: "ppm" | "call_out" | "additional_work";
+    label?: string;
   };
   sheet: {
     status: "draft" | "submitted" | "returned" | "closed" | null;
@@ -160,15 +177,19 @@ export interface JobSheetView {
     returnCount: number;
   };
   lines: Array<{ id: string; serviceLabel: string; occurrence: number; outcome: LineOutcome | null; outcomeGroup: OutcomeGroup | null; outcomeReason: string | null; retry: boolean }>;
-  checklist: Array<{ id: string; lineId: string | null; assetId: string | null; label: string; result: string; note: string | null }>;
-  photos: Array<{ id: string; kind: string; lineId: string | null; assetId: string | null; caption: string | null; url: string | null; createdAt: string }>;
+  checklist: Array<{ id: string; lineId: string | null; assetId: string | null; label: string; category: string | null; result: string; note: string | null }>;
+  photos: Array<{ id: string; kind: string; category: string | null; lineId: string | null; assetId: string | null; caption: string | null; url: string | null; createdAt: string }>;
   assets: Array<{ id: string; label: string; trade: string }>;
 }
 
 const outcomeOf = (status: unknown): LineOutcome | null =>
   status === "completed" || status === "partially_completed" || status === "not_completed" ? status : null;
 
-export async function jobSheetView(admin: Admin, visitId: string, now = new Date()): Promise<JobSheetView> {
+/**
+ * `linkSeconds`: how long the photo links last. The portal re-reads the sheet
+ * as it is shown; the mobile app keeps an opened visit, so it asks for longer.
+ */
+export async function jobSheetView(admin: Admin, visitId: string, now = new Date(), linkSeconds = 600): Promise<JobSheetView> {
   /* The visit and its sheet need only the visit's id: read together. A database without job sheets (503) shows the empty sheet. */
   let notSetUp = false;
   const [{ visit, contract, lines }, sheet] = await Promise.all([
@@ -186,10 +207,12 @@ export async function jobSheetView(admin: Admin, visitId: string, now = new Date
   const [assets, checklistRead, photosRead] = await Promise.all([
     propertyAssets(admin, str(contract.property_id)),
     sheet
-      ? admin.from("amc_visit_checklist_items").select("id, visit_line_id, asset_id, label, result, note, sort_order").eq("job_sheet_id", String(sheet.id)).order("sort_order")
+      ? /* Every column: the category (migration 20261117100000) is read once it exists, without failing before. */
+        admin.from("amc_visit_checklist_items").select("*").eq("job_sheet_id", String(sheet.id)).order("sort_order")
       : null,
     sheet
-      ? admin.from("amc_visit_photos").select("id, kind, visit_line_id, asset_id, caption, storage_path, created_at").eq("job_sheet_id", String(sheet.id)).order("created_at")
+      ? /* Every column: the category (migration 20261113100000) is read once it exists, without failing before. */
+        admin.from("amc_visit_photos").select("*").eq("job_sheet_id", String(sheet.id)).order("created_at")
       : null,
   ]);
   const view = { ...emptyView(visit, contract, lines, true, now), assets };
@@ -199,7 +222,7 @@ export async function jobSheetView(admin: Admin, visitId: string, now = new Date
   const photoRows = (photos ?? []) as Row[];
   const urls = new Map<string, string>();
   if (photoRows.length) {
-    const { data: signed } = await admin.storage.from(AMC_DOCUMENTS_BUCKET).createSignedUrls(photoRows.map((p) => String(p.storage_path)), 600);
+    const { data: signed } = await admin.storage.from(AMC_DOCUMENTS_BUCKET).createSignedUrls(photoRows.map((p) => String(p.storage_path)), linkSeconds);
     for (const s of signed ?? []) if (s.path && s.signedUrl) urls.set(s.path, s.signedUrl);
   }
   return {
@@ -229,12 +252,14 @@ export async function jobSheetView(admin: Admin, visitId: string, now = new Date
       lineId: str(c.visit_line_id),
       assetId: str(c.asset_id),
       label: String(c.label),
+      category: str(c.category),
       result: String(c.result),
       note: str(c.note),
     })),
     photos: photoRows.map((p) => ({
       id: String(p.id),
       kind: String(p.kind),
+      category: str(p.category),
       lineId: str(p.visit_line_id),
       assetId: str(p.asset_id),
       caption: str(p.caption),
@@ -328,6 +353,7 @@ async function ensureSheet(admin: Admin, visit: Row, actor: Actor): Promise<Row>
 
 export async function saveJobSheet(admin: Admin, visitId: string, input: JobSheetInput, actor: Actor, config: AmcConfig, submit: boolean) {
   const { visit, contract, ownerId, lines } = await loadVisit(admin, visitId);
+  if (PLANNABLE_STATUSES.includes(visit.status as VisitStatus) && !(await officeStarted(admin, visitId))) throw new ContractError(NOT_STARTED, 409);
   if (!EDITABLE_VISIT.includes(visit.status as VisitStatus)) {
     throw new ContractError(`Visit ${String(visit.visit_no)} is ${String(visit.status).replace(/_/g, " ")}: its job sheet cannot be changed.`, 409);
   }
@@ -360,17 +386,21 @@ export async function saveJobSheet(admin: Admin, visitId: string, input: JobShee
   const { error: checklistDelete } = await admin.from("amc_visit_checklist_items").delete().eq("job_sheet_id", String(sheet.id));
   if (checklistDelete) throw fail(checklistDelete);
   if (input.checklist.length) {
-    const { error } = await admin.from("amc_visit_checklist_items").insert(
-      input.checklist.map((c, i) => ({
-        job_sheet_id: String(sheet.id),
-        visit_line_id: c.lineId && lineIds.has(c.lineId) ? c.lineId : null,
-        asset_id: c.assetId ?? null,
-        label: c.label,
-        result: c.result,
-        note: c.note,
-        sort_order: i,
-      })),
-    );
+    const rows = input.checklist.map((c, i) => ({
+      job_sheet_id: String(sheet.id),
+      visit_line_id: c.lineId && lineIds.has(c.lineId) ? c.lineId : null,
+      asset_id: c.assetId ?? null,
+      label: c.label,
+      category: c.category ?? null,
+      result: c.result,
+      note: c.note,
+      sort_order: i,
+    }));
+    let { error } = await admin.from("amc_visit_checklist_items").insert(rows);
+    /* Before migration 20261117100000 there is no category column: the checks are kept without it. */
+    if (error && (error.code === "42703" || error.code === "PGRST204")) {
+      ({ error } = await admin.from("amc_visit_checklist_items").insert(rows.map((row) => Object.fromEntries(Object.entries(row).filter(([key]) => key !== "category")))));
+    }
     if (error) throw fail(error);
   }
 
@@ -470,10 +500,28 @@ export async function saveJobSheet(admin: Admin, visitId: string, input: JobShee
 export async function addVisitPhoto(
   admin: Admin,
   visitId: string,
-  input: { bytes: Uint8Array; kind: "before" | "after" | "fault" | "other"; lineId?: string | null; assetId?: string | null; caption?: string | null },
+  input: {
+    bytes: Uint8Array;
+    kind: "before" | "after" | "fault" | "other";
+    lineId?: string | null;
+    assetId?: string | null;
+    caption?: string | null;
+    /** What the photo is, named on the phone (Equipment, Work done, or one the technician typed). */
+    category?: string | null;
+    /** The mobile app names its photos, so a replay after a lost response finds the photo already there. */
+    id?: string | null;
+  },
   actor: Actor,
-) {
+): Promise<{ id: string; duplicate?: true }> {
+  if (input.id) {
+    const { data: existing } = await admin.from("amc_visit_photos").select("id, visit_id").eq("id", input.id).maybeSingle<Row>();
+    if (existing) {
+      if (String(existing.visit_id) !== visitId) throw new ContractError("That photo belongs to another visit.", 409);
+      return { id: input.id, duplicate: true };
+    }
+  }
   const { visit } = await loadVisit(admin, visitId);
+  if (PLANNABLE_STATUSES.includes(visit.status as VisitStatus) && !(await officeStarted(admin, visitId))) throw new ContractError(NOT_STARTED, 409);
   if (!EDITABLE_VISIT.includes(visit.status as VisitStatus)) throw new ContractError("This visit's photos are kept as they are.", 409);
   const sheet = await ensureSheet(admin, visit, actor);
   if (sheet.status !== "draft" && sheet.status !== "returned") throw new ContractError("The job sheet is with the supervisor.", 409);
@@ -483,11 +531,11 @@ export async function addVisitPhoto(
   if (!type) throw new ContractError("Only JPEG, PNG or WebP photos can be added.", 400);
   const { count } = await admin.from("amc_visit_photos").select("id", { count: "exact", head: true }).eq("job_sheet_id", String(sheet.id));
   if ((count ?? 0) >= PHOTOS_PER_VISIT) throw new ContractError(`A visit holds at most ${PHOTOS_PER_VISIT} photos.`, 409);
-  const id = randomUUID();
+  const id = input.id ?? randomUUID();
   const path = `visits/${visitId}/${id}.${PHOTO_EXTENSION[type]}`;
   const { error: upload } = await admin.storage.from(AMC_DOCUMENTS_BUCKET).upload(path, input.bytes, { contentType: type, upsert: false });
   if (upload) throw new ContractError(`Could not store the photo: ${upload.message}`, 500);
-  const { error } = await admin.from("amc_visit_photos").insert({
+  const row = {
     id,
     job_sheet_id: String(sheet.id),
     visit_id: visitId,
@@ -500,7 +548,11 @@ export async function addVisitPhoto(
     file_sha256: createHash("sha256").update(input.bytes).digest("hex"),
     caption: input.caption ?? null,
     uploaded_by: actor.id,
-  });
+  };
+  const category = input.category?.trim().slice(0, 60) || null;
+  let { error } = await admin.from("amc_visit_photos").insert(category ? { ...row, category } : row);
+  /* Before migration 20261113100000 there is no category column: the photo still goes in. */
+  if (category && noCategoryColumn(error)) ({ error } = await admin.from("amc_visit_photos").insert(row));
   if (error) {
     await admin.storage.from(AMC_DOCUMENTS_BUCKET).remove([path]);
     throw fail(error);
@@ -569,7 +621,7 @@ async function earlierAttempts(admin: Admin, line: Row) {
   return out;
 }
 
-export async function closeJobSheet(admin: Admin, visitId: string, comment: string | null, actor: Actor, config: AmcConfig) {
+export async function closeJobSheet(admin: Admin, visitId: string, comment: string | null, actor: Actor, config: AmcConfig, send: SendChannel = "email", browserPdf: Uint8Array | null = null) {
   const { visit, contract, ownerId, lines } = await loadVisit(admin, visitId);
   const sheet = await loadSheet(admin, visitId);
   if (!sheet || sheet.status !== "submitted") throw new ContractError("Only a submitted job sheet can be closed.", 409);
@@ -629,7 +681,7 @@ export async function closeJobSheet(admin: Admin, visitId: string, comment: stri
   /* The service report when work was delivered (Email 3, within 48 hours). */
   let report: Awaited<ReturnType<typeof sendServiceReport>> | null = null;
   if (status !== "not_completed") {
-    report = await sendServiceReport(admin, visitId, actor, config).catch((e) => {
+    report = await sendServiceReport(admin, visitId, actor, config, send, browserPdf).catch((e) => {
       console.error("[amc:job-sheets] service report failed:", e instanceof Error ? e.message : e);
       return null;
     });
@@ -751,56 +803,57 @@ async function reportFacts(admin: Admin, visitId: string) {
   };
 }
 
-function reportHtml(f: Awaited<ReturnType<typeof reportFacts>>, photoUrls: Map<string, string>): string {
+/** The report's facts as the shared report model draws them (18 Nov 2026): the screen, the PDF and the server's fallback. */
+function reportDocumentFacts(f: Awaited<ReturnType<typeof reportFacts>>, photoUrls: Map<string, string>): ServiceReportFacts {
   const s = f.sheet;
   const customer = (f.contract.customer ?? {}) as Row;
-  const row = (k: string, v: string | null) => `<tr><th>${escapeHtml(k)}</th><td>${escapeHtml(v ?? "—")}</td></tr>`;
-  const lineRows = f.lines
-    .map((l) => {
+  const outcomeLabel = (status: string) => LINE_OUTCOME_LABELS[status as LineOutcome] ?? status.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
+  return {
+    kind: "visit",
+    ref: `Visit ${String(f.visit.visit_no)} of ${f.total}`,
+    contractNumber: String(f.contract.contract_number ?? ""),
+    customerName: str(customer.customerName) ?? String(f.contract.customer_name ?? ""),
+    propertyLabel: String(f.contract.property_label ?? ""),
+    work: f.lines.map((l) => String(l.service_label)).join(", ") || null,
+    arrivedAt: str(s.arrived_at),
+    completedAt: str(s.completed_at),
+    outcome: null,
+    signedBy: str(s.client_signature_name),
+    lines: f.lines.map((l) => {
       const group = str(l.outcome_group) as OutcomeGroup | null;
-      const why = group ? `${OUTCOME_GROUPS[group].label}${str(l.outcome_reason) ? `: ${str(l.outcome_reason)}` : ""}` : "";
-      return `<tr><td>${escapeHtml(String(l.service_label))}</td><td>${escapeHtml(String(l.status).replace(/_/g, " "))}</td><td>${escapeHtml(why)}</td></tr>`;
-    })
-    .join("");
-  const checklist = f.checklist.length
-    ? `<h2>Checklist</h2><table class="grid"><tr><th>Item</th><th>Result</th><th>Note</th></tr>${f.checklist
-        .map((c) => `<tr><td>${escapeHtml(String(c.label))}</td><td>${escapeHtml(String(c.result).replace(/_/g, " "))}</td><td>${escapeHtml(str(c.note) ?? "")}</td></tr>`)
-        .join("")}</table>`
-    : "";
-  const list = (title: string, items: string[]) => (items.length ? `<h2>${escapeHtml(title)}</h2><ul>${items.map((i) => `<li>${escapeHtml(i)}</li>`).join("")}</ul>` : "");
-  const photos = f.photos.length
-    ? `<h2>Photos</h2><div class="photos">${f.photos
-        .map((p) => {
-          const url = photoUrls.get(String(p.storage_path));
-          return url ? `<figure><img src="${escapeHtml(url)}"/><figcaption>${escapeHtml(String(p.kind))}${str(p.caption) ? ` · ${escapeHtml(str(p.caption)!)}` : ""}</figcaption></figure>` : "";
-        })
-        .join("")}</div>`
-    : "";
-  return `<!doctype html><html><head><meta charset="utf-8"><title>Service report</title><style>
-    body{font-family:Arial,Helvetica,sans-serif;color:#1f2937;margin:32px;font-size:12px}
-    h1{font-size:20px;margin:0 0 4px;color:#8b1d2c} h2{font-size:14px;margin:20px 0 6px;color:#8b1d2c}
-    .muted{color:#6b7280} table{border-collapse:collapse;width:100%} th{text-align:left;color:#6b7280;font-weight:normal;width:30%;padding:4px 8px 4px 0;vertical-align:top}
-    td{padding:4px 8px 4px 0;vertical-align:top} .grid th,.grid td{border-bottom:1px solid #e5e7eb;padding:6px 8px;width:auto}
-    .photos{display:flex;flex-wrap:wrap;gap:8px} figure{margin:0;width:31%} img{width:100%;height:150px;object-fit:cover;border-radius:4px} figcaption{color:#6b7280;font-size:10px}
-  </style></head><body>
-    <h1>Service report</h1>
-    <div class="muted">Yalla Fix It · AMC ${escapeHtml(String(f.contract.contract_number ?? ""))} · visit ${escapeHtml(String(f.visit.visit_no))} of ${f.total}</div>
-    <h2>Visit</h2><table>
-      ${row("Client", str(customer.customerName) ?? String(f.contract.customer_name ?? ""))}
-      ${row("Property", String(f.contract.property_label ?? ""))}
-      ${row("Arrived", s.arrived_at ? `${fmtDay(String(s.arrived_at))} ${fmtTime(String(s.arrived_at))}` : null)}
-      ${row("Completed", s.completed_at ? `${fmtDay(String(s.completed_at))} ${fmtTime(String(s.completed_at))}` : null)}
-      ${row("Signed by the client", str(s.client_signature_name))}
-    </table>
-    <h2>Work</h2><table class="grid"><tr><th>Service</th><th>Outcome</th><th>Reason</th></tr>${lineRows}</table>
-    ${checklist}
-    ${str(s.faults) ? `<h2>Faults found</h2><p>${escapeHtml(str(s.faults)!)}</p>` : ""}
-    ${list("Consumables used", ((s.consumables ?? []) as Row[]).map((c) => `${String(c.item)} × ${String(c.quantity)}${str(c.unit) ? ` ${str(c.unit)}` : ""}`))}
-    ${list("Additional work found (quoted separately)", ((s.additional_work ?? []) as Row[]).map((a) => String(a.description)))}
-    ${list("Pending works", ((s.pending_works ?? []) as Row[]).map((p) => `${String(p.description)} (${String(p.reason)})`))}
-    ${photos}
-    <p class="muted" style="margin-top:24px">Visits this contract year: ${f.completed} done, ${f.remaining} remaining.</p>
-  </body></html>`;
+      return {
+        service: String(l.service_label),
+        outcome: outcomeLabel(String(l.status)),
+        reason: group ? `${OUTCOME_GROUPS[group].label}${str(l.outcome_reason) ? `: ${str(l.outcome_reason)}` : ""}` : null,
+      };
+    }),
+    findings: str(s.faults),
+    notes: str(s.notes),
+    checklist: f.checklist.map((c) => ({ label: String(c.label), result: String(c.result), note: str(c.note) })),
+    materials: ((s.consumables ?? []) as Row[]).map((c) => `${String(c.quantity)}${str(c.unit) ? ` ${str(c.unit)}` : ""} ${String(c.item)}`),
+    pending: ((s.pending_works ?? []) as Row[]).map((p) => `${String(p.description)} (${String(p.reason)})`),
+    further: ((s.additional_work ?? []) as Row[]).map((a) => String(a.description)),
+    photos: f.photos
+      .map((p) => ({ url: photoUrls.get(String(p.storage_path)) ?? "", label: String(p.kind) === "fault" ? "Fault" : String(p.kind).replace(/^\w/, (c) => c.toUpperCase()), caption: str(p.caption) }))
+      .filter((p) => p.url)
+      .slice(0, 12),
+    closing: `Visits this contract year: ${f.completed} done, ${f.remaining} remaining.`,
+  };
+}
+
+async function signedPhotoUrls(admin: Admin, photos: Row[]) {
+  const photoUrls = new Map<string, string>();
+  if (photos.length) {
+    const { data: signed } = await admin.storage.from(AMC_DOCUMENTS_BUCKET).createSignedUrls(photos.map((p) => String(p.storage_path)), 3600);
+    for (const s of signed ?? []) if (s.path && s.signedUrl) photoUrls.set(s.path, s.signedUrl);
+  }
+  return photoUrls;
+}
+
+/** A visit's report facts, for the portal's viewer and its PDF. */
+export async function serviceReportFacts(admin: Admin, visitId: string): Promise<ServiceReportFacts> {
+  const f = await reportFacts(admin, visitId);
+  return reportDocumentFacts(f, await signedPhotoUrls(admin, f.photos));
 }
 
 /**
@@ -809,15 +862,13 @@ function reportHtml(f: Awaited<ReturnType<typeof reportFacts>>, photoUrls: Map<s
  * prepares the WhatsApp text with a link). report_sent_at is set when the
  * email goes; the 48-hour clock runs until then.
  */
-export async function sendServiceReport(admin: Admin, visitId: string, actor: Actor, config: AmcConfig) {
+/** The report is stored, then emailed, prepared for WhatsApp, or its link handed back to copy (17 Nov 2026). */
+export async function sendServiceReport(admin: Admin, visitId: string, actor: Actor, config: AmcConfig, channel: SendChannel = "email", browserPdf: Uint8Array | null = null) {
   const f = await reportFacts(admin, visitId);
-  const photoUrls = new Map<string, string>();
-  if (f.photos.length) {
-    const { data: signed } = await admin.storage.from(AMC_DOCUMENTS_BUCKET).createSignedUrls(f.photos.map((p) => String(p.storage_path)), 3600);
-    for (const s of signed ?? []) if (s.path && s.signedUrl) photoUrls.set(s.path, s.signedUrl);
-  }
-  const html = reportHtml(f, photoUrls);
-  const pdf = await renderPdf(html);
+  /* The PDF the browser built from the same facts, else the server prints the same model (18 Nov 2026). */
+  const facts = reportDocumentFacts(f, await signedPhotoUrls(admin, f.photos));
+  const html = renderAmcDocumentHtml(serviceReportTitle(facts), buildServiceReportModel(facts), "");
+  const pdf = browserPdf ?? (await renderPdf(html));
   const bytes = pdf ?? new TextEncoder().encode(html);
   const mime = pdf ? "application/pdf" : "text/html";
   const ext = pdf ? "pdf" : "html";
@@ -867,11 +918,13 @@ export async function sendServiceReport(admin: Admin, visitId: string, actor: Ac
   const { data: link } = await admin.storage.from(AMC_DOCUMENTS_BUCKET).createSignedUrl(path, 14 * 86_400);
   values["Report link"] = link?.signedUrl ?? "";
   const email = templateText("emailServiceReport", config.templates)!;
-  const whatsappText = fillTemplate(templateText("messageServiceReport", config.templates)!.body, values).trim();
+  /* No link in the WhatsApp text (18 Nov 2026): the coordinator attaches the PDF. */
+  const whatsappText = withoutReportLink(fillTemplate(templateText("messageServiceReport", config.templates)!.body.replace(/\{Report link\}/g, "{Report link removed}"), values));
   const to = String(customer.customerEmail ?? "").trim();
   const cc = [str(f.owner?.email)].filter((e): e is string => Boolean(e) && e !== to);
-  let outcome: "sent" | "failed" | "no_recipient" = "no_recipient";
-  if (to) {
+  const phone = str(customer.customerPhone);
+  let outcome = initialOutcome(channel);
+  if (channel === "email" && to) {
     try {
       const body = fillTemplate(email.body, values);
       const blocks = body.split(/\n{2,}/).filter((b) => b.trim());
@@ -895,23 +948,43 @@ export async function sendServiceReport(admin: Admin, visitId: string, actor: Ac
       console.error("[amc:job-sheets] Email 3 failed:", e instanceof Error ? e.message.slice(0, 200) : e);
     }
   }
-  if (outcome === "sent") await admin.from("amc_visits").update({ report_sent_at: new Date().toISOString() }).eq("id", visitId);
+  if (sendDelivered(outcome)) await admin.from("amc_visits").update({ report_sent_at: new Date().toISOString() }).eq("id", visitId);
   const submissionId = str(one(f.contract.submission)?.id);
   if (submissionId) {
     await recordSend(admin, {
       submissionId,
       versionNo: 1,
       document: "service_report",
-      channel: "email",
-      recipients: to ? [{ name: values["Client name"], address: to }] : [],
-      cc,
+      channel,
+      recipients: channel === "email" ? (to ? [{ name: values["Client name"], address: to }] : []) : channel === "whatsapp" && phone ? [{ name: values["Client name"], address: phone }] : [],
+      cc: channel === "email" ? cc : [],
       outcome,
       detail: `Visit ${String(f.visit.visit_no)} service report`,
       sentBy: actor.id,
     });
   }
-  const phone = str(customer.customerPhone);
-  return { outcome, documentId, message: whatsappText, whatsapp: phone ? whatsappUrl(phone, whatsappText) : null };
+  return {
+    outcome,
+    documentId,
+    message: whatsappText,
+    whatsapp: phone ? whatsappUrl(phone, whatsappText) : null,
+    link: link?.signedUrl ?? null,
+    file: link?.signedUrl ? { url: link.signedUrl, name: `service-report-${String(f.contract.contract_number ?? "amc")}-visit-${String(f.visit.visit_no)}.${ext}` } : null,
+  };
+}
+
+/**
+ * The WhatsApp text without its link: the placeholder (and the colon before
+ * it) goes, and the text says the report is attached.
+ */
+export function withoutReportLink(text: string): string {
+  const had = text.includes("{Report link removed}");
+  const out = text
+    .replace(/\s*[:\-–]?\s*\{Report link removed\}/g, "")
+    .replace(/[ \t]+$/gm, "")
+    .trim();
+  if (!had) return out;
+  return `${/[.!?]$/.test(out) ? out : `${out}.`} The report is attached.`;
 }
 
 /* ------------------------------------------------------------------ */

@@ -35,6 +35,15 @@ test("the summary strip counts and sums each status, and averages days to invoic
   assert.equal(s.averageDaysToInvoice, 3);
 });
 
+test("days to invoice: an invoice with no known start is left out, not counted as 0 days", () => {
+  const rows = [
+    { queueItemId: "f", amount: 25000, queueValue: 25000, recordedAt: daysAgo(8), recordedByLabel: "Finance One", startedAt: daysAgo(12) },
+    { queueItemId: "g", amount: 20000, queueValue: 20000, recordedAt: daysAgo(4), recordedByLabel: "Finance Two", startedAt: null },
+  ];
+  assert.equal(summarise(items, rows).averageDaysToInvoice, 4, "only f's 4 days");
+  assert.equal(computeQueueMetrics(items, rows, [], NOW).daysToInvoice.average, 4);
+});
+
 test("no invoices yet: no average, not zero", () => {
   assert.equal(summarise(items.slice(0, 2), []).averageDaysToInvoice, null);
 });

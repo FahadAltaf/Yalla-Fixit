@@ -92,7 +92,9 @@ export function getWorkOrderQueueColumns(agedAfterDays: number, operations = fal
       header: "Invoiced",
       cell: ({ row }) => {
         const r = row.original;
-        const pct = r.value && r.value > 0 ? Math.min(100, (r.invoicing.invoicedValue / r.value) * 100) : null;
+        /* Of what is owed: lines FSM bills as Non Billable are left out (Sami, 9 Nov). */
+        const owed = r.billableValue ?? r.value;
+        const pct = owed && owed > 0 ? Math.min(100, (r.invoicing.invoicedValue / owed) * 100) : null;
         return <div className="text-sm tabular-nums">{pct === null ? "—" : `${pct.toFixed(1)}%`}</div>;
       },
       enableSorting: false,

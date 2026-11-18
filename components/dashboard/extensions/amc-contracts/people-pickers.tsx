@@ -39,7 +39,7 @@ const loadStaff = cached(async () =>
     .sort((a, b) => a.name.localeCompare(b.name)),
 );
 
-/* The FSM technicians (AMC -> Technicians); needs AMC Technicians (View). */
+/* The FSM technicians (their AMC skills under Workforce -> People); needs AMC Technicians (View). */
 const loadTechnicians = cached(async () =>
   (await visitsService.technicians()).technicians
     .filter((t) => t.active)

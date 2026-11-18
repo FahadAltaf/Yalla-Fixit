@@ -73,6 +73,12 @@ export function fakeSupabase(seed: Record<string, Row[]> = {}, options: FakeOpti
       this.filters.push((r) => r[c] === v);
       return this;
     }
+    /* Case-insensitive equality only (escaped wildcards), which is all the callers use. */
+    ilike(c: string, pattern: string) {
+      const wanted = pattern.replace(/\\([\\%_])/g, "$1").toLowerCase();
+      this.filters.push((r) => String(r[c] ?? "").toLowerCase() === wanted);
+      return this;
+    }
     neq(c: string, v: unknown) {
       this.filters.push((r) => r[c] !== v);
       return this;
@@ -156,6 +162,14 @@ export function fakeSupabase(seed: Record<string, Row[]> = {}, options: FakeOpti
             const row = withGenerated(this.name, { id: raw.id ?? `fake-${nextId++}`, created_at: new Date().toISOString(), ...raw });
             if (conflicts(this.name, row, this.op === "upsert" ? this.onConflict : undefined)) {
               if (this.op === "upsert" && this.ignoreDuplicates) continue;
+              /* An upsert naming its conflict columns updates the row it meets, as ON CONFLICT DO UPDATE does. */
+              if (this.op === "upsert" && this.onConflict) {
+                const keys = this.onConflict;
+                const existing = rows.find((r) => keys.every((c) => r[c] === row[c]))!;
+                Object.assign(existing, raw);
+                written.push(existing);
+                continue;
+              }
               return { data: null, error: { code: "23505", message: `duplicate key on ${this.name}` } };
             }
             rows.push(row);

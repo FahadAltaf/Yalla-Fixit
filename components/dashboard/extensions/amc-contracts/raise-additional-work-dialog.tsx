@@ -40,6 +40,9 @@ export type PartyDrafts = Record<WorkParty, PartyDraft>;
 
 const emptyParty = (): PartyDraft => ({ name: "", role: "other", email: "", phone: "" });
 
+/* The Parties section of the dialog (requester, approver, payer ...): hidden for now (18 Nov 2026). */
+const SHOW_PARTIES = false;
+
 export function partyDrafts(values?: Partial<Record<WorkParty, WorkPartyValue | null>> | null): PartyDrafts {
   return Object.fromEntries(
     WORK_PARTIES.map((p) => {
@@ -260,6 +263,8 @@ export function RaiseAdditionalWorkDialog({
             </Field>
           </div>
 
+          {/* Hidden for now (18 Nov 2026): the client is every party unless changed on the work's Parties tab. */}
+          {SHOW_PARTIES ? (
           <Collapsible open={partiesOpen} onOpenChange={setPartiesOpen} className="rounded-lg border">
             <CollapsibleTrigger asChild>
               <button type="button" className="hover:bg-muted/40 flex w-full items-center justify-between gap-3 px-4 py-3 text-left">
@@ -276,6 +281,7 @@ export function RaiseAdditionalWorkDialog({
               <PartiesEditor value={parties} onChange={setParties} disabled={busy} />
             </CollapsibleContent>
           </Collapsible>
+          ) : null}
         </div>
 
         <DialogFooter className="sm:items-center">

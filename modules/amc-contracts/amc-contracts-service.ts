@@ -23,6 +23,7 @@ import type {
   fsmContextForWorkOrder,
   serviceMappingOverview,
 } from "@/lib/server/amc/fsm-integration";
+import type { SiteAsset, SiteChangeView, SiteScopeItem } from "@/lib/server/amc/site-visit-approval";
 import type {
   AmcReports,
   AssessmentRecord,
@@ -552,7 +553,8 @@ export const amcContractsService = {
     );
   },
   assessment(id: string) {
-    return request<{ assessment: AssessmentRecord; canEdit: boolean }>(`/api/amc-contracts/assessments/${id}`);
+    /* `changes`: the scope and asset changes held until the approver approves; `canApprove`: this viewer is that approver (16 Nov 2026). */
+    return request<{ assessment: AssessmentRecord; canEdit: boolean; canChangeApprover?: boolean; changes?: SiteChangeView[]; canApprove?: boolean; siteAssets?: SiteAsset[]; siteScope?: SiteScopeItem[] }>(`/api/amc-contracts/assessments/${id}`);
   },
   createAssessment(input: { customerId: string | null; propertyId: string | null; contractId?: string | null }) {
     return request<{ assessment: AssessmentRecord }>("/api/amc-contracts/assessments", { method: "POST", body: JSON.stringify(input) });
@@ -561,7 +563,19 @@ export const amcContractsService = {
   siteVisitPeople() {
     return request<{ people: Array<{ id: string; name: string; email: string | null }>; me: string }>("/api/amc-contracts/assessments/book");
   },
-  bookSiteVisit(input: { customerId: string; propertyId: string; scheduledAt: string; assessorId: string }) {
+  /** Who can approve a site visit (AMC approval rights). */
+  siteVisitApprovers() {
+    return request<{ approvers: Array<{ id: string; name: string; email: string | null }> }>("/api/amc-contracts/assessments/approvers");
+  },
+  /** The approver approves: the inspector's scope and asset changes go onto the property. */
+  approveAssessment(id: string) {
+    return request<{ assessment: AssessmentRecord }>(`/api/amc-contracts/assessments/${id}/approve`, { method: "POST" });
+  },
+  /** The approver sends it back to the inspector with what to change. */
+  sendBackAssessment(id: string, reason: string) {
+    return request<{ assessment: AssessmentRecord }>(`/api/amc-contracts/assessments/${id}/send-back`, { method: "POST", body: JSON.stringify({ reason }) });
+  },
+  bookSiteVisit(input: { customerId: string; propertyId: string; scheduledAt: string; assessorId: string; approverId?: string | null }) {
     return request<{ assessmentId: string; assessmentNumber: string }>("/api/amc-contracts/assessments/book", { method: "POST", body: JSON.stringify(input) });
   },
   updateAssessment(id: string, patch: Record<string, unknown>) {

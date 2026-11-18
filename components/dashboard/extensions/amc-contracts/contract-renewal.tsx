@@ -78,8 +78,8 @@ export function ContractRenewal({
       const result = await amcContractsService.startRenewal(contractId);
       setCreated({ submissionId: result.submissionId, dropped: result.droppedServiceIds });
       toast.success("Renewal proposal created as a draft");
-      await load();
-      onChanged();
+      /* The renewal and the contract reload together, not one after the other. */
+      await Promise.all([load(), Promise.resolve(onChanged())]);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not create the renewal proposal.");
     } finally {

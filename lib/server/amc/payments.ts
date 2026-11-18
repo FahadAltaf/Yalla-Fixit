@@ -28,6 +28,7 @@ import { ensurePpmSchedule } from "@/lib/server/amc/ppm";
 import { recordSend } from "@/lib/server/amc/proposal-share";
 import { closeAmcTodos, openAmcTodo } from "@/lib/server/amc/todos";
 import { sendEmail } from "@/lib/server/send-email";
+import { initialOutcome, type SendChannel, type SendOutcome } from "@/lib/amc/send-channels";
 
 /**
  * AMC payments on the server (Phase 7: DEV-352, 382, 383, 384, 386, Email
@@ -830,7 +831,7 @@ export async function performPaymentAction(
     }
     case "send_reminder": {
       const i = await instalmentOf(admin, contractId, action.instalmentId);
-      const sent = await sendInstalmentReminder(admin, c, i, "manual", config, actor, now);
+      const sent = await sendInstalmentReminder(admin, c, i, "manual", config, actor, now, action.channel);
       return { ok: true, outcome: sent.outcome, message: sent.message, whatsapp: sent.whatsapp };
     }
     case "escalate": {
@@ -891,7 +892,9 @@ export async function sendInstalmentReminder(
   config: AmcConfig,
   actor: Actor,
   now = new Date(),
-): Promise<{ outcome: "sent" | "failed" | "no_recipient"; message: string; whatsapp: string | null }> {
+  /* The daily job emails; the coordinator may pick WhatsApp or copy the text (17 Nov 2026). */
+  channel: SendChannel = "email",
+): Promise<{ outcome: SendOutcome; message: string; whatsapp: string | null }> {
   const today = todayInDubai(now);
   const s = one(c.submission) ?? {};
   const customer = (s.customer ?? {}) as Row;
@@ -920,8 +923,9 @@ export async function sendInstalmentReminder(
   const whatsappText = fillTemplate(templateText("messageInstallmentDue", config.templates)!.body, values).trim();
   const to = String(customer.customerEmail ?? "").trim();
   const cc = [...new Set([String(owner?.email ?? ""), ...config.contracts.financeCcEmails].filter(Boolean))].filter((e) => e !== to);
-  let outcome: "sent" | "failed" | "no_recipient" = "no_recipient";
-  if (to) {
+  const phone = str(customer.customerPhone);
+  let outcome = initialOutcome(channel);
+  if (channel === "email" && to) {
     try {
       const body = fillTemplate(email.body, values);
       const blocks = body.split(/\n{2,}/);
@@ -948,9 +952,9 @@ export async function sendInstalmentReminder(
       submissionId: String(s.id),
       versionNo: 1,
       document: "instalment_reminder",
-      channel: "email",
-      recipients: to ? [{ name: values["Client name"], address: to }] : [],
-      cc,
+      channel,
+      recipients: channel === "email" ? (to ? [{ name: values["Client name"], address: to }] : []) : channel === "whatsapp" && phone ? [{ name: values["Client name"], address: phone }] : [],
+      cc: channel === "email" ? cc : [],
       outcome,
       detail: `Instalment ${String(i.instalment_no)} (${kind})`,
       sentBy: actor.id,
@@ -969,7 +973,6 @@ export async function sendInstalmentReminder(
     origin: actor.id ? undefined : "system",
     payload: { instalmentNo: i.instalment_no, kind, outcome },
   });
-  const phone = str(customer.customerPhone);
   return { outcome, message: whatsappText, whatsapp: phone ? whatsappUrl(phone, whatsappText) : null };
 }
 

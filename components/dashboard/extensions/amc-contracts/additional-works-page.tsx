@@ -245,8 +245,8 @@ export function AdditionalWorksPage() {
         open={raising.open}
         onOpenChange={raising.onOpenChange}
         source="manual"
-        onRaised={async (w) => {
-          await reload();
+        onRaised={(w) => {
+          /* Straight to the new work's page: a reload here was thrown away by the navigation (13 Nov 2026). */
           openWork(w.id);
         }}
       />

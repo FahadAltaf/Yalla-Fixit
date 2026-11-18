@@ -1,4 +1,5 @@
 import { isFlaggedForInvoice, isWorkComplete } from "@/lib/finance/eligibility";
+import { isNonBillable } from "@/lib/finance/progress";
 import { zonedDateString } from "@/lib/scheduling/org-time";
 
 import { calendarDays } from "./quotations";
@@ -10,7 +11,9 @@ import { calendarDays } from "./quotations";
  *     quotation with value that nobody has marked Ready to be Invoiced
  *     (D-02) and that is not already in the queue. Past the setting's days
  *     it is overdue and its coordinator is told (N13). Leakage protection
- *     for the queue.
+ *     for the queue. AMC/contract work and work FSM bills as Non Billable
+ *     (free service) are never invoiced, so they are not leaks and are left
+ *     out (Sami, 9 and 13 Nov).
  *  2. Completed appointments without actual times: they drop out of job
  *     hours, so utilization would be wrong. Shown with the data
  *     completeness % per technician and team that sits beside utilization.
@@ -27,6 +30,10 @@ export type ExceptionWorkOrder = {
   completedAt: string | null;
   estimateId: string | null;
   clientName: string | null;
+  /** AMC or other contract work (Work Type or AMC contract reference): never invoiced per job. */
+  contract?: boolean;
+  /** FSM's Billing Status, e.g. "Non Billable" for free work. */
+  billingStatus?: string | null;
 };
 
 export type ExceptionEstimate = {
@@ -66,6 +73,8 @@ export function findUnflagged(input: {
   const rows: UnflaggedRow[] = [];
   for (const wo of input.workOrders) {
     if (!isWorkComplete(wo) || !wo.estimateId || input.queuedWorkOrderIds.has(wo.id)) continue;
+    /* AMC/contract and free (Non Billable) work is not invoiced, so it is not a leak. */
+    if (wo.contract || isNonBillable(wo.billingStatus)) continue;
     const estimate = input.estimates.get(wo.estimateId);
     /* No quotation, or nothing to charge: not an invoicing leak. */
     if (!estimate || !(estimate.value > 0) || isFlaggedForInvoice(estimate)) continue;

@@ -155,17 +155,29 @@ export const QUEUE_STATUS_LABELS: Record<QueueStatus, string> = {
 /** What "Awaiting action" shows: work Finance still has to do something with. */
 export const AWAITING_ACTION: QueueStatus[] = ["pending", "in_progress", "query_raised", "on_hold", "partially_invoiced"];
 
+/** Completed in FSM with nothing to charge: FSM's total (before VAT) is zero. */
+export function isZeroValueCompleted(subTotal: number | null | undefined, status: string | null | undefined): boolean {
+  return subTotal !== null && subTotal !== undefined && subTotal <= 0.005 && isFsmCompleted(status);
+}
+
 /**
  * FSM's own end states come next to the portal's (26 Oct): Void is never
  * invoiced; Non-billable is completed work not to be invoiced (AMC, free
  * service), handled apart from billable work.
  */
-export function queueStatus(workflow: WorkflowStatus, invoicing: InvoiceStatus, fsmStatus?: string | null): QueueStatus {
+export function queueStatus(
+  workflow: WorkflowStatus,
+  invoicing: InvoiceStatus,
+  fsmStatus?: string | null,
+  options: { zeroValue?: boolean } = {},
+): QueueStatus {
   if (workflow === "excluded") return "excluded";
   if (invoicing === "invoiced") return "invoiced";
   const fsm = (fsmStatus ?? "").trim().toLowerCase();
   if (fsm === "void" || fsm === "voided") return "void";
   if (/^non[\s-]?billable$/.test(fsm)) return "non_billable";
+  /* Completed work worth nothing (free, contract) is never invoiced: Non-billable, not "Not ready" (Sami, 9 Nov). */
+  if (options.zeroValue && invoicing === "not_ready") return "non_billable";
   if (workflow === "query_raised" || workflow === "on_hold" || workflow === "in_progress") return workflow;
   if (invoicing === "partially_invoiced") return "partially_invoiced";
   return invoicing === "ready" ? "pending" : "not_ready";

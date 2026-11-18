@@ -113,6 +113,53 @@ export function firstWorkingDay(from: string, to: string, calendar: WorkingCalen
   return fallback ?? from;
 }
 
+/**
+ * A visit's window after the contract's window length changes (17 Nov
+ * 2026). It keeps its start and gets the new length, never past its cycle.
+ * Its date stays when it is still inside, or when the date was chosen on
+ * purpose (moved with a reason, or agreed with the client); otherwise it
+ * moves to the first working day of the new window.
+ */
+export function rewindowVisit(
+  visit: { windowStart: string; cycleEnd: string; targetDate: string; keepDate: boolean },
+  windowDays: number,
+  calendar: WorkingCalendar,
+): { windowEnd: string; targetDate: string } {
+  const end = addDays(visit.windowStart, Math.max(1, windowDays) - 1);
+  const windowEnd = end <= visit.cycleEnd ? end : visit.cycleEnd >= visit.windowStart ? visit.cycleEnd : end;
+  const inside = visit.targetDate >= visit.windowStart && visit.targetDate <= windowEnd;
+  return { windowEnd, targetDate: inside || visit.keepDate ? visit.targetDate : firstWorkingDay(visit.windowStart, windowEnd, calendar) };
+}
+
+/**
+ * Visit numbers in date order (17 Nov 2026): after clubbing, separating,
+ * adding or removing, "Visit 1, 2, 3" reads down the schedule again
+ * instead of a separated trade becoming "Visit 17" between 1 and 4.
+ *
+ * A visit that has started or is done keeps its number (its job sheet and
+ * report carry it). The rest take the lowest free numbers in date order;
+ * removed and clubbed visits follow, last. Returns id -> new number, only
+ * for the visits whose number changes.
+ */
+export function visitRenumbering(
+  visits: Array<{ id: string; visitNo: number; status: VisitStatus; targetDate: string }>,
+): Map<string, number> {
+  const byDate = (a: { targetDate: string; visitNo: number }, b: { targetDate: string; visitNo: number }) =>
+    a.targetDate === b.targetDate ? a.visitNo - b.visitNo : a.targetDate < b.targetDate ? -1 : 1;
+  const kept = visits.filter((v) => v.status !== "cancelled" && !PLANNABLE_STATUSES.includes(v.status));
+  const open = visits.filter((v) => PLANNABLE_STATUSES.includes(v.status)).sort(byDate);
+  const gone = visits.filter((v) => v.status === "cancelled").sort((a, b) => a.visitNo - b.visitNo);
+  const taken = new Set(kept.map((v) => v.visitNo));
+  const out = new Map<string, number>();
+  let n = 1;
+  for (const v of [...open, ...gone]) {
+    while (taken.has(n)) n += 1;
+    taken.add(n);
+    if (v.visitNo !== n) out.set(v.id, n);
+  }
+  return out;
+}
+
 /* ------------------------------------------------------------------ */
 /* The tentative schedule (DEV-388)                                    */
 /* ------------------------------------------------------------------ */

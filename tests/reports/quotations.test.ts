@@ -39,6 +39,7 @@ test("FSM statuses map onto the BRD's; an unknown value keeps its own name", () 
   assert.equal(statusOf("converted to work order").key, "converted");
   assert.deepEqual(statusOf("On Review"), { key: "other:On Review", label: "On Review", open: false, awaitingClient: false });
   assert.equal(statusOf(null).label, "No status");
+  assert.equal(statusOf("Revised").key, "other:Revised", "Revised is not a status of its own any more (Sami, 9 Nov)");
 });
 
 test("TC07: Sent for 11 days against a 10-day limit is past the limit; 10 days is not", () => {
@@ -113,7 +114,7 @@ test("the summary has every BRD status, zeros included, and averages days in sta
     options,
   );
   const summary = summariseByStatus(rows, LIMITS);
-  assert.equal(summary.length, 8);
+  assert.equal(summary.length, 7, "six statuses (no Revised: FSM has none) and the unmapped one");
   const notSent = summary.find((s) => s.key === "notSent")!;
   assert.deepEqual(
     [notSent.count, notSent.value, notSent.averageDays, notSent.breached, notSent.ageingLimit],

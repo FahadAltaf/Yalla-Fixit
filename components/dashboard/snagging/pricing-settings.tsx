@@ -13,7 +13,7 @@ import {
   FileText,
   Home,
   Info,
-  Pencil,
+  SquarePen,
   Receipt,
   Store,
 } from "lucide-react";
@@ -454,7 +454,7 @@ export default function PricingSettings() {
               onClick={() => setEditingType(row.original)}
               aria-label={`Edit ${row.original.label} rates`}
             >
-              <Pencil className="size-3.5" />
+              <SquarePen className="size-3.5" />
               Edit
             </Button>
           ) : null,
@@ -587,7 +587,7 @@ export default function PricingSettings() {
                         variant="ghost"
                         onClick={() => setEditingCharges(true)}
                       >
-                        <Pencil className="size-3.5" />
+                        <SquarePen className="size-3.5" />
                         Edit
                       </Button>
                     ) : null
@@ -647,7 +647,7 @@ export default function PricingSettings() {
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button size="sm" variant="ghost">
-                          <Pencil className="size-3.5" />
+                          <SquarePen className="size-3.5" />
                           Edit
                           <ChevronDown className="size-3.5" />
                         </Button>

@@ -7,7 +7,6 @@ import { Copy, ExternalLink, ImagePlus, LoaderCircleIcon, RefreshCwIcon, SearchI
 import { toast } from "sonner";
 
 import { StatusSelect } from "@/components/data-table/toolbars/status-select";
-import { PillTabs } from "@/components/dashboard/shared/kaizen";
 import { ActionDialogContent, SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -190,6 +189,13 @@ export function Muted({ children }: { children: ReactNode }) {
  */
 export const PanelSurface = createContext<"box" | "card">("box");
 
+/**
+ * The visit page's header buttons (17 Nov 2026): a tab's own actions --
+ * the job sheet's Return / Close visit / report -- go up beside Open
+ * contract instead of sitting at the bottom of the tab.
+ */
+export const HeaderActionsSlot = createContext<HTMLElement | null>(null);
+
 export function Panel({
   title,
   description,
@@ -313,6 +319,29 @@ export function ReadText({ value, empty = "—" }: { value: string | null | unde
 /* A prepared WhatsApp message                                         */
 /* ------------------------------------------------------------------ */
 
+/**
+ * A prepared message as the office reads it (17 Nov 2026): a long link
+ * (a signed report URL runs to hundreds of characters) shows as a short
+ * "Open link". What is copied or sent keeps the full link.
+ */
+export function MessageText({ text, className }: { text: string; className?: string }) {
+  const parts = text.split(/(https?:\/\/\S+)/g);
+  return (
+    <p className={cn("text-sm break-words whitespace-pre-wrap", className)}>
+      {parts.map((part, i) =>
+        i % 2 === 1 ? (
+          <a key={i} href={part} target="_blank" rel="noopener noreferrer" title={part} className="text-primary inline-flex items-center gap-1 align-baseline font-medium underline-offset-2 hover:underline">
+            Open link
+            <ExternalLink className="size-3" />
+          </a>
+        ) : (
+          part
+        ),
+      )}
+    </p>
+  );
+}
+
 export function PreparedMessage({
   title = "The WhatsApp message",
   message,
@@ -345,7 +374,7 @@ export function PreparedMessage({
           </Button>
         ) : null}
       </div>
-      <p className="text-sm whitespace-pre-wrap">{message}</p>
+      <MessageText text={message} />
       {!whatsapp ? <p className="text-warning text-xs">No phone number on file: copy the message and send it yourself.</p> : null}
       <div className="flex flex-wrap gap-2">
         {whatsapp ? (
@@ -422,7 +451,6 @@ export function PhotosPanel<K extends string>({
   const kindId = useId();
   const { confirm, dialog } = useConfirm();
   const labelOf = (k: string) => labels[k as K] ?? k;
-  const [shownKind, setShownKind] = useState<string>("all");
 
   const add = async (files: FileList | null) => {
     if (!files?.length) return;
@@ -459,8 +487,8 @@ export function PhotosPanel<K extends string>({
       },
     });
 
-  const present = kinds.filter((k) => photos.some((p) => p.kind === k));
-  const shown = shownKind === "all" ? photos : photos.filter((p) => p.kind === shownKind);
+  /* Every photo at once (18 Nov 2026): no filter tabs; each photo carries its category. */
+  const shown = photos;
 
   return (
     <Panel
@@ -498,13 +526,6 @@ export function PhotosPanel<K extends string>({
         />
       ) : (
         <div className="grid gap-4">
-          {present.length > 1 ? (
-            <PillTabs
-              value={shownKind}
-              onChange={setShownKind}
-              tabs={[{ value: "all", label: "All", count: photos.length }, ...present.map((k) => ({ value: k as string, label: labels[k], count: photos.filter((p) => p.kind === k).length }))]}
-            />
-          ) : null}
           <ul className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
             {shown.map((p) => (
               <li key={p.id} className="group bg-card relative overflow-hidden rounded-xl border shadow-xs">

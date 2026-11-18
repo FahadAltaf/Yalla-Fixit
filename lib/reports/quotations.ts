@@ -5,7 +5,9 @@ import { addDaysToDateString, zonedDateString } from "@/lib/scheduling/org-time"
  * much and how long they have sat there; which have sat too long (N7) and
  * which are about to lapse with no answer (N8).
  *
- * Statuses are the BRD's seven. Their mapping onto FSM's values is D-13;
+ * Statuses are the BRD's, less "Revised": YFI's FSM has no such status (a
+ * revision is a new quotation), so it was always empty (Sami, 9 Nov). Their
+ * mapping onto FSM's values is D-13;
  * until it is confirmed, FSM's own names map one to one where they match,
  * "New" is "Not sent", and any value not listed keeps its own name as an
  * extra group, so nothing is hidden.
@@ -20,7 +22,7 @@ import { addDaysToDateString, zonedDateString } from "@/lib/scheduling/org-time"
  * (D-05).
  */
 
-export type StatusKey = "notSent" | "sent" | "approved" | "converted" | "rejected" | "revised" | "expired";
+export type StatusKey = "notSent" | "sent" | "approved" | "converted" | "rejected" | "expired";
 
 export const QUOTATION_STATUSES: ReadonlyArray<{
   key: StatusKey;
@@ -36,7 +38,6 @@ export const QUOTATION_STATUSES: ReadonlyArray<{
   { key: "approved", label: "Approved", fsm: ["Approved"], open: true, awaitingClient: false },
   { key: "converted", label: "Converted to work order", fsm: ["Converted to Work Order"], open: false, awaitingClient: false },
   { key: "rejected", label: "Rejected", fsm: ["Rejected", "Declined"], open: false, awaitingClient: false },
-  { key: "revised", label: "Revised", fsm: ["Revised"], open: false, awaitingClient: false },
   { key: "expired", label: "Expired", fsm: ["Expired"], open: false, awaitingClient: false },
 ];
 

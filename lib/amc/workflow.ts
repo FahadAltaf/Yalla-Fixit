@@ -35,11 +35,22 @@ export type AmcClientAction = "approve" | "reject" | "request_revision" | "sign"
  */
 export const AMC_SELF_APPROVAL_ALLOWED = false;
 
+/**
+ * Local testing only (16 Nov 2026): NEXT_PUBLIC_AMC_SELF_APPROVAL=on lets
+ * an approver decide their own proposal, so one person can walk the whole
+ * flow. Never on a production build, whatever the variable says: next
+ * build inlines NODE_ENV as "production", so live cannot turn it on.
+ * Both values are inlined, so the server and the buttons agree.
+ */
+export function amcSelfApprovalOn(): boolean {
+  return process.env.NODE_ENV !== "production" && process.env.NEXT_PUBLIC_AMC_SELF_APPROVAL === "on";
+}
+
 /** Whether this viewer may approve or send back this proposal. */
 export function canDecideProposal({
   canApprove,
   isOwner,
-  selfApprovalAllowed = AMC_SELF_APPROVAL_ALLOWED,
+  selfApprovalAllowed = AMC_SELF_APPROVAL_ALLOWED || amcSelfApprovalOn(),
 }: {
   canApprove: boolean;
   isOwner: boolean;
@@ -68,7 +79,7 @@ export function checkInternalTransition({
   from,
   isOwner,
   canApprove,
-  selfApprovalAllowed = AMC_SELF_APPROVAL_ALLOWED,
+  selfApprovalAllowed = AMC_SELF_APPROVAL_ALLOWED || amcSelfApprovalOn(),
 }: {
   action: AmcInternalAction;
   from: string;

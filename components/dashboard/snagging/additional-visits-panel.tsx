@@ -16,7 +16,7 @@ import {
   FilePlus2,
   FileText,
   MoreHorizontal,
-  Pencil,
+  SquarePen,
   Plus,
   UserRound,
 } from "lucide-react";
@@ -438,7 +438,7 @@ export function AdditionalVisitsPanel({ task }: { task: SnaggingTask }) {
             </DropdownMenuItem>
             {visit.status !== "completed" && visit.status !== "cancelled" ? (
               <DropdownMenuItem onClick={() => setEditing(visit)}>
-                <Pencil className="size-4" />
+                <SquarePen className="size-4" />
                 Edit inspector, date and notes
               </DropdownMenuItem>
             ) : null}

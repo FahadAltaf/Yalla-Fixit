@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { canOperateContract, canReadContract } from "@/lib/amc/access";
 import { jobSheetActionSchema } from "@/lib/amc/job-sheets";
+import { browserPdfFrom } from "@/lib/server/amc/browser-pdf";
 import { readAmcConfig } from "@/lib/server/amc/config";
 import { contractErrorResponse, requireContractAccess } from "@/lib/server/amc/contract-access";
 import {
@@ -57,7 +58,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ visitId: s
   if (!gate.ok) return gate.response;
   const { visitId } = await ctx.params;
   if (!UUID.test(visitId)) return notFound();
-  const parsed = jobSheetActionSchema.safeParse(await req.json().catch(() => null));
+  const body: unknown = await req.json().catch(() => null);
+  const parsed = jobSheetActionSchema.safeParse(body);
   if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Invalid request" }, { status: 400 });
   try {
     const scope = await visitOwner(gate.admin, visitId);
@@ -75,8 +77,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ visitId: s
       return NextResponse.json({ error: "Only a supervisor reviews job sheets." }, { status: 403 });
     }
     if (action.action === "return") return NextResponse.json(await returnJobSheet(gate.admin, visitId, action.comment, actor));
-    if (action.action === "close") return NextResponse.json(await closeJobSheet(gate.admin, visitId, action.comment, actor, config));
-    return NextResponse.json(await sendServiceReport(gate.admin, visitId, actor, config));
+    if (action.action === "close") return NextResponse.json(await closeJobSheet(gate.admin, visitId, action.comment, actor, config, action.send, browserPdfFrom(body)));
+    /* close and resend_report may carry pdfBase64: the report as the portal built it (18 Nov 2026). */
+    return NextResponse.json(await sendServiceReport(gate.admin, visitId, actor, config, action.channel, browserPdfFrom(body)));
   } catch (error) {
     return contractErrorResponse(error, "Could not update the job sheet");
   }

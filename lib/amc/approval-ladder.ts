@@ -2,6 +2,7 @@ import { z } from "zod";
 
 import type { AmcConfig } from "./config";
 import { discountApprovalLevel, isNonStandardPlan, PAYMENT_PLAN_LABELS, type PaymentPlan } from "./proposal-rules";
+import { amcSelfApprovalOn } from "./workflow";
 
 /**
  * The approval ladder and sharing (BRD 5.5, 5.6; DEV-369, 370, 371). Pure:
@@ -94,13 +95,26 @@ export function ladderLevels(requiredLevel: number): number[] {
 }
 
 /**
+ * The people named for a level, less the proposal's owner.
+ *
+ * A level whose only named approver submitted the proposal would otherwise
+ * wait for ever (16 Nov 2026): nobody approves their own. It then counts as
+ * naming nobody, and falls to the AMC approvers.
+ */
+export function namedDeciders(approverIds: readonly string[], ownerId: string): string[] {
+  return approverIds.filter((id) => id !== ownerId);
+}
+
+/**
  * Who decides a level: the people named for it in configuration, or, when
- * nobody is named, the AMC approvers (AMC Settings list or AMC Approve).
- * Never the proposal's owner.
+ * nobody (other than the owner) is named, the AMC approvers (AMC Settings
+ * list, or AMC Approve when that list is empty). Never the proposal's owner.
  */
 export function canDecideStep(input: { userId: string; ownerId: string; approverIds: readonly string[]; isAmcApprover: boolean }): boolean {
-  if (input.userId === input.ownerId) return false;
-  return input.approverIds.length > 0 ? input.approverIds.includes(input.userId) : input.isAmcApprover;
+  /* The owner decides only with the local testing switch on, and only as an approver (lib/amc/workflow.ts). */
+  if (input.userId === input.ownerId) return amcSelfApprovalOn() && (input.isAmcApprover || input.approverIds.includes(input.userId));
+  const named = namedDeciders(input.approverIds, input.ownerId);
+  return named.length > 0 ? named.includes(input.userId) : input.isAmcApprover;
 }
 
 export const STEP_ACTIONS = ["approve", "reject", "return"] as const;

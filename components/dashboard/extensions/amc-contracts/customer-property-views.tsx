@@ -3,11 +3,12 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Building2, ChevronRight, ClipboardCheck, Layers, Pencil, Plus, Receipt, ScrollText, TriangleAlert, UserRound, UserX } from "lucide-react";
+import { ArrowLeft, Building2, ChevronRight, ClipboardCheck, Layers, SquarePen, Plus, Receipt, ScrollText, TriangleAlert, UserRound, UserX } from "lucide-react";
 import { toast } from "sonner";
 import type { ColumnDef } from "@tanstack/react-table";
 
 import { DataTable } from "@/components/data-table";
+import { ListTable } from "./list-table";
 import { useBreadcrumbLabel } from "@/components/dashboard-layout/breadcrumb-labels";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -17,7 +18,6 @@ import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } fr
 import { EmptyState } from "@/components/ui/empty-state";
 import { Money } from "@/components/ui/money";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { DataRow, PillTabs, SectionCard, StatCard, StatCardGrid, SubHeading, TabCount } from "@/components/dashboard/shared/kaizen";
 import { GoogleLocationMap, hasGoogleMapsKey } from "@/components/dashboard/snagging/google-location-map";
@@ -46,7 +46,7 @@ import { ContactsPanel } from "./profile/contacts-panel";
 import { DetailList } from "./profile/detail-list";
 import { DocumentsPanel } from "./profile/documents-panel";
 import { IdentityCard, LIFECYCLE_TONE } from "./profile/identity-card";
-import { AccessRulesPanel, AssetsPanel, ScopePanel } from "./profile/property-panels";
+import { AccessRulesPanel, AssetsPanel, PropertyPassesPanel, ScopePanel } from "./profile/property-panels";
 import { useDialog } from "./profile/use-dialog";
 import { useUrlTab } from "./profile/use-url-tab";
 import { ClientEnquiriesCard } from "./enquiries/client-enquiries-card";
@@ -392,7 +392,7 @@ export function CustomerDetail({ id }: { id: string }) {
           <div className="flex flex-wrap items-center gap-2">
             {canEdit ? (
               <Button variant="outline" onClick={() => editing.show(true)}>
-                <Pencil className="size-4" />
+                <SquarePen className="size-4" />
                 Edit
               </Button>
             ) : null}
@@ -706,7 +706,7 @@ export function PropertyDetail({ id }: { id: string }) {
               ) : null}
               {canEdit ? (
                 <Button variant="outline" onClick={() => editing.show(true)}>
-                  <Pencil className="size-4" />
+                  <SquarePen className="size-4" />
                   Edit
                 </Button>
               ) : null}
@@ -853,30 +853,6 @@ export function PropertyDetail({ id }: { id: string }) {
                   </div>
                 </SectionCard>
 
-                <SectionCard title="Combined units" icon={<Layers />} description="Linked, not merged: each keeps its owner, billing and history." bodyClassName="border-t">
-                  {units.parent ? (
-                    <DataRow
-                      onClick={() => router.push(`/extensions/amc-contracts/properties/${units.parent!.id}`)}
-                      icon={<Building2 />}
-                      title={units.parent.label}
-                      subtitle="This unit is part of it"
-                      trailing={<ChevronRight className="text-muted-foreground size-4" aria-hidden />}
-                    />
-                  ) : null}
-                  {units.children.map((u) => (
-                    <DataRow
-                      key={u.id}
-                      onClick={() => router.push(`/extensions/amc-contracts/properties/${u.id}`)}
-                      icon={<Layers />}
-                      title={u.label}
-                      subtitle={[unitTypeLabel(u.unitType), u.customerId && u.customerId !== customer?.id ? "different owner" : null].filter(Boolean).join(" · ") || "Unit within"}
-                      trailing={<ChevronRight className="text-muted-foreground size-4" aria-hidden />}
-                    />
-                  ))}
-                  {!units.parent && units.children.length === 0 ? (
-                    <p className="text-muted-foreground px-5 py-4 text-sm">Not linked to other units. Link one from its Edit form.</p>
-                  ) : null}
-                </SectionCard>
               </>,
             )}
 
@@ -918,7 +894,10 @@ export function PropertyDetail({ id }: { id: string }) {
                 ) : null}
                 {maintainedOpened.has("access") ? (
                   <div hidden={maintained !== "access"}>
-                    <AccessRulesPanel propertyId={property.id} canEdit={canEdit} />
+                    <div className="flex flex-col gap-6">
+                      <AccessRulesPanel propertyId={property.id} canEdit={canEdit} />
+                      <PropertyPassesPanel propertyId={property.id} canEdit={canEdit} />
+                    </div>
                   </div>
                 ) : null}
               </>,
@@ -1005,6 +984,30 @@ function PropertyBodySkeleton({ tab }: { tab: (typeof PROPERTY_TABS)[number] }) 
   );
 }
 
+type CurrentEntitlement = NonNullable<PropertyOverview["current"]>["entitlements"][number];
+/* The house table (18 Nov 2026), as every list. */
+const CURRENT_AMC_COLUMNS: ColumnDef<CurrentEntitlement>[] = [
+  { id: "service", header: "Service", cell: ({ row }) => <span className="text-sm font-medium">{row.original.serviceLabel}</span> },
+  {
+    id: "type",
+    header: "Type",
+    cell: ({ row }) => <span className="text-sm capitalize">{row.original.entitlementType === "informational" ? "included" : row.original.entitlementType}</span>,
+  },
+  {
+    id: "used",
+    header: "Used",
+    cell: ({ row }) => <span className="text-sm tabular-nums">{row.original.entitlementType === "informational" ? "—" : formatQuantity(row.original.usedQuantity)}</span>,
+  },
+  {
+    id: "included",
+    header: "Included",
+    cell: ({ row }) => {
+      const e = row.original;
+      return <span className="text-sm tabular-nums">{e.includedQuantity !== null ? formatQuantity(e.includedQuantity) : e.entitlementType === "unlimited" ? "Unlimited" : "—"}</span>;
+    },
+  },
+];
+
 function CurrentAmcCard({ current }: { current: PropertyOverview["current"] }) {
   return (
     <SectionCard
@@ -1031,30 +1034,7 @@ function CurrentAmcCard({ current }: { current: PropertyOverview["current"] }) {
       }
     >
       {current ? (
-        <div className="overflow-x-auto">
-          <Table className="min-w-[520px]">
-            <TableHeader className="[&_th]:text-muted-foreground">
-              <TableRow className="hover:bg-transparent">
-                <TableHead className="pl-5">Service</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Used</TableHead>
-                <TableHead className="pr-5">Included</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {current.entitlements.map((e) => (
-                <TableRow key={`${e.serviceId}-${e.entitlementType}`} className="h-12">
-                  <TableCell className="pl-5">{e.serviceLabel}</TableCell>
-                  <TableCell className="capitalize">{e.entitlementType === "informational" ? "included" : e.entitlementType}</TableCell>
-                  <TableCell className="tabular-nums">{e.entitlementType === "informational" ? "—" : formatQuantity(e.usedQuantity)}</TableCell>
-                  <TableCell className="pr-5 tabular-nums">
-                    {e.includedQuantity !== null ? formatQuantity(e.includedQuantity) : e.entitlementType === "unlimited" ? "Unlimited" : "—"}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+        <ListTable columns={CURRENT_AMC_COLUMNS} data={current.entitlements} />
       ) : (
         <EmptyState icon={<ScrollText className="size-5" />} title="No contract in force" description="This property has no AMC running today. Earlier ones are under Contracts." />
       )}

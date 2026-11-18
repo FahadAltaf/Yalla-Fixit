@@ -103,7 +103,7 @@ export function VisitBoardGrid(props: GridProps) {
     const extra = [...new Set(placed.flatMap((v) => v.technicianIds))].filter((id) => !known.has(id));
     return [
       ...technicians,
-      ...extra.map((fsmId) => ({ fsmId, name: technicianName(fsmId), shift: null, role: "Not on the roster", trades: [] }) as BoardTechnician),
+      ...extra.map((fsmId) => ({ fsmId, name: technicianName(fsmId), shift: null, role: "Not on the roster", trades: [], accountId: null, email: null }) as BoardTechnician),
     ];
   }, [technicians, placed, technicianName]);
 

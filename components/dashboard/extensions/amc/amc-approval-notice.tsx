@@ -25,11 +25,20 @@ import type { AmcPendingApproval } from "./amc-types";
  * canApprove: false and nothing renders.
  */
 
-/* Fired when the queue changes, so an open submissions list reloads, and
-   by the list after a decision, so the notice catches up at once. */
+/* Fired by the notice when the queue changes, so an open submissions list reloads. */
 export const AMC_APPROVALS_CHANGED = "amc-approvals-changed";
+/*
+  Fired after a decision (approve, send back, reject), so the notice catches
+  up at once. Its own event (13 Nov 2026): the list reloads itself after a
+  decision, and hearing AMC_APPROVALS_CHANGED too made it reload twice.
+*/
+export const AMC_DECISION_MADE = "amc-decision-made";
 
 const POLL_MS = 60_000;
+/* Somebody who approves nothing is asked far less often: a ladder change can still add them. */
+const IDLE_POLL_MS = 5 * 60_000;
+/* Switching back to the tab refreshes, but not again within this. */
+const FOCUS_GAP_MS = 30_000;
 /*
   Rows shown before folding; the rest are one click away on the list.
 
@@ -57,12 +66,16 @@ export function AmcApprovalNotice({
   const [dismissedIds, setDismissedIds] = useState<Set<string> | null>(null);
   const known = useRef<Set<string> | null>(null);
   const inFlight = useRef(false);
+  const lastAt = useRef(0);
+  const idle = useRef(false);
 
   const refresh = useCallback(async () => {
     if (inFlight.current) return;
     inFlight.current = true;
+    lastAt.current = Date.now();
     try {
       const response = await amcSubmissionsService.listPendingApprovals();
+      idle.current = !response.canApprove && response.items.length === 0;
       setCanApprove(response.canApprove);
       setItems(response.items);
 
@@ -100,15 +113,20 @@ export function AmcApprovalNotice({
   useEffect(() => {
     void refresh();
     const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") void refresh();
+      if (document.visibilityState !== "visible") return;
+      if (idle.current && Date.now() - lastAt.current < IDLE_POLL_MS) return;
+      void refresh();
     }, POLL_MS);
-    const onRefresh = () => void refresh();
-    window.addEventListener("focus", onRefresh);
-    window.addEventListener(AMC_APPROVALS_CHANGED, onRefresh);
+    const onFocus = () => {
+      if (Date.now() - lastAt.current >= FOCUS_GAP_MS) void refresh();
+    };
+    const onDecision = () => void refresh();
+    window.addEventListener("focus", onFocus);
+    window.addEventListener(AMC_DECISION_MADE, onDecision);
     return () => {
       window.clearInterval(timer);
-      window.removeEventListener("focus", onRefresh);
-      window.removeEventListener(AMC_APPROVALS_CHANGED, onRefresh);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener(AMC_DECISION_MADE, onDecision);
     };
   }, [refresh]);
 

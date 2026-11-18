@@ -405,10 +405,21 @@ const assetRow = (input: AssetInput) => ({
 const assetError = (error: { code?: string; message: string }) =>
   error.code === "23505" ? new ContractError("This property already has an asset with that serial number.", 409) : fail(error);
 
-export async function createAsset(admin: Admin, propertyId: string, input: AssetInput, actor: Actor): Promise<AssetRecord> {
+/**
+ * `id`: the mobile app names the assets it adds, so a replay after a lost
+ * response finds the asset already there instead of adding it twice.
+ */
+export async function createAsset(admin: Admin, propertyId: string, input: AssetInput, actor: Actor, id?: string): Promise<AssetRecord & { duplicate?: true }> {
+  if (id) {
+    const { data: existing } = await admin.from("amc_property_assets").select(ASSET_COLUMNS).eq("id", id).maybeSingle<Row>();
+    if (existing) {
+      if (String(existing.property_id) !== propertyId) throw new ContractError("That asset belongs to another property.", 409);
+      return { ...mapAsset(existing), duplicate: true };
+    }
+  }
   const { data, error } = await admin
     .from("amc_property_assets")
-    .insert({ ...assetRow(input), property_id: propertyId, created_by: actor.id })
+    .insert({ ...assetRow(input), property_id: propertyId, created_by: actor.id, ...(id ? { id } : {}) })
     .select(ASSET_COLUMNS)
     .single<Row>();
   if (error) throw assetError(error);
@@ -641,11 +652,19 @@ async function assertAssetOnProperty(admin: Admin, propertyId: string, assetId: 
   if (!data) throw new ContractError("That asset is not on this property.", 400);
 }
 
-export async function createScopeItem(admin: Admin, propertyId: string, input: ScopeInput, actor: Actor): Promise<ScopeItemRecord> {
+/** `id`: as createAsset -- the mobile app's own id, so a replay is a no-op. */
+export async function createScopeItem(admin: Admin, propertyId: string, input: ScopeInput, actor: Actor, id?: string): Promise<ScopeItemRecord & { duplicate?: true }> {
+  if (id) {
+    const { data: existing } = await admin.from("amc_scope_items").select(SCOPE_COLUMNS).eq("id", id).maybeSingle<Row>();
+    if (existing) {
+      if (String(existing.property_id) !== propertyId) throw new ContractError("That scope item belongs to another property.", 409);
+      return { ...mapScope(existing), duplicate: true };
+    }
+  }
   await assertAssetOnProperty(admin, propertyId, input.assetId);
   const { data, error } = await admin
     .from("amc_scope_items")
-    .insert({ ...scopeRow(input), property_id: propertyId, created_by: actor.id })
+    .insert({ ...scopeRow(input), property_id: propertyId, created_by: actor.id, ...(id ? { id } : {}) })
     .select(SCOPE_COLUMNS)
     .single<Row>();
   if (error) throw fail(error);

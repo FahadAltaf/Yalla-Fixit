@@ -513,25 +513,6 @@ export function EditTechnicianDialog({
         <div className="grid gap-4 py-2">
           <div className="grid gap-2">
             <span className="text-sm font-medium">Trades</span>
-            {/* What each column means (11 Nov 2026): staff asked what Level, Certificate and the date are for. */}
-            <dl className="bg-muted/40 text-muted-foreground grid gap-1.5 rounded-lg border px-3 py-2.5 text-xs sm:grid-cols-2">
-              <div>
-                <dt className="text-foreground inline font-medium">Tick </dt>
-                <dd className="inline">each trade they do. Unticked trades are never suggested.</dd>
-              </div>
-              <div>
-                <dt className="text-foreground inline font-medium">Level: </dt>
-                <dd className="inline">Expert is suggested first, Competent can be suggested, Trainee is never suggested for that trade.</dd>
-              </div>
-              <div>
-                <dt className="text-foreground inline font-medium">Certificate: </dt>
-                <dd className="inline">the licence or certificate they hold for the trade, e.g. a DEWA or Civil Defence card number. Optional.</dd>
-              </div>
-              <div>
-                <dt className="text-foreground inline font-medium">Expires on: </dt>
-                <dd className="inline">when that certificate runs out. After it, they are not suggested for the trade until it is renewed. Leave empty if it never expires.</dd>
-              </div>
-            </dl>
             <div className="divide-y rounded-lg border">
               <div className="text-muted-foreground hidden gap-3 px-3 py-2 text-xs font-medium sm:grid sm:grid-cols-[8rem_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)]">
                 <span>Trade</span>

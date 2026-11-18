@@ -123,8 +123,31 @@ export function VisitBoard() {
       confirmText: "Remove",
       variant: "destructive",
       action: async () => {
-        for (const v of visits) await visitsService.boardAction({ action: "unplace", visitId: v.id });
-        onDone(single ? `Visit ${single.visitNo} removed from the board` : `${plural(visits.length, "visit")} removed from the board`);
+        /*
+          One at a time (they can share a day's schedule), carrying on past a
+          failure; the board reloads either way, so it never shows a removed
+          visit as still placed (13 Nov 2026).
+        */
+        const failed: Array<{ reason: unknown }> = [];
+        for (const v of visits) {
+          try {
+            await visitsService.boardAction({ action: "unplace", visitId: v.id });
+          } catch (reason) {
+            failed.push({ reason });
+          }
+        }
+        if (failed.length === 0) {
+          onDone(single ? `Visit ${single.visitNo} removed from the board` : `${plural(visits.length, "visit")} removed from the board`);
+          return;
+        }
+        clearSelection();
+        reload();
+        const removed = visits.length - failed.length;
+        throw new Error(
+          (removed ? `${plural(removed, "visit")} removed, but ` : "") +
+            (failed.length === 1 ? "one could not be: " : `${failed.length} could not be: `) +
+            (failed[0].reason instanceof Error ? failed[0].reason.message : "try again."),
+        );
       },
     });
   };

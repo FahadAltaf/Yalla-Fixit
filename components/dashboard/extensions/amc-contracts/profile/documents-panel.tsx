@@ -33,6 +33,8 @@ const LEVEL_LABELS: Record<DocumentLevel, string> = {
   enquiry: "Enquiry",
   visit: "Visit",
   call_out: "Call out",
+  site_visit: "Site visit",
+  additional_work: "Additional work",
 };
 
 const sizeLabel = (bytes: number) => (bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);

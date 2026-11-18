@@ -1,18 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Eye, Send } from "lucide-react";
-import { toast } from "sonner";
+import { useState } from "react";
+import { Eye } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ActionDialogContent, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
-import { insightsService, type ClientReportSendResult } from "@/modules/amc-contracts/insights-service";
+import { insightsService } from "@/modules/amc-contracts/insights-service";
 
-import { PreparedMessage, errorText } from "./call-out-shared";
-import { clientReportPdf } from "./client-report-viewer";
+import { clientReportFileName, clientReportPdf } from "./client-report-viewer";
+import { SendDialog } from "./send-options";
 
 /* A Blob as base64, for the JSON body. */
 async function toBase64(blob: Blob): Promise<string> {
@@ -26,11 +23,10 @@ const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
  * Sends a contract's client report (Phase 12: DEV-410): the server stores
- * the PDF on the contract, emails it to the client with the account
- * manager copied, and prepares a WhatsApp message with a link. The email
- * is prefilled from the client's contact as signed and may be changed or
- * left empty (the server then uses the email on file). After sending, the
- * dialog shows the WhatsApp message to send from the phone.
+ * the PDF on the contract, then it goes by WhatsApp, email (the account
+ * manager copied) or as a link to copy -- the same three ways as every send
+ * (17 Nov 2026). For email the address is prefilled from the client's
+ * contact and may be changed or left empty (the email on file is used).
  */
 export function SendClientReportDialog({
   open,
@@ -50,119 +46,74 @@ export function SendClientReportDialog({
   /** Opens the report in the viewer. */
   onPreview?: () => void;
 }) {
-  const [email, setEmail] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [stage, setStage] = useState<"pdf" | "send">("pdf");
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<ClientReportSendResult | null>(null);
-
-  useEffect(() => {
-    if (open) {
-      setEmail(defaultEmail ?? "");
-      setError(null);
-      setResult(null);
-    }
-  }, [open, defaultEmail]);
-
+  /* null: not changed, so the client's email as on file. */
+  const [typed, setTyped] = useState<string | null>(null);
+  const email = typed ?? defaultEmail ?? "";
   const to = email.trim();
   const valid = !to || EMAIL.test(to);
 
-  const send = async () => {
-    if (!valid) {
-      setError("Enter a valid email address, or leave it empty.");
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      /* The branded PDF, as the viewer shows it; if it cannot be built here the server prints its own. */
-      setStage("pdf");
-      const pdf = await insightsService
-        .clientReport(contractId)
-        .then(({ report }) => clientReportPdf(report))
-        .then(toBase64)
-        .catch(() => null);
-      setStage("send");
-      const sent = await insightsService.sendClientReport(contractId, to || null, pdf);
-      if (sent.outcome === "sent") toast.success("Client report emailed to the client");
-      else if (sent.outcome === "no_recipient") toast.warning("The client has no email address on file: send the report by WhatsApp.");
-      else toast.error("The client report email could not be sent. Try again, or send it by WhatsApp.");
-      setResult(sent);
-    } catch (e) {
-      toast.error(errorText(e, "Could not send the client report."));
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
-    <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
-      <ActionDialogContent busy={busy} className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>{result ? "Client report prepared" : "Send the client report"}</DialogTitle>
-          <DialogDescription>
-            {result
-              ? result.outcome === "sent"
-                ? `Emailed for ${contractLabel}, and kept with the contract's documents.`
-                : `Kept with ${contractLabel}'s documents. Send it to ${customerName || "the client"} by WhatsApp.`
-              : `The visits, call outs, additional work and allowances on ${contractLabel}, as of today, emailed as a PDF to ${customerName || "the client"}. The account manager is copied.`}
-          </DialogDescription>
-        </DialogHeader>
-
-        {result ? (
-          result.message ? (
-            <PreparedMessage message={result.message} whatsapp={result.whatsapp} />
-          ) : null
-        ) : (
-          <div className="grid gap-2 py-1">
-            <Label htmlFor="amc-client-report-to">Client email (optional)</Label>
-            <Input
-              id="amc-client-report-to"
-              type="email"
-              inputMode="email"
-              autoComplete="off"
-              placeholder="Uses the email on file when empty"
-              value={email}
-              maxLength={200}
-              aria-invalid={!valid}
-              onChange={(event) => {
-                setEmail(event.target.value);
-                setError(null);
-              }}
-            />
-            <p className="text-muted-foreground text-xs">Change it to send to someone else at the client. Nothing on the contract is changed.</p>
-            {error ? (
-              <p className="text-danger text-sm" role="alert">
-                {error}
+    <SendDialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) setTyped(null);
+        onOpenChange(next);
+      }}
+      title="Send the client report"
+      description={`The visits, call outs, additional work and allowances on ${contractLabel}, as of today, for ${customerName || "the client"}. A copy is kept with the contract's documents.`}
+      what="the client report"
+      noun="Client report"
+      canSend={(channel) => channel !== "email" || valid}
+      /* WhatsApp carries no link (18 Nov 2026): the PDF is downloaded and attached. */
+      download={async () => {
+        const { report } = await insightsService.clientReport(contractId);
+        const blob = await clientReportPdf(report);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = clientReportFileName(report);
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 5000);
+      }}
+      onSend={async (channel) => {
+        /* The branded PDF, as the viewer shows it; if it cannot be built here the server prints its own. */
+        const pdf = await insightsService
+          .clientReport(contractId)
+          .then(({ report }) => clientReportPdf(report))
+          .then(toBase64)
+          .catch(() => null);
+        return insightsService.sendClientReport(contractId, channel === "email" ? to || null : null, pdf, channel);
+      }}
+    >
+      {(channel) => (
+        <>
+          {channel === "email" ? (
+            <div className="grid gap-1.5">
+              <Label htmlFor="amc-client-report-to">Client email (optional)</Label>
+              <Input
+                id="amc-client-report-to"
+                type="email"
+                inputMode="email"
+                autoComplete="off"
+                placeholder="Uses the email on file when empty"
+                value={email}
+                maxLength={200}
+                aria-invalid={!valid}
+                onChange={(event) => setTyped(event.target.value)}
+              />
+              <p className={valid ? "text-muted-foreground text-xs" : "text-danger text-xs"}>
+                {valid ? "Change it to send to someone else at the client. The account manager is copied." : "Enter a valid email address, or leave it empty."}
               </p>
-            ) : null}
-          </div>
-        )}
-
-        <DialogFooter>
-          {result ? (
-            <Button onClick={() => onOpenChange(false)}>Done</Button>
-          ) : (
-            <>
-              {onPreview ? (
-                <Button variant="outline" onClick={onPreview} disabled={busy}>
-                  <Eye className="size-4" />
-                  View report
-                </Button>
-              ) : null}
-              <SubmitButton
-                onClick={() => void send()}
-                disabled={!valid}
-                pending={busy}
-                pendingLabel={stage === "pdf" ? "Preparing the PDF…" : "Sending…"}
-                icon={<Send className="size-4" />}
-              >
-                Send to client
-              </SubmitButton>
-            </>
-          )}
-        </DialogFooter>
-      </ActionDialogContent>
-    </Dialog>
+            </div>
+          ) : null}
+          {onPreview ? (
+            <Button variant="outline" size="sm" className="w-fit" onClick={onPreview}>
+              <Eye className="size-4" />
+              View report
+            </Button>
+          ) : null}
+        </>
+      )}
+    </SendDialog>
   );
 }

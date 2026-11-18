@@ -25,7 +25,7 @@ export type AdditionalWorkCreateBody = z.input<typeof additionalWorkCreateSchema
 export type AdditionalWorkActionInput = z.input<typeof additionalWorkActionSchema>;
 
 export type WorkPhotoKind = "finding" | "before" | "after" | "other";
-export type ShareOutcome = "sent" | "failed" | "no_recipient";
+export type ShareOutcome = "sent" | "failed" | "no_recipient" | "prepared" | "link_created";
 
 export interface AdditionalWorksResponse {
   migrated: boolean;
@@ -48,6 +48,9 @@ export interface WorkActionResult {
   documentId?: string;
   message?: string;
   whatsapp?: string | null;
+  link?: string | null;
+  /** The quotation file, to download and attach to WhatsApp (18 Nov 2026). */
+  file?: { url: string; name: string } | null;
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {

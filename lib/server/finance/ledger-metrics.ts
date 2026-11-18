@@ -1,8 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { DigestItem } from "@/lib/finance/digest-plan";
-import { isFsmCompleted, queueStatus, workOrderInvoicing, type QueueStatus, type WorkflowStatus } from "@/lib/finance/line-status";
+import { isFsmCompleted, isZeroValueCompleted, queueStatus, type QueueStatus, type WorkflowStatus } from "@/lib/finance/line-status";
 import type { MetricExclusion, MetricInvoice, MetricItem } from "@/lib/finance/metrics";
+import { isEnded } from "@/lib/finance/progress";
+import { billableValue, invoicingFrom, loadProgress, progressCap, type StateRow } from "@/lib/server/finance/work-orders";
 import { readAllRows } from "@/lib/server/snagging/read-all";
 
 /**
@@ -12,17 +14,24 @@ import { readAllRows } from "@/lib/server/snagging/read-all";
  * called here: what a work order looked like is the snapshot kept when
  * someone last acted on it (migration 20261025100000).
  *
- *  - In the queue: a work order with a line completed in FSM (as last
- *    seen), an invoice, or a workflow status. Not ready ones are not
- *    counted.
- *  - Entered: when FSM completed the work (else, before 20261025100000,
- *    its first Ready mark or invoice).
+ *  - In the queue: by the same rule as Ready to invoice (Sami, 9 Nov:
+ *    the figures differed). Ready once the work order is Completed in FSM
+ *    (as last seen), or as far as Operations' "invoice" percentages
+ *    allow; or with an invoice, a workflow status, or Non-billable. Not
+ *    ready ones, and Void, Cancelled or Closed work with nothing invoiced,
+ *    are not counted.
+ *  - Entered: when it became invoiceable: FSM completing the work, or
+ *    Operations' first "invoice" percentage, or a Ready mark.
  *  - Value: what is ready and not yet invoiced while it waits; what was
  *    invoiced once invoiced; its value before VAT once excluded.
  *  - Invoices: a row per work order an invoice covers, so a MAHER invoice
  *    across two work orders counts once (invoiceId) but times each. The
  *    variance (invoice total against the lines it covers) sits on its
- *    first row. Days to invoice run from FSM completing the lines.
+ *    first row: the MAHER total Finance entered (20261118150000) less the
+ *    lines. Days to invoice run from when the lines became invoiceable,
+ *    never from the invoice itself (an invoice used to set that time, so
+ *    some invoices showed 0 days); unknown, the invoice is left out of
+ *    the average.
  */
 
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -76,7 +85,8 @@ export async function readLedgerForMetrics(admin: SupabaseClient): Promise<Ledge
       ),
       readAllRows<Record<string, unknown>>((from, to) => finance().from("work_order_states").select("*").order("fsm_work_order_id").range(from, to), "work order states"),
       readAllRows<Record<string, unknown>>(
-        (from, to) => finance().from("line_invoices").select("id, total_amount, recorded_at, recorded_by_label").order("id").range(from, to),
+        /* Every column: maher_total arrives with 20261118150000. */
+        (from, to) => finance().from("line_invoices").select("*").order("id").range(from, to),
         "invoices",
       ),
       readAllRows<Record<string, unknown>>(
@@ -91,8 +101,8 @@ export async function readLedgerForMetrics(admin: SupabaseClient): Promise<Ledge
         (from, to) =>
           finance()
             .from("line_events")
-            .select("id, fsm_work_order_id, event_type, created_at")
-            .in("event_type", ["marked_ready", "invoiced"])
+            .select("id, fsm_work_order_id, fsm_line_id, event_type, created_at")
+            .eq("event_type", "marked_ready")
             .order("id")
             .range(from, to),
         "ready marks",
@@ -110,13 +120,25 @@ export async function readLedgerForMetrics(admin: SupabaseClient): Promise<Ledge
     linesOf.set(id, [...(linesOf.get(id) ?? []), l]);
   }
   const flowOf = new Map(flows.map((f) => [String(f.fsm_work_order_id), f]));
-  /* The first Ready mark or invoice: when FSM's completion was never seen. */
+  /* The first Ready mark, per work order and per line (an invoice is not one: it would make the wait 0 days). */
   const enteredOf = new Map<string, string>();
+  const markedOf = new Map<string, string>();
   for (const e of events) {
     const id = String(e.fsm_work_order_id);
     const at = String(e.created_at);
     if (!enteredOf.has(id) || at < enteredOf.get(id)!) enteredOf.set(id, at);
+    const line = str(e.fsm_line_id);
+    if (line && (!markedOf.has(line) || at < markedOf.get(line)!)) markedOf.set(line, at);
   }
+  /* Operations' "% done" (20261026100000), as Ready to invoice reads it. */
+  const progress = await loadProgress(admin, [...new Set([...linesOf.keys(), ...flowOf.keys()])]);
+  /* When Operations first allowed some of a line (or the whole work order) to be invoiced. */
+  const firstInvoicePercent = (workOrderId: string, lineId: string | null) =>
+    earliest(
+      (progress.byWorkOrder.get(workOrderId) ?? [])
+        .filter((e) => e.purpose === "invoice" && e.percent > 0 && (e.lineId === null || e.lineId === lineId))
+        .map((e) => e.recordedAt),
+    );
 
   /*
     Every value here is with VAT (23 Oct), at the work order's own rate as
@@ -139,27 +161,37 @@ export async function readLedgerForMetrics(admin: SupabaseClient): Promise<Ledge
     const states = linesOf.get(id) ?? [];
     const flow = flowOf.get(id);
     const subTotal = flow?.sub_total === null || flow?.sub_total === undefined ? null : Number(flow.sub_total);
-    /* Ready once FSM completed the line or the work order (23 Oct), as last seen. */
-    const woCompleted = isFsmCompleted(str(flow?.fsm_status));
-    let invoicing = workOrderInvoicing(
-      states.map((s) => ({
-        amount: Number(s.amount ?? 0),
-        ready: woCompleted || Boolean(s.fsm_completed_at),
-        invoicedAmount: Number(s.invoiced_amount ?? 0),
-      })),
-    );
-    /* Lines the portal never kept do not count: invoiced in full only when it reaches FSM's total. */
-    if (invoicing.status === "invoiced" && subTotal !== null && invoicing.invoicedValue < subTotal - 0.01) {
-      invoicing = { ...invoicing, status: "partially_invoiced" };
-    }
+    const fsmStatus = str(flow?.fsm_status);
+    /* As Ready to invoice works it out: all that is left once Completed in FSM, else what Operations' percentages allow. */
+    const woCompleted = isFsmCompleted(fsmStatus);
+    const stateRows: StateRow[] = states.map((s) => ({
+      lineId: String(s.fsm_line_id),
+      workOrderId: id,
+      name: str(s.name),
+      amount: Number(s.amount ?? 0),
+      ready: Boolean(s.ready),
+      invoicedAmount: Number(s.invoiced_amount ?? 0),
+      readyAt: str(s.ready_at),
+      readyBy: str(s.ready_by_label),
+      completedAt: str(s.fsm_completed_at),
+      billable: s.billable === null || s.billable === undefined ? null : Boolean(s.billable),
+    }));
+    const entries = progress.byWorkOrder.get(id) ?? [];
+    const invoicing = invoicingFrom(stateRows, subTotal, woCompleted, woCompleted ? 0 : progressCap(entries, stateRows, subTotal, fsmStatus));
     const workflow = ((flow?.status as WorkflowStatus | undefined) ?? "open") as WorkflowStatus;
-    const status = queueStatus(workflow, invoicing.status);
+    const owed = billableValue(stateRows, subTotal);
+    const zeroValue = isZeroValueCompleted(subTotal, fsmStatus);
+    const status = queueStatus(workflow, invoicing.status, fsmStatus, { zeroValue });
     if (status === "not_ready") continue;
+    /* Void, Cancelled or Closed: counted only if something was invoiced before it ended (as Ready to invoice). */
+    if (isEnded(fsmStatus) && invoicing.invoicedValue <= 0) continue;
 
-    const firstReady =
-      earliest([str(flow?.fsm_completed_at), ...states.map((s) => str(s.fsm_completed_at))]) ??
-      earliest(states.filter((s) => s.ready).map((s) => str(s.ready_at)));
-    const enteredAt = firstReady ?? enteredOf.get(id) ?? str(flow?.status_changed_at) ?? new Date().toISOString();
+    const firstReady = earliest([
+      woCompleted ? str(flow?.fsm_completed_at) : null,
+      firstInvoicePercent(id, null),
+      ...states.map((s) => firstInvoicePercent(id, String(s.fsm_line_id))),
+    ]);
+    const enteredAt = earliest([firstReady, enteredOf.get(id)]) ?? str(flow?.status_changed_at) ?? new Date().toISOString();
     const statusChangedAt = workflow !== "open" && flow ? String(flow.status_changed_at) : (firstReady ?? enteredAt);
     const linesValue = round2(states.reduce((sum, s) => sum + Number(s.amount ?? 0), 0));
     const value =
@@ -176,7 +208,8 @@ export async function readLedgerForMetrics(admin: SupabaseClient): Promise<Ledge
       enteredAt,
       statusChangedAt,
       value: round2(value * woRateOf(id)),
-      subTotal,
+      /* What is owed (less non-billable lines): the daily email's completion % is of this. */
+      subTotal: owed,
       invoicedValue: invoicing.invoicedValue,
       holdReason: str(flow?.hold_reason),
     });
@@ -192,11 +225,21 @@ export async function readLedgerForMetrics(admin: SupabaseClient): Promise<Ledge
       return [String(l.fsm_line_id), withVat !== null && amount > 0 ? withVat / amount : woRateOf(String(l.fsm_work_order_id))];
     }),
   );
+  /* When the line became invoiceable: FSM completing it or its work order, Operations' first "invoice" %, or a Ready mark. */
   const readyAtOf = new Map(
-    lines.map((l) => [
-      String(l.fsm_line_id),
-      str(l.fsm_completed_at) ?? str(flowOf.get(String(l.fsm_work_order_id))?.fsm_completed_at) ?? str(l.ready_at),
-    ]),
+    lines.map((l) => {
+      const workOrderId = String(l.fsm_work_order_id);
+      const lineId = String(l.fsm_line_id);
+      return [
+        lineId,
+        earliest([
+          str(l.fsm_completed_at),
+          str(flowOf.get(workOrderId)?.fsm_completed_at),
+          firstInvoicePercent(workOrderId, lineId),
+          markedOf.get(lineId),
+        ]),
+      ];
+    }),
   );
   const invoiceById = new Map(invoiceRows.map((i) => [String(i.id), i]));
   const groups = new Map<string, { invoiceId: string; workOrderId: string; amount: number; withVat: number; startedAt: string | null }>();
@@ -215,7 +258,9 @@ export async function readLedgerForMetrics(admin: SupabaseClient): Promise<Ledge
   for (const g of groups.values()) {
     const invoice = invoiceById.get(g.invoiceId);
     if (!invoice) continue;
-    const variance = varianceGiven.has(g.invoiceId) ? 0 : round2(Number(invoice.total_amount) - (allocatedOf.get(g.invoiceId) ?? 0));
+    /* The MAHER total Finance entered, else (before 20261118150000) the portal's own total. */
+    const billed = invoice.maher_total === null || invoice.maher_total === undefined ? Number(invoice.total_amount) : Number(invoice.maher_total);
+    const variance = varianceGiven.has(g.invoiceId) ? 0 : round2(billed - (allocatedOf.get(g.invoiceId) ?? 0));
     varianceGiven.add(g.invoiceId);
     invoices.push({
       queueItemId: g.workOrderId,
@@ -224,6 +269,7 @@ export async function readLedgerForMetrics(admin: SupabaseClient): Promise<Ledge
       queueValue: g.withVat,
       recordedAt: String(invoice.recorded_at),
       recordedByLabel: str(invoice.recorded_by_label),
+      /* Null: when it became invoiceable is unknown, so it is left out of days to invoice. */
       startedAt: g.startedAt,
     });
   }

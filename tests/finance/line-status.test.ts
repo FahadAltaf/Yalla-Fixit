@@ -71,3 +71,15 @@ test("2 Nov: lines carry their net amount; VAT is worked out once on the invoice
   assert.deepEqual(mixed, { net: 200, vat: 5, total: 205, ratePercent: null });
   assert.deepEqual(invoiceTotals([]), { net: 0, vat: 0, total: 0, ratePercent: 0 });
 });
+
+test("completed work worth nothing is Non-billable, not Not ready (Sami, 9 Nov)", async () => {
+  const { isZeroValueCompleted, queueStatus } = await import("@/lib/finance/line-status");
+  assert.equal(isZeroValueCompleted(0, "Completed"), true);
+  assert.equal(isZeroValueCompleted(0, "In Progress"), false, "not completed: the value may still come");
+  assert.equal(isZeroValueCompleted(150, "Completed"), false);
+  assert.equal(isZeroValueCompleted(null, "Completed"), false, "FSM's total unknown");
+  assert.equal(queueStatus("open", "not_ready", "Completed", { zeroValue: true }), "non_billable");
+  assert.equal(queueStatus("open", "not_ready", "Completed"), "not_ready", "without the flag, as before");
+  assert.equal(queueStatus("excluded", "not_ready", "Completed", { zeroValue: true }), "excluded", "a decision already taken stands");
+  assert.equal(queueStatus("open", "partially_invoiced", "Completed", { zeroValue: true }), "partially_invoiced", "something was invoiced: never hidden");
+});

@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   TRIGGER_LABELS,
   canDecideStep,
+  namedDeciders,
   evaluateTriggers,
   ladderLevels,
   priorApprovalCovers,
@@ -12,6 +13,7 @@ import {
 } from "@/lib/amc/approval-ladder";
 import { approversForLevel, type AmcConfig } from "@/lib/amc/config";
 import { PAYMENT_PLAN_LABELS, approvalLevelName, planFromLegacyTerms, type PaymentPlan } from "@/lib/amc/proposal-rules";
+import { amcSelfApprovalOn } from "@/lib/amc/workflow";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { ContractError, isMissingTable } from "@/lib/server/amc/contracts";
 import { notifyProposalEvent, notifyUsers } from "@/lib/server/amc/notifications";
@@ -135,6 +137,33 @@ export async function viewerDecidesStep(admin: Admin, proposal: { id: string; ow
   const { step } = await pendingStep(admin, proposal.id);
   if (!step) return null;
   return canDecideStep({ userId, ownerId: proposal.owner_id, approverIds: step.approverIds, isAmcApprover });
+}
+
+/**
+ * Who can decide the open level, by name, for the proposal page
+ * (16 Nov 2026): "waiting for the approver" left an owner who is an
+ * approver wondering why they had no button.
+ *
+ * The level's named people less the owner; when that leaves nobody, the
+ * AMC Settings approvers less the owner; when that list is empty, null
+ * (anyone with the AMC approve permission).
+ */
+export async function stepDeciders(
+  admin: Admin,
+  proposal: { id: string; owner_id: string },
+  settingsApprovers: readonly string[],
+): Promise<{ levelName: string; names: string[] | null } | null> {
+  const { step } = await pendingStep(admin, proposal.id);
+  if (!step) return null;
+  const named = namedDeciders(step.approverIds, proposal.owner_id);
+  if (named.length) {
+    return { levelName: step.levelName, names: named.map((id) => step.approverNames[step.approverIds.indexOf(id)] ?? "User") };
+  }
+  const emails = [...new Set(settingsApprovers.map((e) => e.trim().toLowerCase()).filter(Boolean))];
+  if (!emails.length) return { levelName: step.levelName, names: null };
+  const { data } = await admin.from("user_profile").select("id, full_name, email").in("email", emails);
+  const people = ((data ?? []) as Row[]).filter((u) => String(u.id) !== proposal.owner_id);
+  return { levelName: step.levelName, names: people.map((u) => (u.full_name as string | null) || String(u.email)) };
 }
 
 /* ------------------------------------------------------------------ */
@@ -366,7 +395,7 @@ export async function decideStep(
   if (!data) throw new ContractError("Not found", 404);
   const p = data as unknown as LadderProposal;
   if (p.status !== "awaiting_approval") throw new ContractError("This proposal is not waiting for approval.", 409);
-  if (actor.id === p.owner_id) throw new ContractError("A proposal has to be approved by someone other than the person who wrote it.", 403);
+  if (actor.id === p.owner_id && !amcSelfApprovalOn()) throw new ContractError("A proposal has to be approved by someone other than the person who wrote it.", 403);
   if (!canDecideStep({ userId: actor.id, ownerId: p.owner_id, approverIds: step.approverIds, isAmcApprover })) {
     throw new ContractError(
       step.approverIds.length ? `Level ${step.level} (${step.levelName}) is decided by ${step.approverNames.join(", ")}.` : "You do not have permission to approve AMC proposals.",
@@ -482,12 +511,21 @@ export async function pendingForApprover(
     if (isMissingTable(error)) return { submissionIds: [], allPending: [], migrated: false };
     throw new ContractError(error.message, 500);
   }
-  const allPending = ((data ?? []) as Row[]).map((r) => String(r.submission_id));
-  const ids = ((data ?? []) as Row[])
-    .filter((r) => {
-      const named = ((r.approver_ids as string[] | null) ?? []).map(String);
-      return named.length ? named.includes(userId) : isAmcApprover;
-    })
+  const rows = (data ?? []) as Row[];
+  const allPending = rows.map((r) => String(r.submission_id));
+  /* The owners, so the queue follows canDecideStep: a level naming only its owner falls to the AMC approvers. */
+  const owners = new Map<string, string>();
+  if (allPending.length) {
+    const { data: subs } = await admin.from("amc_submissions").select("id, owner_id").in("id", allPending);
+    for (const s of (subs ?? []) as Row[]) owners.set(String(s.id), String(s.owner_id));
+  }
+  const ids = rows
+    .filter((r) => canDecideStep({
+      userId,
+      ownerId: owners.get(String(r.submission_id)) ?? "",
+      approverIds: ((r.approver_ids as string[] | null) ?? []).map(String),
+      isAmcApprover,
+    }))
     .map((r) => String(r.submission_id));
   return { submissionIds: ids, allPending, migrated: true };
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useState, type ReactNode } from "react";
-import { Ban, Banknote, CalendarCheck, Hammer, Users, CheckCheck, CheckCircle2, FileText, Plus, ReceiptText, Save, Search, Send, Trash2 } from "lucide-react";
+import { Ban, Banknote, CalendarCheck, Hammer, Users, CheckCircle2, FileText, Plus, ReceiptText, Save, Search, Send, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
@@ -37,7 +37,10 @@ import {
   type WorkPhotoKind,
 } from "@/modules/amc-contracts/additional-works-service";
 
-import { Fact, Field, Muted, Panel, PanelEmpty, PhotosPanel, SectionDialog, PreparedMessage, ReadText, errorText, shortDateTime, useActionForm } from "./call-out-shared";
+import { Fact, Field, Muted, Panel, PanelEmpty, PhotosPanel, SectionDialog, ReadText, errorText, shortDateTime, useActionForm } from "./call-out-shared";
+import { SendDialog } from "./send-options";
+import { useVisitCharge } from "./visit-charge";
+import type { PricedService } from "@/lib/amc/visit-charges";
 import { formatContractDate } from "./contract-status";
 import { CrewPicker, crewOptions, crewSummary } from "./crew-picker";
 import { TechnicianSelect, useTechnicianName } from "./people-pickers";
@@ -134,10 +137,16 @@ export function WorkSteps({ work: w }: { work: AdditionalWorkRecord }) {
  * when the quotation is shared. Scheduling has its own tab (Crew & time):
  * `onSchedule` opens it.
  */
+/*
+  No Complete button (18 Nov 2026): the work is completed when the supervisor
+  closes its job sheet, which the crew fills in on the phone, as for a
+  planned visit.
+*/
 export function useWorkActions(data: AdditionalWorkResponse | null, changed: () => Promise<void>, busy: boolean, onSchedule: () => void) {
-  const { confirm, dialog: confirmDialog } = useConfirm();
+  const { dialog: confirmDialog } = useConfirm();
   const actionForm = useActionForm();
-  const [prepared, setPrepared] = useState<{ message: string; whatsapp: string | null } | null>(null);
+  /* Shared by WhatsApp, email or a link to copy (17 Nov 2026). */
+  const [sharing, setSharing] = useState(false);
   const w = data?.work ?? null;
 
   if (!w || !data) return { buttons: null, dialogs: <>{confirmDialog}{actionForm.dialog}</>, notice: null };
@@ -150,30 +159,7 @@ export function useWorkActions(data: AdditionalWorkResponse | null, changed: () 
     await changed();
   };
 
-  const share = () =>
-    void confirm({
-      title: `Share quotation ${w.workNo}?`,
-      description: `This emails the quotation PDF (AED ${w.totals.total.toLocaleString("en-AE", { minimumFractionDigits: 2 })}) to ${
-        approver?.email ? `${approver.name} at ${approver.email}` : approver ? `${approver.name}, who has no email on file, so the client's address is used if any` : "the client's email address on file"
-      }, and prepares a WhatsApp message.`,
-      confirmText: "Share quotation",
-      action: async () => {
-        const result = await additionalWorksService.action(w.id, { action: "share" });
-        if (result.outcome === "sent") toast.success("Quotation emailed");
-        else if (result.outcome === "no_recipient") toast.warning("No email address on file: send the quotation by WhatsApp.");
-        else toast.error("The quotation email could not be sent. Send it by WhatsApp, or share again.");
-        if (result.message) setPrepared({ message: result.message, whatsapp: result.whatsapp ?? null });
-        await changed();
-      },
-    });
-
-  const complete = () =>
-    void confirm({
-      title: `Mark ${w.workNo} as completed?`,
-      description: "The work was done. It can then be invoiced; the call out it came from may close.",
-      confirmText: "Mark completed",
-      action: () => post({ action: "complete" }, "Marked completed"),
-    });
+  const share = () => setSharing(true);
 
   const buttons =
     data.canEdit && !workLocked(w) ? (
@@ -233,12 +219,6 @@ export function useWorkActions(data: AdditionalWorkResponse | null, changed: () 
             {w.status === "scheduled" ? "Reschedule" : "Schedule"}
           </Button>
         ) : null}
-        {can("completed") ? (
-          <Button disabled={busy} onClick={complete}>
-            <CheckCheck className="size-4" />
-            Complete
-          </Button>
-        ) : null}
         {can("invoiced") ? (
           <Button
             disabled={busy}
@@ -278,9 +258,7 @@ export function useWorkActions(data: AdditionalWorkResponse | null, changed: () 
       </>
     ) : null;
 
-  const notice = prepared ? (
-    <PreparedMessage title="The quotation, for WhatsApp" message={prepared.message} whatsapp={prepared.whatsapp} onDismiss={() => setPrepared(null)} />
-  ) : null;
+  const notice = null;
 
   return {
     buttons,
@@ -288,6 +266,21 @@ export function useWorkActions(data: AdditionalWorkResponse | null, changed: () 
       <>
         {confirmDialog}
         {actionForm.dialog}
+        <SendDialog
+          open={sharing}
+          onOpenChange={setSharing}
+          title={`Share quotation ${w.workNo}`}
+          description={`The quotation PDF, AED ${w.totals.total.toLocaleString("en-AE", { minimumFractionDigits: 2 })} including VAT, for ${approver?.name ?? "the client"} to approve.`}
+          what="the quotation"
+          noun="Quotation"
+          contacts={{ email: approver?.email ?? null, phone: approver?.phone ?? null }}
+          attach
+          onSend={async (channel) => {
+            const r = await additionalWorksService.action(w.id, { action: "share", channel });
+            return { outcome: r.outcome ?? "prepared", message: r.message ?? "", whatsapp: r.whatsapp ?? null, link: r.link ?? null, file: r.file ?? null };
+          }}
+          onDone={changed}
+        />
       </>
     ),
     notice,
@@ -442,20 +435,22 @@ export function WorkPartiesSection({ data, working, setWorking, changed }: WorkS
 /* Quotation                                                           */
 /* ------------------------------------------------------------------ */
 
-type LineDraft = { key: string; description: string; kind: QuotationLine["kind"]; quantity: string; unitPrice: string };
+/* serviceId (18 Nov 2026): a line picked from the rate card keeps its service. */
+type LineDraft = { key: string; description: string; kind: QuotationLine["kind"]; quantity: string; unitPrice: string; serviceId?: string | null };
 
 let lineSeq = 0;
 const lineKey = () => `l${(lineSeq += 1)}`;
 const toDrafts = (lines: QuotationLine[]): LineDraft[] =>
-  lines.map((l) => ({ key: lineKey(), description: l.description, kind: l.kind, quantity: String(l.quantity), unitPrice: String(l.unitPrice) }));
+  lines.map((l) => ({ key: lineKey(), description: l.description, kind: l.kind, quantity: String(l.quantity), unitPrice: String(l.unitPrice), serviceId: l.serviceId ?? null }));
 const fromDrafts = (drafts: LineDraft[]): { lines: QuotationLine[]; invalid: boolean } => {
   const filled = drafts.filter((d) => d.description.trim() || d.quantity.trim() || d.unitPrice.trim());
-  const lines = filled.map((d) => ({ description: d.description.trim(), kind: d.kind, quantity: Number(d.quantity), unitPrice: Number(d.unitPrice) }));
+  const lines = filled.map((d) => ({ description: d.description.trim(), kind: d.kind, quantity: Number(d.quantity), unitPrice: Number(d.unitPrice), ...(d.serviceId ? { serviceId: d.serviceId } : {}) }));
   const invalid = lines.some((l) => !l.description || !(l.quantity > 0) || !(l.unitPrice >= 0) || !Number.isFinite(l.unitPrice));
   return { lines, invalid };
 };
 const sameLines = (a: QuotationLine[], b: QuotationLine[]) =>
-  a.length === b.length && a.every((l, i) => l.description === b[i].description && l.kind === b[i].kind && l.quantity === b[i].quantity && l.unitPrice === b[i].unitPrice);
+  a.length === b.length &&
+  a.every((l, i) => l.description === b[i].description && l.kind === b[i].kind && l.quantity === b[i].quantity && l.unitPrice === b[i].unitPrice && (l.serviceId ?? null) === (b[i].serviceId ?? null));
 
 export function WorkQuotationSection({ data, working, setWorking, changed }: WorkSectionProps) {
   const { work: w, canEdit } = data;
@@ -463,6 +458,8 @@ export function WorkQuotationSection({ data, working, setWorking, changed }: Wor
   const busy = working !== null;
   const [drafts, setDrafts] = useState<LineDraft[]>(() => (w.quotationLines.length ? toDrafts(w.quotationLines) : [{ key: lineKey(), description: "", kind: "labour", quantity: "1", unitPrice: "" }]));
   const quoting = canEdit && canMoveWork(w.status, "quotation_prepared");
+  /* The rate card's services for the property, to add as priced lines (18 Nov 2026). */
+  const priced = useVisitCharge("additional_work", w.id, quoting);
   const built = fromDrafts(drafts);
   const totals = quotationTotals(built.invalid ? built.lines.filter((l) => l.description && l.quantity > 0 && l.unitPrice >= 0) : built.lines, w.materialFeePercent);
   const dirty = quoting && !sameLines(built.lines, w.quotationLines);
@@ -495,7 +492,7 @@ export function WorkQuotationSection({ data, working, setWorking, changed }: Wor
       }
     >
       {quoting ? (
-        <QuoteEditor drafts={drafts} setDrafts={setDrafts} disabled={busy} />
+        <QuoteEditor drafts={drafts} setDrafts={setDrafts} disabled={busy} services={priced.data?.services ?? []} />
       ) : w.quotationLines.length === 0 ? (
         <PanelEmpty icon={<FileText />} title="No quotation" description="No quotation was prepared before this work moved on." />
       ) : (
@@ -541,7 +538,7 @@ export function WorkQuotationSection({ data, working, setWorking, changed }: Wor
   );
 }
 
-function QuoteEditor({ drafts, setDrafts, disabled }: { drafts: LineDraft[]; setDrafts: (next: LineDraft[]) => void; disabled: boolean }) {
+function QuoteEditor({ drafts, setDrafts, disabled, services = [] }: { drafts: LineDraft[]; setDrafts: (next: LineDraft[]) => void; disabled: boolean; services?: PricedService[] }) {
   const base = useId();
   const update = (key: string, next: Partial<LineDraft>) => setDrafts(drafts.map((d) => (d.key === key ? { ...d, ...next } : d)));
   return (
@@ -602,7 +599,7 @@ function QuoteEditor({ drafts, setDrafts, disabled }: { drafts: LineDraft[]; set
           </div>
         );
       })}
-      <div>
+      <div className="flex flex-wrap items-center gap-2">
         <Button
           size="sm"
           variant="ghost"
@@ -612,6 +609,31 @@ function QuoteEditor({ drafts, setDrafts, disabled }: { drafts: LineDraft[]; set
           <Plus className="size-3.5" />
           Add line
         </Button>
+        {services.length ? (
+          <Select
+            value=""
+            onValueChange={(serviceId) => {
+              const s = services.find((x) => x.serviceId === serviceId);
+              if (!s) return;
+              /* A service from the rate card: labour, at the card's price for this property (it can still be changed). */
+              const empty = drafts.filter((d) => d.description.trim() || d.unitPrice.trim());
+              setDrafts([...empty, { key: lineKey(), description: s.label, kind: "labour", quantity: "1", unitPrice: s.rate !== null ? String(s.rate) : "", serviceId: s.serviceId }]);
+            }}
+            disabled={disabled || drafts.length >= 60}
+          >
+            <SelectTrigger size="sm" className="w-auto" aria-label="Add a service from the rate card">
+              <SelectValue placeholder="Add from the rate card…" />
+            </SelectTrigger>
+            <SelectContent>
+              {services.map((s) => (
+                <SelectItem key={s.serviceId} value={s.serviceId}>
+                  {s.label}
+                  {s.rate !== null ? ` · AED ${s.rate.toFixed(2)}${s.unit ? ` ${s.unit}` : ""}` : " · no rate on the card"}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : null}
       </div>
     </div>
   );
@@ -664,6 +686,8 @@ export function WorkScheduleSection({ data, working, setWorking, changed }: Work
   const [duration, setDuration] = useState(String(placedMinutes ?? 120));
   const [suggestion, setSuggestion] = useState<{ key: string; data: WorkCrewSuggestion } | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
+  /* Chosen technicians still without a mobile login (the crew list creates them). */
+  const [missingLogins, setMissingLogins] = useState(0);
   const [override, setOverride] = useState("");
   const ids = { date: useId(), time: useId(), duration: useId(), override: useId() };
   const [editing, setEditing] = useState(false);
@@ -777,7 +801,7 @@ export function WorkScheduleSection({ data, working, setWorking, changed }: Work
             <SubmitButton
               pending={working === "schedule"}
               pendingLabel="Saving…"
-              disabled={working !== null || !fresh || picked.length === 0 || picked.length > 10 || reasonMissing}
+              disabled={working !== null || !fresh || picked.length === 0 || picked.length > 10 || reasonMissing || missingLogins > 0}
               icon={<CalendarCheck className="size-4" />}
               onClick={() => save(false)}
             >
@@ -785,7 +809,7 @@ export function WorkScheduleSection({ data, working, setWorking, changed }: Work
             </SubmitButton>
           }
         >
-          {!w.trade ? <p className="text-warning text-xs">This work has no trade (set it on the Finding tab), so nobody can be confirmed competent for it.</p> : null}
+          {!w.trade ? <p className="text-warning text-xs">This work has no trade (set it on the Finding tab), so the technicians with AMC skills are offered: pick who fits the work.</p> : null}
           <div className="grid gap-4 sm:grid-cols-3">
             <Field id={ids.date} label="Date">
               <DateSelect id={ids.date} value={date} onChange={setDate} />
@@ -813,7 +837,7 @@ export function WorkScheduleSection({ data, working, setWorking, changed }: Work
               Find technicians
             </SubmitButton>
           </div>
-          {options ? <CrewPicker options={options} picked={picked} onPickedChange={setPicked} disabled={working !== null} /> : null}
+          {options ? <CrewPicker options={options} picked={picked} onPickedChange={setPicked} disabled={working !== null} onMissingLoginsChange={setMissingLogins} /> : null}
           {fresh && differs && picked.length ? (
             <Field
               id={ids.override}
@@ -842,15 +866,16 @@ function InfoRow({ label, children }: { label: string; children: ReactNode }) {
 /* Photos                                                              */
 /* ------------------------------------------------------------------ */
 
-export function WorkPhotosSection({ data, working, changed }: Omit<WorkSectionProps, "setWorking">) {
+/* readOnly (18 Nov 2026): in the job sheet the crew adds the photos on the phone, so the portal only shows them. */
+export function WorkPhotosSection({ data, working, changed, readOnly = false }: Omit<WorkSectionProps, "setWorking"> & { readOnly?: boolean }) {
   const { work: w, photos, canEdit } = data;
   return (
     <PhotosPanel
-      description="The finding, before and after."
+      description={readOnly ? "The photos the crew took on the phone, and the finding's." : "The finding, before and after."}
       photos={photos}
       kinds={PHOTO_KINDS}
       labels={PHOTO_LABELS}
-      editable={canEdit && !workLocked(w)}
+      editable={canEdit && !workLocked(w) && !readOnly}
       disabled={working !== null}
       upload={(file, kind) => additionalWorksService.addPhoto(w.id, { file, kind })}
       onUploaded={changed}

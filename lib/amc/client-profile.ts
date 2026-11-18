@@ -100,17 +100,22 @@ export const ACCESS_TYPE_LABELS: Record<(typeof ACCESS_TYPES)[number], string> =
   other: "Other",
 };
 
-export const DOCUMENT_LEVELS = ["customer", "property", "contract", "proposal", "enquiry", "visit", "call_out"] as const;
+/* site_visit (17 Nov 2026, 20261117120000): a site visit's gate passes. */
+/* additional_work (17 Nov 2026, 20261117130000): its gate passes. */
+export const DOCUMENT_LEVELS = ["customer", "property", "contract", "proposal", "enquiry", "visit", "call_out", "site_visit", "additional_work"] as const;
 export type DocumentLevel = (typeof DOCUMENT_LEVELS)[number];
 /** Categories offered per level (BRD 5.9); free text is not allowed so reports stay groupable. */
 export const DOCUMENT_CATEGORIES: Record<DocumentLevel, string[]> = {
   customer: ["Trade licence", "Emirates ID / passport", "TRN certificate", "Correspondence", "Other"],
-  property: ["Title deed", "Tenancy contract", "Floor plan", "Access pass", "Photos", "Other"],
+  /* Gate pass (17 Nov 2026): a property pass counts for every visit and site visit there. */
+  property: ["Title deed", "Tenancy contract", "Floor plan", "Access pass", "Gate pass", "Photos", "Other"],
   contract: ["Signed contract", "Signed scan", "Amendment", "Payment proof", "Correspondence", "Other"],
   proposal: ["Proposal PDF", "Client decision evidence", "Other"],
   enquiry: ["Site visit photos", "Correspondence", "Other"],
   visit: ["Gate pass", "Job sheet", "Service report", "Photos", "Other"],
-  call_out: ["Photos", "Quotation", "Other"],
+  call_out: ["Gate pass", "Photos", "Quotation", "Other"],
+  site_visit: ["Gate pass", "Other"],
+  additional_work: ["Gate pass", "Other"],
 };
 
 export const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];

@@ -346,7 +346,6 @@ const QUOTATION_STATUS_STYLES: Record<string, string> = {
   approved: "bg-success/10 text-success",
   converted: "bg-success/10 text-success",
   rejected: "bg-destructive/10 text-destructive",
-  revised: "bg-warning/10 text-warning",
   expired: "bg-mist text-ink-soft",
 };
 

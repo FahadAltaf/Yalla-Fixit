@@ -1,9 +1,12 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 
+import { invoiceVariance, varianceNeedsReason } from "@/lib/finance/variance";
+
 import {
   AWAITING_ACTION,
   isFsmCompleted,
+  isZeroValueCompleted,
   lineCanBeInvoiced,
   lineRemaining,
   lineStatus,
@@ -172,7 +175,7 @@ function ledgerMissing(error: { code?: string; message?: string } | null): boole
   );
 }
 
-type StateRow = {
+export type StateRow = {
   lineId: string;
   workOrderId: string;
   name: string | null;
@@ -183,9 +186,11 @@ type StateRow = {
   readyBy: string | null;
   /** When FSM said the line was completed, as last seen (migration 20261025100000). */
   completedAt: string | null;
+  /** FSM's Billing Status for the line, as last seen (20261118160000); null: not known, counted as billable. */
+  billable?: boolean | null;
 };
 
-type ProgressRow = ProgressEntry & {
+export type ProgressRow = ProgressEntry & {
   id: string;
   workOrderId: string;
   lineName: string | null;
@@ -195,7 +200,7 @@ type ProgressRow = ProgressEntry & {
 };
 
 /* Operations' "% done" (migration 20261026100000); before it, nobody has recorded any. */
-async function loadProgress(admin: SupabaseClient, workOrderIds: string[]): Promise<{ ready: boolean; byWorkOrder: Map<string, ProgressRow[]> }> {
+export async function loadProgress(admin: SupabaseClient, workOrderIds: string[]): Promise<{ ready: boolean; byWorkOrder: Map<string, ProgressRow[]> }> {
   const byWorkOrder = new Map<string, ProgressRow[]>();
   if (!workOrderIds.length) return { ready: true, byWorkOrder };
   try {
@@ -234,14 +239,16 @@ async function loadProgress(admin: SupabaseClient, workOrderIds: string[]): Prom
  * percentages allow, over the lines the portal knows and, for a whole-work-
  * order entry, the rest of the work order's value.
  */
-function progressCap(entries: ProgressRow[], states: StateRow[], subTotal: number | null, workOrderStatus: string | null): number {
+export function progressCap(entries: ProgressRow[], states: StateRow[], subTotal: number | null, workOrderStatus: string | null): number {
   if (!entries.length) return 0;
-  const known = new Map(states.map((s) => [s.lineId, { amount: s.amount, invoiced: s.invoicedAmount }]));
-  for (const e of entries) if (e.lineId && !known.has(e.lineId)) known.set(e.lineId, { amount: e.valueBeforeVat, invoiced: 0 });
+  const known = new Map(states.map((s) => [s.lineId, { amount: s.amount, invoiced: s.invoicedAmount, billable: s.billable !== false }]));
+  for (const e of entries) if (e.lineId && !known.has(e.lineId)) known.set(e.lineId, { amount: e.valueBeforeVat, invoiced: 0, billable: true });
   let cap = 0;
   let knownValue = 0;
   for (const [lineId, m] of known) {
     knownValue += m.amount;
+    /* A line FSM bills as Non Billable is never invoiced, whatever the %. */
+    if (!m.billable) continue;
     cap += invoiceCap({ amount: m.amount, invoicedAmount: m.invoiced }, { workOrderStatus, postToMaher: null, entry: effectiveEntry(lineId, entries) });
   }
   const whole = entries.filter((e) => e.lineId === null).sort((a, b) => b.recordedAt.localeCompare(a.recordedAt))[0];
@@ -304,6 +311,7 @@ async function loadLedger(
         readyAt: str(r.ready_at),
         readyBy: str(r.ready_by_label),
         completedAt: str(r.fsm_completed_at),
+        billable: r.billable === null || r.billable === undefined ? null : Boolean(r.billable),
       })),
       workflow: new Map(
         flows.map((f) => [
@@ -328,14 +336,28 @@ async function loadLedger(
 }
 
 /**
+ * What a work order is owed, before VAT: FSM's total less the lines last
+ * seen as Non Billable (20261118160000), as the work order page counts it.
+ * A non-billable line already invoiced still counts what was invoiced.
+ * Without FSM's total, the lines the portal knows. Null when neither is known.
+ */
+export function billableValue(states: Array<Pick<StateRow, "amount" | "invoicedAmount" | "billable">>, subTotal: number | null): number | null {
+  const nonBillable = round2(states.reduce((sum, s) => sum + (s.billable === false ? Math.max(0, s.amount - s.invoicedAmount) : 0), 0));
+  if (subTotal !== null) return Math.max(0, round2(subTotal - nonBillable));
+  if (!states.length) return null;
+  return Math.max(0, round2(states.reduce((sum, s) => sum + s.amount, 0) - nonBillable));
+}
+
+/**
  * Where a work order's invoicing stands in the list, where FSM gives no
  * lines: what the portal recorded as invoiced against FSM's total, ready
  * when the work order is completed in FSM. Invoiced in full only when the
  * invoiced amount reaches FSM's total.
  */
-function invoicingFrom(states: StateRow[], subTotal: number | null, completed: boolean, progressValue = 0): WorkOrderInvoicing {
+export function invoicingFrom(states: StateRow[], subTotal: number | null, completed: boolean, progressValue = 0): WorkOrderInvoicing {
   const invoicedValue = round2(states.reduce((sum, s) => sum + s.invoicedAmount, 0));
-  const value = subTotal ?? round2(states.reduce((sum, s) => sum + s.amount, 0));
+  /* Only what is owed: FSM's total less the lines it bills as Non Billable (Sami, 9 Nov). */
+  const value = billableValue(states, subTotal) ?? 0;
   const remainingValue = Math.max(0, round2(value - invoicedValue));
   /* Ready for Finance: all that is left; before that, what Operations' percentages allow. */
   const readyValue = completed ? remainingValue : Math.min(remainingValue, progressValue);
@@ -457,6 +479,8 @@ export type WorkOrderListRow = {
   value: number | null;
   /** With VAT (FSM's Grand_Total). */
   valueWithVat: number | null;
+  /** What is owed, before VAT: value less the lines FSM bills as Non Billable (the Invoiced % is of this). */
+  billableValue: number | null;
   invoicing: WorkOrderInvoicing;
   queueStatus: QueueStatus;
   /** Since when it has been in its queue status. */
@@ -557,7 +581,8 @@ export async function listWorkOrders(admin: SupabaseClient, filters: WorkOrderFi
     const invoicing = invoicingFrom(states, w.subTotal, finance, finance ? 0 : progressCap(entries, states, w.subTotal, billing));
     const flow = ledger.workflow.get(w.id);
     const workflow: WorkflowStatus = flow?.status ?? "open";
-    const status = queueStatus(workflow, invoicing.status, billing);
+    const zeroValue = isZeroValueCompleted(w.subTotal, billing);
+    const status = queueStatus(workflow, invoicing.status, billing, { zeroValue });
     const firstReady = states.map((s) => s.readyAt).filter((v): v is string => Boolean(v)).sort()[0] ?? null;
     const statusSince = workflow !== "open" && flow ? flow.statusChangedAt : (firstReady ?? w.completedAt ?? w.createdAt);
     const done = w.appointmentStatuses;
@@ -580,7 +605,7 @@ export async function listWorkOrders(admin: SupabaseClient, filters: WorkOrderFi
       forFinance:
         /* Void, Cancelled or Closed: only if something was invoiced before it ended (30 Oct). */
         (!isEnded(billing) || invoicing.invoicedValue > 0) &&
-        (finance || invoicing.readyValue > 0.01 || invoicing.invoicedValue > 0 || workflow !== "open" || isNonBillable(billing)),
+        (finance || invoicing.readyValue > 0.01 || invoicing.invoicedValue > 0 || workflow !== "open" || isNonBillable(billing) || zeroValue),
       needsCompleting: !finished && done.length > 0 && done.every((st) => isFsmCompleted(st)),
       progressPercent: whole?.percent ?? null,
       progressPurpose: whole?.purpose ?? null,
@@ -650,6 +675,7 @@ export async function listWorkOrders(admin: SupabaseClient, filters: WorkOrderFi
       completedAt: w.completedAt,
       value: w.subTotal,
       valueWithVat: w.grandTotal,
+      billableValue: billableValue(statesOf.get(w.id) ?? [], w.subTotal),
       invoicing: v.invoicing,
       queueStatus: v.status,
       statusSince: v.statusSince,
@@ -829,6 +855,9 @@ export type WorkOrderInvoice = {
   number: string;
   date: string;
   total: number;
+  /** The total printed on the MAHER invoice (13 Nov); null for invoices recorded before it was asked. */
+  maherTotal: number | null;
+  varianceReason: string | null;
   recordedBy: string | null;
   recordedAt: string;
   hasFile: boolean;
@@ -996,7 +1025,7 @@ export async function readWorkOrderDetail(
   if (invoicing.status === "invoiced" && owed !== null && invoicing.invoicedValue < owed - 0.01) {
     invoicing = { ...invoicing, status: "partially_invoiced" };
   }
-  const status = queueStatus(workflow, invoicing.status, wo.invoicingStatus);
+  const status = queueStatus(workflow, invoicing.status, wo.invoicingStatus, { zeroValue: isZeroValueCompleted(owed, wo.invoicingStatus) });
   const firstReady = lines.map((l) => l.readyAt).filter((v): v is string => Boolean(v)).sort()[0] ?? null;
   const completedAt =
     wo.completedAt ?? lines.filter((l) => isFsmCompleted(l.status)).map((l) => l.actualEnd).filter((v): v is string => Boolean(v)).sort()[0] ?? null;
@@ -1061,7 +1090,8 @@ async function readHistoryRows(admin: SupabaseClient, workOrderId: string) {
   const [allocations, events, exclusions, states] = await Promise.all([
     fin
       .from("line_invoice_allocations")
-      .select("invoice_id, fsm_line_id, amount, line_invoices(id, maher_invoice_number, invoice_date, total_amount, recorded_by_label, recorded_at, file_path)")
+      /* Every column of the invoice: maher_total and variance_reason arrive with 20261118150000. */
+      .select("invoice_id, fsm_line_id, amount, line_invoices(*)")
       .eq("fsm_work_order_id", workOrderId)
       .order("id"),
     fin
@@ -1085,6 +1115,8 @@ type InvoiceHeaderRow = {
   recorded_by_label: string | null;
   recorded_at: string;
   file_path: string | null;
+  maher_total?: number | null;
+  variance_reason?: string | null;
 };
 
 function shapeHistory(rows: NonNullable<Awaited<ReturnType<typeof readHistoryRows>>>, lines: WorkOrderLine[]) {
@@ -1106,6 +1138,8 @@ function shapeHistory(rows: NonNullable<Awaited<ReturnType<typeof readHistoryRow
       number: String(h.maher_invoice_number),
       date: String(h.invoice_date),
       total: Number(h.total_amount),
+      maherTotal: h.maher_total === null || h.maher_total === undefined ? null : Number(h.maher_total),
+      varianceReason: str(h.variance_reason),
       recordedBy: str(h.recorded_by_label),
       recordedAt: String(h.recorded_at),
       hasFile: Boolean(h.file_path),
@@ -1165,6 +1199,14 @@ const aedText = (n: number) => `AED ${n.toLocaleString("en-US", { minimumFractio
 function invoicingError(error: { code?: string; message: string }, fn: string): never {
   let message = error.message.replace(new RegExp(`^${fn}: `), "");
   /* The database's own check, should another invoice get in first: "line 3324… has 0 left to invoice, not 1920". */
+  /* The limit checked with the line locked (20261118150000): another invoice got in first. */
+  const more = /^line \S+ can take ([\d.]+) more now, not ([\d.]+)\./.exec(message);
+  if (more) {
+    message =
+      Number(more[1]) <= 0.005
+        ? "One of these lines cannot be invoiced any further now: someone may have just recorded an invoice on it. Reload and check before trying again."
+        : `One of these lines can be invoiced by only ${aedText(Number(more[1]))} more now (before VAT), not ${aedText(Number(more[2]))}: someone may have just recorded an invoice on it. Reload and enter a smaller amount.`;
+  }
   const left = /^line \S+ has ([\d.]+) left to invoice, not ([\d.]+)$/.exec(message);
   if (left) {
     message =
@@ -1212,6 +1254,8 @@ async function snapshotWorkOrder(admin: SupabaseClient, live: NonNullable<Awaite
       amount_with_vat: l.line_amount === null ? null : Math.max(0, l.line_amount),
       /* When the line was completed: its actual end, else the work order's completion. */
       completed_at: lineCanBeInvoiced(l.status, w.status) ? (l.actual_end ?? w.completedAt ?? new Date().toISOString()) : null,
+      /* FSM's Billing Status (20261118160000): the list and metrics leave non-billable lines out of what is owed. */
+      billable: lineBillable(l.billing_status, w.billingStatus),
     })),
   });
   if (error && !/PGRST202|snapshot_work_order|schema cache/i.test(`${error.code} ${error.message}`)) {
@@ -1316,6 +1360,10 @@ export const invoiceRequestSchema = z
     date: DATE,
     /* Ignored: the total is the lines with VAT, worked out on the server from FSM (23 Oct). */
     total: z.number().positive().max(100_000_000).nullish(),
+    /** The total printed on the MAHER invoice, with VAT (Sami, 13 Nov): compared with the lines' total. */
+    maherTotal: z.number().positive().max(100_000_000),
+    /** Why the MAHER total differs from the lines' total; required beyond AED 1.00 (lib/finance/variance.ts). */
+    varianceReason: z.string().trim().max(500).nullish(),
     note: z.string().trim().max(2000).nullish(),
     /** Before VAT; in full or part of each line. */
     allocations: z
@@ -1404,6 +1452,14 @@ export async function recordLineInvoice(
         409,
       );
     }
+    /*
+      The most the line may have invoiced in total once this invoice is in. The
+      database checks it with the line locked (20261118150000), so two invoices
+      at the same moment cannot together pass Operations' limit (Sami, 9 Nov).
+      What was invoiced is read before the limit, so a change in between only
+      makes this stricter.
+    */
+    const invoicedBefore = held.states.find((st) => st.lineId === String(line.fsm_line_id))?.invoicedAmount ?? 0;
     return {
       line: a.line,
       amount: round2(a.amount),
@@ -1411,12 +1467,21 @@ export async function recordLineInvoice(
       work_order_number: live.workOrder.number,
       name: line.name,
       line_amount: Math.max(0, line.amount ?? 0),
+      max_invoiced: round2(invoicedBefore + cap),
       vat: { amount: line.amount, lineAmount: line.line_amount, taxPercent: line.tax_percent },
     };
   });
   /* The invoice total (2 Nov): the lines' net total, plus VAT worked out once on it. */
   const total = invoiceTotals(allocations.map((a) => ({ amount: a.amount, line: a.vat }))).total;
-  const { data, error } = await admin.schema("finance").rpc("record_line_invoice", {
+  /* The MAHER total against it: beyond rounding, a reason is required (13 Nov). */
+  const varianceReason = input.varianceReason?.trim() || null;
+  if (varianceNeedsReason(input.maherTotal, total) && !varianceReason) {
+    throw new InvoicingError(
+      `The MAHER invoice total (${aedText(input.maherTotal)}) differs from the lines' total (${aedText(total)}) by ${aedText(Math.abs(invoiceVariance(input.maherTotal, total)))}. Give the reason for the difference.`,
+      400,
+    );
+  }
+  const params = {
     p_key: input.idempotencyKey,
     p_number: input.number,
     p_date: input.date,
@@ -1427,7 +1492,15 @@ export async function recordLineInvoice(
     p_note: input.note ?? null,
     p_file_path: input.filePath,
     p_scan: input.scan ?? null,
-  });
+  };
+  let { data, error } = await admin
+    .schema("finance")
+    .rpc("record_line_invoice", { ...params, p_maher_total: round2(input.maherTotal), p_variance_reason: varianceReason });
+  /* Before 20261118150000 the function has no MAHER total: record as before (the server's limit check still ran). */
+  if (error?.code === "PGRST202") {
+    console.warn("[finance] record_line_invoice: migration 20261118150000 not applied; the MAHER total and reason are not kept");
+    ({ data, error } = await admin.schema("finance").rpc("record_line_invoice", params));
+  }
   if (error) invoicingError(error, "record_line_invoice");
   for (const [workOrderId, live] of byWorkOrder) await moveToInProgress(admin, workOrderId, live.workOrder.subTotal, actor);
   return String(data);

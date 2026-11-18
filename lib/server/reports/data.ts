@@ -440,7 +440,7 @@ export async function loadUnflaggedInputs(
     readModuleSince(admin, {
       module: "Work_Orders",
       sortField: "Modified_Time",
-      fields: ["Name", "Status", "Completed_Time", "Estimate", "Company", "Contact"],
+      fields: ["Name", "Status", "Completed_Time", "Estimate", "Company", "Contact", "Work_Type__C", "AMC_Contract_Ref__C", "Billing_Status"],
       fromIso: isoFrom(range.from),
       resource: "work_orders",
     }),
@@ -453,6 +453,8 @@ export async function loadUnflaggedInputs(
     completedAt: str(r.Completed_Time),
     estimateId: lookupId(r.Estimate),
     clientName: lookupName(r.Company) ?? lookupName(r.Contact),
+    contract: isContractWork({ workType: str(r.Work_Type__C), amcContractRef: lookupName(r.AMC_Contract_Ref__C) ?? str(r.AMC_Contract_Ref__C) }),
+    billingStatus: str(r.Billing_Status),
   }));
   const estimates = new Map<string, ExceptionEstimate>(
     [...byId].map(([id, q]) => [
@@ -703,8 +705,9 @@ export async function loadRevenueInputs(
   const created = new Map<string, string>();
   for (const r of woRows) {
     const status = str(r.Status);
+    /* Only Completed work is revenue. "Closed" in FSM means cancelled and is never invoiced (Sami, 13 Nov). */
     const completedAt = str(r.Completed_Time) ?? str(r.Closed_Time);
-    if ((status !== "Completed" && status !== "Closed") || !completedAt || !inDates(completedAt)) continue;
+    if (status !== "Completed" || !completedAt || !inDates(completedAt)) continue;
     const id = String(r.id);
     const own = r.Sub_Total === null || r.Sub_Total === undefined ? 0 : Number(r.Sub_Total);
     const estimateId = lookupId(r.Estimate);

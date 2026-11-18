@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import { SquarePen, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -95,7 +95,7 @@ function InlineName({ name, muted, canEdit, onRename }: { name: string; muted?: 
         <span className={muted ? "text-muted-foreground line-through" : ""}>{name}</span>
         {canEdit ? (
           <Button variant="ghost" size="icon-sm" aria-label={`Rename ${name}`} onClick={() => { setDraft(name); setEditing(true); }}>
-            <Pencil className="size-3.5" />
+            <SquarePen className="size-3.5" />
           </Button>
         ) : null}
       </span>

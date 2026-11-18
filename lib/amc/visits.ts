@@ -91,6 +91,10 @@ export interface TechnicianFacts {
   hasVehicle: boolean;
   isDriver: boolean;
   accessPermissions: string[];
+  /** The portal login the mobile app signs in with (technician_reference.user_profile_id), when there is one. */
+  accountId?: string | null;
+  /** From Zoho FSM; a new login uses it. */
+  email?: string | null;
 }
 
 export interface VisitNeed {
@@ -100,6 +104,12 @@ export interface VisitNeed {
   area?: string | null;
   /** Access permissions the property's rules call for (gate pass types). */
   accessTypes: string[];
+  /**
+   * A call out or additional work (18 Nov 2026): a technician with AMC skills
+   * may go; access is settled by the visit's own passes (Access tab, checked
+   * at Start visit), so a missing permission on their profile is only noted.
+   */
+  accessAsNote?: boolean;
 }
 
 export interface TechnicianBusy {
@@ -122,6 +132,9 @@ export interface TechnicianFit {
   workloadMinutes: number;
   /** Higher is a better pick. */
   score: number;
+  /** The portal login, when there is one (undefined when not known). */
+  accountId?: string | null;
+  email?: string | null;
 }
 
 const competent = (s: { level: SkillLevel; certificateExpires: string | null }, date: string) =>
@@ -145,14 +158,17 @@ export function fitFor(t: TechnicianFacts, need: VisitNeed, busy: TechnicianBusy
   if (busy.onLeave) blockers.push("On leave that day");
   if (busy.overlaps > 0) blockers.push("Already booked at that time");
   const missingAccess = need.accessTypes.filter((a) => !t.accessPermissions.some((p) => p.trim().toLowerCase() === a.trim().toLowerCase()));
-  if (missingAccess.length) blockers.push(`No access permission: ${missingAccess.join(", ")}`);
+  if (missingAccess.length) {
+    if (need.accessAsNote) notes.push(`No ${missingAccess.join(", ")} permission on their profile: the visit's pass covers access`);
+    else blockers.push(`No access permission: ${missingAccess.join(", ")}`);
+  }
   if (need.area && t.areas.length && !t.areas.some((a) => need.area!.toLowerCase().includes(a.toLowerCase()) || a.toLowerCase().includes(need.area!.toLowerCase()))) {
     notes.push("Usually works another area");
   }
   if (!t.hasVehicle) notes.push("No vehicle");
   const expert = covers.some((trade) => t.skills.some((s) => s.trade === trade && s.level === "expert"));
   const score = covers.length * 100 + (expert ? 10 : 0) - Math.round(busy.workloadMinutes / 30) - notes.length * 5;
-  return { fsmId: t.fsmId, name: t.name, covers, blockers, notes, workloadMinutes: busy.workloadMinutes, score };
+  return { fsmId: t.fsmId, name: t.name, covers, blockers, notes, workloadMinutes: busy.workloadMinutes, score, accountId: t.accountId ?? null, email: t.email ?? null };
 }
 
 /**
@@ -349,5 +365,101 @@ export const visitActionSchema = z.discriminatedUnion("action", [
       note: optionalText(500),
     })
     .strict(),
+  /* Passes (17 Nov 2026): each with its own valid-until and note; the visit's access follows them. */
+  z
+    .object({
+      action: z.literal("pass"),
+      documentId: uuid,
+      validUntil: isoDate.nullable(),
+      note: optionalText(500),
+      /* Which of the property's access rules it is for (null: none), and where it stands (17 Nov 2026). */
+      accessRuleId: uuid.nullable().optional(),
+      accessStatus: z.enum(ACCESS_STATUSES).optional(),
+    })
+    .strict(),
+  z.object({ action: z.literal("pass_remove"), documentId: uuid }).strict(),
+  z.object({ action: z.literal("passes_changed") }).strict(),
+  /* The office starts the visit (17 Nov 2026); only then does the phone open its job sheet. */
+  z.object({ action: z.literal("start") }).strict(),
 ]);
+
+/** What must be in place before a visit starts, and the tab where each is filled in. */
+export type StartProblem = { tab: "crew" | "client" | "access" | null; text: string };
+
+/**
+ * Start visit (17 Nov 2026): the crew is chosen, its time is set, the client
+ * has confirmed and the access is sorted. Until then the visit cannot start
+ * and the inspector cannot fill the job sheet.
+ */
+export function startProblems(v: {
+  status: string;
+  contractActive: boolean;
+  technicianIds: readonly string[];
+  scheduledStart: string | null;
+  scheduledEnd: string | null;
+  clientConfirmation: string | null;
+  accessStatus: string | null;
+}): StartProblem[] {
+  const startable = ["not_scheduled", "scheduled", "rescheduled", "confirmed", "pending_access"];
+  if (!startable.includes(v.status)) return [{ tab: null, text: `The visit is ${v.status.replace(/_/g, " ")}, so it cannot be started.` }];
+  const out: StartProblem[] = [];
+  if (!v.contractActive) out.push({ tab: null, text: "The contract is not active." });
+  if (!v.technicianIds.length) out.push({ tab: "crew", text: "Choose the crew." });
+  if (!v.scheduledStart || !v.scheduledEnd) out.push({ tab: "crew", text: "Set the visit's date and time." });
+  if (v.clientConfirmation !== "confirmed") out.push({ tab: "client", text: "Confirm the visit with the client." });
+  /* From the passes' status (17 Nov 2026): only an approved pass valid on the day lets the crew in. */
+  if (v.accessStatus !== "approved" && v.accessStatus !== "not_required") {
+    out.push({ tab: "access", text: accessProblemText(v.accessStatus) });
+  }
+  return out;
+}
+
+/** What is wrong with a visit's access, for the start checklist (17 Nov 2026). */
+export function accessProblemText(status: string | null): string {
+  return status === "pending"
+    ? "Get the pass approved, or add an approved pass valid on the visit day."
+    : status === "rejected"
+      ? "The pass was rejected: add one that is approved."
+      : status === "expired"
+        ? "The pass runs out before the visit day: add a new one."
+        : "Add a pass valid on the visit day.";
+}
+
+/**
+ * Where a new pass starts (17 Nov 2026): approved when it is for one of the
+ * property's access rules, otherwise waiting for approval. The coordinator
+ * can still pick another status.
+ */
+export const defaultPassStatus = (accessRuleId: string | null): AccessStatus => (accessRuleId ? "approved" : "pending");
+
+/** A pass's status: one from before statuses (none stored) counts as approved, as it did. */
+export const passStatus = (p: { status?: AccessStatus | null }): AccessStatus => p.status ?? "approved";
+
+/**
+ * A visit's access from its passes (17 Nov 2026), so nobody sets a status,
+ * date and note apart from the pass they describe. An approved pass with no
+ * end date, or valid on the visit day, approves it; then a pass marked not
+ * required; then one still pending; then a rejected one; approved passes
+ * that all run out before the day (or marked expired) leave it expired. No
+ * pass is pending when the property asks for one, else not required.
+ */
+export function accessFromPasses(
+  passes: Array<{ id: string; validUntil: string | null; uploadedAt: string; status?: AccessStatus | null }>,
+  visitDay: string,
+  propertyNeedsPass: boolean,
+): { status: AccessStatus; validUntil: string | null; documentId: string | null } {
+  const newest = [...passes].sort((a, b) => (a.uploadedAt < b.uploadedAt ? 1 : -1));
+  const latestOf = (list: typeof newest) => list.reduce<string | null>((max, p) => (p.validUntil && (!max || p.validUntil > max) ? p.validUntil : max), null);
+  const valid = newest.filter((p) => passStatus(p) === "approved" && (p.validUntil === null || p.validUntil >= visitDay));
+  if (valid.length) {
+    const open = valid.some((p) => p.validUntil === null);
+    return { status: "approved", validUntil: open ? null : latestOf(valid), documentId: valid[0].id };
+  }
+  for (const status of ["not_required", "pending", "rejected"] as const) {
+    const these = newest.filter((p) => passStatus(p) === status);
+    if (these.length) return { status, validUntil: latestOf(these), documentId: these[0].id };
+  }
+  if (newest.length) return { status: "expired", validUntil: latestOf(newest), documentId: newest[0].id };
+  return { status: propertyNeedsPass ? "pending" : "not_required", validUntil: null, documentId: null };
+}
 export type VisitAction = z.infer<typeof visitActionSchema>;

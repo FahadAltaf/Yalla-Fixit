@@ -22,6 +22,7 @@ import {
   type UpdateEnquiryInput,
 } from "@/lib/amc/enquiries";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
+import { approverName } from "@/lib/server/amc/site-visit-approvers";
 import {
   CLIENT_EMBED,
   PROPERTY_EMBED,
@@ -329,6 +330,14 @@ export async function listAmcPeople(admin: Admin): Promise<Array<{ id: string; n
   return ((data ?? []) as Row[])
     .filter((u) => u.is_active !== false)
     .map((u) => ({ id: String(u.id), name: str(u.full_name) ?? str(u.email) ?? "User", email: str(u.email) }));
+}
+
+/* The approver goes on with the booking; before 20261116110000 (no column) the visit is booked without one. */
+async function setApprover(admin: Admin, assessmentId: string, approverId: string | null | undefined) {
+  if (!approverId) return;
+  const name = await approverName(admin, approverId);
+  const { error } = await admin.from("amc_assessments").update({ approver_id: approverId, approver_name: name }).eq("id", assessmentId);
+  if (error && !(error.code === "42703" || error.code === "PGRST204")) throw fail(error);
 }
 
 async function personName(admin: Admin, userId: string): Promise<string> {
@@ -681,6 +690,8 @@ export async function scheduleSiteVisit(
   }
   const property = await propertyOfCustomer(admin, input.propertyId, current.customer.id);
   const assessorName = await personName(admin, input.assessorId);
+  /* Checked before anything is created, so a wrong approver books nothing. */
+  if (input.approverId) await approverName(admin, input.approverId);
 
   const assessment = await createAssessment(admin, { customerId: current.customer.id, propertyId: input.propertyId, assessorName }, actor);
   const { error } = await admin
@@ -696,6 +707,7 @@ export async function scheduleSiteVisit(
     })
     .eq("id", assessment.id);
   if (error) throw fail(error);
+  await setApprover(admin, assessment.id, input.approverId);
 
   const now = new Date().toISOString();
   const next = stageAfterSiteVisitBooked(config, current.stage);
@@ -756,6 +768,7 @@ export async function scheduleSiteVisit(
 export async function bookSiteVisit(admin: Admin, input: BookSiteVisitInput, actor: Actor): Promise<{ assessmentId: string; assessmentNumber: string }> {
   const property = await propertyOfCustomer(admin, input.propertyId, input.customerId);
   const assessorName = await personName(admin, input.assessorId);
+  if (input.approverId) await approverName(admin, input.approverId);
   const assessment = await createAssessment(admin, { customerId: input.customerId, propertyId: input.propertyId, assessorName }, actor);
   const { error } = await admin
     .from("amc_assessments")
@@ -768,13 +781,14 @@ export async function bookSiteVisit(admin: Admin, input: BookSiteVisitInput, act
     })
     .eq("id", assessment.id);
   if (error) throw fail(error);
+  await setApprover(admin, assessment.id, input.approverId);
   await recordAmcAudit(admin, {
     entityType: "assessment",
     entityId: assessment.id,
     eventType: "site_visit_scheduled",
     actorId: actor.id,
     actorLabel: actor.label,
-    payload: { scheduledAt: input.scheduledAt, assessorId: input.assessorId },
+    payload: { scheduledAt: input.scheduledAt, assessorId: input.assessorId, approverId: input.approverId ?? null },
   });
   if (input.assessorId !== actor.id) {
     await notifyUsers(admin, {

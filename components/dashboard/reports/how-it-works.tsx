@@ -65,7 +65,7 @@ export function quotationsHowItWorks(s?: { limits?: { notSent: number; sent: num
       {
         heading: "Statuses",
         lines: [
-          "Seven statuses: Not sent (FSM's New), Sent, Approved, Converted to work order, Rejected, Revised, Expired. An FSM status not in this list keeps its own name, so nothing is hidden.",
+          "Six statuses: Not sent (FSM's New), Sent, Approved, Converted to work order, Rejected, Expired. FSM has no Revised status (a revision is a new quotation). An FSM status not in this list keeps its own name, so nothing is hidden.",
           "Per status: count, total value and average days in the status. Click a status to list it. A status card turns red when any of its quotations is past its limit.",
         ],
       },

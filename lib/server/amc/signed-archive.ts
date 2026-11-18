@@ -158,7 +158,11 @@ function cellHtml(c: Cell, tag: "td" | "th"): string {
   const bg = c.shade === "brand" ? BRAND : c.shade === "label" ? "#EDEDED" : c.shade === "zebra" ? "#F5F5F5" : "#fff";
   const color = c.shade === "brand" ? "#fff" : "inherit";
   const lines = c.lines.map((line) => `<div>${runs(line)}</div>`).join("");
-  return `<${tag} style="background:${bg};color:${color};text-align:${c.align ?? "left"};border:1px solid ${LINE};padding:4px 6px;vertical-align:top">${lines}</${tag}>`;
+  /* Photos under the text, as on screen (a quotation line). */
+  const images = c.images?.length
+    ? `<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-top:6px">${c.images.map((src) => `<img src="${esc(src)}" alt="" style="width:100%;height:auto;display:block">`).join("")}</div>`
+    : "";
+  return `<${tag} style="background:${bg};color:${color};text-align:${c.align ?? "left"};border:1px solid ${LINE};padding:4px 6px;vertical-align:top">${lines}${images}</${tag}>`;
 }
 
 function blockHtml(b: Block): string {
@@ -191,6 +195,10 @@ function blockHtml(b: Block): string {
       return `<div>${b.items.map((i) => `<p><span class="num">${esc(i.number)}</span> ${runs(i.runs)}</p>`).join("")}</div>`;
     case "term":
       return `<p><span class="num">${esc(b.number)}</span> ${runs(b.runs)}</p>`;
+    case "photos":
+      return `<div class="photos">${b.items
+        .map((p) => `<figure><img src="${esc(p.url)}" alt=""><figcaption><b>${esc(p.label)}</b>${p.caption ? `<span>${esc(p.caption)}</span>` : ""}</figcaption></figure>`)
+        .join("")}</div>`;
     case "signatures":
       return `<div class="sigs">${[b.left, b.right]
         .map((party) => `<div><div class="muted">${esc(party)}</div><div class="sigline"></div><div class="muted small">Name / Signature / Stamp</div></div>`)
@@ -225,6 +233,11 @@ export function renderAmcDocumentHtml(title: string, model: AmcDocumentModel, ta
   .record { border: 2px solid ${BRAND}; padding: 10px 14px; margin-top: 24px; page-break-inside: avoid; }
   .record h2 { margin-top: 0; color: ${BRAND}; }
   .record table td { border: 1px solid ${LINE}; padding: 4px 8px; }
+  .photos { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 6px 0 10px; }
+  .photos figure { margin: 0; border: 1px solid ${LINE}; border-radius: 4px; overflow: hidden; page-break-inside: avoid; }
+  .photos img { width: 100%; height: 130px; object-fit: cover; display: block; background: #f2f2f2; }
+  .photos figcaption { padding: 5px 7px 7px; font-size: 8pt; color: ${MUTED}; }
+  .photos figcaption b { display: block; color: ${BRAND}; }
   .archive { margin-top: 16px; font-size: 8pt; color: ${MUTED}; word-break: break-all; }
 </style></head>
 <body>

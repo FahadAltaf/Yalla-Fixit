@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { CalendarCheck, CalendarClock, Search, UserCheck, Users } from "lucide-react";
+import { CalendarCheck, CalendarClock, KeyRound, Search, UserCheck, Users } from "lucide-react";
 import { toast } from "sonner";
 
 import { ActionDialogContent, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
+import { useTechnicianLogins } from "@/components/dashboard/shared/technician-login";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -130,6 +132,8 @@ export function PlaceDialog({ open, onOpenChange, onDone, reload, request, techn
   const [time, setTime] = useState("");
   const [duration, setDuration] = useState("");
   const [selected, setSelected] = useState<string[]>([]);
+  /* Chosen technicians still without a mobile login (the crew list creates them). */
+  const [missingLogins, setMissingLogins] = useState(0);
   const [lead, setLead] = useState("");
   const [override, setOverride] = useState("");
   const [reason, setReason] = useState("");
@@ -210,6 +214,7 @@ export function PlaceDialog({ open, onOpenChange, onDone, reload, request, techn
     !stale &&
     selected.length > 0 &&
     uncovered.length === 0 &&
+    missingLogins === 0 &&
     (!needsOverride || override.trim().length >= 3) &&
     (!needsReason || reason.trim().length >= 3);
 
@@ -317,7 +322,7 @@ export function PlaceDialog({ open, onOpenChange, onDone, reload, request, techn
           ) : pinnedMissing ? (
             <p className="text-warning text-xs">{technicianName(pinned)} is not confirmed for this visit&apos;s trades. The suggested crew is picked instead.</p>
           ) : null}
-          <CrewPicker options={crewOptions(suggestion)} picked={selected} onPickedChange={setSelected} leadId={leadId || null} disabled={busy} />
+          <CrewPicker options={crewOptions(suggestion)} picked={selected} onPickedChange={setSelected} leadId={leadId || null} disabled={busy} onMissingLoginsChange={setMissingLogins} />
           {selected.length > 0 && uncovered.length > 0 ? (
             <p className="text-danger text-xs">Nobody chosen covers {uncovered.map((t) => TRADE_LABELS[t]).join(", ")}.</p>
           ) : null}
@@ -449,7 +454,30 @@ export function CrewDialog({ open, onOpenChange, onDone, reload, visits, technic
   }, [technicians, search]);
   const single = visits.length === 1 ? visits[0] : null;
   const unchanged = single !== null && sameSet(selected, single.technicianIds);
-  const canSubmit = visits.length > 0 && selected.length > 0 && !unchanged;
+  /* A technician without a mobile login gets one before they are put on the crew (13 Nov 2026). */
+  const { createLogins, dialogs: loginDialogs } = useTechnicianLogins();
+  const [linkedNow, setLinkedNow] = useState<ReadonlySet<string>>(() => new Set());
+  const [creating, setCreating] = useState(false);
+  const hasLogin = (t: BoardTechnician) => t.accountId !== null || linkedNow.has(t.fsmId);
+  const withoutLogin = technicians.filter((t) => selected.includes(t.fsmId) && !hasLogin(t));
+  const makeLogins = async (list: BoardTechnician[]) => {
+    setCreating(true);
+    try {
+      const made = await createLogins(list.map((t) => ({ fsmId: t.fsmId, name: t.name, email: t.email })));
+      if (made) setLinkedNow((prev) => new Set([...prev, ...made.map((r) => r.fsmId)]));
+      return Boolean(made);
+    } finally {
+      setCreating(false);
+    }
+  };
+  const pick = (t: BoardTechnician, on: boolean) => {
+    if (!on) return setSelected((cur) => cur.filter((id) => id !== t.fsmId));
+    if (hasLogin(t)) return setSelected((cur) => [...cur, t.fsmId]);
+    void makeLogins([t]).then((ok) => {
+      if (ok) setSelected((cur) => (cur.includes(t.fsmId) ? cur : [...cur, t.fsmId]));
+    });
+  };
+  const canSubmit = visits.length > 0 && selected.length > 0 && !unchanged && withoutLogin.length === 0;
 
   const submit = async () => {
     if (!canSubmit) return;
@@ -476,6 +504,20 @@ export function CrewDialog({ open, onOpenChange, onDone, reload, visits, technic
         </SubmitButton>
       }
     >
+      {loginDialogs}
+      {withoutLogin.length ? (
+        <div className="border-warning/30 bg-warning/5 flex flex-wrap items-center justify-between gap-3 rounded-lg border px-3 py-2.5">
+          <p className="text-warning min-w-0 flex-1 text-sm">
+            {withoutLogin.length === 1
+              ? `${withoutLogin[0].name} has no mobile login yet. Create it before assigning them.`
+              : `${withoutLogin.length} chosen technicians have no mobile login yet. Create them before assigning.`}
+          </p>
+          <Button type="button" size="sm" variant="outline" disabled={busy || creating} onClick={() => void makeLogins(withoutLogin)}>
+            <KeyRound className="size-4" />
+            {withoutLogin.length === 1 ? "Create login" : "Create logins"}
+          </Button>
+        </div>
+      ) : null}
       <div className="relative">
         <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2" />
         <Input aria-label="Search technicians" placeholder="Search by name or trade" className="ps-9" value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -491,11 +533,20 @@ export function CrewDialog({ open, onOpenChange, onDone, reload, visits, technic
                 <Checkbox
                   checked={checked}
                   className="mt-0.5"
-                  onCheckedChange={(v) => setSelected((cur) => (v === true ? [...cur, t.fsmId] : cur.filter((id) => id !== t.fsmId)))}
+                  disabled={busy || creating}
+                  onCheckedChange={(v) => pick(t, v === true)}
                 />
                 <span className="min-w-0 flex-1">
-                  <span className="font-medium">{t.name}</span>
-                  {selected[0] === t.fsmId ? <span className="text-muted-foreground"> · lead</span> : null}
+                  <span className="flex flex-wrap items-center gap-1.5">
+                    <span className="font-medium">{t.name}</span>
+                    {selected[0] === t.fsmId ? <span className="text-muted-foreground">· lead</span> : null}
+                    {hasLogin(t) ? null : (
+                      <Badge variant="outline" className="border-warning/40 text-warning font-normal" title="No mobile login yet: ticking creates one">
+                        <KeyRound className="size-3" />
+                        No login
+                      </Badge>
+                    )}
+                  </span>
                   <span className="text-muted-foreground block text-xs">
                     {t.trades.map((tr) => TRADE_LABELS[tr]).join(", ") || "No confirmed trade"}
                     {t.shift ? ` · ${t.shift}` : ""}

@@ -19,7 +19,7 @@ import {
   ListCheck,
   Loader2,
   MoreHorizontal,
-  PencilIcon,
+  SquarePen,
   Phone,
   Link as LinkIcon,
   Mail,
@@ -118,6 +118,11 @@ type Step = {
   note?: string | null;
   tone?: "good" | "bad";
 };
+
+/** "A", "A and B", "A, B and C". */
+function listNames(names: readonly string[]) {
+  return names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
 
 function formatWhen(value: string) {
   const date = new Date(value);
@@ -645,6 +650,20 @@ export function SubmissionDetails({
   const revisable = canReviseProposal(submission);
   const answerable = isOwn && canRecordClientAnswer(submission);
   const canDecideNow = canDecide && awaiting;
+  /* Who decides the open level, named, so nobody waits on a button they will never get. */
+  const deciders = submission.approval_deciders;
+  const decidersText = deciders
+    ? deciders.names === null
+      ? "anyone whose role has the AMC approve permission"
+      : deciders.names.length
+        ? listNames(deciders.names)
+        : "nobody yet: add an approver in AMC Settings or AMC Configuration"
+    : null;
+  const waitingBody = !decidersText
+    ? "It is locked while it waits. Nothing goes to the client until it is approved."
+    : isOwn
+      ? `You submitted it, so you cannot approve it yourself. ${deciders?.levelName ? `${deciders.levelName} is decided by ` : "It is decided by "}${decidersText}. Nothing goes to the client until it is approved.`
+      : `${deciders?.levelName ? `${deciders.levelName} is decided by ` : "It is decided by "}${decidersText}. It is locked while it waits.`;
 
   /* The one thing on this proposal that needs somebody's attention. */
   const attention =
@@ -662,7 +681,7 @@ export function SubmissionDetails({
           ? {
             tone: "warn" as const,
             title: "Priced below the floor rate",
-            body: "After the discount, one or more lines are under the rate card's floor. The approver sees this when deciding.",
+            body: `After the discount, one or more lines are under the rate card's floor. The approver sees this when deciding.${awaiting && !canDecide && decidersText ? ` ${waitingBody}` : ""}`,
           }
         : awaiting
           ? {
@@ -670,7 +689,7 @@ export function SubmissionDetails({
             title: canDecide ? "Waiting for your decision" : "Waiting for the approver",
             body: canDecide
               ? "Read it through, preview the documents, then approve it or send it back with a note."
-              : "It is locked while it waits. Nothing goes to the client until it is approved.",
+              : waitingBody,
           }
           : null;
 
@@ -803,7 +822,7 @@ export function SubmissionDetails({
               <>
                 <Button asChild variant="outline">
                   <Link href={`/extensions/amc/${submission.id}/edit`}>
-                    <PencilIcon className="size-4" />
+                    <SquarePen className="size-4" />
                     Edit
                   </Link>
                 </Button>
@@ -815,7 +834,7 @@ export function SubmissionDetails({
             ) : canEdit ? (
               <Button asChild>
                 <Link href={`/extensions/amc/${submission.id}/edit`}>
-                  <PencilIcon className="size-4" />
+                  <SquarePen className="size-4" />
                   Edit
                 </Link>
               </Button>

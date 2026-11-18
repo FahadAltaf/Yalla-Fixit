@@ -100,6 +100,11 @@ export interface CallOutActionResult {
   ok: true;
   /** record: parts, or more than the minor-fix hours, make the corrective work additional work. */
   suggestAdditionalWork?: boolean;
+  /** send_acknowledgement: how it went and the text. */
+  outcome?: "sent" | "failed" | "no_recipient" | "prepared" | "link_created";
+  message?: string;
+  whatsapp?: string | null;
+  link?: string | null;
 }
 
 export type AllowanceMovementKind = "consumption" | "adjustment" | "correction" | "reserve" | "release";

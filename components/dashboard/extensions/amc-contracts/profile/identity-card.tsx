@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { BadgeCheck, IdCard, Link2, Megaphone, Pencil } from "lucide-react";
+import { BadgeCheck, IdCard, Link2, Megaphone, SquarePen } from "lucide-react";
 import { toast } from "sonner";
 
 import { SectionCard, SubHeading } from "@/components/dashboard/shared/kaizen";
@@ -59,7 +59,7 @@ export function IdentityCard({ customer, canEdit, onChanged }: { customer: Custo
           {customer.fsmContactId ? <span className="font-mono text-xs">{customer.fsmContactId}</span> : <span className="text-muted-foreground font-normal">Not linked</span>}
           {canEdit ? (
             <Button size="icon" variant="ghost" className="size-7" onClick={() => fsm.show(true)} aria-label={customer.fsmContactId ? "Change the FSM contact id" : "Link an FSM contact id"}>
-              {customer.fsmContactId ? <Pencil className="size-3.5" /> : <Link2 className="size-3.5" />}
+              {customer.fsmContactId ? <SquarePen className="size-3.5" /> : <Link2 className="size-3.5" />}
             </Button>
           ) : null}
         </span>

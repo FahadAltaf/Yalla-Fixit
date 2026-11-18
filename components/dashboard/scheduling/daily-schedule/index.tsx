@@ -75,7 +75,7 @@ import {
   GripVertical,
   Layers,
   MoveHorizontal,
-  Pencil,
+  SquarePen,
   Plus,
   Printer,
   History as HistoryIcon,
@@ -3305,7 +3305,7 @@ const TechnicianRow = memo(function TechnicianRow({
                 className="text-muted-foreground hover:text-foreground shrink-0 rounded p-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus:opacity-100"
                 aria-label={`Edit role for ${technician.display_name}`}
               >
-                <Pencil className="size-3" />
+                <SquarePen className="size-3" />
               </button>
             </Hint>
           )}

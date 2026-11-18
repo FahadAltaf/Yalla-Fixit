@@ -15,7 +15,7 @@ import {
   Link2,
   MapPin,
   MessageSquarePlus,
-  Pencil,
+  SquarePen,
   SearchX,
   Shuffle,
   TriangleAlert,
@@ -213,7 +213,8 @@ export function EnquiryDetail({ id }: { id: string }) {
       ? nextStage
       : undefined;
   const needsVisit = Boolean(e?.siteVisitRequired) && !completedVisit;
-  const canStartProposal = Boolean(e) && canEdit && !closed && !e?.proposal;
+  /* Not offered while the site visit it needs is still to be done (13 Nov 2026): the notice below books it instead. */
+  const canStartProposal = Boolean(e) && canEdit && !closed && !e?.proposal && !needsVisit;
 
   /* DEV-365: the proposal, prefilled from the enquiry, its property and its site visit. */
   /* Asked first (11 Nov 2026): it acts at once, so it is confirmed like every other step. */
@@ -320,7 +321,7 @@ export function EnquiryDetail({ id }: { id: string }) {
                         variant="outline"
                         onClick={() => setDialog("edit")}
                       >
-                        <Pencil className="size-4" />
+                        <SquarePen className="size-4" />
                         Edit
                       </Button>
                       <Button variant="outline" onClick={() => openStage()}>
@@ -572,7 +573,7 @@ export function EnquiryDetail({ id }: { id: string }) {
                             {canEdit ? (
                               <HeadingIconButton
                                 label="Edit client"
-                                icon={<Pencil />}
+                                icon={<SquarePen />}
                                 onClick={() => setDialog("client")}
                               />
                             ) : null}
@@ -680,7 +681,7 @@ export function EnquiryDetail({ id }: { id: string }) {
                             {e.property && canEdit && addressForm ? (
                               <HeadingIconButton
                                 label="Edit property"
-                                icon={<Pencil />}
+                                icon={<SquarePen />}
                                 onClick={() => setDialog("property")}
                               />
                             ) : null}
@@ -1138,7 +1139,7 @@ export function EnquiryDetail({ id }: { id: string }) {
             enquiry={e}
             onSave={async (input) => {
               await enquiriesService.scheduleSiteVisit(e.id, input);
-              after("Site visit booked; the assessor has been told");
+              after("Site visit booked; the inspector has been told");
             }}
           />
         </>

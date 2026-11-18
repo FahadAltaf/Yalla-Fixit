@@ -31,9 +31,12 @@ const est = (patch: Partial<ExceptionEstimate>): ExceptionEstimate => ({
   ...patch,
 });
 
-test("eligibility: completed work and the invoice flag (D-01, D-02 placeholders)", () => {
+test("eligibility: completed work and the invoice flag (D-01 answered 13 Nov: Closed is cancelled)", () => {
   assert.equal(isWorkComplete({ status: "Completed", completedAt: null }), true);
-  assert.equal(isWorkComplete({ status: "closed", completedAt: null }), true);
+  assert.equal(isWorkComplete({ status: "closed", completedAt: null }), false, "Closed means cancelled in YFI's FSM");
+  assert.equal(isWorkComplete({ status: "Closed", completedAt: "2026-10-01T00:00:00Z" }), false, "even with a completion time");
+  assert.equal(isWorkComplete({ status: "Cancelled", completedAt: "2026-10-01T00:00:00Z" }), false);
+  assert.equal(isWorkComplete({ status: "Void", completedAt: null }), false);
   assert.equal(isWorkComplete({ status: "In Progress", completedAt: "2026-10-01T00:00:00Z" }), true);
   assert.equal(isWorkComplete({ status: "In Progress", completedAt: null }), false);
   assert.equal(isFlaggedForInvoice({ postToMaher: "To Be Invoiced" }), true);
@@ -74,6 +77,25 @@ test("completed without the flag: only done, valued, unflagged work not yet in t
     ],
   );
   assert.equal(rows[0].coordinatorEmail, "coord.one@test.local");
+});
+
+test("completed without the flag: Closed, AMC/contract and Non Billable work are not leaks (Sami, 9 and 13 Nov)", () => {
+  const estimates = new Map([est({ id: "E1" })].map((e) => [e.id, e]));
+  const rows = findUnflagged({
+    workOrders: [
+      wo({ id: "W1", estimateId: "E1" }), // a leak
+      wo({ id: "W2", estimateId: "E1", status: "Closed" }), // cancelled
+      wo({ id: "W3", estimateId: "E1", contract: true }), // AMC
+      wo({ id: "W4", estimateId: "E1", billingStatus: "Non Billable" }), // free service
+      wo({ id: "W5", estimateId: "E1", billingStatus: "Not yet Invoiced" }), // billable: a leak
+    ],
+    estimates,
+    queuedWorkOrderIds: new Set(),
+    today: TODAY,
+    afterDays: 3,
+    timeZone: "Asia/Dubai",
+  });
+  assert.deepEqual(rows.map((r) => r.workOrderId).sort(), ["W1", "W5"]);
 });
 
 const appt = (patch: Partial<ExceptionAppointment>): ExceptionAppointment => ({

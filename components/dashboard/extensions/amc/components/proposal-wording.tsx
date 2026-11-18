@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import type { UseFormReturn } from "react-hook-form";
-import { FileText, Pencil, RotateCcw, TriangleAlert } from "lucide-react";
+import { FileText, SquarePen, RotateCcw, TriangleAlert } from "lucide-react";
 
 import { QuoteRichText } from "@/components/dashboard/snagging/quote-rich-text";
 import { Badge } from "@/components/ui/badge";
@@ -220,7 +220,7 @@ export function ProposalWording({
                 setOpen(item);
               }}
             >
-              <Pencil className="size-3.5" />
+              <SquarePen className="size-3.5" />
               Edit
             </Button>
           </div>

@@ -2,7 +2,7 @@
 
 import { useId, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, Ban, CalendarCheck, CheckCheck, ChevronRight, Flag, Users, Hammer, MapPinCheck, Plus, Save, Search, Trash2, Wrench } from "lucide-react";
+import { AlertTriangle, Ban, CalendarCheck, ChevronRight, Flag, Users, Hammer, Plus, Save, Search, Trash2, Wrench } from "lucide-react";
 import { toast } from "sonner";
 
 import { SubmitButton } from "@/components/dashboard/shared/kaizen-states";
@@ -15,7 +15,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { TruncatedText } from "@/components/ui/truncated-text";
 import DateSelect from "@/components/ui/date-select";
 import TimeSelect from "@/components/ui/time-select";
-import DateTimeSelect from "@/components/ui/date-time-select";
 import { canMoveCallOut } from "@/lib/amc/call-outs";
 import { additionalWorkPageHref } from "@/lib/amc/field-visits";
 import { todayInDubai } from "@/lib/amc/contracts";
@@ -38,8 +37,6 @@ import {
   SlaBadge,
   WorkStatusBadge,
   errorText,
-  fromLocalInput,
-  nowLocalInput,
   shortDateTime,
   useActionForm,
 } from "./call-out-shared";
@@ -72,7 +69,8 @@ const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((
 type CallOutData = CallOutDetailResponse;
 
 /** Close, cancel and flag misuse: the buttons for the page's header, and the form each opens. */
-export function useCallOutActions(data: CallOutData | null, changed: () => Promise<void>, disabled: boolean) {
+/* started: once the office pressed Start visit (18 Nov 2026) the call out can no longer be cancelled. */
+export function useCallOutActions(data: CallOutData | null, changed: () => Promise<void>, disabled: boolean, started = false) {
   const actionForm = useActionForm();
   const c = data?.callOut ?? null;
 
@@ -82,20 +80,6 @@ export function useCallOutActions(data: CallOutData | null, changed: () => Promi
     toast.success(success);
     await changed();
   };
-
-  const askClose = () =>
-    c &&
-    actionForm.ask({
-      title: `Close call out ${c.callOutNo}?`,
-      description:
-        c.coverage === "covered"
-          ? "The visit was delivered: a covered call out uses its unit of the allowance. It stays open while its additional work is still open."
-          : "The visit was delivered. It stays open while its additional work is still open.",
-      fields: [{ key: "note", label: "Note", type: "textarea", maxLength: 1000 }],
-      confirmText: "Close call out",
-      icon: <CheckCheck className="size-4" />,
-      submit: (v) => post({ action: "close", note: v.note || null }, `Call out ${c.callOutNo} closed`),
-    });
 
   const askCancel = () =>
     c &&
@@ -130,16 +114,10 @@ export function useCallOutActions(data: CallOutData | null, changed: () => Promi
             Flag misuse
           </Button>
         ) : null}
-        {canMoveCallOut(c.status, "cancelled") ? (
+        {canMoveCallOut(c.status, "cancelled") && !started ? (
           <Button variant="outline" className="text-danger hover:text-danger" disabled={disabled} onClick={askCancel}>
             <Ban className="size-4" />
             Cancel call out
-          </Button>
-        ) : null}
-        {canMoveCallOut(c.status, "closed") ? (
-          <Button disabled={disabled} onClick={askClose}>
-            <CheckCheck className="size-4" />
-            Close call out
           </Button>
         ) : null}
       </>
@@ -153,7 +131,7 @@ export function useCallOutActions(data: CallOutData | null, changed: () => Promi
  * its own page (AMC -> Additional work -> the work), where a work just
  * raised is opened to be quoted.
  */
-export function useCallOutWorkDialogs(data: CallOutData | null, changed: () => Promise<void>) {
+export function useCallOutWorkDialogs(data: CallOutData | null) {
   const raising = useDialog<true>();
   const router = useRouter();
   const open = (workId: string) => router.push(additionalWorkPageHref(workId));
@@ -171,8 +149,8 @@ export function useCallOutWorkDialogs(data: CallOutData | null, changed: () => P
         initialTrade={c.trade}
         initialTechnicianId={c.technicianIds[0] ?? null}
         context={`call out ${c.callOutNo}`}
-        onRaised={async (w) => {
-          await changed();
+        onRaised={(w) => {
+          /* Straight to the new work's page: a reload here was thrown away by the navigation (13 Nov 2026). */
           open(w.id);
         }}
       />
@@ -209,35 +187,28 @@ export function CallOutNotices({ callOut: c }: { callOut: CallOutRecord }) {
 
 type PageSectionProps = { data: CallOutData; working: CallOutWorking; setWorking: (w: CallOutWorking) => void; changed: () => Promise<void> };
 
-/** Crew and time: where it stands, then Schedule (or Reschedule) and Record attendance, each in a dialog. */
+/**
+ * Crew and time: where it stands, then Schedule (or Reschedule) in a dialog.
+ * Attendance is not recorded here (18 Nov 2026): the crew records the arrival
+ * on the phone's job sheet, as for a planned visit, and it shows here.
+ */
 export function CallOutCrewSection({ data, working, setWorking, changed }: PageSectionProps) {
   const c = data.callOut;
   const technicianName = useTechnicianName();
-  const [open, setOpen] = useState<"schedule" | "attend" | null>(null);
+  const [open, setOpen] = useState<"schedule" | null>(null);
   const canSchedule = data.canEdit && canMoveCallOut(c.status, "scheduled");
-  const canAttend = data.canEdit && canMoveCallOut(c.status, "attended");
   const due = c.attendDueAt ?? c.scheduleDueAt;
   return (
     <>
       <Panel
         title="Crew and time" icon={<Users />}
-        description="When the crew goes, who goes, and when they arrived. Arrival settles the deadline."
+        description="When the crew goes and who goes. The crew records their arrival on the phone; it settles the deadline."
         actions={
-          canSchedule || canAttend ? (
-            <>
-              {canAttend ? (
-                <Button variant={canSchedule ? "outline" : "default"} disabled={working !== null} onClick={() => setOpen("attend")}>
-                  <MapPinCheck className="size-4" />
-                  Record attendance
-                </Button>
-              ) : null}
-              {canSchedule ? (
-                <Button disabled={working !== null} onClick={() => setOpen("schedule")}>
-                  <CalendarCheck className="size-4" />
-                  {c.scheduledStart ? "Reschedule" : "Schedule the visit"}
-                </Button>
-              ) : null}
-            </>
+          canSchedule ? (
+            <Button disabled={working !== null} onClick={() => setOpen("schedule")}>
+              <CalendarCheck className="size-4" />
+              {c.scheduledStart ? "Reschedule" : "Schedule the visit"}
+            </Button>
           ) : null
         }
       >
@@ -254,12 +225,11 @@ export function CallOutCrewSection({ data, working, setWorking, changed }: PageS
         </dl>
         {!data.canEdit ? (
           <p className="text-muted-foreground text-sm">You can see this call out, but not change it.</p>
-        ) : !canSchedule && !canAttend ? (
-          <p className="text-muted-foreground text-sm">The visit is done; see Findings.</p>
+        ) : !canSchedule ? (
+          <p className="text-muted-foreground text-sm">The crew is on it or done; see the Job sheet.</p>
         ) : null}
       </Panel>
       <ScheduleDialog callOut={c} open={open === "schedule"} onOpenChange={(next) => setOpen(next ? "schedule" : null)} working={working} setWorking={setWorking} changed={changed} />
-      <AttendDialog callOut={c} open={open === "attend"} onOpenChange={(next) => setOpen(next ? "attend" : null)} working={working} setWorking={setWorking} changed={changed} />
     </>
   );
 }
@@ -304,15 +274,16 @@ export function CallOutFindingsSection({ data, working, setWorking, changed, onR
   );
 }
 
-export function CallOutPhotosSection({ data, working, changed }: Omit<PageSectionProps, "setWorking">) {
+/* readOnly (18 Nov 2026): in the job sheet the crew adds the photos on the phone, so the portal only shows them. */
+export function CallOutPhotosSection({ data, working, changed, readOnly = false }: Omit<PageSectionProps, "setWorking"> & { readOnly?: boolean }) {
   const c = data.callOut;
   return (
     <PhotosPanel
-      description="What the client reported, before and after."
+      description={readOnly ? "The photos the crew took on the phone, and any from when the call out was logged." : "What the client reported, before and after."}
       photos={data.photos}
       kinds={PHOTO_KINDS}
       labels={PHOTO_LABELS}
-      editable={data.canEdit}
+      editable={data.canEdit && !readOnly}
       disabled={working !== null}
       upload={(file, kind) => callOutsService.addPhoto(c.id, { file, kind })}
       onUploaded={changed}
@@ -406,6 +377,8 @@ function ScheduleDialog({ callOut: c, open, onOpenChange, working, setWorking, c
   const [duration, setDuration] = useState(String(placedMinutes ?? (c.priority === "emergency" ? 60 : 120)));
   const [suggestion, setSuggestion] = useState<{ key: string; data: CallOutSuggestion } | null>(null);
   const [picked, setPicked] = useState<string[]>([]);
+  /* Chosen technicians still without a mobile login (the crew list creates them). */
+  const [missingLogins, setMissingLogins] = useState(0);
   const [override, setOverride] = useState("");
   const ids = { date: useId(), time: useId(), duration: useId(), override: useId() };
 
@@ -465,7 +438,7 @@ function ScheduleDialog({ callOut: c, open, onOpenChange, working, setWorking, c
         <SubmitButton
           pending={working === "schedule"}
           pendingLabel="Saving…"
-          disabled={working !== null || !fresh || picked.length === 0 || picked.length > 10 || reasonMissing}
+          disabled={working !== null || !fresh || picked.length === 0 || picked.length > 10 || reasonMissing || missingLogins > 0}
           icon={<CalendarCheck className="size-4" />}
           onClick={save}
         >
@@ -473,7 +446,7 @@ function ScheduleDialog({ callOut: c, open, onOpenChange, working, setWorking, c
         </SubmitButton>
       }
     >
-      {!c.trade ? <p className="text-warning text-xs">This call out has no trade, so nobody can be confirmed competent for it.</p> : null}
+      {!c.trade ? <p className="text-warning text-xs">This call out has no trade, so the technicians with AMC skills are offered: pick who fits the work.</p> : null}
       <div className="grid gap-4 sm:grid-cols-3">
         <Field id={ids.date} label="Date">
           <DateSelect id={ids.date} value={date} onChange={setDate} />
@@ -501,7 +474,7 @@ function ScheduleDialog({ callOut: c, open, onOpenChange, working, setWorking, c
           Find technicians
         </SubmitButton>
       </div>
-      {options ? <CrewPicker options={options} picked={picked} onPickedChange={setPicked} disabled={working !== null} /> : null}
+      {options ? <CrewPicker options={options} picked={picked} onPickedChange={setPicked} disabled={working !== null} onMissingLoginsChange={setMissingLogins} /> : null}
       {fresh && differs && picked.length ? (
         <Field
           id={ids.override}
@@ -517,51 +490,6 @@ function ScheduleDialog({ callOut: c, open, onOpenChange, working, setWorking, c
 
 /* ------------------------------------------------------------------ */
 /* Attend                                                              */
-/* ------------------------------------------------------------------ */
-
-function AttendDialog({ callOut: c, open, onOpenChange, working, setWorking, changed }: DialogProps) {
-  const run = useRun(setWorking);
-  const [attendedAt, setAttendedAt] = useState(() => nowLocalInput());
-  const id = useId();
-  const iso = fromLocalInput(attendedAt);
-  const beforeCall = iso !== null && Date.parse(iso) < Date.parse(c.reportedAt);
-
-  const save = () =>
-    void run(
-      "attend",
-      async () => {
-        if (!iso) return;
-        await callOutsService.action(c.id, { action: "attend", attendedAt: iso });
-        toast.success(`Call out ${c.callOutNo}: attendance recorded`);
-        onOpenChange(false);
-        await changed();
-      },
-      "Could not record the attendance.",
-    );
-
-  return (
-    <SectionDialog
-      open={open}
-      onOpenChange={onOpenChange}
-      title="Record attendance"
-      description={
-        c.status === "logged" && c.priority === "emergency"
-          ? "An emergency crew can be sent at once: record when they arrived, without scheduling first. This settles the deadline."
-          : "When the crew arrived on site. This settles the deadline."
-      }
-      busy={working === "attend"}
-      submit={
-        <SubmitButton pending={working === "attend"} pendingLabel="Saving…" disabled={working !== null || !iso || beforeCall} icon={<MapPinCheck className="size-4" />} onClick={save}>
-          Record attendance
-        </SubmitButton>
-      }
-    >
-      <Field id={id} label="Arrived at" hint={beforeCall ? <span className="text-danger">Attendance cannot be before the call.</span> : undefined}>
-        <DateTimeSelect id={id} value={attendedAt} onChange={setAttendedAt} />
-      </Field>
-    </SectionDialog>
-  );
-}
 
 /* ------------------------------------------------------------------ */
 /* Findings (diagnosis, resolution, pending works)                     */

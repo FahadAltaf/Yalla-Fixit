@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { sendChannelSchema } from "./send-channels";
 
 /**
  * AMC visit execution and closure (BRD v0.3 5.12; Phase 10: DEV-402,
@@ -73,18 +74,19 @@ export type ReviewReason = keyof typeof REVIEW_REASON_LABELS;
 
 /**
  * Why a supervisor must look closely (BRD 5.12: pending works, quality
- * concerns, missing evidence, incomplete scope). Missing evidence: a
- * completed trade without both a before and an after photo, or no client
- * signature for work that was done.
+ * concerns, missing evidence, incomplete scope). Missing evidence: work
+ * done with no photo at all, or no client signature for it.
+ *
+ * Any photo counts (16 Nov 2026): the mobile app files photos by what they
+ * show (Equipment, Fault, Work done ...) rather than before / after, so
+ * asking for a before and an after flagged every sheet it sent.
  */
 export function reviewReasons(s: SheetFacts): ReviewReason[] {
   const out: ReviewReason[] = [];
   if (s.pendingWorks.length) out.push("pending_works");
   if (s.qualityConcern) out.push("quality_concern");
   const done = s.lines.some((l) => l.outcome === "completed" || l.outcome === "partially_completed");
-  const hasBefore = s.photos.some((p) => p.kind === "before");
-  const hasAfter = s.photos.some((p) => p.kind === "after");
-  if (done && (!hasBefore || !hasAfter || !s.clientSignatureName?.trim())) out.push("missing_evidence");
+  if (done && (s.photos.length === 0 || !s.clientSignatureName?.trim())) out.push("missing_evidence");
   if (s.lines.some((l) => l.outcome !== "completed")) out.push("incomplete_scope");
   return out;
 }
@@ -181,6 +183,8 @@ export const jobSheetSchema = z
             lineId: uuid.optional().nullable(),
             assetId: uuid.optional().nullable(),
             label: text(300).min(1),
+            /* The technician's own grouping, typed (migration 20261117100000). */
+            category: optionalText(100),
             result: z.enum(["ok", "attention", "fault", "not_applicable"]),
             note: optionalText(1000),
           })
@@ -195,8 +199,8 @@ export type JobSheetInput = z.infer<typeof jobSheetSchema>;
 export const jobSheetActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("save"), sheet: jobSheetSchema }).strict(),
   z.object({ action: z.literal("submit"), sheet: jobSheetSchema }).strict(),
-  z.object({ action: z.literal("close"), comment: optionalText(1000) }).strict(),
+  z.object({ action: z.literal("close"), comment: optionalText(1000), send: sendChannelSchema.optional() }).strict(),
   z.object({ action: z.literal("return"), comment: text(1000).min(3, "Say what needs fixing") }).strict(),
-  z.object({ action: z.literal("resend_report") }).strict(),
+  z.object({ action: z.literal("resend_report"), channel: sendChannelSchema.optional() }).strict(),
 ]);
 export type JobSheetAction = z.infer<typeof jobSheetActionSchema>;

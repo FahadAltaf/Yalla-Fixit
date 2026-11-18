@@ -1,7 +1,11 @@
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { QueueStatus } from "@/lib/server/finance/queue";
 import { INVOICE_STATUS_LABELS, QUEUE_STATUS_LABELS as WORK_ORDER_QUEUE_LABELS, type InvoiceStatus, type QueueStatus as WorkOrderQueueStatus } from "@/lib/finance/line-status";
+import { VARIANCE_TOLERANCE_AED, invoiceVariance, varianceNeedsReason } from "@/lib/finance/variance";
 import { CHART_COLOR } from "@/lib/snagging/chart-palette";
 import { cn } from "@/lib/utils";
 
@@ -162,6 +166,87 @@ export function InvoiceTotals({ totals }: { totals: { net: number; vat: number; 
       </div>
     </div>
   );
+}
+
+/**
+ * The total printed on the MAHER invoice, against the portal's (Sami, 13 Nov).
+ * Beyond AED 1.00 (VAT rounding) the difference needs a reason; the server
+ * and the database refuse the invoice without one.
+ */
+export function MaherTotalFields({
+  id,
+  value,
+  onChange,
+  reason,
+  onReasonChange,
+  portalTotal,
+  hint,
+}: {
+  id: string;
+  value: string;
+  onChange: (value: string) => void;
+  reason: string;
+  onReasonChange: (value: string) => void;
+  /** The lines plus VAT, as the portal works it out. */
+  portalTotal: number;
+  /** Where the figure came from, e.g. "Read from the invoice." */
+  hint?: string | null;
+}) {
+  const typed = Number(value);
+  const entered = value.trim() !== "" && Number.isFinite(typed) && typed > 0;
+  const variance = entered ? invoiceVariance(typed, portalTotal) : 0;
+  const needsReason = entered && varianceNeedsReason(typed, portalTotal);
+  return (
+    <div className="grid gap-3">
+      <div className="grid gap-1.5">
+        <Label htmlFor={`${id}-total`}>Total on the MAHER invoice, with VAT</Label>
+        <div className="relative">
+          <span className="text-muted-foreground pointer-events-none absolute inset-y-0 left-2.5 flex items-center text-sm">AED</span>
+          <Input
+            id={`${id}-total`}
+            type="number"
+            inputMode="decimal"
+            min={0}
+            step="0.01"
+            className="pl-11 tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            aria-invalid={(value.trim() !== "" && !entered) || undefined}
+          />
+        </div>
+        <p className={cn("text-xs", needsReason ? "text-warning" : "text-muted-foreground")}>
+          {!entered
+            ? "Enter the total exactly as MAHER printed it."
+            : Math.abs(variance) < 0.005
+              ? `Matches the lines' total.${hint ? ` ${hint}` : ""}`
+              : needsReason
+                ? `${aed(Math.abs(variance))} ${variance > 0 ? "more" : "less"} than the lines' total of ${aed(portalTotal)}. Give the reason below.`
+                : `${aed(Math.abs(variance))} ${variance > 0 ? "more" : "less"} than the lines' total: within the AED ${VARIANCE_TOLERANCE_AED.toFixed(2)} allowed for rounding.`}
+        </p>
+      </div>
+      {needsReason ? (
+        <div className="grid gap-1.5">
+          <Label htmlFor={`${id}-reason`}>Reason for the difference</Label>
+          <Textarea
+            id={`${id}-reason`}
+            rows={2}
+            maxLength={500}
+            value={reason}
+            onChange={(e) => onReasonChange(e.target.value)}
+            placeholder="For example: MAHER rounded VAT per line, or a discount agreed with the client"
+            aria-invalid={!reason.trim() || undefined}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** True when the MAHER total is entered and any difference is explained. */
+export function maherTotalReady(value: string, reason: string, portalTotal: number): boolean {
+  const typed = Number(value);
+  if (value.trim() === "" || !Number.isFinite(typed) || typed <= 0) return false;
+  return !varianceNeedsReason(typed, portalTotal) || reason.trim().length > 0;
 }
 
 /**

@@ -227,6 +227,8 @@ export const amcServiceRowInputSchema = z.object({
     field and must still load.
   */
   free: z.boolean().optional().default(false),
+  /* The rate was changed on this proposal; the card's floor still decides whether it needs approval (16 Nov 2026). */
+  rateOverride: z.boolean().optional(),
   /** Accepted for compatibility, never trusted. */
   price: z.number().optional(),
   /* What the service covers on this property ("10 FCU") (DEV-261). */
