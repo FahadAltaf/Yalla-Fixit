@@ -98,7 +98,12 @@ export interface VisitCharge {
   paymentNote: string | null;
   recordedAt: string | null;
   createdAt: string;
+  /** An additional work's quotation shown as its services before approval (19 Nov 2026): nothing is due yet. */
+  draft?: boolean;
 }
+
+/** The material handling fee as a line of an additional work's charge (worked out from its materials, never picked). */
+export const MATERIAL_FEE_SERVICE = "__material_fee";
 
 /** A service the office can pick for this property, priced from the rate card in force. */
 export interface PricedService {

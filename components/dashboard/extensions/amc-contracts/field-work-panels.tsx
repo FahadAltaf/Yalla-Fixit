@@ -13,7 +13,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { CLIENT_CONFIRMATION_LABELS, FIELD_STARTABLE, fieldStartChecks, type ClientConfirmation, type FieldStartKind, type FieldStartTab } from "@/lib/amc/field-start";
+import { CLIENT_CONFIRMATION_LABELS, FIELD_START_SHOWN, fieldStartChecks, workApproved, type ClientConfirmation, type FieldStartKind, type FieldStartTab } from "@/lib/amc/field-start";
 import { amcRequest } from "@/lib/amc/http-cache";
 import type { SendResult } from "@/lib/amc/send-channels";
 import { PAYMENT_TIMING_LABELS, chargeOpen, type PaymentTiming } from "@/lib/amc/visit-charges";
@@ -109,7 +109,7 @@ export function FieldStartAction({
     );
   }
   /* Shown whenever the record can be started (18 Nov 2026); what is missing is said in the dialog, not by hiding the button. */
-  if (!canEdit || !status || !FIELD_STARTABLE[kind].includes(status)) return null;
+  if (!canEdit || !status || !FIELD_START_SHOWN[kind].includes(status)) return null;
   const toPay = d ? chargeOpen(d.charge) : false;
   const paid = d?.charge?.status === "paid";
   const servicesMissing = Boolean(d && d.chargeReady && kind === "call_out" && d.coverage === "chargeable" && (!d.charge || d.charge.lines.length === 0));
@@ -117,6 +117,7 @@ export function FieldStartAction({
   const checks = d
     ? fieldStartChecks({
         kind,
+        ...(kind === "additional_work" ? { approved: workApproved(status) } : {}),
         priority: d.priority,
         technicianIds: d.technicianIds,
         scheduledStart: d.scheduledStart,

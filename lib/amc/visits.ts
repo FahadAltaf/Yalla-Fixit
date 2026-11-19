@@ -110,6 +110,12 @@ export interface VisitNeed {
    * at Start visit), so a missing permission on their profile is only noted.
    */
   accessAsNote?: boolean;
+  /**
+   * A call out or additional work (19 Nov 2026): any technician can be found
+   * and chosen, AMC skills or not. A confirmed skill for the trade still
+   * ranks them first and makes the suggestion; without one it is only noted.
+   */
+  skillAsNote?: boolean;
 }
 
 export interface TechnicianBusy {
@@ -153,7 +159,8 @@ export function fitFor(t: TechnicianFacts, need: VisitNeed, busy: TechnicianBusy
   /* No trade named (a call out of an unknown kind): any free technician fits. */
   if (need.trades.length > 0 && covers.length === 0) {
     const expired = need.trades.some((trade) => t.skills.some((s) => s.trade === trade && s.level !== "trainee" && s.certificateExpires && s.certificateExpires < need.date));
-    blockers.push(expired ? "Certificate expired for this trade" : "Not confirmed for this trade");
+    if (need.skillAsNote) notes.push(expired ? "Certificate expired for this trade" : "No AMC skill for this trade on their profile");
+    else blockers.push(expired ? "Certificate expired for this trade" : "Not confirmed for this trade");
   }
   if (busy.onLeave) blockers.push("On leave that day");
   if (busy.overlaps > 0) blockers.push("Already booked at that time");
@@ -197,10 +204,11 @@ export function suggestCrew(fits: TechnicianFit[], trades: Trade[]): { technicia
  * What blocks assigning this crew (BRD 5.11 / DEV-397): any technician
  * with a blocker, or a trade nobody in the crew covers. Empty = allowed.
  */
-export function assignmentProblems(fits: TechnicianFit[], trades: Trade[]): string[] {
+export function assignmentProblems(fits: TechnicianFit[], trades: Trade[], opts: { skillAsNote?: boolean } = {}): string[] {
   const problems = fits.flatMap((f) => f.blockers.map((b) => `${f.name}: ${b.toLowerCase()}`));
   const covered = new Set(fits.flatMap((f) => f.covers));
-  const missing = trades.filter((t) => !covered.has(t));
+  /* A call out or additional work (19 Nov 2026): nobody needs the AMC skill for the trade. */
+  const missing = opts.skillAsNote ? [] : trades.filter((t) => !covered.has(t));
   if (missing.length) problems.push(`Nobody in the crew covers ${missing.join(", ")}`);
   return problems;
 }

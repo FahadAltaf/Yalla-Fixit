@@ -13,6 +13,7 @@ import {
   listOfStage,
   siteApprovalState,
   shownOnPhone,
+  phoneStatusLabel,
   SHOWN_ON_PHONE_FILTER,
   mobileListQuerySchema,
   mobileMutationSchema,
@@ -248,4 +249,12 @@ test("a visit the office has not started is not on the phone (site visits except
   // The assessor starts a site visit on the phone: it shows while planned.
   assert.equal(shownOnPhone({ kind: "site_visit", stage: "planned", started_at: null }), true);
   assert.equal(SHOWN_ON_PHONE_FILTER, "kind.eq.site_visit,and(kind.eq.ppm,stage.not.in.(to_plan,planned,confirmed)),started_at.not.is.null");
+});
+
+test("an additional work reads by its stage while it stays scheduled", () => {
+  assert.equal(phoneStatusLabel("additional_work", "scheduled", "planned"), "Scheduled");
+  assert.equal(phoneStatusLabel("additional_work", "scheduled", "in_progress"), "In progress");
+  assert.equal(phoneStatusLabel("additional_work", "scheduled", "review"), "Awaiting review");
+  // A call out has statuses of its own for each step.
+  assert.equal(phoneStatusLabel("call_out", "attended", "in_progress"), "Attended");
 });

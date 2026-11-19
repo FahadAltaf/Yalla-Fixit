@@ -281,7 +281,7 @@ export const MODULE_GUIDES: Record<ModuleKey, Guide> = {
   /* ---------------------------------------------------------------- */
   visits: {
     title: "Visits",
-    summary: "Every AMC visit in one list: planned maintenance visits, call outs, approved additional work and site visits before a proposal, wherever each one stands.",
+    summary: "Every AMC visit in one list: planned maintenance visits, call outs, additional work (from the moment it is raised) and site visits before a proposal, wherever each one stands.",
     who: "Coordinators, supervisors and the AMC team.",
     steps: [
       { title: "See what is open", detail: "The list opens on the visits still to be done, soonest first. Filter by kind, stage, day (today, the next 7 days, overdue) or technician, or search a number, client or property." },

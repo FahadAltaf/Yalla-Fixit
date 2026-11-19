@@ -20,12 +20,12 @@ test("an emergency call out needs only its crew and access", () => {
   assert.equal(fieldStartProblems({ kind: "call_out", priority: "emergency", technicianIds: ["t1"], scheduledStart: null, scheduledEnd: null, accessStatus: "pending" })[0].key, "access");
 });
 
-test("additional work also needs the client's confirmation", () => {
+/* 19 Nov 2026: additional work as a call out -- no client confirmation; the client's approval of the quotation first. */
+test("additional work: approval, crew, time and access, no client confirmation", () => {
   const base = { kind: "additional_work" as const, technicianIds: ["t1"], ...slot, accessStatus: "approved" };
-  assert.deepEqual(fieldStartChecks({ ...base, clientConfirmation: null }).map((c) => c.key), ["crew", "time", "client", "access"]);
-  assert.equal(fieldStartProblems({ ...base, clientConfirmation: "pending" })[0].key, "client");
-  assert.equal(fieldStartProblems({ ...base, clientConfirmation: "declined" })[0].key, "client");
-  assert.deepEqual(fieldStartProblems({ ...base, clientConfirmation: "confirmed" }), []);
+  assert.deepEqual(fieldStartChecks({ ...base, approved: false }).map((c) => c.key), ["approval", "crew", "time", "access"]);
+  assert.deepEqual(fieldStartProblems({ ...base, clientConfirmation: null, approved: true }), [], "the client's confirmation is not asked");
+  assert.equal(fieldStartProblems({ ...base, approved: false })[0].key, "approval");
 });
 
 test("access says what is wrong with the pass", () => {

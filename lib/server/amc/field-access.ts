@@ -2,7 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { whatsappUrl } from "@/lib/amc/approval-ladder";
 import { todayInDubai } from "@/lib/amc/contracts";
-import { FIELD_STARTABLE, fieldStartProblems, type ClientConfirmation, type FieldStartKind } from "@/lib/amc/field-start";
+import { FIELD_STARTABLE, fieldStartProblems, workApproved, type ClientConfirmation, type FieldStartKind } from "@/lib/amc/field-start";
 import { initialOutcome, type SendChannel, type SendResult } from "@/lib/amc/send-channels";
 import { accessFromPasses, type AccessStatus } from "@/lib/amc/visits";
 import { chargeOpen, type PaymentTimingInput, type VisitCharge } from "@/lib/amc/visit-charges";
@@ -195,10 +195,11 @@ export async function startFieldWork(admin: Admin, kind: FieldStartKind, id: str
   const v = await fieldAccess(admin, kind, id);
   if (!v.ready) throw new ContractError(NOT_READY, 503);
   if (v.startedAt) throw new ContractError(`This ${NOUN[kind]} was already started.`, 409);
-  if (!FIELD_STARTABLE[kind].includes(v.status)) throw new ContractError(`This ${NOUN[kind]} is ${v.status.replace(/_/g, " ")}: it cannot be started.`, 409);
   if (!v.contractActive) throw new ContractError("The contract is not active, so its work cannot start.", 409);
+  /* What is missing first (19 Nov 2026: for additional work, the client's approval), then the status. */
   const problems = fieldStartProblems({
     kind,
+    ...(kind === "additional_work" ? { approved: workApproved(v.status) } : {}),
     priority: v.priority,
     technicianIds: v.technicianIds,
     scheduledStart: v.scheduledStart,
@@ -208,6 +209,7 @@ export async function startFieldWork(admin: Admin, kind: FieldStartKind, id: str
     ...chargeFacts(v, payment),
   });
   if (problems.length) throw new ContractError(`Before starting: ${problems.map((p) => p.text.replace(/\.$/, "").toLowerCase()).join("; ")}.`, 400);
+  if (!FIELD_STARTABLE[kind].includes(v.status)) throw new ContractError(`This ${NOUN[kind]} is ${v.status.replace(/_/g, " ")}: it cannot be started.`, 409);
   /* Before or after the visit, with the reason for after, kept on the charge. */
   if (v.charge && chargeOpen(v.charge) && payment) await setPaymentTiming(admin, v.charge.id, payment, actor);
   else if (v.charge?.status === "paid") await setPaymentTiming(admin, v.charge.id, { timing: "before_visit", reason: null }, actor);

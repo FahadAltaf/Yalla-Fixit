@@ -662,6 +662,8 @@ export async function callOutNeed(admin: Admin, row: Row, trades: Trade[], date:
     accessTypes: ((rules ?? []) as Row[]).filter((r) => r.access_type === "security_clearance").map((r) => str(r.issuer) ?? "Security clearance"),
     /* Call outs and additional work (18 Nov 2026): access is the visit's pass, so a technician's missing permission does not block them. */
     accessAsNote: true,
+    /* Any technician can be found and chosen (19 Nov 2026): an AMC skill for the trade ranks them first, its absence is only noted. */
+    skillAsNote: true,
   };
 }
 
@@ -679,21 +681,15 @@ export async function crewSuggestion(
   const need = await callOutNeed(admin, { contract_id: input.contractId }, trades, input.date);
   const fits = await crewFitsForSlot(admin, need, dubaiSlot(input.date, input.time, input.durationMinutes), null, input.ignoreIds);
   /*
-    No trade (18 Nov 2026): nobody can be checked for it, so the AMC
-    technicians are offered -- whoever has a confirmed AMC skill on their
-    profile (Workforce -> People -> AMC skills); the whole roster when nobody
-    has one yet. Busy or away ones still show why.
+    The whole roster (19 Nov 2026): a technician is not checked for AMC
+    access. Those with a confirmed AMC skill for the trade rank first and
+    make the suggestion; busy or away ones still show why.
   */
-  let amcTeam: Set<string> | null = null;
-  if (!trades.length) {
-    const { data: skills } = await admin.from("amc_technician_skills").select("fsm_resource_id, level");
-    const ids = new Set(((skills ?? []) as Row[]).filter((s) => s.level !== "trainee").map((s) => String(s.fsm_resource_id)));
-    amcTeam = ids.size ? ids : null;
-  }
   return {
     noTrade: !trades.length,
-    fits: trades.length ? fits.filter((f) => f.covers.length > 0 || f.blockers.some((b) => b.startsWith("Certificate"))) : fits.filter((f) => !amcTeam || amcTeam.has(f.fsmId)),
-    suggested: suggestCrew(fits, trades),
+    fits: [...fits].sort((a, b) => b.covers.length - a.covers.length || b.score - a.score),
+    /* No "nobody has the AMC skill" gap: nobody needs it here (19 Nov 2026). */
+    suggested: { ...suggestCrew(fits, trades), uncovered: [] as Trade[] },
     skilledByTrade: Object.fromEntries(trades.map((trade) => [trade, fits.filter((f) => f.covers.includes(trade)).length])),
     rosterSize: fits.length,
   };
@@ -712,7 +708,7 @@ export async function checkCrewForSlot(
   const trades = input.trade ? [input.trade] : [];
   const need = await callOutNeed(admin, { contract_id: input.contractId }, trades, input.date);
   const fits = await crewFitsForSlot(admin, need, slot, input.technicianIds, input.ignoreIds);
-  const problems = assignmentProblems(fits, trades);
+  const problems = assignmentProblems(fits, trades, { skillAsNote: need.skillAsNote });
   if (problems.length) throw new ContractError(problems.join(" "), 409);
   const suggested = suggestCrew(await crewFitsForSlot(admin, need, slot, null, input.ignoreIds), trades).technicianIds;
   const same = suggested.length === input.technicianIds.length && suggested.every((t) => input.technicianIds.includes(t));
@@ -743,7 +739,7 @@ export async function performCallOutAction(admin: Admin, id: string, action: Cal
       const trades = str(row.trade) ? [str(row.trade) as Trade] : [];
       const need = await callOutNeed(admin, row, trades, action.date);
       const fits = await crewFitsForSlot(admin, need, slot, action.technicianIds, [id]);
-      const problems = assignmentProblems(fits, trades);
+      const problems = assignmentProblems(fits, trades, { skillAsNote: need.skillAsNote });
       if (problems.length) throw new ContractError(problems.join(" "), 409);
       /* The same rule as a PPM visit (BRD 5.13 / 5.11): another crew than the suggested one needs a reason. */
       const suggested = suggestCrew(await crewFitsForSlot(admin, need, slot, null, [id]), trades).technicianIds;

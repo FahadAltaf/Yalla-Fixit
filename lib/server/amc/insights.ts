@@ -143,16 +143,34 @@ async function scope(admin: Admin, who: Who): Promise<Scope> {
 }
 
 async function visitFacts(admin: Admin, ids: string[]): Promise<VisitFact[]> {
-  let rows = await forContracts(admin, "amc_visits", "id, contract_id, status, window_start, window_end, closed_at, sheet:amc_visit_job_sheets(completed_at)", ids);
+  let rows = await forContracts(
+    admin,
+    "amc_visits",
+    "id, contract_id, status, window_start, window_end, original_target_date, closed_at, sheet:amc_visit_job_sheets(completed_at), lines:amc_visit_lines!amc_visit_lines_visit_id_fkey(home_window_start, home_window_end)",
+    ids,
+  );
   if (!rows.length) rows = await forContracts(admin, "amc_visits", "id, contract_id, status, window_start, window_end", ids);
-  return rows.map((v) => ({
-    id: String(v.id),
-    contractId: String(v.contract_id),
-    status: String(v.status),
-    windowStart: String(v.window_start),
-    windowEnd: String(v.window_end),
-    doneAt: str(one(v.sheet)?.completed_at) ?? str(v.closed_at),
-  }));
+  return rows.map((v) => {
+    /*
+      A rescheduled visit's window moves with it (19 Nov 2026), so adherence
+      reads the window it was planned in: its lines' home windows.
+    */
+    const homes = (Array.isArray(v.lines) ? (v.lines as Row[]) : []).filter((l) => str(l.home_window_start) && str(l.home_window_end));
+    const planned =
+      str(v.original_target_date) && homes.length
+        ? {
+            windowStart: homes.map((l) => String(l.home_window_start)).sort()[0],
+            windowEnd: homes.map((l) => String(l.home_window_end)).sort().at(-1)!,
+          }
+        : { windowStart: String(v.window_start), windowEnd: String(v.window_end) };
+    return {
+      id: String(v.id),
+      contractId: String(v.contract_id),
+      status: String(v.status),
+      ...planned,
+      doneAt: str(one(v.sheet)?.completed_at) ?? str(v.closed_at),
+    };
+  });
 }
 
 async function callOutFacts(admin: Admin, ids: string[], period: Period | null): Promise<Array<CallOutFact & { contractId: string }>> {

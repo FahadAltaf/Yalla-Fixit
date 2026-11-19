@@ -977,7 +977,7 @@ function dateChange(ctx: VisitContext, date: string, reason: string | null, conf
     throw new ContractError(`Visit ${String(v.visit_no)}: that day is outside its service window, so say why it is rescheduled.`, 400);
   }
   const windowDays = Number(ctx.contract.ppm_window_days) || config.scheduling.serviceWindowDays;
-  const window = windowAfterMove({ windowStart: String(v.window_start), windowEnd: String(v.window_end) }, date, windowDays, confirmed);
+  const window = windowAfterMove({ windowStart: String(v.window_start), windowEnd: String(v.window_end) }, date, windowDays);
   const reschedule = move.kind === "outside_window" && confirmed;
   return {
     changes: {

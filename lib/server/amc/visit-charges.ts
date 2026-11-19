@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { servicesForProperty } from "@/components/dashboard/extensions/amc/amc-settings";
 import { rateItemFor } from "@/lib/amc/rate-card";
 import {
+  MATERIAL_FEE_SERVICE,
   chargeTotals,
   type ChargeLine,
   type ChargePaymentMode,
@@ -127,22 +128,75 @@ export async function saveCallOutServices(admin: Admin, id: string, lines: Charg
   return charge;
 }
 
+/**
+ * An additional work's quotation lines as charge lines (19 Nov 2026): a line
+ * at AED 0 is free, as a call out's; the material handling fee, when there
+ * is one, is a line of its own, so the lines add up to the subtotal.
+ */
+export function workChargeLines(w: Row): ChargeLine[] {
+  const lines: ChargeLine[] = ((Array.isArray(w.quotation_lines) ? w.quotation_lines : []) as Row[]).map((l) => {
+    const unitPrice = Number(l.unitPrice ?? 0);
+    return {
+      serviceId: str(l.serviceId),
+      label: String(l.description ?? ""),
+      unit: l.kind === "material" ? "material" : null,
+      units: Number(l.quantity ?? 1),
+      unitPrice,
+      cardPrice: null,
+      charged: unitPrice > 0,
+    };
+  });
+  const fee = num(w.material_fee);
+  if (fee > 0) lines.push({ serviceId: MATERIAL_FEE_SERVICE, label: `Material handling fee (${num(w.material_fee_percent)}%)`, unit: null, units: 1, unitPrice: fee, cardPrice: null, charged: true });
+  return lines;
+}
+
+/** Before approval: the work's quotation shown as its services (not stored, nothing due yet). */
+export async function draftWorkCharge(admin: Admin, workId: string): Promise<VisitCharge | null> {
+  const { data: w } = await admin
+    .from("amc_additional_works")
+    .select("id, work_no, contract_id, quotation_lines, material_fee, material_fee_percent, subtotal, vat_amount, total, created_at")
+    .eq("id", workId)
+    .maybeSingle<Row>();
+  if (!w) return null;
+  const lines = workChargeLines(w);
+  if (!lines.length) return null;
+  return {
+    id: `draft-${workId}`,
+    contractId: String(w.contract_id),
+    kind: "additional_work",
+    ownerId: workId,
+    ref: str(w.work_no),
+    lines,
+    subtotal: num(w.subtotal),
+    vatAmount: num(w.vat_amount),
+    total: num(w.total),
+    status: "due",
+    paymentTiming: null,
+    paymentTimingReason: null,
+    paidAmount: null,
+    paidOn: null,
+    paymentMode: null,
+    paymentReference: null,
+    paymentNote: null,
+    recordedAt: null,
+    createdAt: String(w.created_at),
+    draft: true,
+  };
+}
+
 /** An additional work's charge follows its quotation (lines and totals, with the material fee); kept once paid. */
 export async function syncWorkCharge(admin: Admin, workId: string, actor: Actor) {
-  const { data: w, error } = await admin.from("amc_additional_works").select("id, contract_id, status, quotation_lines, subtotal, vat_amount, total").eq("id", workId).maybeSingle<Row>();
+  const { data: w, error } = await admin
+    .from("amc_additional_works")
+    .select("id, contract_id, status, quotation_lines, material_fee, material_fee_percent, subtotal, vat_amount, total")
+    .eq("id", workId)
+    .maybeSingle<Row>();
   if (error || !w) return null;
   if (!["approved", "scheduled", "completed", "invoiced", "paid"].includes(String(w.status))) return null;
   const existing = await readCharge(admin, "additional_work", workId);
   if (!existing.ready || existing.charge?.status === "paid") return existing.charge;
-  const lines: ChargeLine[] = ((Array.isArray(w.quotation_lines) ? w.quotation_lines : []) as Row[]).map((l) => ({
-    serviceId: str(l.serviceId),
-    label: String(l.description ?? ""),
-    unit: l.kind === "material" ? "material" : null,
-    units: Number(l.quantity ?? 1),
-    unitPrice: Number(l.unitPrice ?? 0),
-    cardPrice: null,
-    charged: true,
-  }));
+  const lines = workChargeLines(w);
   const total = num(w.total);
   return upsertCharge(
     admin,

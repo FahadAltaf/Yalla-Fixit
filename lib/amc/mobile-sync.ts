@@ -158,6 +158,21 @@ export function siteApprovalState(a: SiteApprovalFields): SiteApprovalState | nu
 }
 
 /**
+ * A visit's status as the crew should read it. An additional work stays
+ * "scheduled" while the crew is on site and while its job sheet is with the
+ * supervisor (19 Nov 2026), so its stage says where it is, as the portal's
+ * list does: In progress, then Awaiting review. Every other kind keeps its
+ * own status's words.
+ */
+export function phoneStatusLabel(kind: FieldVisitKind, status: string, stage: FieldVisitStage): string {
+  if (kind === "additional_work" && status === "scheduled") {
+    if (stage === "in_progress") return "In progress";
+    if (stage === "review") return "Awaiting review";
+  }
+  return fieldVisitStatusLabel(kind, status);
+}
+
+/**
  * A card from a view row. `services` is the planned visit's live service
  * lines (read for the page in one query); a call out or additional work is
  * its one trade; a site visit has none.
@@ -174,7 +189,7 @@ export function toMobileCard(row: FieldVisitViewRow, serviceLines: number, appro
     stage: row.stage,
     /* A site visit's approval stands in for draft / completed (the phone colours the pill by it). */
     status: approval ?? row.status,
-    status_label: approval ? SITE_APPROVAL_LABELS[approval] : fieldVisitStatusLabel(row.kind, row.status),
+    status_label: approval ? SITE_APPROVAL_LABELS[approval] : phoneStatusLabel(row.kind, row.status, row.stage),
     day: String(row.day).slice(0, 10),
     scheduled_start: row.scheduled_start,
     scheduled_end: row.scheduled_end,

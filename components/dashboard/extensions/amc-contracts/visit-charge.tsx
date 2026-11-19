@@ -26,6 +26,7 @@ import {
   CHARGE_PAYMENT_MODES,
   CHARGE_PAYMENT_MODE_LABELS,
   CHARGE_STATUS_LABELS,
+  MATERIAL_FEE_SERVICE,
   PAYMENT_TIMING_LABELS,
   chargeTotals,
   type ChargeLine,
@@ -47,7 +48,8 @@ import { useAmcData } from "./use-amc-data";
 */
 
 type Kind = "call_out" | "additional_work";
-type ChargeResponse = { charge: VisitCharge | null; ready: boolean; services: PricedService[]; canEdit: boolean };
+/* servicesEditable: an additional work's services can change (before approval, 19 Nov 2026). */
+type ChargeResponse = { charge: VisitCharge | null; ready: boolean; services: PricedService[]; canEdit: boolean; servicesEditable?: boolean };
 
 const url = (kind: Kind, id: string) => `/api/amc-field-work/${kind}/${encodeURIComponent(id)}/charge`;
 const post = (kind: Kind, id: string, body: Record<string, unknown>) => amcRequest(url(kind, id), { method: "POST", body: JSON.stringify(body) });
@@ -108,6 +110,9 @@ export function ChargeCard({
   const [paying, setPaying] = useState(false);
   const charge = data?.charge ?? null;
   const canEdit = Boolean(data?.canEdit && data.ready);
+  /* Who may change the services: a call out's until paid; an additional work's until approved (19 Nov 2026). */
+  const servicesEditable = kind === "call_out" ? canEdit && charge?.status !== "paid" : Boolean(data?.servicesEditable);
+  const draft = Boolean(charge?.draft);
   const changed = async () => {
     reload();
     await onChanged?.();
@@ -116,23 +121,23 @@ export function ChargeCard({
   return (
     <SectionCard
       icon={<ReceiptText />}
-      title={kind === "call_out" ? "Services and price" : "Payment"}
+      title="Services and price"
       description={
         kind === "call_out"
           ? "The services done on this call out, priced from the rate card, each charged or free. Paid before the visit or after it, chosen at Start visit."
-          : "What the client pays for this work, from the quotation. Paid before the visit or after it, chosen at Start visit."
+          : "The services for this work, from the rate card or typed, each charged or free. They are the quotation the client approves; paid before the visit or after it, chosen at Start visit."
       }
       bodyClassName="px-5 pb-5"
       action={
-        canEdit ? (
+        canEdit || servicesEditable ? (
           <div className="flex flex-wrap items-center gap-2">
-            {kind === "call_out" && charge?.status !== "paid" ? (
+            {servicesEditable ? (
               <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
                 <SquarePen className="size-4" />
                 {charge?.lines.length ? "Edit services" : "Add services"}
               </Button>
             ) : null}
-            {charge?.status === "due" ? (
+            {canEdit && charge?.status === "due" && !draft ? (
               <Button size="sm" onClick={() => setPaying(true)}>
                 <Banknote className="size-4" />
                 Record payment
@@ -153,24 +158,32 @@ export function ChargeCard({
       ) : !charge || charge.lines.length === 0 ? (
         <EmptyState
           icon={<ReceiptText className="size-5" />}
-          title={kind === "call_out" ? "No services yet" : "Nothing to pay yet"}
+          title="No services yet"
           description={
             kind === "call_out"
               ? coverage === "covered"
                 ? "Covered by the AMC: add the services done, as free, or charge any that are not covered."
                 : "Add the services the crew will do, so the client knows the price before the visit."
-              : "The charge appears once the quotation is approved."
+              : "Add the services and their price: they are the quotation the client approves."
           }
-          action={canEdit && kind === "call_out" ? { label: "Add services", onClick: () => setEditing(true) } : undefined}
+          action={servicesEditable ? { label: "Add services", onClick: () => setEditing(true) } : undefined}
         />
       ) : (
         <div className="grid gap-4">
           {/* As the proposal's Services and cost (18 Nov 2026): the lines in a table, their sum in its footer under the price. */}
           <ChargeTable charge={charge} />
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border px-4 py-3 text-sm">
-            <ChargeStatusBadges charge={charge} />
+            {draft ? (
+              <Badge variant="secondary" className="bg-brand-50 text-brand border-0 font-medium">
+                Quotation · not approved yet
+              </Badge>
+            ) : (
+              <ChargeStatusBadges charge={charge} />
+            )}
             <span className="text-muted-foreground">
-              {charge.status === "paid"
+              {draft
+                ? "Share it with the client (Share quotation), then Approve. What they pay is due from then."
+                : charge.status === "paid"
                 ? `Paid ${charge.paidOn ? formatContractDate(charge.paidOn) : ""} by ${charge.paymentMode ? CHARGE_PAYMENT_MODE_LABELS[charge.paymentMode].toLowerCase() : "—"}${charge.paymentReference ? ` · ${charge.paymentReference}` : ""}`
                 : charge.paymentTiming === "after_visit"
                   ? `After the visit: ${charge.paymentTimingReason ?? ""}`
@@ -182,18 +195,20 @@ export function ChargeCard({
         </div>
       )}
 
-      {kind === "call_out" && data ? (
+      {data && servicesEditable ? (
         <ServicesDialog
           open={editing}
           onOpenChange={setEditing}
+          kind={kind}
           id={id}
           services={data.services}
-          initial={charge?.lines ?? []}
+          /* The material fee follows the materials: never edited as a service. */
+          initial={(charge?.lines ?? []).filter((l) => l.serviceId !== MATERIAL_FEE_SERVICE)}
           freeByDefault={coverage === "covered"}
           onSaved={changed}
         />
       ) : null}
-      {charge ? <RecordChargePaymentDialog open={paying} onOpenChange={setPaying} kind={kind} id={id} charge={charge} onSaved={changed} /> : null}
+      {charge && !draft ? <RecordChargePaymentDialog open={paying} onOpenChange={setPaying} kind={kind} id={id} charge={charge} onSaved={changed} /> : null}
     </SectionCard>
   );
 }
@@ -218,8 +233,9 @@ function ChargeTable({ charge }: { charge: VisitCharge }) {
           <TableBody>
             {charge.lines.map((l, i) => (
               <TableRow key={i}>
-                <TableCell className="align-top text-sm">
-                  <span className="font-medium">{l.label}</span>
+                {/* A long service name wraps in its column, not over the units and rate (19 Nov 2026). */}
+                <TableCell className="align-top text-sm whitespace-normal">
+                  <span className="font-medium break-words">{l.label}</span>
                   {l.cardPrice !== null && l.cardPrice !== l.unitPrice ? (
                     <span className="text-muted-foreground mt-0.5 block text-xs">Rate card {l.cardPrice.toFixed(2)}</span>
                   ) : null}
@@ -268,10 +284,11 @@ function ChargeTable({ charge }: { charge: VisitCharge }) {
   );
 }
 
-/** A call out's services: each from the rate card for the property, its units and price, charged or free. */
+/** A call out's or additional work's services: each from the rate card for the property (or custom), its units and price, charged or free. */
 function ServicesDialog({
   open,
   onOpenChange,
+  kind,
   id,
   services,
   initial,
@@ -280,6 +297,7 @@ function ServicesDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  kind: Kind;
   id: string;
   services: PricedService[];
   initial: ChargeLine[];
@@ -304,7 +322,7 @@ function ServicesDialog({
   const save = async () => {
     setBusy(true);
     try {
-      await post("call_out", id, { action: "save_services", lines: lines.map((l) => ({ ...l, label: l.label.trim() })) });
+      await post(kind, id, { action: "save_services", lines: lines.map((l) => ({ ...l, label: l.label.trim() })) });
       toast.success("Services saved");
       onOpenChange(false);
       await onSaved();
@@ -328,8 +346,8 @@ function ServicesDialog({
         <DialogHeader>
           <DialogTitle>Services and price</DialogTitle>
           <DialogDescription>
-            Pick the services for this call out. Each is priced from the rate card for the property, or add a custom service with its own name and price; switch off
-            Charge for any that are free.
+            Pick the services for this {kind === "call_out" ? "call out" : "work"}. Each is priced from the rate card for the property, or add a custom service with its own name and
+            price; switch off Charge for any that are free.{kind === "additional_work" ? " They are the quotation the client approves." : ""}
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-3 py-1">

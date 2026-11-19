@@ -672,7 +672,7 @@ async function runPpmAction(admin: Admin, contractId: string, action: PpmAction,
       if (move.needsReason && !action.reason) {
         throw new ContractError("That date is outside the visit's service window: say why it is rescheduled.", 400);
       }
-      const window = windowAfterMove({ windowStart: String(v.window_start), windowEnd: String(v.window_end) }, action.date, rules.windowDays, confirmed);
+      const window = windowAfterMove({ windowStart: String(v.window_start), windowEnd: String(v.window_end) }, action.date, rules.windowDays);
       const reschedule = move.kind === "outside_window" && confirmed;
       const { error } = await admin
         .from("amc_visits")

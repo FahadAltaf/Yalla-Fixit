@@ -282,17 +282,18 @@ export function classifyMove(
 }
 
 /**
- * A tentative visit moved outside its window takes a new window starting
- * on the new date; a confirmed one keeps its window, because adherence is
- * measured against it.
+ * A visit moved outside its window takes a new window starting on the new
+ * date, tentative or confirmed (19 Nov 2026: the window shown follows the
+ * day it was moved to). A confirmed one is still a reschedule: it keeps its
+ * original date and reason, and adherence is measured against its lines'
+ * planned (home) windows, which a move never changes.
  */
 export function windowAfterMove(
   visit: { windowStart: string; windowEnd: string },
   newDate: string,
   windowDays: number,
-  planConfirmed: boolean,
 ): { windowStart: string; windowEnd: string } {
-  if (planConfirmed || (newDate >= visit.windowStart && newDate <= visit.windowEnd)) {
+  if (newDate >= visit.windowStart && newDate <= visit.windowEnd) {
     return { windowStart: visit.windowStart, windowEnd: visit.windowEnd };
   }
   return { windowStart: newDate, windowEnd: addDays(newDate, Math.max(1, windowDays) - 1) };

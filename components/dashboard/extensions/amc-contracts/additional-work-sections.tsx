@@ -142,7 +142,8 @@ export function WorkSteps({ work: w }: { work: AdditionalWorkRecord }) {
   closes its job sheet, which the crew fills in on the phone, as for a
   planned visit.
 */
-export function useWorkActions(data: AdditionalWorkResponse | null, changed: () => Promise<void>, busy: boolean, onSchedule: () => void) {
+/* The commercial steps in the header; scheduling is on Crew & time, as a call out's (19 Nov 2026). */
+export function useWorkActions(data: AdditionalWorkResponse | null, changed: () => Promise<void>, busy: boolean) {
   const { dialog: confirmDialog } = useConfirm();
   const actionForm = useActionForm();
   /* Shared by WhatsApp, email or a link to copy (17 Nov 2026). */
@@ -211,12 +212,6 @@ export function useWorkActions(data: AdditionalWorkResponse | null, changed: () 
           >
             <CheckCircle2 className="size-4" />
             Approve
-          </Button>
-        ) : null}
-        {can("scheduled") ? (
-          <Button variant="outline" disabled={busy} onClick={onSchedule}>
-            <CalendarCheck className="size-4" />
-            {w.status === "scheduled" ? "Reschedule" : "Schedule"}
           </Button>
         ) : null}
         {can("invoiced") ? (
@@ -692,7 +687,9 @@ export function WorkScheduleSection({ data, working, setWorking, changed }: Work
   const ids = { date: useId(), time: useId(), duration: useId(), override: useId() };
   const [editing, setEditing] = useState(false);
 
-  const can = canEdit && canMoveWork(w.status, "scheduled");
+  /* Before approval too (19 Nov 2026), as a call out once logged: planned now, scheduled when the client approves. */
+  const beforeApproval = w.status === "identified" || w.status === "quotation_prepared" || w.status === "shared";
+  const can = canEdit && (beforeApproval || canMoveWork(w.status, "scheduled"));
   const minutes = Number(duration);
   const validSlot = isIsoDate(date) && isTime(time) && Number.isInteger(minutes) && minutes >= 15 && minutes <= 1440;
   const slotKey = `${date}|${time}|${minutes}`;
@@ -733,8 +730,10 @@ export function WorkScheduleSection({ data, working, setWorking, changed }: Work
     );
 
   const stateText =
-    w.status === "identified" || w.status === "quotation_prepared" || w.status === "shared"
-      ? "It is scheduled once the client approves the quotation."
+    beforeApproval
+      ? canEdit
+        ? "Planned while the quotation is with the client: it becomes scheduled on this slot once they approve."
+        : "It is scheduled once the client approves the quotation."
       : w.status === "rejected"
         ? "The client declined the work."
         : !canEdit
@@ -745,12 +744,12 @@ export function WorkScheduleSection({ data, working, setWorking, changed }: Work
     <>
       <Panel
         title="When and who" icon={<CalendarCheck />}
-        description="The slot and the crew doing the work. The technician who found it is on the Finding tab."
+        description="The slot and the crew doing the work. The technician who found it is on the Overview."
         actions={
           can ? (
             <Button disabled={working !== null} onClick={() => setEditing(true)}>
               <CalendarCheck className="size-4" />
-              {w.status === "scheduled" ? "Reschedule" : "Schedule the work"}
+              {w.status === "scheduled" || slot.scheduledStart || w.scheduledFor ? "Reschedule" : "Schedule the work"}
             </Button>
           ) : null
         }
@@ -769,7 +768,7 @@ export function WorkScheduleSection({ data, working, setWorking, changed }: Work
           {slot.assignmentNote ? <InfoRow label="Why this crew">{slot.assignmentNote}</InfoRow> : null}
           <InfoRow label="Trade">{w.trade ? (TRADE_LABELS[w.trade as Trade] ?? w.trade) : <Muted>Not set</Muted>}</InfoRow>
         </dl>
-        {!can ? <p className="text-muted-foreground text-sm">{stateText}</p> : null}
+        {!can || beforeApproval ? <p className="text-muted-foreground text-sm">{stateText}</p> : null}
       </Panel>
 
       {!slot.migrated ? (
@@ -809,7 +808,7 @@ export function WorkScheduleSection({ data, working, setWorking, changed }: Work
             </SubmitButton>
           }
         >
-          {!w.trade ? <p className="text-warning text-xs">This work has no trade (set it on the Finding tab), so the technicians with AMC skills are offered: pick who fits the work.</p> : null}
+          {!w.trade ? <p className="text-warning text-xs">This work has no trade (set it with Edit finding on the Overview), so every technician is offered: pick who fits the work.</p> : null}
           <div className="grid gap-4 sm:grid-cols-3">
             <Field id={ids.date} label="Date">
               <DateSelect id={ids.date} value={date} onChange={setDate} />

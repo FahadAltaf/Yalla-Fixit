@@ -16,6 +16,7 @@ import {
   onCrew,
   parseMobileMutation,
   toMobileCard,
+  phoneStatusLabel,
   shownOnPhone,
   SHOWN_ON_PHONE_FILTER,
   SHOWN_ON_PHONE_FILTER_NO_STARTED,
@@ -27,7 +28,7 @@ import {
   type SiteFormInput,
   type MobileResult,
 } from "@/lib/amc/mobile-sync";
-import { fieldVisitStatusLabel, type FieldVisitKind, type FieldVisitStage } from "@/lib/amc/field-visits";
+import { type FieldVisitKind, type FieldVisitStage } from "@/lib/amc/field-visits";
 import { PLANNABLE_STATUSES, VISIT_STATUS_LABELS, type VisitStatus } from "@/lib/amc/ppm";
 import { tradeForService } from "@/lib/amc/visits";
 import { hasResourceAction } from "@/lib/role-permissions";
@@ -735,8 +736,11 @@ async function viewDetail(tech: MobileTechnician, kind: FieldVisitKind, id: stri
   /* The office's Start visit (18 Nov 2026): its own column; "in progress" is the crew being on site. */
   const started = Boolean(str(more.started_at)) || data.stage === "in_progress" || data.stage === "review";
   const waitingForStart = (kind === "call_out" && (ownStatus === "scheduled" || ownStatus === "logged") && !started) || (kind === "additional_work" && ownStatus === "scheduled" && !started);
+  /* As a planned visit's (19 Nov 2026): only while its job sheet is not started, a draft, or sent back; not once it is with the supervisor or closed. */
+  const fieldSheetStatus = fieldSheet?.sheet.status ?? null;
+  const sheetOpen = fieldSheetStatus === null || fieldSheetStatus === "draft" || fieldSheetStatus === "returned";
   const canEdit =
-    (kind === "call_out" ? CALL_OUT_EDITABLE.includes(ownStatus ?? "") : kind === "additional_work" ? WORK_EDITABLE.includes(ownStatus ?? "") : false) && !waitingForStart;
+    (kind === "call_out" ? CALL_OUT_EDITABLE.includes(ownStatus ?? "") : kind === "additional_work" ? WORK_EDITABLE.includes(ownStatus ?? "") : false) && !waitingForStart && sheetOpen;
   const contact = kind === "call_out" ? { data: more } : { data: null as Row | null };
   const status = String(data.status);
   return {
@@ -751,7 +755,7 @@ async function viewDetail(tech: MobileTechnician, kind: FieldVisitKind, id: stri
       id,
       ref: String(data.ref),
       status,
-      status_label: fieldVisitStatusLabel(kind, status),
+      status_label: phoneStatusLabel(kind, status, data.stage as FieldVisitStage),
       stage: data.stage as FieldVisitStage,
       scheduled_start: str(data.scheduled_start),
       scheduled_end: str(data.scheduled_end),

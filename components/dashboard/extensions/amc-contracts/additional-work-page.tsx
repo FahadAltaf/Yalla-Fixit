@@ -3,78 +3,102 @@
 import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ExternalLink, FileSignature, Hammer, XCircle } from "lucide-react";
+import { ExternalLink, FileSignature, Hammer, SquarePen, XCircle } from "lucide-react";
 
 import { SectionCard, StatCard, StatCardGrid } from "@/components/dashboard/shared/kaizen";
-import { ErrorState, SectionSkeleton } from "@/components/dashboard/shared/kaizen-states";
+import { ActionDialogContent, ErrorState, SectionSkeleton } from "@/components/dashboard/shared/kaizen-states";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Dialog, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Money } from "@/components/ui/money";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { WORK_RISK_LABELS } from "@/lib/amc/call-outs";
 import { TRADE_LABELS } from "@/lib/amc/client-profile";
-import { visitPageHref } from "@/lib/amc/field-visits";
+import { FIELD_VISIT_STAGE_LABELS, visitPageHref, type FieldVisitStage } from "@/lib/amc/field-visits";
 import { amcRefresh } from "@/lib/amc/http-cache";
+import { CHARGE_STATUS_LABELS, PAYMENT_TIMING_LABELS } from "@/lib/amc/visit-charges";
 import type { Trade } from "@/lib/amc/visits";
+import { cn } from "@/lib/utils";
 import { additionalWorksService, type AdditionalWorkResponse } from "@/modules/amc-contracts/additional-works-service";
+import { fieldVisitsService, type FieldVisitRow } from "@/modules/amc-contracts/field-visits-service";
+import { fieldJobSheetCalls } from "@/modules/amc-contracts/job-sheets-service";
 
 import {
   WorkFindingSection,
-  WorkPartiesSection,
-  WorkPhotosSection,
-  WorkQuotationSection,
   WorkScheduleSection,
-  WorkSteps,
   useWorkActions,
+  workLocked,
   workSourceLabel,
   type WorkWorking,
 } from "./additional-work-sections";
-import { Muted, Panel, PanelSurface, RiskBadge, WorkStatusBadge, shortDateTime } from "./call-out-shared";
+import { HeaderActionsSlot, Muted, PanelSurface, RiskBadge, WorkStatusBadge, shortDateTime } from "./call-out-shared";
 import { formatContractDate, formatDateTime } from "./contract-status";
 import { DetailHeaderCard, DetailHeaderSkeleton, DetailToolbar, shortPlace } from "./detail-header";
 import { DetailList } from "./enquiries/enquiry-ui";
+import { FieldStartAction, FieldWorkAccessCard, useFieldWork, type FieldWork } from "./field-work-panels";
+import { JobSheetPanel } from "./job-sheet-panel";
 import { useTechnicianName } from "./people-pickers";
 import { useUrlTab } from "./profile/use-url-tab";
 import { useAmcData } from "./use-amc-data";
+import { ChargeCard } from "./visit-charge";
 import { HistoryPanel } from "./visit-page";
 import { slotLabel } from "./visit-status";
-import { FieldStartAction, FieldWorkAccessCard, WorkConfirmationCard, useFieldWork } from "./field-work-panels";
-import { HeaderActionsSlot } from "./call-out-shared";
-import { ChargeCard } from "./visit-charge";
-import { JobSheetPanel } from "./job-sheet-panel";
-import { fieldJobSheetCalls } from "@/modules/amc-contracts/job-sheets-service";
 
 /* The work's job sheet (18 Nov 2026): the planned visit's panel on the work's calls. */
 const WORK_SHEET = fieldJobSheetCalls("additional_work");
 
-/* client, access (17 Nov 2026): once approved, confirmed with the client and access sorted, then Start visit, as a planned visit. */
-const TABS = ["overview", "finding", "quotation", "parties", "crew", "client", "access", "job_sheet", "photos", "history"] as const;
+/*
+  The tabs, as a call out's (19 Nov 2026): Overview, Crew & time, Client,
+  Access, Services, Job sheet, History, at every status, as a call out has
+  them from the moment it is logged. The old Finding, Quotation, Parties and
+  Photos tabs live on in links: the finding is on the overview, the
+  quotation and its parties under Services, the photos on the job sheet.
+*/
+const TABS = ["overview", "crew", "access", "services", "job_sheet", "history", "client", "finding", "quotation", "parties", "photos"] as const;
 type Tab = (typeof TABS)[number];
 const TAB_LABELS: Record<Tab, string> = {
   overview: "Overview",
-  finding: "Finding",
-  quotation: "Quotation",
-  parties: "Parties",
   crew: "Crew & time",
   client: "Client",
   access: "Access",
+  services: "Services",
   job_sheet: "Job sheet",
-  photos: "Photos",
   history: "History",
+  finding: "Finding",
+  quotation: "Quotation",
+  parties: "Parties",
+  photos: "Photos",
+};
+/* Exactly a call out's tabs (19 Nov 2026): no Client tab, the client is not asked to confirm. */
+const WORK_TABS: readonly Tab[] = ["overview", "crew", "access", "services", "job_sheet", "history"];
+
+const STAGE_TONES: Record<FieldVisitStage, string> = {
+  to_plan: "bg-mist text-ink-soft",
+  planned: "bg-brand-50 text-brand",
+  confirmed: "bg-success/10 text-success",
+  in_progress: "bg-warning/10 text-warning",
+  review: "bg-warning/10 text-warning",
+  done: "bg-success/10 text-success",
+  cancelled: "bg-mist text-ink-soft",
 };
 
 const LIST = "/extensions/amc-contracts/additional-works";
+const VISIT_STATUSES = ["approved", "scheduled", "completed", "invoiced", "paid"];
+
+const shortDay = (iso: string) => new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", timeZone: "Asia/Dubai" }).format(new Date(iso));
+const hhmm = (iso: string) => new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Dubai" }).format(new Date(iso));
+const slotHours = (start: string, end: string | null) => (end ? `${hhmm(start)}–${hhmm(end)}` : hhmm(start));
 
 /**
- * One additional work on its own page, as a visit: the header with where it
- * stands and the next commercial step (share, approve, schedule, complete,
- * invoice, paid, reject), then tabs that load when first opened and stay
- * mounted (?tab=…): Overview, Finding, Quotation, Parties, Crew & time (the
- * slot and crew once approved), Photos, History. It is a quotation before
- * approval and a visit after, so it has its own page at every status.
+ * One additional work on its own page, laid out exactly as a call out's
+ * (19 Nov 2026): the header with its stage, place, time and crew and what
+ * can be done, then Overview, Crew & time, Client, Access, Services, Job
+ * sheet and History, loaded when first opened and kept mounted (?tab=…),
+ * at every status. Before approval the commercial steps (share, approve,
+ * reject) are in the header and each tab says what waits for approval.
  */
 export function AdditionalWorkPage({ id }: { id: string }) {
   const router = useRouter();
@@ -85,9 +109,11 @@ export function AdditionalWorkPage({ id }: { id: string }) {
   const data = work.data;
   const w = data?.work ?? null;
 
-  /* Once approved it is a visit: its access, client confirmation and start. */
-  const visitLike = Boolean(w && ["approved", "scheduled", "completed", "invoiced", "paid"].includes(w.status));
-  const fieldWork = useFieldWork(visitLike ? "additional_work" : null, id);
+  /* Its stage, crew, access, client confirmation, start and job sheet, as a call out's, from the moment it is raised (19 Nov 2026). */
+  const fieldWork = useFieldWork(w ? "additional_work" : null, id);
+  /* Its row in AMC -> Visits (every additional work after migration 20261119100000; only approved ones before). */
+  const row = useAmcData(() => (w ? fieldVisitsService.visit(id).catch(() => null) : Promise.resolve(null)), w ? `field-visit:${id}` : "field-visit:none");
+  const v = row.data?.visit ?? null;
   /* Where the job sheet puts its Return / Close / report buttons; the sheet is read again with everything else. */
   const [headerSlot, setHeaderSlot] = useState<HTMLElement | null>(null);
   const [sheetVersion, setSheetVersion] = useState(0);
@@ -95,21 +121,26 @@ export function AdditionalWorkPage({ id }: { id: string }) {
     setSheetVersion((n) => n + 1);
     work.reload();
     fieldWork.reload();
+    row.reload();
     history.reload();
   };
   const changed = async () => reloadAll();
   const refresh = () => amcRefresh(reloadAll);
-  const actions = useWorkActions(data, changed, working !== null, () => setTab("crew"));
-  /* Once approved it is a visit: its photos are part of the job sheet, as a planned visit's (18 Nov 2026). */
-  const shownTabs = TABS.filter((t) => (t === "client" || t === "access" || t === "job_sheet" ? visitLike : t === "photos" ? !visitLike : true));
+  const actions = useWorkActions(data, changed, working !== null);
   const notFound = work.error && /not found/i.test(work.error);
 
-  /* Once started (or done), the job sheet is mounted hidden, so its Return / Close / report buttons are in the header from any tab. */
-  const sheetActive = visitLike && (Boolean(fieldWork.data?.startedAt) || ["completed", "invoiced", "paid"].includes(w?.status ?? ""));
-  /* An old link to the Photos tab opens the job sheet once the work is a visit. */
-  const shown: Tab = visitLike && tab === "photos" ? "job_sheet" : tab;
+  const tabs = WORK_TABS;
+  /* Old links: the finding on the overview, the quotation and parties under Services, the photos on the job sheet. */
+  const wanted: Tab = tab === "finding" || tab === "client" ? "overview" : tab === "quotation" || tab === "parties" ? "services" : tab === "photos" ? "job_sheet" : tab;
+  const shown: Tab = tabs.includes(wanted) ? wanted : "overview";
+
+  /* The crew submitted its job sheet: awaiting the supervisor's review, as a call out's. */
+  const crewSubmitted = fieldWork.data?.sheetStatus === "submitted";
+  const stage: FieldVisitStage | null = v ? (crewSubmitted ? "review" : v.stage) : null;
+  /* Once started, in review or done, the job sheet is mounted hidden, so its Return / Close / report buttons are in the header from any tab. */
+  const sheetActive = Boolean(fieldWork.data?.startedAt) || stage === "review" || stage === "done" || ["completed", "invoiced", "paid"].includes(w?.status ?? "");
   const panel = (value: Tab, children: ReactNode) =>
-    isOpened(value) || shown === value || (value === "job_sheet" && sheetActive) ? (
+    tabs.includes(value) && (isOpened(value) || shown === value || (value === "job_sheet" && sheetActive)) ? (
       <TabsContent value={value} forceMount className="mt-4 flex flex-col gap-4 data-[state=inactive]:hidden">
         {children}
       </TabsContent>
@@ -134,10 +165,19 @@ export function AdditionalWorkPage({ id }: { id: string }) {
   }
 
   const sourceHref = w?.source === "visit" && w.visitId ? visitPageHref(w.visitId) : w?.source === "call_out" && w.callOutId ? visitPageHref(w.callOutId) : null;
+  const when = (d: AdditionalWorkResponse) =>
+    d.slot.scheduledStart ? slotLabel(d.slot.scheduledStart, d.slot.scheduledEnd) : d.work.scheduledFor ? `${formatContractDate(d.work.scheduledFor)} (no slot yet)` : null;
+  const crewText = v ? (v.crew.length ? `${v.crew[0].name}${v.crew.length > 1 ? ` +${v.crew.length - 1}` : ""}` : "No crew yet") : null;
 
   return (
     <div className="flex w-full flex-1 flex-col gap-6">
-      <DetailToolbar backHref={LIST} backLabel="Additional work" fetchedAt={data?.fetchedAt ?? null} refreshing={work.reloading || history.reloading} onRefresh={refresh} />
+      <DetailToolbar
+        backHref={LIST}
+        backLabel="Additional work"
+        fetchedAt={data?.fetchedAt ?? null}
+        refreshing={work.reloading || row.reloading || history.reloading}
+        onRefresh={refresh}
+      />
 
       {work.error ? (
         <ErrorState title="Could not load the additional work" message={work.error} onRetry={work.reload} />
@@ -152,20 +192,28 @@ export function AdditionalWorkPage({ id }: { id: string }) {
                 {w.workNo}
               </Badge>
               <RiskBadge risk={w.risk} />
+              {v?.late ? (
+                <Badge variant="secondary" className="bg-danger/10 text-danger border-0 font-medium">
+                  Overdue
+                </Badge>
+              ) : null}
             </>
           }
           title={w.customerName || "Additional work"}
           status={
+            /* A visit's stage once approved, as a call out's; the quotation's status before. */
             <span className="flex items-center gap-2">
-              <WorkStatusBadge status={w.status} />
-              <span className="text-muted-foreground text-sm">{workSourceLabel(w)}</span>
+              {stage ? (
+                <Badge variant="secondary" className={cn("border-0 font-medium", STAGE_TONES[stage])}>
+                  {FIELD_VISIT_STAGE_LABELS[stage]}
+                </Badge>
+              ) : (
+                <WorkStatusBadge status={w.status} />
+              )}
+              <span className="text-muted-foreground text-sm">{crewSubmitted ? "Submitted by the crew" : v ? v.statusLabel : workSourceLabel(w)}</span>
             </span>
           }
-          subline={[
-            shortPlace(w.propertyLabel),
-            w.totals.total ? `AED ${w.totals.total.toLocaleString("en-AE", { minimumFractionDigits: 2 })}` : "Not quoted yet",
-            data.slot.scheduledStart ? slotLabel(data.slot.scheduledStart, data.slot.scheduledEnd) : w.scheduledFor ? formatContractDate(w.scheduledFor) : null,
-          ]
+          subline={[shortPlace(w.propertyLabel), when(data) ?? "No slot yet", crewText ?? (w.totals.total ? `AED ${w.totals.total.toLocaleString("en-AE", { minimumFractionDigits: 2 })}` : "Not quoted yet")]
             .filter(Boolean)
             .join(" · ")}
           actions={
@@ -186,7 +234,19 @@ export function AdditionalWorkPage({ id }: { id: string }) {
               ) : null}
               {actions.buttons}
               <span ref={setHeaderSlot} className="contents" />
-              {visitLike ? <FieldStartAction kind="additional_work" id={id} fw={fieldWork} status={w.status} canEdit={data.canEdit} onTab={(t) => setTab(t === "services" || t === "payment" ? "quotation" : t)} onChanged={changed} disabled={working !== null} /> : null}
+              {/* Start visit at every status, as a call out's (19 Nov 2026): the dialog says what is missing, first the client's approval. */}
+              {w ? (
+                <FieldStartAction
+                  kind="additional_work"
+                  id={id}
+                  fw={fieldWork}
+                  status={w.status}
+                  canEdit={data.canEdit}
+                  onTab={(t) => setTab(t === "payment" ? "services" : t)}
+                  onChanged={changed}
+                  disabled={working !== null}
+                />
+              ) : null}
             </>
           }
         />
@@ -205,37 +265,27 @@ export function AdditionalWorkPage({ id }: { id: string }) {
 
       {w ? (
         <HeaderActionsSlot.Provider value={headerSlot}>
-        <PanelSurface.Provider value="card">
-          <Tabs value={shown} onValueChange={setTab}>
-            <TabsList className="h-auto w-full flex-wrap justify-start gap-1 group-data-horizontal/tabs:h-auto">
-              {shownTabs.map((t) => (
-                <TabsTrigger key={t} value={t}>
-                  {TAB_LABELS[t]}
-                  {t === "photos" && data?.photos.length ? <span className="text-muted-foreground ml-1 tabular-nums">({data.photos.length})</span> : null}
-                </TabsTrigger>
-              ))}
-            </TabsList>
+          <PanelSurface.Provider value="card">
+            <Tabs value={shown} onValueChange={setTab}>
+              <TabsList className="h-auto w-full flex-wrap justify-start gap-1 group-data-horizontal/tabs:h-auto">
+                {tabs.map((t) => (
+                  <TabsTrigger key={t} value={t}>
+                    {TAB_LABELS[t]}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
 
-            {panel("overview", withWork((d) => <WorkOverview data={d} onTab={setTab} />))}
-            {panel("finding", withWork((d) => <WorkFindingSection {...props(d)} />))}
-            {panel(
-              "quotation",
-              <>
-                {withWork((d) => <WorkQuotationSection {...props(d)} />)}
-                {/* What the client pays, from the quotation, before or after the visit (18 Nov 2026). */}
-                {visitLike ? <ChargeCard kind="additional_work" id={id} onChanged={changed} refreshKey={sheetVersion} /> : null}
-              </>,
-            )}
-            {panel("parties", withWork((d) => <WorkPartiesSection {...props(d)} />))}
-            {panel("crew", withWork((d) => <WorkScheduleSection {...props(d)} />))}
-            {visitLike ? panel("client", <WorkConfirmationCard id={id} fw={fieldWork} onChanged={changed} onTab={setTab} />) : null}
-            {visitLike ? panel("access", <FieldWorkAccessCard kind="additional_work" id={id} fw={fieldWork} onChanged={changed} />) : null}
-            {/* Exactly the planned visit's Job sheet tab (18 Nov 2026). */}
-            {visitLike ? panel("job_sheet", <JobSheetPanel visitId={id} calls={WORK_SHEET} onChanged={changed} readOnly refreshKey={sheetVersion} />) : null}
-            {visitLike ? null : panel("photos", withWork((d) => <WorkPhotosSection data={d} working={working} changed={changed} />))}
-            {panel("history", <HistoryPanel data={history} description="Everything that happened to this work, newest first: each step from the finding to the payment, and who took it." />)}
-          </Tabs>
-        </PanelSurface.Provider>
+              {panel("overview", withWork((d) => <WorkOverview data={d} v={v} fw={fieldWork} working={working} setWorking={setWorking} changed={changed} onTab={setTab} />))}
+              {panel("crew", withWork((d) => <WorkScheduleSection {...props(d)} />))}
+              {panel("access", <FieldWorkAccessCard kind="additional_work" id={id} fw={fieldWork} onChanged={changed} />)}
+              {/* Exactly a call out's Services tab (19 Nov 2026): the services and their price, each charged or free; they are the quotation the client approves. */}
+              {panel("services", <ChargeCard kind="additional_work" id={id} onChanged={changed} refreshKey={sheetVersion} />)}
+              {/* Exactly the planned visit's and the call out's Job sheet tab (18 Nov 2026). */}
+              {/* Exactly the call out's Job sheet tab: its photos are the crew's, on the sheet (no separate photos card, 19 Nov 2026). */}
+              {panel("job_sheet", <JobSheetPanel visitId={id} calls={WORK_SHEET} onChanged={changed} readOnly refreshKey={sheetVersion} />)}
+              {panel("history", <HistoryPanel data={history} description="Everything that happened to this work, newest first: each step from the finding to the payment, and who took it." />)}
+            </Tabs>
+          </PanelSurface.Provider>
         </HeaderActionsSlot.Provider>
       ) : null}
 
@@ -244,74 +294,158 @@ export function AdditionalWorkPage({ id }: { id: string }) {
   );
 }
 
-function WorkOverview({ data, onTab }: { data: AdditionalWorkResponse; onTab: (tab: Tab) => void }) {
+/* ------------------------------------------------------------------ */
+/* Overview, as a call out's                                            */
+/* ------------------------------------------------------------------ */
+
+const SHEET_STATE: Record<string, { label: string; tone: "good" | "review" | "progress" | "neutral" }> = {
+  closed: { label: "Closed", tone: "good" },
+  submitted: { label: "Awaiting review", tone: "review" },
+  returned: { label: "Returned to the crew", tone: "review" },
+  draft: { label: "Being filled in", tone: "progress" },
+};
+
+function WorkOverview({
+  data,
+  v,
+  fw,
+  working,
+  setWorking,
+  changed,
+  onTab,
+}: {
+  data: AdditionalWorkResponse;
+  v: FieldVisitRow | null;
+  fw: FieldWork | null;
+  working: WorkWorking;
+  setWorking: (w: WorkWorking) => void;
+  changed: () => Promise<void>;
+  onTab: (tab: Tab) => void;
+}) {
   const { work: w, slot, photos } = data;
   const technicianName = useTechnicianName();
+  const [editing, setEditing] = useState(false);
   const quoted = w.quotationLines.length > 0;
-  const approved = ["approved", "scheduled", "completed", "invoiced", "paid"].includes(w.status);
+  const approved = VISIT_STATUSES.includes(w.status);
+  const charge = fw?.data?.charge ?? null;
+  const sheet = fw?.data?.sheetStatus ?? null;
+  const started = Boolean(fw?.data?.startedAt);
+  const leadId = slot.leadTechnicianId ?? slot.technicianIds[0] ?? null;
+  const lead = v ? (v.crew.find((c) => c.lead) ?? v.crew[0])?.name : leadId ? technicianName(leadId) : null;
+  const crewCount = v ? v.crew.length : slot.technicianIds.length;
+  const sheetState = sheet ? SHEET_STATE[sheet] : null;
+  const canEditFinding = data.canEdit && !workLocked(w);
+
   return (
     <>
+      {/* Four answers, each opening its tab, as a call out's overview. */}
       <StatCardGrid columns={4}>
         <StatCard
-          label="Quotation"
-          value={quoted ? <Money value={w.totals.total} /> : "Not quoted"}
-          headline={w.approvedAt ? `Approved ${shortDateTime(w.approvedAt)}` : w.sharedAt ? `Shared ${shortDateTime(w.sharedAt)}` : quoted ? "Ready to share" : "Prepare it on Quotation"}
-          caption={`${w.quotationLines.length} ${w.quotationLines.length === 1 ? "line" : "lines"}, VAT included`}
+          label="Approval"
+          value={w.status === "rejected" ? "Rejected" : approved ? "Approved" : w.sharedAt ? "Shared" : quoted ? "Ready to share" : "Not quoted"}
+          headline={w.approvedAt ? `Approved ${shortDateTime(w.approvedAt)}` : w.sharedAt ? `Shared ${shortDateTime(w.sharedAt)}` : quoted ? "Share the quotation with the client" : "Prepare it on Services"}
+          caption={`${WORK_RISK_LABELS[w.risk]} risk · raised ${shortDateTime(w.createdAt)}`}
           tone={approved ? "good" : w.status === "rejected" ? "bad" : w.sharedAt ? "review" : "neutral"}
-          onSelect={() => onTab("quotation")}
-          selectLabel="Open the quotation"
+          onSelect={() => onTab("services")}
+          selectLabel="Open the services and quotation"
         />
         <StatCard
-          label="When"
-          value={slot.scheduledStart ? slotLabel(slot.scheduledStart, slot.scheduledEnd).split(",")[0] : w.scheduledFor ? formatContractDate(w.scheduledFor) : "Not scheduled"}
-          headline={slot.scheduledStart ? slotLabel(slot.scheduledStart, slot.scheduledEnd) : approved ? "Schedule it on Crew & time" : "After the client approves"}
-          tone={w.completedAt ? "good" : slot.scheduledStart || w.scheduledFor ? "progress" : "neutral"}
-          onSelect={() => onTab("crew")}
-          selectLabel="Open crew and time"
+          label="Price"
+          value={quoted ? <Money value={w.totals.total} /> : "Not quoted"}
+          headline={
+            charge
+              ? `${CHARGE_STATUS_LABELS[charge.status]}${charge.paymentTiming ? ` · ${PAYMENT_TIMING_LABELS[charge.paymentTiming].toLowerCase()}` : ""}`
+              : quoted
+                ? "Chargeable, VAT included"
+                : "No services yet"
+          }
+          caption={`${w.quotationLines.length} ${w.quotationLines.length === 1 ? "line" : "lines"}`}
+          tone={charge?.status === "paid" ? "good" : quoted ? "review" : "neutral"}
+          onSelect={() => onTab("services")}
+          selectLabel="Open the services and quotation"
         />
         <StatCard
           label="Crew"
-          value={slot.technicianIds.length ? (technicianName(slot.leadTechnicianId ?? slot.technicianIds[0]) ?? "—") : "Not assigned"}
-          headline={slot.technicianIds.length > 1 ? `+${slot.technicianIds.length - 1} more` : slot.technicianIds.length ? "Lead technician" : "No crew yet"}
-          caption={w.technicianId ? `Found by ${technicianName(w.technicianId)}` : undefined}
-          tone={slot.technicianIds.length ? "good" : "neutral"}
+          value={crewCount ? (lead ?? "—") : "Not assigned"}
+          headline={slot.scheduledStart ? `${shortDay(slot.scheduledStart)}, ${slotHours(slot.scheduledStart, slot.scheduledEnd)}` : approved ? "No slot yet" : "After the client approves"}
+          caption={w.completedAt ? `Completed ${shortDateTime(w.completedAt)}` : crewCount > 1 ? `+${crewCount - 1} more` : undefined}
+          tone={w.completedAt ? "good" : crewCount ? "progress" : "neutral"}
           onSelect={() => onTab("crew")}
           selectLabel="Open crew and time"
         />
         <StatCard
-          label="Photos"
-          value={photos.length}
-          headline={photos.length ? "Of the finding, before and after" : "None yet"}
-          tone={photos.length ? "good" : "neutral"}
-          onSelect={() => onTab("photos")}
-          selectLabel="Open the photos"
+          label="Job sheet"
+          value={sheetState?.label ?? (started ? "Started" : "Not started")}
+          headline={photos.length ? `${photos.length} ${photos.length === 1 ? "photo" : "photos"}` : "No photos yet"}
+          caption={started ? undefined : approved ? "Start the visit to open it on the phone" : "Opens once approved and started"}
+          tone={sheetState?.tone ?? (started ? "progress" : "neutral")}
+          onSelect={() => onTab("job_sheet")}
+          selectLabel="Open the job sheet"
         />
       </StatCardGrid>
 
-      <Panel title="Where it stands" description="From the finding to the payment.">
-        <WorkSteps work={w} />
-      </Panel>
-
-      <SectionCard title="Work details" description="What was found, where, how serious it is, and the commercial record." icon={<Hammer />} bodyClassName="px-5 pb-4">
+      <SectionCard
+        title="Additional work details"
+        description="What was found, where, how serious it is, and the commercial record."
+        icon={<Hammer />}
+        bodyClassName="px-5 pb-4"
+        action={
+          canEditFinding ? (
+            <Button variant="outline" size="sm" onClick={() => setEditing(true)}>
+              <SquarePen className="size-4" />
+              Edit finding
+            </Button>
+          ) : null
+        }
+      >
         <DetailList
           rows={[
-            { label: "Finding", value: <span className="line-clamp-3 whitespace-pre-wrap">{w.finding}</span> },
-            { label: "Risk", value: WORK_RISK_LABELS[w.risk] },
             { label: "Trade", value: w.trade ? (TRADE_LABELS[w.trade as Trade] ?? w.trade) : <Muted>Not set</Muted> },
+            { label: "Risk", value: WORK_RISK_LABELS[w.risk] },
             { label: "Found on", value: workSourceLabel(w) },
+            ...(w.technicianId ? [{ label: "Found by", value: technicianName(w.technicianId) ?? "—" }] : []),
             { label: "Raised", value: shortDateTime(w.createdAt) },
+            {
+              label: "Contract",
+              value: (
+                <Link href={`/extensions/amc-contracts/${w.contractId}`} className="text-brand hover:underline">
+                  {w.contractNumber || "Open"}
+                </Link>
+              ),
+            },
             ...(w.approvalEvidence ? [{ label: "Approval", value: w.approvalEvidence }] : []),
             ...(w.completedAt ? [{ label: "Completed", value: shortDateTime(w.completedAt) }] : []),
             ...(w.invoiceNumber ? [{ label: "Invoice", value: w.invoiceNumber }] : []),
             ...(w.paymentReference ? [{ label: "Payment reference", value: w.paymentReference }] : []),
           ]}
         />
-        <div className="pt-3">
-          <Button size="sm" variant="outline" onClick={() => onTab("finding")}>
-            Edit the finding
-          </Button>
+        {/* The finding in full, under its label, as a call out's diagnosis. */}
+        <div className="mt-2 grid gap-1 border-t pt-4">
+          <p className="text-muted-foreground text-sm">Finding</p>
+          <p className="text-sm leading-relaxed whitespace-pre-wrap">{w.finding}</p>
         </div>
       </SectionCard>
+
+
+      <Dialog open={editing} onOpenChange={(next) => working === null && setEditing(next)}>
+        <ActionDialogContent busy={working !== null} className="max-h-[88vh] overflow-y-auto sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Edit the finding</DialogTitle>
+            <DialogDescription>The technical finding, kept apart from the quotation, and who found it.</DialogDescription>
+          </DialogHeader>
+          <PanelSurface.Provider value="box">
+            <WorkFindingSection
+              data={data}
+              working={working}
+              setWorking={setWorking}
+              changed={async () => {
+                await changed();
+                setEditing(false);
+              }}
+            />
+          </PanelSurface.Provider>
+        </ActionDialogContent>
+      </Dialog>
     </>
   );
 }

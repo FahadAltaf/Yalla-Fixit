@@ -177,7 +177,7 @@ const pickFrom = <T extends string>(value: string | null, allowed: readonly T[],
 
 /**
  * AMC -> Visits: every AMC visit in one list (planned visits, call outs,
- * approved additional work, site visits), paged and filtered in the
+ * additional work from when it is raised, site visits), paged and filtered in the
  * database. The filters live in the address (?kind, ?stage, ?when,
  * ?technician), so a filtered list can be shared or reloaded.
  */
@@ -262,7 +262,7 @@ export function VisitsPage() {
         eyebrow="Operations"
         title="Visits"
         info={<ModuleGuide module="visits" />}
-        description="Every AMC visit in one place: planned maintenance, call outs, approved additional work and site visits, with where each one stands."
+        description="Every AMC visit in one place: planned maintenance, call outs, additional work and site visits, with where each one stands."
         actions={
           <Button onClick={() => setStartingSiteVisit(true)}>
             <Plus className="size-4" />
@@ -340,7 +340,7 @@ export function VisitsPage() {
               description={
                 filtered
                   ? "No visit matches these filters."
-                  : "Visits appear here when a contract's schedule is made, a call out is logged, additional work is approved or a site visit is booked."
+                  : "Visits appear here when a contract's schedule is made, a call out is logged, additional work is raised or a site visit is booked."
               }
               action={filtered ? { label: "Clear filters", variant: "outline", onClick: clearFilters } : undefined}
             />

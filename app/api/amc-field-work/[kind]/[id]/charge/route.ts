@@ -2,17 +2,19 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
 import { chargeLineSchema, recordChargePaymentSchema } from "@/lib/amc/visit-charges";
-import { additionalWorkOwner } from "@/lib/server/amc/additional-works";
+import { additionalWorkOwner, saveWorkServices } from "@/lib/server/amc/additional-works";
+import { readAmcConfig } from "@/lib/server/amc/config";
 import { callOutOwner } from "@/lib/server/amc/call-outs";
 import { contractErrorResponse, requireContractAccess } from "@/lib/server/amc/contract-access";
 import { UUID, fieldWorkRights } from "@/lib/server/amc/field-work-access";
-import { priceList, readCharge, recordChargePayment, saveCallOutServices, syncWorkCharge } from "@/lib/server/amc/visit-charges";
+import { draftWorkCharge, priceList, readCharge, recordChargePayment, saveCallOutServices, syncWorkCharge } from "@/lib/server/amc/visit-charges";
 
 /*
   What a call out or additional work costs the client (18 Nov 2026).
 
   GET                                    the charge, and the services priced from the rate card for its property
-  POST { action: "save_services", lines }  a call out's services, each charged or free
+  POST { action: "save_services", lines }  the services, each charged or free: a call out's charge, an
+                                           additional work's quotation (19 Nov 2026, until approval)
   POST { action: "record_payment", amount, paidOn, mode, reference, note }
 */
 
@@ -44,11 +46,17 @@ export async function GET(_req: NextRequest, ctx: Params) {
     const { gate, kind, rights, response } = await gateFor(kindParam, id);
     if (!gate) return response;
     const table = kind === "call_out" ? "amc_call_outs" : "amc_additional_works";
-    const { data: row } = await gate.admin.from(table).select("contract_id").eq("id", id).maybeSingle<{ contract_id: string }>();
+    const { data: row } = await gate.admin.from(table).select("contract_id, status").eq("id", id).maybeSingle<{ contract_id: string; status: string }>();
     if (!row) return notFound();
     if (kind === "additional_work") await syncWorkCharge(gate.admin, id, { id: gate.userId, label: gate.label }).catch(() => null);
     const [{ charge, ready }, services] = await Promise.all([readCharge(gate.admin, kind, id), priceList(gate.admin, row.contract_id)]);
-    return NextResponse.json({ charge, ready, services, canEdit: rights.edit }, { headers: { "Cache-Control": "no-store" } });
+    /* An additional work before approval: its quotation as its services (19 Nov 2026), changed until approved. */
+    const beforeApproval = kind === "additional_work" && ["identified", "quotation_prepared", "shared"].includes(row.status);
+    const shown = charge ?? (beforeApproval ? await draftWorkCharge(gate.admin, id) : null);
+    return NextResponse.json(
+      { charge: shown, ready, services, canEdit: rights.edit, servicesEditable: kind === "call_out" ? undefined : rights.edit && beforeApproval },
+      { headers: { "Cache-Control": "no-store" } },
+    );
   } catch (error) {
     return contractErrorResponse(error, "Could not load the charge");
   }
@@ -65,7 +73,10 @@ export async function POST(req: NextRequest, ctx: Params) {
     const actor = { id: gate.userId, label: gate.label };
     if (parsed.data.action === "save_services") {
       if (!rights.edit) return NextResponse.json({ error: "You cannot change this." }, { status: 403 });
-      if (kind !== "call_out") return NextResponse.json({ error: "An additional work is priced on its quotation." }, { status: 400 });
+      if (kind === "additional_work") {
+        await saveWorkServices(gate.admin, id, parsed.data.lines, actor, await readAmcConfig(gate.admin));
+        return NextResponse.json({ charge: await draftWorkCharge(gate.admin, id) });
+      }
       return NextResponse.json({ charge: await saveCallOutServices(gate.admin, id, parsed.data.lines, actor) });
     }
     if (!rights.edit && !gate.payments.edit) return NextResponse.json({ error: "Recording a payment needs AMC Payments (Edit)." }, { status: 403 });

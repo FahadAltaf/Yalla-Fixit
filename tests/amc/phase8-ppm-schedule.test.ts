@@ -79,8 +79,10 @@ test("moving a visit: inside its window is not a reschedule; outside it after co
   assert.deepEqual(classifyMove(v, "2026-11-10", true), { kind: "in_window", needsReason: false });
   assert.deepEqual(classifyMove(v, "2026-11-20", true), { kind: "outside_window", needsReason: true });
   assert.deepEqual(classifyMove(v, "2026-11-20", false), { kind: "outside_window", needsReason: false }, "still planning");
-  assert.deepEqual(windowAfterMove(v, "2026-11-20", 15, true), { windowStart: "2026-11-01", windowEnd: "2026-11-15" }, "adherence keeps the window");
-  assert.deepEqual(windowAfterMove(v, "2026-11-20", 15, false), { windowStart: "2026-11-20", windowEnd: "2026-12-04" });
+  /* 19 Nov 2026: a reschedule moves the window too; adherence reads the lines' home windows. */
+  assert.deepEqual(windowAfterMove(v, "2026-11-20", 15), { windowStart: "2026-11-20", windowEnd: "2026-12-04" });
+  assert.deepEqual(windowAfterMove(v, "2026-11-10", 15), { windowStart: "2026-11-01", windowEnd: "2026-11-15" }, "a move inside the window keeps it");
+  assert.deepEqual(windowAfterMove(v, "2026-11-20", 15), { windowStart: "2026-11-20", windowEnd: "2026-12-04" });
 });
 
 test("clubbing: where the windows meet, the earlier target; never two visits of one service", () => {

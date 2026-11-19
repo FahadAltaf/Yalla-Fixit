@@ -446,7 +446,7 @@ function ScheduleDialog({ callOut: c, open, onOpenChange, working, setWorking, c
         </SubmitButton>
       }
     >
-      {!c.trade ? <p className="text-warning text-xs">This call out has no trade, so the technicians with AMC skills are offered: pick who fits the work.</p> : null}
+      {!c.trade ? <p className="text-warning text-xs">This call out has no trade, so every technician is offered: pick who fits the work.</p> : null}
       <div className="grid gap-4 sm:grid-cols-3">
         <Field id={ids.date} label="Date">
           <DateSelect id={ids.date} value={date} onChange={setDate} />

@@ -378,10 +378,69 @@ async function startedByOffice(admin: Admin, id: string): Promise<boolean> {
   return Boolean(data?.started_at);
 }
 
+/*
+  Planned before approval (19 Nov 2026), as a call out is scheduled once it
+  is logged: the day, time and crew are kept on the work while it is being
+  quoted, and it becomes Scheduled when the client approves.
+*/
+const PLANNABLE_BEFORE_APPROVAL: readonly AdditionalWorkStatus[] = ["identified", "quotation_prepared", "shared"];
+
+/**
+ * An additional work's services, picked as a call out's (19 Nov 2026): from
+ * the rate card or typed, each charged or free. They are its quotation --
+ * the lines the client approves, shared as the PDF, and the charge once
+ * approved. A free line is kept at AED 0. Changed until approval.
+ */
+export async function saveWorkServices(
+  admin: Admin,
+  id: string,
+  lines: Array<{ serviceId: string | null; label: string; unit: string | null; units: number; unitPrice: number; charged: boolean }>,
+  actor: Actor,
+  config: AmcConfig,
+) {
+  if (!lines.length) throw new ContractError("Add at least one service.", 400);
+  return performWorkAction(
+    admin,
+    id,
+    {
+      action: "quote",
+      lines: lines.map((l) => ({
+        description: l.label.trim(),
+        kind: l.unit === "material" ? ("material" as const) : ("labour" as const),
+        quantity: l.units,
+        unitPrice: l.charged ? l.unitPrice : 0,
+        serviceId: l.serviceId,
+      })),
+    },
+    actor,
+    config,
+  );
+}
+
 export async function performWorkAction(admin: Admin, id: string, action: AdditionalWorkAction, actor: Actor, config: AmcConfig) {
   const row = await loadWork(admin, id);
   const status = row.status as AdditionalWorkStatus;
   const now = new Date().toISOString();
+  const planning = PLANNABLE_BEFORE_APPROVAL.includes(status);
+  /* The slot kept without a status change (before approval). */
+  const plan = async (changes: Row) => {
+    const { data, error } = await admin
+      .from("amc_additional_works")
+      .update({ ...changes, updated_at: now })
+      .eq("id", id)
+      .eq("status", status)
+      .select("id");
+    if (error) throw fail(error);
+    if (!data?.length) throw new ContractError("Someone else changed this additional work. Reload and try again.", 409);
+    await recordAmcAudit(admin, {
+      entityType: "additional_work",
+      entityId: id,
+      eventType: "work_planned",
+      actorId: actor.id,
+      actorLabel: actor.label,
+      payload: { day: changes.scheduled_for ?? null, start: changes.scheduled_start ?? null, crew: changes.technician_ids ?? null, beforeApproval: true },
+    });
+  };
   switch (action.action) {
     case "update": {
       if (status === "paid" || status === "rejected") throw new ContractError("A paid or rejected additional work is kept as it is.", 409);
@@ -436,24 +495,29 @@ export async function performWorkAction(admin: Admin, id: string, action: Additi
       }
       return { ok: true as const, ...sent };
     }
-    case "approve":
+    case "approve": {
       await moveTo(admin, row, "approved", { approved_at: now, approval_evidence: `${action.evidence}${action.approvedBy ? ` (approved by ${action.approvedBy})` : ""}` }, actor);
       /* Approved: what the client pays, from the quotation, on the contract's Payments tab (18 Nov 2026). */
       await syncWorkCharge(admin, id, actor).catch(() => null);
+      /* Planned before approval (19 Nov 2026): it is scheduled on that slot now. */
+      const planned = await workSlot(admin, id).catch(() => null);
+      if (str(row.scheduled_for) || planned?.scheduledStart) await moveTo(admin, { ...row, status: "approved" }, "scheduled", {}, actor).catch(() => null);
       return { ok: true as const };
+    }
     case "reject":
       await moveTo(admin, row, "rejected", { rejected_at: now, rejection_reason: action.reason }, actor, action.reason);
       return { ok: true as const };
     case "schedule": {
       const withCrew = Boolean(action.time || action.durationMinutes || action.technicianIds?.length);
       if (!withCrew) {
-        await moveTo(admin, row, "scheduled", { scheduled_for: action.date }, actor);
+        if (planning) await plan({ scheduled_for: action.date });
+        else await moveTo(admin, row, "scheduled", { scheduled_for: action.date }, actor);
         return { ok: true as const };
       }
       if (!action.time || !action.durationMinutes || !action.technicianIds?.length) {
         throw new ContractError("Give the start time, the duration and at least one technician, or only the day.", 400);
       }
-      if (!canMoveWork(status, "scheduled")) {
+      if (!planning && !canMoveWork(status, "scheduled")) {
         throw new ContractError(`${String(row.work_no)} is ${ADDITIONAL_WORK_STATUS_LABELS[status].toLowerCase()}: it cannot be scheduled now.`, 409);
       }
       if (!(await workSlot(admin, id)).migrated) throw new ContractError("Scheduling a crew needs the database update 20261112100000. Schedule the day only until it is applied.", 503);
@@ -468,20 +532,16 @@ export async function performWorkAction(admin: Admin, id: string, action: Additi
         overrideReason: action.overrideReason ?? null,
         ignoreIds: [id],
       });
-      await moveTo(
-        admin,
-        row,
-        "scheduled",
-        {
-          scheduled_for: action.date,
-          scheduled_start: slot.start,
-          scheduled_end: slot.end,
-          technician_ids: action.technicianIds,
-          lead_technician_id: action.technicianIds[0],
-          assignment_note: action.overrideReason ?? null,
-        },
-        actor,
-      );
+      const slotChanges = {
+        scheduled_for: action.date,
+        scheduled_start: slot.start,
+        scheduled_end: slot.end,
+        technician_ids: action.technicianIds,
+        lead_technician_id: action.technicianIds[0],
+        assignment_note: action.overrideReason ?? null,
+      };
+      if (planning) await plan(slotChanges);
+      else await moveTo(admin, row, "scheduled", slotChanges, actor);
       /* A new slot is asked again (17 Nov 2026); the column is missing before 20261117130000. */
       if (slot.start !== str(row.scheduled_start)) {
         await admin.from("amc_additional_works").update({ client_confirmation: null, confirmed_at: null }).eq("id", id).is("started_at", null);
