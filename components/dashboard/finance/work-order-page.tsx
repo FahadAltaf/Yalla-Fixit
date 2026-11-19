@@ -51,7 +51,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { fsmRecordLink } from "@/lib/fsm-links";
-import { INVOICE_STATUS_LABELS, QUEUE_STATUS_LABELS, invoiceTotals, withVat } from "@/lib/finance/line-status";
+import { INVOICE_STATUS_LABELS, QUEUE_STATUS_LABELS, invoiceTotals, isFsmCompleted, isZeroValueCompleted, withVat } from "@/lib/finance/line-status";
 import {
   COMPLETION_LABELS,
   PROGRESS_PURPOSE_LABELS,
@@ -270,8 +270,10 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
   const completed = lines.filter((l) => l.status === "Completed");
   /* Non-billable by its status, or by FSM's Billing Status with no line billable (WO3000: In Progress and Non Billable). */
   const nonBillable = isNonBillable(wo.invoicingStatus);
-  /* Non-billable, or Void, Cancelled or Closed in FSM (30 Oct): nothing more is done on it here. */
-  const fsmEnded = nonBillable || isEnded(wo.status);
+  /* 19 Nov: Completed in FSM and worth AED 0: nothing to complete or invoice (shown Non-billable, as in the list). */
+  const zeroValue = isZeroValueCompleted(wo.subTotal, wo.invoicingStatus) || (data.queueStatus === "non_billable" && !nonBillable);
+  /* Non-billable, worth nothing, or Void, Cancelled or Closed in FSM (30 Oct): nothing more is done on it here. */
+  const fsmEnded = nonBillable || zeroValue || isEnded(wo.status);
   const fsmLink = fsmRecordLink("Work_Orders", wo.id);
   const verifiedExclusion = workflow === "excluded" ? ([...data.exclusions].reverse().find((x) => x.decision === "verified" && !x.revertedAt) ?? null) : null;
   const live = data.ledgerReady && workflow !== "excluded";
@@ -427,20 +429,52 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
     marked Complete only once every billable line is.
   */
   const completionOf = (l: WorkOrderLine) => lineCompletion(l.progress);
-  const woCompletion = workOrderCompletion(lines.map((l) => ({ billable: l.billable, completion: completionOf(l) })));
+  /*
+    19 Nov: a line Completed in FSM (or on a work order Completed in FSM) is
+    done, so it never blocks "Complete work order". Operations can still
+    mark it complete here: on work not flagged To Be Invoiced, that is what
+    lets Finance invoice it.
+  */
+  const fsmDone = isFsmCompleted(wo.status);
+  const doneInFsm = (l: WorkOrderLine) => fsmDone || isFsmCompleted(l.status);
+  const woCompletion = workOrderCompletion(lines.map((l) => ({ billable: l.billable, completion: doneInFsm(l) ? "complete" : completionOf(l) })));
   /* Confirmed as a whole: the entry that counts for every billable line is the work order's own 100 %. */
   const lastProgressEvent = data.events.filter((e) => e.type === "progress_recorded").reduce<WorkOrderEvent | null>((a, e) => (!a || e.at > a.at ? e : a), null);
+  /* 19 Nov: worth AED 0 with every line complete: nothing is left to confirm (no button is offered), so it reads as complete. */
   const woConfirmed =
-    woCompletion.completion === "complete" &&
-    (lines.filter((l) => l.billable).every((l) => l.progress?.wholeWorkOrder) || Boolean(lastProgressEvent?.note?.startsWith("Work order marked complete")));
-  const notComplete = lines.filter((l) => l.billable && completionOf(l) !== "complete");
+    (zeroValue && woCompletion.completion === "complete") ||
+    (woCompletion.completion === "complete" &&
+    (lines.filter((l) => l.billable).every((l) => l.progress?.wholeWorkOrder) || Boolean(lastProgressEvent?.note?.startsWith("Work order marked complete"))));
+  /* 19 Nov: a line worth AED 0 never blocks the work order: "Complete work order" marks it complete with it. */
+  const zeroLine = (l: WorkOrderLine) => (l.amount ?? 0) <= 0.005 && l.invoicedAmount <= 0.005;
+  const zeroToComplete = lines.filter((l) => l.billable && zeroLine(l) && !doneInFsm(l) && completionOf(l) !== "complete");
+  const notComplete = lines.filter((l) => l.billable && !zeroLine(l) && !doneInFsm(l) && completionOf(l) !== "complete");
+  /*
+    19 Nov: Operations marked every billable line complete in the portal, but
+    Zoho FSM still shows the work order open. The portal completes it in FSM
+    only with FINANCE_FSM_COMPLETION=on; else, or when FSM refused, the two
+    disagree and the page says so, with FSM's reason when it gave one.
+  */
+  const billableLines = lines.filter((l) => l.billable);
+  const operationsMarkedComplete = billableLines.length > 0 && billableLines.every((l) => completionOf(l) === "complete");
+  const lastFsmAnswer = data.events
+    .filter((e) => e.type === "fsm_completed" || e.type === "fsm_not_completed")
+    .reduce<WorkOrderEvent | null>((a, e) => (!a || e.at > a.at ? e : a), null);
+  const lastFsmRefusal = lastFsmAnswer?.type === "fsm_not_completed" ? (lastFsmAnswer.note ?? "no reason given") : null;
+  const fsmDisagrees = operationsMarkedComplete && !fsmDone && !isEnded(wo.status) && !nonBillable;
   /* 2 Nov: the work order's completion in one plain sentence, the same everywhere on the page. */
   const linesWord = (n: number) => (n === 1 ? "line" : "lines");
   const completionSentence =
     woCompletion.completion === "complete"
       ? woConfirmed
-        ? `Complete: all ${woCompletion.billable} ${linesWord(woCompletion.billable)} done, and Operations confirmed the work order complete.`
-        : `All ${woCompletion.billable} ${linesWord(woCompletion.billable)} complete. Operations can now confirm the work order complete.`
+        ? zeroValue
+          ? `Complete: all ${woCompletion.billable} ${linesWord(woCompletion.billable)} done. Worth AED 0, so there is nothing to confirm or invoice.`
+          : `Complete: all ${woCompletion.billable} ${linesWord(woCompletion.billable)} done, and Operations confirmed the work order complete.`
+        : fsmDone
+          ? data.readyForFinance
+            ? "Complete: the work order is Completed in Zoho FSM and flagged To Be Invoiced."
+            : "Completed in Zoho FSM, but its quotation is not flagged To Be Invoiced. Complete work order makes it ready for Finance to invoice."
+          : `All ${woCompletion.billable} ${linesWord(woCompletion.billable)} complete. Operations can now confirm the work order complete.`
       : woCompletion.completion === "partial"
         ? `Partially complete: ${woCompletion.complete} of ${woCompletion.billable} ${linesWord(woCompletion.billable)} complete, ${notComplete.length} still to finish. The work order is complete once every line is.`
         : `Not started: none of the ${woCompletion.billable} ${linesWord(woCompletion.billable)} is marked complete yet.`;
@@ -448,7 +482,8 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
   const canComplete = can.progress && live && !fsmEnded && data.progressReady && workflow !== "on_hold";
   /* The line table's Action column: Operations, when it may mark lines. */
   const actionColumn = canComplete;
-  if (canComplete && !woConfirmed) {
+  /* Completed in FSM and flagged: Finance invoices all of it already, nothing for Operations to confirm (19 Nov). */
+  if (canComplete && !woConfirmed && !data.readyForFinance) {
     actions.push(
       <Button
         key="complete"
@@ -472,15 +507,17 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
           if (
             await confirm({
               title: "Mark the work order complete?",
-              description: "Every line is complete. Each keeps what it was marked: to invoice or revenue only. Nothing is invoiced here.",
+              description: `Every line is complete.${zeroToComplete.length ? ` ${zeroToComplete.length === 1 ? "The line" : `${zeroToComplete.length} lines`} worth AED 0 ${zeroToComplete.length === 1 ? "is" : "are"} marked complete with it.` : ""} Each keeps what it was marked: to invoice or revenue only. Nothing is invoiced here.`,
               confirmText: "Mark complete",
             })
           ) {
             const billable = lines.filter((l) => l.billable);
             const answers = [...new Set(billable.map((l) => l.progress?.purpose ?? "invoice"))];
+            /* The AED 0 lines not marked yet go in as complete too, so the server sees every line complete. */
+            const zeroEntries = zeroToComplete.map((l) => ({ line: l.id, percent: 100, purpose: l.progress?.purpose ?? ("invoice" as const) }));
             const entries =
               answers.length === 1
-                ? [{ line: null, percent: 100, purpose: answers[0] }]
+                ? [...zeroEntries, { line: null, percent: 100, purpose: answers[0] }]
                 : billable.map((l) => ({ line: l.id, percent: 100, purpose: l.progress?.purpose ?? ("invoice" as const) }));
             void run("Work order marked complete", async () => toastFsm((await financeService.recordProgress(id, { entries, note: "Work order marked complete" })).fsm));
           }
@@ -491,9 +528,11 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
       </Button>,
     );
   }
-  if (canComplete && notComplete.some((l) => l.remaining > 0.005)) {
+  /* Work with value still asks for the % done (19 Nov), even when FSM shows it Completed: the lines Operations has not marked complete here. */
+  const toMark = lines.filter((l) => l.billable && completionOf(l) !== "complete" && l.remaining > 0.005);
+  if (canComplete && toMark.length) {
     actions.push(
-      <Button key="partial" variant="outline" disabled={updating} onClick={() => setPartialFor({ lines: notComplete.filter((l) => l.remaining > 0.005) })}>
+      <Button key="partial" variant="outline" disabled={updating} onClick={() => setPartialFor({ lines: toMark })}>
         <Percent className="size-4" />
         Partially complete
       </Button>,
@@ -588,7 +627,11 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
     </Band>
   ) : fsmEnded ? (
     <Band tone="neutral" icon={<Info />} title={isEnded(wo.status) ? `${wo.status} in Zoho FSM` : "Non-billable"}>
-      {isVoid(wo.status)
+      {zeroValue && !nonBillable && !isEnded(wo.status)
+        ? fsmDone
+          ? "Completed in Zoho FSM and worth AED 0, so there is nothing to invoice (free or contract work). It is kept apart from billable work."
+          : `Worth AED 0 and marked complete by Operations, so there is nothing to invoice (free or contract work). Zoho FSM still shows it ${wo.status ?? "open"}: mark it Completed in FSM so the two agree.${lastFsmRefusal ? ` FSM refused the portal's completion: ${lastFsmRefusal}` : ""}`
+        : isVoid(wo.status)
         ? "The work order was voided in FSM: nothing is invoiced or recognised."
         : isCancelledOrClosed(wo.status)
           ? `The work order is ${wo.status} in FSM: it is not completed, invoiced or recognised here, and nothing new can be started on it.${invoicing.invoicedValue > 0 ? " What was invoiced before stays recorded." : ""}`
@@ -608,6 +651,16 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
     </Band>
   ) : null;
 
+  /* Shown under the main band when the portal and FSM disagree (not for AED 0 work: its band says it already). */
+  const mismatchBand =
+    fsmDisagrees && !zeroValue ? (
+      <Band tone="warning" icon={<TriangleAlert />} title={`Complete in the portal, ${wo.status ?? "open"} in Zoho FSM`}>
+        Operations marked every line complete here, but Zoho FSM still shows the work order {wo.status ?? "open"}. Mark it Completed in FSM so the two agree
+        {data.readyForFinance ? "." : "; Finance can already invoice what Operations marked to invoice."}
+        {lastFsmRefusal ? ` FSM refused the portal's completion: ${lastFsmRefusal}` : ""}
+      </Band>
+    ) : null;
+
   return (
     <div className="flex flex-col gap-4" aria-busy={updating || undefined}>
       <Card className="relative gap-0 overflow-hidden p-0">
@@ -617,7 +670,8 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
             <div className="flex flex-wrap items-center gap-2">
               {wo.type ? <Badge variant="outline">{wo.type}</Badge> : null}
               {/* FSM's status, unless it says the same as the portal's beside the title (2 Nov). */}
-              {wo.status?.toLowerCase() !== QUEUE_STATUS_LABELS[data.queueStatus]?.toLowerCase() ? <WorkOrderStatusBadge status={wo.status} /> : null}
+              {/* 19 Nov: each badge says where it comes from: Zoho FSM, or Operations in the portal. */}
+              {wo.status?.toLowerCase() !== QUEUE_STATUS_LABELS[data.queueStatus]?.toLowerCase() ? <WorkOrderStatusBadge status={wo.status} prefix="FSM:" /> : null}
               {/* 30 Oct: Operations' completion, beside FSM's own status. */}
               {!fsmEnded && woCompletion.completion !== "not_started" ? (
                 <Badge
@@ -625,6 +679,7 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
                   className={cn("border-0", woCompletion.completion === "complete" ? "bg-success/10 text-success" : "bg-warning/10 text-warning")}
                   title={`Marked by Operations: ${woCompletion.complete} of ${woCompletion.billable} billable lines complete`}
                 >
+                  <span className="font-normal opacity-80">Operations:</span>
                   {woCompletion.completion === "complete"
                     ? woConfirmed
                       ? "Complete"
@@ -671,6 +726,7 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
           </div>
         </div>
         {band}
+        {mismatchBand}
         <div className="bg-muted/40 border-t px-5 py-2.5">
           {updating ? (
             <p className="text-muted-foreground flex items-center gap-1.5 text-xs">
@@ -749,7 +805,9 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
               headline={
                 woCompletion.completion === "complete"
                   ? woConfirmed
-                    ? "Work order complete, confirmed by Operations"
+                    ? zeroValue
+                      ? "Work order complete; worth AED 0, nothing to invoice"
+                      : "Work order complete, confirmed by Operations"
                     : "All lines complete; the work order is not yet confirmed"
                   : woCompletion.completion === "partial"
                     ? `Partially complete: ${notComplete.length} ${linesWord(notComplete.length)} still to finish`
@@ -891,7 +949,22 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
                       {actionColumn ? (
                         <TableCell className="text-center">
                           {/* Until it is invoiced in full, a line can be marked or changed (30 Oct: Complete, or Partially complete). */}
-                          {line.billable && line.remaining > 0.005 ? (
+                          {/* 19 Nov: a line worth AED 0 can be marked Complete (a % of nothing means nothing, so no Partial). */}
+                          {line.billable && zeroLine(line) && completionOf(line) !== "complete" ? (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="h-8"
+                              disabled={updating}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setCompleteFor({ line });
+                              }}
+                            >
+                              <CheckCheck className="size-4" />
+                              Complete
+                            </Button>
+                          ) : line.billable && line.remaining > 0.005 ? (
                             <div className="flex justify-center gap-1.5">
                               {completionOf(line) !== "complete" ? (
                                 <Button
@@ -1448,12 +1521,18 @@ function ProgressDialog({
   /*
     Line by line only (27 Oct): each line's % is entered, and the work
     order's overall % follows from them, weighted by each line's value.
-    Each line opens at the % it was last given; one never given a % opens
-    empty, its least (what is invoiced) shown in the box.
+    The % is the TOTAL done so far, never "how much more" (19 Nov: a line
+    50% done and 50% invoiced needs 100% for Finance to invoice the other
+    50%; typing 50 again changed nothing and Save stayed off without saying
+    why). So each line shows what is done, invoiced and left, the box opens
+    empty asking for the new total, and a line under it says what the
+    number typed will do.
   */
-  const [perLine, setPerLine] = useState<Record<string, string>>(() =>
-    Object.fromEntries(lines.map((l) => [l.id, l.progress ? String(l.progress.percent) : ""])),
-  );
+  const [perLine, setPerLine] = useState<Record<string, string>>(() => Object.fromEntries(lines.map((l) => [l.id, ""])));
+  /* Done so far: the last % given, never below what is invoiced. */
+  const doneOf = (l: WorkOrderLine) => Math.max(l.progress?.percent ?? 0, floorOf(l));
+  const leftPercentOf = (l: WorkOrderLine) => Math.max(0, round2(100 - doneOf(l)));
+  const leftValueOf = (l: WorkOrderLine) => Math.max(0, round2(((l.amount ?? 0) * leftPercentOf(l)) / 100));
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -1481,11 +1560,40 @@ function ProgressDialog({
   const entries = purpose ? changed.map((l) => ({ line: l.id, percent: percentOf(l)!, purpose })) : [];
   const lineProblems = lines.filter((l) => problemOf(l) !== null).length;
   const ok = entries.length > 0 && lineProblems === 0;
+  /* What a line's number will do, in words, under its box. */
+  const hintOf = (l: WorkOrderLine): { text: string; tone: "muted" | "warning" | "success" } | null => {
+    const done = doneOf(l);
+    const pct = percentOf(l);
+    if (pct === null) {
+      if (done >= 100) return { text: "Already 100% done (Complete). Nothing more to record.", tone: "muted" };
+      return done > 0
+        ? { text: `Enter the new total done, more than ${done}%. 100% makes the other ${leftPercentOf(l)}% (${aed(leftValueOf(l))}) ready.`, tone: "muted" }
+        : null;
+    }
+    if (pct >= 100) return { text: done > 0 ? `100%: the line is Complete; the other ${leftPercentOf(l)}% (${aed(leftValueOf(l))}) is added.` : "100%: this line is marked Complete.", tone: "success" };
+    if (Math.abs(pct - done) <= 0.05) {
+      return l.progress && purpose && l.progress.purpose !== purpose
+        ? { text: `Still ${done}% done; only the answer below changes.`, tone: "muted" }
+        : { text: `It is already ${done}% done. The % is the total done so far: enter 100% to add the other ${leftPercentOf(l)}%.`, tone: "warning" };
+    }
+    const more = round2(pct - done);
+    return more > 0 ? { text: `${more}% more than before (${aed(round2(((l.amount ?? 0) * more) / 100))}), ${round2(100 - pct)}% still to do.`, tone: "muted" } : null;
+  };
+  /* Why Save is off, when nothing below says it already. */
+  const whyNoSave =
+    ok || lineProblems > 0
+      ? null
+      : !lines.some((l) => percentOf(l) !== null)
+        ? "Enter the total % done for a line to save."
+        : !purpose
+          ? `Answer "${lines.length > 1 ? "Should these lines be ready to invoice?" : "Should this line be ready to invoice?"}" to save.`
+          : "Nothing has changed: enter a total above what is already done.";
   /* The overall % the lines come to, weighted by each line's net value. */
   const valueOf = (l: WorkOrderLine) => l.amount ?? 0;
   const totalValue = lines.reduce((sum, l) => sum + valueOf(l), 0);
   const weighted = lines.some((l) => percentOf(l) !== null) && totalValue > 0
-    ? round2((lines.reduce((sum, l) => sum + valueOf(l) * (percentOf(l) ?? 0), 0) / totalValue))
+    ? /* A line left empty keeps what it has. */
+      round2(lines.reduce((sum, l) => sum + valueOf(l) * (percentOf(l) ?? doneOf(l)), 0) / totalValue)
     : null;
   /* What Finance could invoice now if it is ready to invoice: each line's % of its value, less what is invoiced already. Incl. VAT. */
   /* A % within 0.1 of what is invoiced (the box rounds it up) adds nothing to invoice. */
@@ -1525,44 +1633,79 @@ function ProgressDialog({
         <DialogHeader>
           <DialogTitle>How much is done</DialogTitle>
           <DialogDescription>
-            How much of {lines.length === 1 ? "this line" : "each line"} is done. Below 100% it is partially complete; 100% marks it Complete. Nothing is invoiced here.
+            The total done so far on {lines.length === 1 ? "this line" : "each line"}, not how much more: a line 50% done becomes 100% when the rest is finished. Below
+            100% it is partially complete; 100% marks it Complete. Nothing is invoiced here.
           </DialogDescription>
         </DialogHeader>
 
         <div className="-mx-4 grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] gap-4 overflow-x-hidden overflow-y-auto px-4 py-0.5">
           <div className="grid gap-2">
-            <Label>{lines.length === 1 ? "% done" : "% done of each line"}</Label>
+            <Label>{lines.length === 1 ? "Total % done" : "Total % done of each line"}</Label>
             {lines.map((l) => {
               const lineProblem = problemOf(l);
+              const hint = hintOf(l);
+              const done = doneOf(l);
               return (
                 <div key={l.id} className={cn("grid min-w-0 gap-1.5 rounded-lg border px-3 py-2", lineProblem && "border-destructive")}>
                   <div className="flex min-w-0 items-center gap-3">
                     <div className="min-w-0 flex-1">
                       <LineName name={l.name} description={l.description} />
-                      <p className="text-muted-foreground text-xs tabular-nums">
-                        {aed(l.amount ?? 0)} before VAT
-                        {l.invoicedAmount > 0 ? ` · ${floorOf(l)}% invoiced` : ""}
-                        {l.progress ? ` · last ${l.progress.percent}%` : ""}
-                      </p>
+                      <p className="text-muted-foreground text-xs tabular-nums">{aed(l.amount ?? 0)} before VAT</p>
                     </div>
                     <div className="w-24 shrink-0">
                       <PercentInput
                         id={`progress-${l.id}`}
                         value={perLine[l.id] ?? ""}
                         min={floorOf(l)}
-                        placeholder={floorOf(l) > 0 ? `≥ ${floorOf(l)}` : undefined}
+                        placeholder={done > 0 ? `now ${done}` : undefined}
                         invalid={Boolean(lineProblem)}
                         onChange={(v) => setPerLine((prev) => ({ ...prev, [l.id]: v }))}
                         label={`% done of ${l.name ?? "the line"}`}
                       />
                     </div>
                   </div>
+                  {/* Where the line stands: done, invoiced and left, in % and AED. */}
+                  {done > 0 ? (
+                    <div className="grid grid-cols-3 gap-2 text-xs tabular-nums">
+                      <div className="bg-muted/40 rounded-md px-2 py-1">
+                        <p className="text-muted-foreground">Done so far</p>
+                        <p className="font-medium">{done}%</p>
+                      </div>
+                      <div className="bg-muted/40 rounded-md px-2 py-1">
+                        <p className="text-muted-foreground">Invoiced</p>
+                        <p className="font-medium">
+                          {floorOf(l)}% · {aed(l.invoicedAmount)}
+                        </p>
+                      </div>
+                      <div className="bg-muted/40 rounded-md px-2 py-1">
+                        <p className="text-muted-foreground">Left to do</p>
+                        <p className="font-medium">
+                          {leftPercentOf(l)}% · {aed(leftValueOf(l))}
+                        </p>
+                      </div>
+                    </div>
+                  ) : null}
                   {lineProblem ? (
                     <p className="text-destructive text-xs" role="alert">
                       {lineProblem}
                     </p>
-                  ) : isComplete(l) ? (
-                    <p className="text-success text-xs">100%: this line is marked Complete.</p>
+                  ) : hint ? (
+                    <div className="flex items-start justify-between gap-2">
+                      <p className={cn("text-xs", hint.tone === "warning" ? "text-warning" : hint.tone === "success" ? "text-success" : "text-muted-foreground")}>
+                        {hint.text}
+                      </p>
+                      {done > 0 && done < 100 && (percentOf(l) ?? 0) < 100 ? (
+                        <Button
+                          type="button"
+                          variant="link"
+                          size="sm"
+                          className="h-auto shrink-0 p-0 text-xs"
+                          onClick={() => setPerLine((prev) => ({ ...prev, [l.id]: "100" }))}
+                        >
+                          Rest done (100%)
+                        </Button>
+                      ) : null}
+                    </div>
                   ) : null}
                 </div>
               );
@@ -1612,6 +1755,7 @@ function ProgressDialog({
             <Textarea id="progress-note" rows={2} maxLength={2000} value={note} onChange={(e) => setNote(e.target.value)} />
           </div>
           {problem ? <p className="text-destructive text-sm">{problem}</p> : null}
+          {whyNoSave ? <p className="text-muted-foreground text-xs">{whyNoSave}</p> : null}
         </div>
 
         <DialogFooter>
@@ -1643,7 +1787,9 @@ function CompleteDialog({
   onClose: () => void;
   onRecorded: () => void;
 }) {
-  const [purpose, setPurpose] = useState<ProgressPurpose | null>(null);
+  /* 19 Nov: a line worth AED 0 has nothing to invoice or book as revenue, so nothing is asked; it is recorded as "to invoice", like most lines, so the work order's answers stay one. */
+  const worthNothing = (line.amount ?? 0) <= 0.005 && line.invoicedAmount <= 0.005;
+  const [purpose, setPurpose] = useState<ProgressPurpose | null>(worthNothing ? "invoice" : null);
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -1674,14 +1820,20 @@ function CompleteDialog({
       <ActionDialogContent busy={busy} className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Mark {line.name ?? "this line"} complete</DialogTitle>
-          <DialogDescription>100% done. Nothing is invoiced here.</DialogDescription>
+          <DialogDescription>
+            {worthNothing
+              ? "100% done. This line is worth AED 0, so there is nothing to invoice or book as revenue: it is only marked complete."
+              : "100% done. Nothing is invoiced here."}
+          </DialogDescription>
         </DialogHeader>
-        <PurposeChoice
-          question="Should this line be ready to invoice?"
-          purpose={purpose}
-          onChange={setPurpose}
-          invoiceHint={`Finance may invoice ${aed(left)} before VAT now.`}
-        />
+        {worthNothing ? null : (
+          <PurposeChoice
+            question="Should this line be ready to invoice?"
+            purpose={purpose}
+            onChange={setPurpose}
+            invoiceHint={`Finance may invoice ${aed(left)} before VAT now.`}
+          />
+        )}
         <div className="grid gap-1.5">
           <Label htmlFor="complete-note">Note</Label>
           <Textarea id="complete-note" rows={2} maxLength={2000} value={note} onChange={(e) => setNote(e.target.value)} />

@@ -127,6 +127,81 @@ function liveWorkOrder(record: FsmRecord): LiveWorkOrder {
   };
 }
 
+/*
+  19 Nov: the list's search asks Zoho FSM itself, so a work order is found
+  whatever its date: by work order number (FSM's Name, "WO3957"; digits
+  alone are tried as "WO" + digits too) and by quotation number. FSM keeps
+  the link on the work order (its Estimate), and its search cannot look a
+  work order up by Estimate (checked 19 Nov: quotation 17972's own
+  Work_Order is empty). So the quotation's client's work orders are
+  searched (Company, else Contact, which FSM can search) and the one whose
+  Estimate is the quotation is taken. GET only, through the read-only
+  reader, kept ten minutes like the list.
+*/
+const searchCache = new Map<string, Cached<LiveWorkOrder[]>>();
+const MAX_SEARCH_QUOTATIONS = 5;
+/* Pages of a client's work orders read to find a quotation's (200 a page). */
+const MAX_CLIENT_PAGES = 3;
+
+export async function searchWorkOrdersLive(admin: SupabaseClient, text: string): Promise<LiveWorkOrder[]> {
+  const q = text.trim();
+  if (q.length < 2 || q.length > 60) return [];
+  const key = q.toLowerCase();
+  const hit = fresh(searchCache.get(key));
+  if (hit) return hit;
+  const reader = await readerFor(admin, 3 + MAX_SEARCH_QUOTATIONS * (1 + MAX_CLIENT_PAGES));
+  const search = async (module: "Work_Orders" | "Estimates", comparator: "equal" | "contains", value: string): Promise<FsmRecord[]> => {
+    const params = new URLSearchParams({ api_name: "Name", value, comparator, per_page: "25" });
+    const res = await reader.get(`/${module}/search?${params.toString()}`);
+    /* 204: nothing found. Any other refusal: nothing from this search; the list's own search still runs. */
+    return res.ok ? dataOf(res.json) : [];
+  };
+  const digits = /^\d+$/.test(q);
+  const [byName, byNumber, quotations] = await Promise.all([
+    search("Work_Orders", "contains", q),
+    digits ? search("Work_Orders", "equal", `WO${q}`) : Promise.resolve([] as FsmRecord[]),
+    search("Estimates", "equal", q),
+  ]);
+  const found = new Map<string, LiveWorkOrder>();
+  for (const record of [...byNumber, ...byName]) {
+    const wo = liveWorkOrder(record);
+    if (wo.id) found.set(wo.id, wo);
+  }
+  /* Each quotation's work order: read by id when the quotation names it, else among its client's work orders. */
+  await Promise.all(
+    quotations.slice(0, MAX_SEARCH_QUOTATIONS).map(async (estimate) => {
+      const named = lookupId(estimate.Work_Order);
+      if (named) {
+        const res = await reader.get(`/Work_Orders/${encodeURIComponent(named)}`);
+        const record = res.ok ? dataOf(res.json)[0] : undefined;
+        const wo = record ? liveWorkOrder(record) : null;
+        if (wo?.id) found.set(wo.id, wo);
+        return;
+      }
+      const estimateId = estimate.id === undefined || estimate.id === null ? null : String(estimate.id);
+      const company = lookupId(estimate.Company);
+      const contact = lookupId(estimate.Contact);
+      const by = company ? { api: "Company", id: company } : contact ? { api: "Contact", id: contact } : null;
+      if (!estimateId || !by) return;
+      for (let page = 1; page <= MAX_CLIENT_PAGES; page += 1) {
+        const params = new URLSearchParams({ api_name: by.api, value: by.id, comparator: "equal", per_page: "200", page: String(page) });
+        const res = await reader.get(`/Work_Orders/search?${params.toString()}`);
+        if (!res.ok) return;
+        for (const record of dataOf(res.json)) {
+          if (lookupId(record.Estimate) !== estimateId) continue;
+          const wo = liveWorkOrder(record);
+          if (wo.id) found.set(wo.id, wo);
+        }
+        if (!(res.json as { info?: { more_records?: boolean } } | null)?.info?.more_records) return;
+      }
+    }),
+  );
+  const rows = [...found.values()];
+  searchCache.set(key, { at: Date.now(), value: rows });
+  if (searchCache.size > 200) searchCache.clear();
+  return rows;
+}
+
 async function readerFor(admin: SupabaseClient, budget: number) {
   if (!financeFsmReadEnabled()) throw new FsmLiveError("Reading from Zoho FSM is switched off (FINANCE_FSM_READ).", 503);
   return createFsmReader({ token: await getFsmAccessToken(admin), budget });

@@ -147,7 +147,7 @@ export const QUEUE_STATUS_LABELS: Record<QueueStatus, string> = {
   on_hold: "On Hold",
   partially_invoiced: "Partially invoiced",
   invoiced: "Invoiced",
-  excluded: "Excluded",
+  excluded: "Not invoiceable",
   non_billable: "Non-billable",
   void: "Void",
 };
@@ -155,9 +155,17 @@ export const QUEUE_STATUS_LABELS: Record<QueueStatus, string> = {
 /** What "Awaiting action" shows: work Finance still has to do something with. */
 export const AWAITING_ACTION: QueueStatus[] = ["pending", "in_progress", "query_raised", "on_hold", "partially_invoiced"];
 
-/** Completed in FSM with nothing to charge: FSM's total (before VAT) is zero. */
-export function isZeroValueCompleted(subTotal: number | null | undefined, status: string | null | undefined): boolean {
-  return subTotal !== null && subTotal !== undefined && subTotal <= 0.005 && isFsmCompleted(status);
+/**
+ * Done with nothing to charge: FSM's total (before VAT) is zero and the work
+ * is Completed in FSM, or (19 Nov) Operations marked it complete in the
+ * portal while FSM has not caught up.
+ */
+export function isZeroValueCompleted(
+  subTotal: number | null | undefined,
+  status: string | null | undefined,
+  operationsComplete = false,
+): boolean {
+  return subTotal !== null && subTotal !== undefined && subTotal <= 0.005 && (isFsmCompleted(status) || operationsComplete);
 }
 
 /**

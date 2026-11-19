@@ -101,9 +101,14 @@ const WORK_ORDER_STATUS_STYLES: Record<string, string> = {
   "Non-billable": "bg-warning/10 text-warning",
 };
 
-export function WorkOrderStatusBadge({ status }: { status: string | null }) {
+export function WorkOrderStatusBadge({ status, prefix }: { status: string | null; prefix?: string }) {
   return (
-    <Badge variant="secondary" className={cn("border-0 font-medium whitespace-nowrap", WORK_ORDER_STATUS_STYLES[status ?? ""] ?? "bg-mist text-ink-soft")}>
+    <Badge
+      variant="secondary"
+      className={cn("border-0 font-medium whitespace-nowrap", WORK_ORDER_STATUS_STYLES[status ?? ""] ?? "bg-mist text-ink-soft")}
+      title={prefix ? `${prefix} ${status ?? "No status"}` : undefined}
+    >
+      {prefix ? <span className="font-normal opacity-80">{prefix}</span> : null}
       {status ?? "No status"}
     </Badge>
   );

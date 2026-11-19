@@ -6,7 +6,7 @@ import { LoaderCircleIcon, RefreshCwIcon, SearchIcon, XIcon } from "lucide-react
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 
 
@@ -42,6 +42,7 @@ export function FinanceQueueToolbar({
   agedAfterDays,
   initialSearch = "",
   activeFilters = 0,
+  fsmCovered = [],
 }: {
   onSearchChange: (value: string) => void;
   loading: boolean;
@@ -58,17 +59,18 @@ export function FinanceQueueToolbar({
   initialSearch?: string;
   /** How many of the dates and Aged only are in use: "Clear" shows when any is. */
   activeFilters?: number;
+  /** FSM statuses a choice in statusOptions already finds (19 Nov): not listed again under Zoho FSM. */
+  fsmCovered?: string[];
 }) {
   const searchId = useId();
   const [search, setSearch] = useState(initialSearch);
   const set = (patch: Partial<FinanceQueueToolbarFilters>) => onFiltersChange({ ...filters, ...patch });
   const statusValue = filters.fsm ? `${FSM_PREFIX}${filters.fsm}` : filters.status;
-  /* One list (27 Oct): the invoicing statuses, then FSM's not already in it ("In Progress" once, for both). */
-  const named = new Set(statusOptions.map((option) => option.label.toLowerCase()));
-  const options = [
-    ...statusOptions,
-    ...fsmStatuses.filter((status) => !named.has(status.toLowerCase())).map((status) => ({ value: `${FSM_PREFIX}${status}`, label: status })),
-  ];
+  /* One list (27 Oct): the portal's statuses, then FSM's not already found by one of them, under their own heading (19 Nov). */
+  const named = new Set([...statusOptions.map((option) => option.label.toLowerCase()), ...fsmCovered.map((s) => s.toLowerCase())]);
+  const fsmOptions = fsmStatuses.filter((status) => !named.has(status.toLowerCase())).map((status) => ({ value: `${FSM_PREFIX}${status}`, label: status }));
+  /* A status from an old link that is not offered any more still shows its name. */
+  const known = [...statusOptions, ...fsmOptions].some((o) => o.value === statusValue);
 
   return (
     <div className="flex flex-col gap-4 px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:py-6">
@@ -102,11 +104,29 @@ export function FinanceQueueToolbar({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {options.map((option) => (
+            {statusOptions.map((option) => (
               <SelectItem key={option.value} value={option.value}>
                 {option.label}
               </SelectItem>
             ))}
+            {!known ? (
+              <SelectItem value={statusValue} className="hidden">
+                {filters.fsm || statusValue}
+              </SelectItem>
+            ) : null}
+            {fsmOptions.length ? (
+              <>
+                <SelectSeparator />
+                <SelectGroup>
+                  <SelectLabel>Other Zoho FSM statuses</SelectLabel>
+                  {fsmOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </>
+            ) : null}
           </SelectContent>
         </Select>
 

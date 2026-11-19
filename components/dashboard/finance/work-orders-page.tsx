@@ -16,7 +16,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { useDebounce } from "@/hooks/use-debounce";
-import { QUEUE_STATUS_LABELS, type QueueStatus } from "@/lib/finance/line-status";
+import { QUEUE_STATUS_LABELS } from "@/lib/finance/line-status";
 import { addDaysToDateString, todayInZone } from "@/lib/scheduling/org-time";
 import type { WorkOrderList } from "@/lib/server/finance/work-orders";
 
@@ -47,17 +47,47 @@ const MAX_DAYS = 122;
  * asks Zoho FSM again. The filters live in the URL, so Back keeps them.
  */
 
-const STATUS_FILTERS: Array<{ value: string; label: string }> = [
+/*
+  19 Nov: one short list per screen, in each team's words. Where the
+  portal and Zoho FSM say the same thing, one choice finds both: "In
+  Progress" is in progress in the portal or in FSM, "Complete" is marked
+  complete by Operations or Completed in FSM, "Not invoiceable" is marked
+  not invoiceable or Non-billable in FSM. FSM's other statuses follow
+  under their own heading (FSM_COVERED are not repeated there).
+*/
+const FINANCE_STATUS_FILTERS: Array<{ value: string; label: string }> = [
   { value: "all", label: "All statuses" },
   { value: "open", label: "Awaiting action" },
-  /* Non-billable and Void are FSM's: they are under "In Zoho FSM" in the same dropdown (27 Oct). */
-  ...(Object.keys(QUEUE_STATUS_LABELS) as QueueStatus[])
-    .filter((status) => status !== "non_billable" && status !== "void")
-    .map((status) => ({ value: status, label: QUEUE_STATUS_LABELS[status] })),
-  /* 30 Oct: what Operations has marked (Complete confirmed; lines marked, not yet confirmed). */
-  { value: "ops_partial", label: "Partially complete (Operations)" },
-  { value: "ops_complete", label: "Complete (Operations)" },
+  { value: "pending", label: QUEUE_STATUS_LABELS.pending },
+  { value: "in_progress", label: "In Progress" },
+  { value: "query_raised", label: QUEUE_STATUS_LABELS.query_raised },
+  { value: "on_hold", label: QUEUE_STATUS_LABELS.on_hold },
+  { value: "partially_invoiced", label: QUEUE_STATUS_LABELS.partially_invoiced },
+  { value: "invoiced", label: QUEUE_STATUS_LABELS.invoiced },
+  { value: "not_invoiceable", label: "Not invoiceable" },
 ];
+
+const OPERATIONS_STATUS_FILTERS: Array<{ value: string; label: string }> = [
+  { value: "all", label: "All statuses" },
+  { value: "todo", label: "To do" },
+  { value: "not_started", label: "Not started" },
+  { value: "ops_partial", label: "Partially complete" },
+  { value: "complete", label: "Complete" },
+  { value: "needs_completing", label: "Needs completing in FSM" },
+  { value: "not_ready", label: QUEUE_STATUS_LABELS.not_ready },
+  { value: "pending", label: "Pending invoice" },
+  { value: "in_progress", label: "In Progress" },
+  { value: "query_raised", label: QUEUE_STATUS_LABELS.query_raised },
+  { value: "on_hold", label: QUEUE_STATUS_LABELS.on_hold },
+  { value: "invoiced", label: QUEUE_STATUS_LABELS.invoiced },
+  { value: "not_invoiceable", label: "Not invoiceable" },
+];
+
+/* The older status words, as the choice that now finds them. */
+const STATUS_ALIASES: Record<string, string> = { excluded: "not_invoiceable", non_billable: "not_invoiceable", ops_complete: "complete" };
+
+/* FSM statuses already found by a choice above. */
+const FSM_COVERED = ["In Progress", "Completed", "Non-billable"];
 
 const LIST_STALE_MS = 10 * 60_000;
 
@@ -75,7 +105,11 @@ export function FinanceWorkOrdersPage({ view: askedView }: { view?: "finance" | 
   const params = useSearchParams();
   const filters: FinanceQueueToolbarFilters = useMemo(
     () => ({
-      status: params.get("status") ?? "all",
+      /* Older links (metrics, emails) use the statuses the shorter lists merged (19 Nov). */
+      status:
+        params.get("attention") === "1" && !params.get("status")
+          ? "needs_completing"
+          : (STATUS_ALIASES[params.get("status") ?? ""] ?? params.get("status") ?? "all"),
       fsm: params.get("fsm") ?? "",
       /* No client filter (27 Oct): one left in an old link must not filter unseen. */
       client: "",
@@ -87,7 +121,17 @@ export function FinanceWorkOrdersPage({ view: askedView }: { view?: "finance" | 
     }),
     [params],
   );
-  const attention = params.get("attention") === "1";
+  /*
+    19 Nov: a card is a status: selecting it sets the status list to the
+    same choice (and again shows every status). "Needs completing in FSM"
+    is a status too now; an old ?attention=1 link opens on it.
+  */
+  const cardFilter = (status: string, what: string) => ({
+    onSelect: () => filterBy({ status: filters.status === status ? "all" : status, fsm: "", attention: false, page: 0 }),
+    selectLabel: filters.status === status ? "Show every status" : `Show only ${what}`,
+  });
+  const showingOnly = (status: string) => filters.status === status;
+  const SHOWING = "Showing only these · select to show all";
   /* The date boxes always show the dates in use: the last 30 days until changed. */
   const today = todayInZone();
   const shownTo = filters.to || today;
@@ -155,7 +199,6 @@ export function FinanceWorkOrdersPage({ view: askedView }: { view?: "finance" | 
 
   const query = new URLSearchParams();
   if (askedView) query.set("view", askedView);
-  if (attention) query.set("attention", "1");
   if (filters.status !== "all") query.set("status", filters.status);
   for (const key of ["fsm", "from", "to"] as const) if (filters[key]) query.set(key, filters[key]);
   if (filters.aged) query.set("aged", "1");
@@ -205,7 +248,7 @@ export function FinanceWorkOrdersPage({ view: askedView }: { view?: "finance" | 
   const columns = useMemo(() => getWorkOrderQueueColumns(data?.agedAfterDays ?? 7, operations), [data?.agedAfterDays, operations]);
   const summary = switching ? undefined : data?.summary;
   const filtered = Boolean(
-    filters.status !== "all" || filters.fsm || filters.from || filters.to || filters.aged || attention || debouncedSearch,
+    filters.status !== "all" || filters.fsm || filters.from || filters.to || filters.aged || debouncedSearch,
   );
 
   return (
@@ -245,9 +288,12 @@ export function FinanceWorkOrdersPage({ view: askedView }: { view?: "finance" | 
         </p>
       ) : data ? (
         <p className="text-muted-foreground -mt-3 text-xs">
-          Work orders raised {data.from} to {data.to}, read from Zoho FSM {timeAgo(data.fsm.fetchedAt)}
+          {data.searching
+            ? `Searching all of Zoho FSM by work order and quotation number, and these dates' work orders by client (the cards still show ${data.from} to ${data.to}), `
+            : `Work orders raised ${data.from} to ${data.to}, `}
+          read from Zoho FSM {timeAgo(data.fsm.fetchedAt)}
           {data.fsm.cached ? " (kept for ten minutes; Refresh reads again)" : ""}.
-          {data.outsideDates > 0
+          {!data.searching && data.outsideDates > 0
             ? ` Also ${data.outsideDates} raised outside these dates that ${data.outsideDates === 1 ? "is" : "are"} still awaiting action, as last read when worked on.`
             : ""}
         </p>
@@ -273,47 +319,73 @@ export function FinanceWorkOrdersPage({ view: askedView }: { view?: "finance" | 
           <StatCard
             label="Needs completing in FSM"
             value={data.needsCompleting}
-            headline={attention ? "Showing only these · select to show all" : "Appointments all done, not marked Completed"}
+            headline={showingOnly("needs_completing") ? SHOWING : "Appointments all done, not marked Completed"}
             tone={data.needsCompleting > 0 ? "progress" : "neutral"}
-            onSelect={() => filterBy({ attention: !attention, page: 0 })}
-            selectLabel={attention ? "Show every work order" : "Show only work orders that need completing in FSM"}
+            {...cardFilter("needs_completing", "work orders that need completing in FSM")}
           />
-          <StatCard label="Not ready" value={summary.notReady.count} headline={`${aed(summary.notReady.valueWithVat)} incl. VAT`} />
-          <StatCard label="Pending invoice" value={summary.pending.count} headline={`${aed(summary.pending.valueWithVat)} to invoice, incl. VAT`} />
+          <StatCard
+            label="Not ready"
+            value={summary.notReady.count}
+            headline={showingOnly("not_ready") ? SHOWING : `${aed(summary.notReady.valueWithVat)} incl. VAT`}
+            {...cardFilter("not_ready", "work orders not ready to invoice")}
+          />
+          <StatCard
+            label="Pending invoice"
+            value={summary.pending.count}
+            headline={showingOnly("pending") ? SHOWING : `${aed(summary.pending.valueWithVat)} to invoice, incl. VAT`}
+            {...cardFilter("pending", "work orders pending invoice")}
+          />
           <StatCard
             label="Query raised"
             value={summary.queryRaised.count}
-            headline={summary.queryRaised.count ? "Waiting on a coordinator's answer" : "No query open"}
+            headline={showingOnly("query_raised") ? SHOWING : summary.queryRaised.count ? "Waiting on a coordinator's answer" : "No query open"}
             tone={summary.queryRaised.count ? "progress" : "neutral"}
+            {...cardFilter("query_raised", "work orders with a query open")}
           />
-          <StatCard label="Non-billable" value={summary.nonBillable.count} headline={`${aed(summary.nonBillable.valueWithVat)} incl. VAT, not invoiced`} />
+          <StatCard
+            label="Not invoiceable"
+            value={summary.nonBillable.count + summary.excluded.count}
+            headline={
+              showingOnly("not_invoiceable") ? SHOWING : `${aed(summary.nonBillable.valueWithVat + summary.excluded.valueWithVat)} incl. VAT, not invoiced`
+            }
+            {...cardFilter("not_invoiceable", "work orders not invoiceable")}
+          />
         </StatCardGrid>
       ) : summary ? (
         <StatCardGrid columns={5}>
           <StatCard
             label="Pending"
             value={summary.pending.count}
-            headline={`${aed(summary.pending.valueWithVat)} to invoice, incl. VAT`}
+            headline={showingOnly("pending") ? SHOWING : `${aed(summary.pending.valueWithVat)} to invoice, incl. VAT`}
+            {...cardFilter("pending", "work orders pending invoice")}
           />
+          {/* The same work orders as "In Progress" in the status list (19 Nov: queries are their own card's count no more, as the list counts them apart). */}
           <StatCard
             label="In progress"
-            value={summary.inProgress.count + summary.queryRaised.count}
+            value={summary.inProgress.count}
             headline={
-              summary.queryRaised.count
-                ? `${summary.queryRaised.count} with a query open`
-                : `${aed(summary.inProgress.valueWithVat)} left, incl. VAT`
+              showingOnly("in_progress")
+                ? SHOWING
+                : summary.queryRaised.count
+                  ? `${summary.queryRaised.count} more with a query open`
+                  : `${aed(summary.inProgress.valueWithVat)} left, incl. VAT`
             }
             tone="progress"
+            {...cardFilter("in_progress", "work orders in progress")}
           />
           <StatCard
             label="On hold"
             value={summary.onHold.count}
-            headline={`${aed(summary.onHold.valueWithVat)} incl. VAT`}
+            headline={showingOnly("on_hold") ? SHOWING : `${aed(summary.onHold.valueWithVat)} incl. VAT`}
+            {...cardFilter("on_hold", "work orders on hold")}
           />
           <StatCard
-            label="Non-billable"
-            value={summary.nonBillable.count}
-            headline={`${aed(summary.nonBillable.valueWithVat)} incl. VAT, not invoiced`}
+            label="Not invoiceable"
+            value={summary.nonBillable.count + summary.excluded.count}
+            headline={
+              showingOnly("not_invoiceable") ? SHOWING : `${aed(summary.nonBillable.valueWithVat + summary.excluded.valueWithVat)} incl. VAT, not invoiced`
+            }
+            {...cardFilter("not_invoiceable", "work orders not invoiceable")}
           />
           <StatCard
             label="Average time to invoice"
@@ -343,7 +415,8 @@ export function FinanceWorkOrdersPage({ view: askedView }: { view?: "finance" | 
               pageSize={pageSize}
               onPageSizeChange={(size) => turnPage({ pageSize: size, page: 0 })}
               onRefresh={() => void refresh()}
-              statusOptions={STATUS_FILTERS}
+              statusOptions={operations ? OPERATIONS_STATUS_FILTERS : FINANCE_STATUS_FILTERS}
+              fsmCovered={FSM_COVERED}
               fsmStatuses={data?.options.fsmStatuses ?? []}
               filters={{ ...filters, from: dates.from, to: dates.to }}
               onFiltersChange={(next) =>

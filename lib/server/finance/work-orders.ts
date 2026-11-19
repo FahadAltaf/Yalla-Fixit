@@ -40,6 +40,7 @@ import {
   fetchQuotationFlagsLive,
   fetchWorkOrderLive,
   fetchWorkOrdersLive,
+  searchWorkOrdersLive,
   forgetLists,
   FsmLiveError,
   type LiveWorkOrder,
@@ -88,10 +89,19 @@ export const workOrderFiltersSchema = z.object({
   fsm: z.string().trim().max(60).optional(),
   /**
    * "all" (the default), "open" (awaiting action), one queue status, or
-   * Operations' completion (30 Oct: ops_partial, ops_complete).
+   * Operations' completion (30 Oct: ops_partial, ops_complete). 19 Nov, one
+   * short list per screen, the portal's and FSM's words merged:
+   * not_invoiceable (excluded or Non-billable), complete (Operations or
+   * FSM), todo and not_started (Operations still to do), needs_completing
+   * (appointments done, not Completed in FSM). The older values still work.
    */
   status: z
     .enum([
+      "not_invoiceable",
+      "complete",
+      "todo",
+      "not_started",
+      "needs_completing",
       "ops_partial",
       "ops_complete",
       "open",
@@ -517,6 +527,8 @@ export type WorkOrderQueueSummary = Record<
 export type WorkOrderList = {
   from: string;
   to: string;
+  /** A search was given: the dates were ignored (19 Nov). */
+  searching: boolean;
   earliest: string;
   clamped: boolean;
   rows: WorkOrderListRow[];
@@ -551,21 +563,34 @@ const SUMMARY_KEY: Record<QueueStatus, keyof Omit<WorkOrderQueueSummary, "averag
 };
 
 export async function listWorkOrders(admin: SupabaseClient, filters: WorkOrderFilters): Promise<WorkOrderList> {
+  /*
+    19 Nov: a search ignores the dates. It asks Zoho FSM's own search (work
+    order and quotation numbers, any date) and also looks through the
+    dates' list and every work order the portal holds (client names). The
+    cards still count the dates' work orders, search or not.
+  */
+  const searching = Boolean(filters.q?.trim());
   const period = workOrderPeriod(filters);
   const fromIso = zonedTimeToUtc(period.from).toISOString();
   const toIso = zonedTimeToUtc(addDaysToDateString(period.to, 1)).toISOString();
 
   const refresh = filters.refresh === "1";
   const listView = filters.view ?? "finance";
-  const [live, settings, flags] = await Promise.all([
+  const [live, settings, flags, found] = await Promise.all([
     fetchWorkOrdersLive(admin, { fromIso, toIso }, { refresh }),
     readReportingSettings(admin),
     fetchQuotationFlagsLive(admin, { refresh }),
+    /* FSM's search failing never fails the list: the search below still looks through what was read. */
+    searching ? searchWorkOrdersLive(admin, filters.q!).catch(() => [] as LiveWorkOrder[]) : Promise.resolve([] as LiveWorkOrder[]),
   ]);
   /* Operations' reminder: each work order's appointment statuses come with the list (27 Oct): no separate read. */
   const agedAfterDays = settings.finance.agedAfterDays;
-  const outside = await ledgerWorkOrdersOutside(admin, new Set(live.rows.map((w) => w.id)));
-  const everyId = [...live.rows, ...outside].map((w) => w.id);
+  const liveIds = new Set(live.rows.map((w) => w.id));
+  /* Found by FSM's search outside the dates (read live, so preferred to the portal's last snapshot). */
+  const extras = found.filter((w) => !liveIds.has(w.id));
+  const foundIds = new Set(found.map((w) => w.id));
+  const outside = await ledgerWorkOrdersOutside(admin, new Set([...liveIds, ...extras.map((w) => w.id)]));
+  const everyId = [...live.rows, ...extras, ...outside].map((w) => w.id);
   const [ledger, progress] = await Promise.all([loadLedger(admin, everyId), loadProgress(admin, everyId)]);
   const statesOf = new Map<string, StateRow[]>();
   for (const s of ledger.states) statesOf.set(s.workOrderId, [...(statesOf.get(s.workOrderId) ?? []), s]);
@@ -581,19 +606,28 @@ export async function listWorkOrders(admin: SupabaseClient, filters: WorkOrderFi
     const invoicing = invoicingFrom(states, w.subTotal, finance, finance ? 0 : progressCap(entries, states, w.subTotal, billing));
     const flow = ledger.workflow.get(w.id);
     const workflow: WorkflowStatus = flow?.status ?? "open";
-    const zeroValue = isZeroValueCompleted(w.subTotal, billing);
+    const whole = entries.filter((e) => e.lineId === null).sort((a, b) => b.recordedAt.localeCompare(a.recordedAt))[0] ?? null;
+    const latest = [...entries].sort((a, b) => b.recordedAt.localeCompare(a.recordedAt))[0] ?? null;
+    /*
+      Complete as the work order page counts it (19 Nov): confirmed as a whole,
+      or every billable line the portal knows marked 100 % (WO3947: its one
+      line marked Complete read "Partially complete" here).
+    */
+    const knownLines = states.filter((s) => s.billable !== false);
+    const everyLineComplete = knownLines.length > 0 && knownLines.every((s) => (effectiveEntry(s.lineId, entries)?.percent ?? 0) >= 100);
+    const operationsCompletion: "complete" | "partial" | null =
+      latest?.note?.startsWith("Work order marked complete") || (whole !== null && whole.percent >= 100) || everyLineComplete
+        ? "complete"
+        : entries.some((e) => e.percent > 0)
+          ? "partial"
+          : null;
+    /* AED 0: nothing to invoice once FSM completed it or Operations marked it complete (19 Nov). */
+    const zeroValue = isZeroValueCompleted(w.subTotal, billing, operationsCompletion === "complete");
     const status = queueStatus(workflow, invoicing.status, billing, { zeroValue });
     const firstReady = states.map((s) => s.readyAt).filter((v): v is string => Boolean(v)).sort()[0] ?? null;
     const statusSince = workflow !== "open" && flow ? flow.statusChangedAt : (firstReady ?? w.completedAt ?? w.createdAt);
     const done = w.appointmentStatuses;
     const finished = isFsmCompleted(billing) || isNonBillable(billing) || isEnded(billing);
-    const whole = entries.filter((e) => e.lineId === null).sort((a, b) => b.recordedAt.localeCompare(a.recordedAt))[0] ?? null;
-    const latest = [...entries].sort((a, b) => b.recordedAt.localeCompare(a.recordedAt))[0] ?? null;
-    const operationsCompletion: "complete" | "partial" | null = latest?.note?.startsWith("Work order marked complete")
-      ? "complete"
-      : entries.some((e) => e.percent > 0)
-        ? "partial"
-        : null;
     return {
       invoicing,
       status,
@@ -612,11 +646,15 @@ export async function listWorkOrders(admin: SupabaseClient, filters: WorkOrderFi
       operationsCompletion,
     };
   };
-  const views = new Map([...live.rows, ...outside].map((w) => [w.id, view(w)]));
+  const views = new Map([...live.rows, ...extras, ...outside].map((w) => [w.id, view(w)]));
   /* Work still waiting is never hidden by the dates. */
   const earlier = outside.filter((w) => AWAITING_ACTION.includes(views.get(w.id)!.status));
   const inView = (w: LiveWorkOrder) => listView === "operations" || views.get(w.id)!.forFinance;
-  const all = [...live.rows, ...earlier].filter(inView).sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
+  const newestFirst = (a: LiveWorkOrder, b: LiveWorkOrder) => (b.createdAt ?? "").localeCompare(a.createdAt ?? "");
+  /* The dates' work orders: the cards count these, search or not. */
+  const all = [...live.rows, ...earlier].filter(inView).sort(newestFirst);
+  /* What a search looks through: the dates' list, FSM's search results, and every work order the portal holds. */
+  const searched = searching ? [...live.rows, ...extras, ...outside].filter(inView).sort(newestFirst) : all;
   const ids = all.map((w) => w.id);
   const daysIn = (since: string | null) => (since ? Math.max(0, Math.floor((now - Date.parse(since)) / DAY_MS)) : 0);
 
@@ -640,21 +678,42 @@ export async function listWorkOrders(admin: SupabaseClient, filters: WorkOrderFi
       case "ops_complete":
         return v.operationsCompletion === "complete";
       case "ops_partial":
-        return v.operationsCompletion === "partial";
+        return v.operationsCompletion === "partial" && !isFsmCompleted(w.invoicingStatus);
+      /* 19 Nov: one word for what the portal and FSM both say. */
+      case "complete":
+        return v.operationsCompletion === "complete" || isFsmCompleted(w.invoicingStatus);
+      case "not_invoiceable":
+      case "excluded":
+      case "non_billable":
+        return v.status === "excluded" || v.status === "non_billable";
+      case "todo":
+        return operationsToDo(w, v);
+      case "not_started":
+        return operationsToDo(w, v) && v.operationsCompletion === null;
+      case "needs_completing":
+        return v.needsCompleting;
       default:
         return v.status === filters.status;
     }
   };
+  /* Operations still has work on it: not complete in the portal or FSM, and not ended, not invoiceable or invoiced. */
+  const operationsToDo = (w: LiveWorkOrder, v: ReturnType<typeof view>) =>
+    v.operationsCompletion !== "complete" &&
+    !isFsmCompleted(w.invoicingStatus) &&
+    !isEnded(w.invoicingStatus) &&
+    !["excluded", "non_billable", "invoiced", "void"].includes(v.status);
   const needle = (filters.q ?? "").toLowerCase();
-  const matching = all.filter((w) => {
+  const matching = searched.filter((w) => {
     const v = views.get(w.id)!;
     if (!statusMatches(w, v)) return false;
-    if (filters.attention === "1" && !v.needsCompleting) return false;
+    /* A search finds the work order whatever the card or Aged only say (19 Nov); the status chosen still applies. */
+    if (!searching && filters.attention === "1" && !v.needsCompleting) return false;
     if (filters.client && (w.contactName ?? w.companyName) !== filters.client) return false;
     if (filters.coordinator && w.ownerName !== filters.coordinator) return false;
     if (filters.fsm && fsmStatusLabel(w) !== filters.fsm) return false;
-    if (filters.aged === "1" && !(v.status === "pending" && daysIn(v.statusSince) >= agedAfterDays)) return false;
-    if (needle && !`${w.number ?? ""} ${w.estimateNumber ?? ""} ${w.companyName ?? ""} ${w.contactName ?? ""}`.toLowerCase().includes(needle)) {
+    if (!searching && filters.aged === "1" && !(v.status === "pending" && daysIn(v.statusSince) >= agedAfterDays)) return false;
+    /* What FSM's search found matches already (a quotation number finds its work order). */
+    if (needle && !foundIds.has(w.id) && !`${w.number ?? ""} ${w.estimateNumber ?? ""} ${w.companyName ?? ""} ${w.contactName ?? ""}`.toLowerCase().includes(needle)) {
       return false;
     }
     return true;
@@ -727,6 +786,7 @@ export async function listWorkOrders(admin: SupabaseClient, filters: WorkOrderFi
   return {
     from: period.from,
     to: period.to,
+    searching,
     earliest: period.earliest,
     clamped: period.clamped,
     rows,
@@ -1025,7 +1085,9 @@ export async function readWorkOrderDetail(
   if (invoicing.status === "invoiced" && owed !== null && invoicing.invoicedValue < owed - 0.01) {
     invoicing = { ...invoicing, status: "partially_invoiced" };
   }
-  const status = queueStatus(workflow, invoicing.status, wo.invoicingStatus, { zeroValue: isZeroValueCompleted(owed, wo.invoicingStatus) });
+  /* AED 0 is nothing to invoice once FSM completed it, or Operations marked every billable line complete (19 Nov). */
+  const operationsComplete = billableLines.length > 0 && billableLines.every((l) => (l.progress?.percent ?? 0) >= 100);
+  const status = queueStatus(workflow, invoicing.status, wo.invoicingStatus, { zeroValue: isZeroValueCompleted(owed, wo.invoicingStatus, operationsComplete) });
   const firstReady = lines.map((l) => l.readyAt).filter((v): v is string => Boolean(v)).sort()[0] ?? null;
   const completedAt =
     wo.completedAt ?? lines.filter((l) => isFsmCompleted(l.status)).map((l) => l.actualEnd).filter((v): v is string => Boolean(v)).sort()[0] ?? null;
@@ -1660,6 +1722,10 @@ export async function recordProgress(
   if (isEnded(wo.invoicingStatus) || isNonBillable(wo.invoicingStatus)) {
     throw new InvoicingError(`${wo.number ?? "This work order"} is ${wo.invoicingStatus} in FSM: there is nothing to complete, invoice or recognise.`, 409);
   }
+  /* 19 Nov: Completed in FSM and worth AED 0: nothing to complete or invoice. */
+  if (isZeroValueCompleted(wo.subTotal, wo.invoicingStatus)) {
+    throw new InvoicingError(`${wo.number ?? "This work order"} is Completed in FSM and worth AED 0: there is nothing to complete or invoice.`, 409);
+  }
   const lineOf = new Map(live.lines.map((l) => [String(l.fsm_line_id), l]));
   /* Complete and partially complete (30 Oct): the work order only once every billable line is complete. */
   const existing = (await loadProgress(admin, [workOrderId])).byWorkOrder.get(workOrderId) ?? [];
@@ -1669,7 +1735,8 @@ export async function recordProgress(
       id: String(l.fsm_line_id),
       name: l.name,
       billable: lineBillable(l.billing_status, wo.billingStatus),
-      completion: lineCompletion(effectiveEntry(String(l.fsm_line_id), existing)),
+      /* 19 Nov: Completed in FSM (the line or its work order) counts as complete, whatever the portal recorded. */
+      completion: isFsmCompleted(l.status) || isFsmCompleted(wo.status) ? "complete" : lineCompletion(effectiveEntry(String(l.fsm_line_id), existing)),
     })),
   );
   if (refusal) throw new InvoicingError(refusal, 409);

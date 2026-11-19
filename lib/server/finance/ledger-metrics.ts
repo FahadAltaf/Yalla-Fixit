@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { DigestItem } from "@/lib/finance/digest-plan";
 import { isFsmCompleted, isZeroValueCompleted, queueStatus, type QueueStatus, type WorkflowStatus } from "@/lib/finance/line-status";
 import type { MetricExclusion, MetricInvoice, MetricItem } from "@/lib/finance/metrics";
-import { isEnded } from "@/lib/finance/progress";
+import { effectiveEntry, isEnded } from "@/lib/finance/progress";
 import { billableValue, invoicingFrom, loadProgress, progressCap, type StateRow } from "@/lib/server/finance/work-orders";
 import { readAllRows } from "@/lib/server/snagging/read-all";
 
@@ -180,7 +180,12 @@ export async function readLedgerForMetrics(admin: SupabaseClient): Promise<Ledge
     const invoicing = invoicingFrom(stateRows, subTotal, woCompleted, woCompleted ? 0 : progressCap(entries, stateRows, subTotal, fsmStatus));
     const workflow = ((flow?.status as WorkflowStatus | undefined) ?? "open") as WorkflowStatus;
     const owed = billableValue(stateRows, subTotal);
-    const zeroValue = isZeroValueCompleted(subTotal, fsmStatus);
+    /* Operations' complete as Ready to invoice counts it: the whole work order at 100 %, or every billable line known. */
+    const billableRows = stateRows.filter((r) => r.billable !== false);
+    const operationsComplete =
+      entries.some((e) => e.lineId === null && e.percent >= 100) ||
+      (billableRows.length > 0 && billableRows.every((r) => (effectiveEntry(r.lineId, entries)?.percent ?? 0) >= 100));
+    const zeroValue = isZeroValueCompleted(subTotal, fsmStatus, operationsComplete);
     const status = queueStatus(workflow, invoicing.status, fsmStatus, { zeroValue });
     if (status === "not_ready") continue;
     /* Void, Cancelled or Closed: counted only if something was invoiced before it ended (as Ready to invoice). */
