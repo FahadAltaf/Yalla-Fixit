@@ -10,7 +10,7 @@ import { IconText } from "@/components/data-table/columns/icon-text";
 import { Badge } from "@/components/ui/badge";
 import { IdentityCell } from "@/components/ui/entity-avatar";
 import { TruncatedText } from "@/components/ui/truncated-text";
-import type { RevenueClientRow, RevenueMonthRow, RevenueTechnicianRow, RevenueWorkOrderRow } from "@/lib/reports/revenue";
+import type { RevenueClientRow, RevenueHow, RevenueMonthRow, RevenueTechnicianRow, RevenueWorkOrderRow } from "@/lib/reports/revenue";
 import { formatZonedDate } from "@/lib/scheduling/org-time";
 
 /**
@@ -30,8 +30,9 @@ export const REVENUE_HELP: Record<string, Help> = {
   revenue: {
     title: "Revenue",
     lines: [
-      "The value of the work orders completed in Zoho FSM in the dates, before VAT, on the day FSM completed them.",
-      "A work order with no value of its own counts its quotation's; with neither, it counts 0.",
+      "What was recognised of each work order in the dates, before VAT, from Zoho FSM and the portal together (19 Nov).",
+      "All of a work order once Zoho FSM completes it; before that, the Complete or % done Operations marked in Ready to invoice (to invoice or revenue only); never less than what was invoiced.",
+      "Only the part new in the dates counts: 50 % done last month and Completed this month counts the other 50 % here. Non-billable work counts only what was invoiced.",
     ],
   },
   technicianRevenue: {
@@ -62,7 +63,7 @@ export const REVENUE_HELP: Record<string, Help> = {
     ],
   },
   hours: { title: "Hours on the work", lines: ["Their hours on the work orders credited here: own time sheet, else the appointment's actual times."] },
-  workOrders: { title: "Work orders", lines: ["Work orders completed in the dates that this row's revenue comes from."] },
+  workOrders: { title: "Work orders", lines: ["Work orders whose revenue in the dates is in this row: completed in Zoho FSM, marked Complete or % done by Operations, or invoiced in the dates."] },
 };
 
 function RatingCell({ average, count }: { average: number | null; count: number }) {
@@ -243,6 +244,33 @@ export const REVENUE_MONTH_COLUMNS: ColumnDef<RevenueMonthRow>[] = [
   ratingColumn(),
 ];
 
+/* What a work order's revenue rests on (19 Nov: FSM and the portal). */
+export const HOW_WORDS: Record<RevenueHow, string> = {
+  fsm_completed: "Completed in FSM",
+  portal_complete: "Complete in portal",
+  portal_partial: "Partly done in portal",
+  invoiced: "Invoiced",
+};
+
+function howLines(r: RevenueWorkOrderRow): string[] {
+  const percent = r.percentDone === null ? "" : ` (${r.percentDone} % of its ${aed(r.fullValue)})`;
+  const first =
+    r.how === "fsm_completed"
+      ? `Completed in Zoho FSM${r.fsmCompletedDate ? ` on ${dateOnly(r.fsmCompletedDate)}` : ""}: all of its ${aed(r.fullValue)} is recognised.`
+      : r.how === "portal_complete"
+        ? `Operations marked it Complete in the portal; Zoho FSM does not show it Completed yet.`
+        : r.how === "portal_partial"
+          ? `Operations marked it partly done in the portal${percent}.`
+          : "Only what was invoiced of it counts (non-billable, cancelled, or invoiced ahead of the % done).";
+  return [
+    first,
+    ...(r.earlier ? [`Already counted before these dates: ${aed(r.earlier)}.`] : []),
+    `In these dates: ${aed(r.value)}.`,
+    ...(r.months.length > 1 ? [r.months.map((m) => `${m.key}: ${aed(m.amount)}`).join(" · ")] : []),
+    r.valueSource === "quotation" ? "The work order has no value of its own: its quotation's is used, before VAT." : "",
+  ].filter(Boolean);
+}
+
 const BASIS_WORDS: Record<RevenueWorkOrderRow["basis"], string> = {
   hours: "split by hours worked",
   equal: "no hours recorded: split equally",
@@ -261,9 +289,34 @@ export const REVENUE_WORK_ORDER_COLUMNS: ColumnDef<RevenueWorkOrderRow>[] = [
     enableSorting: false,
   },
   {
-    id: "completed",
-    header: "Completed",
-    cell: ({ row }) => <IconText icon={CalendarDays}>{dateOnly(row.original.completedDate)}</IconText>,
+    id: "counted",
+    header: helpHeader("Counted on", {
+      title: "Counted on",
+      lines: ["The last thing in the dates that added to its revenue: Zoho FSM completing it, Operations marking it Complete or % done, or an invoice."],
+    }),
+    cell: ({ row }) => <IconText icon={CalendarDays}>{dateOnly(row.original.countedDate)}</IconText>,
+    enableSorting: false,
+  },
+  {
+    id: "how",
+    header: helpHeader("Counted from", {
+      title: "Counted from",
+      lines: [
+        "Completed in FSM: Zoho FSM completed it, so all of it is revenue.",
+        "Complete in portal / Partly done in portal: Operations marked it in Ready to invoice; FSM has not completed it yet.",
+        "Invoiced: only what was invoiced counts.",
+      ],
+    }),
+    cell: ({ row }) => {
+      const r = row.original;
+      return (
+        <Explained help={{ title: HOW_WORDS[r.how], lines: howLines(r) }}>
+          <Badge variant="secondary" className="border-0 font-medium whitespace-nowrap">
+            {r.how === "portal_partial" && r.percentDone !== null ? `${r.percentDone}% done in portal` : HOW_WORDS[r.how]}
+          </Badge>
+        </Explained>
+      );
+    },
     enableSorting: false,
   },
   {
@@ -271,9 +324,9 @@ export const REVENUE_WORK_ORDER_COLUMNS: ColumnDef<RevenueWorkOrderRow>[] = [
     header: helpHeader("Revenue", REVENUE_HELP.revenue),
     cell: ({ row }) => {
       const r = row.original;
-      if (r.valueSource === "none") return <FlagBadge tone="muted">No value in FSM</FlagBadge>;
+      if (r.valueSource === "none" && r.value === 0) return <FlagBadge tone="muted">No value in FSM</FlagBadge>;
       return (
-        <Explained help={{ title: aed(r.value), lines: [r.valueSource === "quotation" ? "The work order has no value of its own: its quotation's, before VAT." : "The work order's total before VAT."] }}>
+        <Explained help={{ title: aed(r.value), lines: howLines(r) }}>
           {num(aed(r.value), true)}
         </Explained>
       );
@@ -365,8 +418,12 @@ export const REVENUE_EXPORT_COLUMNS = {
   work_orders: [
     { key: "workOrder", label: "Work order" },
     { key: "client", label: "Client" },
-    { key: "completed", label: "Completed" },
-    { key: "revenue", label: "Revenue (AED, before VAT)" },
+    { key: "counted", label: "Counted on" },
+    { key: "how", label: "Counted from" },
+    { key: "percentDone", label: "Done so far %" },
+    { key: "revenue", label: "Revenue in the dates (AED, before VAT)" },
+    { key: "earlier", label: "Counted before the dates (AED)" },
+    { key: "fullValue", label: "Work order value (AED)" },
     { key: "valueFrom", label: "Value from" },
     { key: "kind", label: "Kind" },
     { key: "technicians", label: "Technicians (share)" },
@@ -417,8 +474,12 @@ export const revenueExportRow = {
   work_orders: (r: RevenueWorkOrderRow) => ({
     workOrder: r.number,
     client: r.clientName,
-    completed: r.completedDate,
+    counted: r.countedDate,
+    how: HOW_WORDS[r.how],
+    percentDone: r.percentDone,
     revenue: r.value,
+    earlier: r.earlier,
+    fullValue: r.fullValue,
     valueFrom: r.valueSource === "work_order" ? "Work order" : r.valueSource === "quotation" ? "Quotation" : "No value",
     kind: r.amc ? "AMC" : "One-time",
     technicians: r.shares.map((s) => `${s.name} ${s.amount.toFixed(2)}`).join("; "),

@@ -200,13 +200,14 @@ export function exceptionsHowItWorks(s?: { afterDays?: number }): HowItWorksCont
 export function revenueHowItWorks(): HowItWorksContent {
   return {
     title: "revenue",
-    summary: "What the completed work was worth, by client, technician and month, with the AMC mix, what is invoiced and the customers' ratings.",
+    summary: "What the work done was worth, from Zoho FSM and the portal, by client, technician and month, with the AMC mix, what is invoiced and the customers' ratings.",
     sections: [
       {
         heading: "What counts as revenue",
         lines: [
-          "Work orders completed in Zoho FSM in the dates, at their value before VAT, on the day FSM completed them (4 Nov).",
-          "A work order with no value of its own counts its quotation's; with neither it is listed at 0. Work still in progress in FSM is not counted until it is marked Completed there.",
+          "Zoho FSM and the portal together (19 Nov), the same rule as month-end revenue in Invoicing metrics: all of a work order once Zoho FSM completes it; before that, the Complete or % done Operations marked in Ready to invoice (to invoice or revenue only alike); never less than what was invoiced.",
+          "Only what is new in the dates counts, on the day it happened: a work order marked 50 % done in October and Completed in FSM in November counts half in each month.",
+          "Non-billable work orders and lines, and Void, Cancelled or Closed ones, count only what was invoiced. Before VAT. A work order with no value of its own counts its quotation's; Completed with neither, it is listed at 0.",
           "AMC: Work Type AMC PPM, or an AMC contract reference on the work order. Everything else is one-time work.",
         ],
       },
@@ -220,7 +221,7 @@ export function revenueHowItWorks(): HowItWorksContent {
       {
         heading: "Invoiced and ratings",
         lines: [
-          "Invoiced: MAHER invoices recorded in Ready to invoice against those work orders, before VAT. Invoices raised outside the portal are not known.",
+          "Invoiced: MAHER invoices recorded in Ready to invoice against those work orders, before VAT, whenever recorded. Invoices raised outside the portal are not known.",
           "Ratings: the customer's stars on FSM service reports made in the dates, 1 to 5; FSM's 0 means no rating and is left out. A rating counts for every technician on its appointment.",
         ],
       },

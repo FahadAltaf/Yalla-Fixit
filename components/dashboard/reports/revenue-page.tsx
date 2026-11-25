@@ -188,13 +188,17 @@ export function RevenuePage() {
   const empty = (
     <EmptyState
       icon={<CircleDollarSign />}
-      title="No completed work in these dates"
-      description="No work order was completed in Zoho FSM in these dates with these filters. Work still in progress counts once it is marked Completed in FSM."
+      title="No revenue in these dates"
+      description="No work order was completed in Zoho FSM, marked Complete or % done by Operations, or invoiced in these dates with these filters."
     />
   );
   /* What the figures leave out or estimate, in one line under the cards. */
   const notes = s
     ? [
+        s.portalCountedWorkOrders
+          ? `${plural(s.portalCountedWorkOrders, "work order")} (${aed(s.portalCounted)}) counted from Operations' Complete or % done, not yet Completed in FSM`
+          : "",
+        s.earlier ? `${aed(s.earlier)} of these work orders was counted before these dates` : "",
         s.unassignedWorkOrders ? `${plural(s.unassignedWorkOrders, "work order")} (${aed(s.unassigned)}) with nobody from the technician list on them` : "",
         s.equalSplitWorkOrders ? `${plural(s.equalSplitWorkOrders, "work order")} had no hours recorded and were split equally` : "",
         s.quotationValued ? `${plural(s.quotationValued, "work order")} valued from the quotation` : "",
@@ -207,7 +211,7 @@ export function RevenuePage() {
       <PageHeading
         eyebrow="Reports"
         title="Revenue"
-        description="Completed work by client, technician and month, with the AMC mix, invoicing and ratings."
+        description="Work done by client, technician and month, from Zoho FSM and Operations' marks in the portal, with the AMC mix, invoicing and ratings."
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <HowItWorks content={revenueHowItWorks()} />
@@ -234,7 +238,7 @@ export function RevenuePage() {
 
       {s ? (
         <StatCardGrid columns={4}>
-          <StatCard label="Revenue" value={aed(s.revenue)} headline={`${plural(s.workOrders, "work order")} completed, before VAT`} />
+          <StatCard label="Revenue" value={aed(s.revenue)} headline={`${plural(s.workOrders, "work order")}, before VAT`} />
           <StatCard
             label="AMC share"
             value={s.amcPercent === null ? "—" : `${s.amcPercent}%`}

@@ -1,15 +1,30 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { computeRevenue, splitByHours, type RevenueCrew, type RevenueRating, type RevenueWorkOrder } from "@/lib/reports/revenue";
+import { recognisedAsOf, type RecognitionInput } from "@/lib/finance/progress";
+import {
+  computeRevenue,
+  revenueInDates,
+  splitByHours,
+  type RevenueCrew,
+  type RevenueRating,
+  type RevenueSegments,
+  type RevenueWorkOrder,
+} from "@/lib/reports/revenue";
 
 const wo = (patch: Partial<RevenueWorkOrder>): RevenueWorkOrder => ({
   id: "W1",
   number: "WO-1",
   clientName: "Client A",
-  completedAt: "2026-10-15T08:00:00Z",
-  completedDate: "2026-10-15",
+  countedAt: "2026-10-15T08:00:00Z",
+  countedDate: "2026-10-15",
   value: 1000,
+  fullValue: 1000,
+  earlier: 0,
+  percentDone: 100,
+  months: [{ key: (patch.countedDate ?? "2026-10-15").slice(0, 7), amount: patch.value ?? 1000 }],
+  how: "fsm_completed",
+  fsmCompletedDate: "2026-10-15",
   valueSource: "work_order",
   amc: false,
   ...patch,
@@ -57,7 +72,7 @@ test("revenue by client, technician and month, with the AMC mix, invoiced and ra
   const result = computeRevenue({
     workOrders: [
       wo({ id: "W1", value: 1000 }),
-      wo({ id: "W2", number: "WO-2", clientName: "Client B", value: 600, amc: true, completedAt: "2026-11-02T08:00:00Z", completedDate: "2026-11-02" }),
+      wo({ id: "W2", number: "WO-2", clientName: "Client B", value: 600, amc: true, countedAt: "2026-11-02T08:00:00Z", countedDate: "2026-11-02" }),
       wo({ id: "W3", number: "WO-3", value: 0, valueSource: "none" }),
       wo({ id: "W4", number: "WO-4", clientName: "Client B", value: 400, valueSource: "quotation" }),
     ],
@@ -117,6 +132,96 @@ test("revenue by client, technician and month, with the AMC mix, invoiced and ra
       ["Nov 2026", 600, 1, 3],
     ],
   );
-  assert.deepEqual(result.workOrders.map((w) => w.id), ["W2", "W1", "W3", "W4"], "most recently completed first");
+  assert.deepEqual(result.workOrders.map((w) => w.id), ["W2", "W1", "W3", "W4"], "most recently counted first");
   assert.equal(result.workOrders.find((w) => w.id === "W1")?.basis, "hours");
+});
+
+// ---------------------------------------------------------------------
+// 19 Nov: revenue from Zoho FSM and the portal together
+// ---------------------------------------------------------------------
+
+const recognition = (patch: Partial<RecognitionInput>): RecognitionInput => ({
+  value: 10000,
+  lines: [
+    { id: "L1", amount: 6000, billable: true },
+    { id: "L2", amount: 4000, billable: true },
+  ],
+  entries: [],
+  invoices: [],
+  fsmCompletedAt: null,
+  ended: false,
+  ...patch,
+});
+/* October and November 2026, cut at 1 Nov (times in UTC; the zone does not matter here). */
+const octNov: RevenueSegments = {
+  boundaries: [
+    { iso: "2026-10-01T00:00:00.000Z", date: "2026-09-30" },
+    { iso: "2026-11-01T00:00:00.000Z", date: "2026-10-31" },
+    { iso: "2026-12-01T00:00:00.000Z", date: "2026-11-30" },
+  ],
+  months: ["2026-10", "2026-11"],
+};
+const nov: RevenueSegments = { boundaries: octNov.boundaries.slice(1), months: ["2026-11"] };
+const day = (iso: string) => iso.slice(0, 10);
+const entry = (lineId: string | null, percent: number, recordedAt: string, purpose: "invoice" | "revenue_only" = "invoice") => ({ lineId, percent, purpose, recordedAt });
+
+test("portal % done counts before FSM completes it; FSM's completion counts the rest", () => {
+  const wo = recognition({
+    entries: [entry("L1", 50, "2026-10-10T08:00:00.000Z"), entry("L2", 50, "2026-10-10T08:00:00.000Z", "revenue_only")],
+    fsmCompletedAt: "2026-11-05T08:00:00.000Z",
+  });
+  assert.deepEqual(recognisedAsOf(wo, { iso: "2026-11-01T00:00:00.000Z", date: "2026-10-31" }), { recognised: 5000, invoiced: 0, basis: "portal_partial" });
+  const both = revenueInDates(wo, octNov, day)!;
+  assert.equal(both.value, 10000);
+  assert.deepEqual(both.months, [
+    { key: "2026-10", amount: 5000 },
+    { key: "2026-11", amount: 5000 },
+  ]);
+  assert.equal(both.how, "fsm_completed");
+  /* November alone: only the other half, the first half counted before. */
+  const later = revenueInDates(wo, nov, day)!;
+  assert.equal(later.value, 5000);
+  assert.equal(later.earlier, 5000);
+  assert.equal(later.countedDate, "2026-11-05");
+});
+
+test("Operations' Complete counts all of it although FSM has not completed it", () => {
+  const wo = recognition({ entries: [entry(null, 100, "2026-11-03T08:00:00.000Z")] });
+  const r = revenueInDates(wo, nov, day)!;
+  assert.equal(r.value, 10000);
+  assert.equal(r.how, "portal_complete");
+  assert.equal(r.percentDone, 100);
+});
+
+test("never less than invoiced; non-billable and cancelled count only what was invoiced", () => {
+  const invoicedAhead = recognition({ invoices: [{ lineId: "L1", amount: 3000, date: "2026-11-10" }] });
+  assert.equal(revenueInDates(invoicedAhead, nov, day)!.value, 3000);
+  assert.equal(revenueInDates(invoicedAhead, nov, day)!.how, "invoiced");
+
+  const nonBillableLine = recognition({
+    value: 6000,
+    lines: [
+      { id: "L1", amount: 6000, billable: true },
+      { id: "L2", amount: 4000, billable: false },
+    ],
+    entries: [entry(null, 100, "2026-11-03T08:00:00.000Z")],
+  });
+  assert.equal(revenueInDates(nonBillableLine, nov, day)!.value, 6000, "the non-billable line is left out");
+
+  const cancelled = recognition({ ended: true, entries: [entry(null, 100, "2026-11-03T08:00:00.000Z")] });
+  assert.equal(revenueInDates(cancelled, nov, day), null, "nothing invoiced, nothing counted");
+});
+
+test("nothing moved in the dates: not listed; completed in FSM in them at AED 0: listed at 0", () => {
+  const before = recognition({ fsmCompletedAt: "2026-10-20T08:00:00.000Z" });
+  assert.equal(revenueInDates(before, nov, day), null);
+  const zero = recognition({ value: 0, lines: [], fsmCompletedAt: "2026-11-20T08:00:00.000Z" });
+  const r = revenueInDates(zero, nov, day)!;
+  assert.equal(r.value, 0);
+  assert.equal(r.how, "fsm_completed");
+});
+
+test("a negative change (a % taken back) splits between technicians to the fils", () => {
+  const split = splitByHours(-100, { technicianIds: ["T1", "T2", "T3"], minutes: {} });
+  assert.deepEqual(split.shares.map((s) => s.amount), [-33.34, -33.33, -33.33]);
 });

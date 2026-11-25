@@ -129,6 +129,81 @@ export function recognisedValue(line: LineMoney, context: { workOrderStatus: str
   return round2(Math.max(byProgress, line.invoicedAmount));
 }
 
+// ---------------------------------------------------------------------
+// Recognised as of a moment (19 Nov: the Revenue report follows the portal and FSM)
+// ---------------------------------------------------------------------
+
+export type RecognitionLine = { id: string; amount: number; billable: boolean };
+export type RecognitionInvoice = { lineId: string | null; amount: number; /** The MAHER invoice's date, YYYY-MM-DD. */ date: string };
+export type RecognitionInput = {
+  /** What the work order is worth before VAT, its non-billable lines left out (Zoho FSM, read live). */
+  value: number;
+  /** Its lines as the portal last read them, for Operations' % done line by line. */
+  lines: RecognitionLine[];
+  /** Operations' Complete / % done entries (portal). */
+  entries: ProgressEntry[];
+  /** MAHER invoices recorded in Ready to invoice (portal). */
+  invoices: RecognitionInvoice[];
+  /** When Zoho FSM completed it; null while it is not Completed there ("" when FSM gives no time: long before). */
+  fsmCompletedAt: string | null;
+  /** Void, Cancelled or Closed, or Non-billable: nothing is recognised beyond what was invoiced. */
+  ended: boolean;
+};
+
+export type Recognised = {
+  recognised: number;
+  invoiced: number;
+  /** What it rests on at that moment. */
+  basis: "fsm_completed" | "portal_complete" | "portal_partial" | "invoiced" | "none";
+};
+
+/**
+ * What is recognised of a work order by a moment, before VAT: the same rule
+ * as month-end revenue. All of it once Completed in Zoho FSM; before that,
+ * Operations' latest % done in the portal line by line (to invoice or
+ * revenue only alike; Complete is 100 %); never less than what was invoiced
+ * by then. Non-billable lines, and ended or Non-billable work orders, count
+ * only what was invoiced.
+ */
+export function recognisedAsOf(input: RecognitionInput, until: { iso: string; date: string }): Recognised {
+  const paid = input.invoices.filter((i) => i.date <= until.date);
+  const invoiced = round2(paid.reduce((s, i) => s + i.amount, 0));
+  if (input.ended) return { recognised: invoiced, invoiced, basis: invoiced > 0 ? "invoiced" : "none" };
+  if (input.fsmCompletedAt !== null && input.fsmCompletedAt < until.iso) {
+    return { recognised: round2(Math.max(Math.max(0, input.value), invoiced)), invoiced, basis: "fsm_completed" };
+  }
+  const recorded = input.entries.filter((e) => e.recordedAt < until.iso);
+  if (!input.lines.length) {
+    /* Never read line by line: only a whole-work-order entry can apply. */
+    const whole = recorded.filter((e) => e.lineId === null).sort((a, b) => b.recordedAt.localeCompare(a.recordedAt))[0];
+    const byProgress = whole ? round2((Math.max(0, input.value) * whole.percent) / 100) : 0;
+    const recognised = round2(Math.max(byProgress, invoiced));
+    const basis = whole && whole.percent > 0 ? (whole.percent >= 100 ? "portal_complete" : "portal_partial") : invoiced > 0 ? "invoiced" : "none";
+    return { recognised, invoiced, basis };
+  }
+  const known = new Set(input.lines.map((l) => l.id));
+  let recognised = 0;
+  let marked = 0;
+  let complete = 0;
+  let billable = 0;
+  for (const line of input.lines) {
+    const paidOnLine = paid.filter((p) => p.lineId === line.id).reduce((s, p) => s + p.amount, 0);
+    if (!line.billable) {
+      recognised += paidOnLine;
+      continue;
+    }
+    billable += 1;
+    const entry = effectiveEntry(line.id, recorded);
+    if (entry && entry.percent > 0) marked += 1;
+    if (entry && entry.percent >= 100) complete += 1;
+    recognised += Math.max(entry ? (Math.max(0, line.amount) * entry.percent) / 100 : 0, paidOnLine);
+  }
+  /* Invoiced against a line the portal no longer lists: still invoiced. */
+  recognised += paid.filter((p) => p.lineId === null || !known.has(p.lineId)).reduce((s, p) => s + p.amount, 0);
+  const basis = billable > 0 && complete === billable ? "portal_complete" : marked > 0 ? "portal_partial" : invoiced > 0 ? "invoiced" : "none";
+  return { recognised: round2(recognised), invoiced, basis };
+}
+
 /** Percent of a line's amount that a before-VAT figure is, for display. */
 export function percentOf(part: number, amount: number | null): number | null {
   return amount && amount > 0 ? Math.round((part / amount) * 1000) / 10 : null;

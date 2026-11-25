@@ -10,7 +10,8 @@ import type {
   ExceptionWorkOrder,
 } from "@/lib/reports/exceptions";
 import type { QuotationRecord } from "@/lib/reports/quotations";
-import type { RevenueCrew, RevenueRating, RevenueWorkOrder } from "@/lib/reports/revenue";
+import { isEnded, isNonBillable, invoicingStatus, type ProgressEntry, type RecognitionInvoice, type RecognitionLine } from "@/lib/finance/progress";
+import { revenueInDates, type RevenueCrew, type RevenueRating, type RevenueSegments, type RevenueWorkOrder } from "@/lib/reports/revenue";
 import { chargeabilityOf, isContractWork, type TechnicianWork, type UtilizationAppointment } from "@/lib/reports/utilization";
 import { addDaysToDateString, todayInZone, zonedDateString, zonedTimeToUtc } from "@/lib/scheduling/org-time";
 import {
@@ -664,13 +665,103 @@ export async function loadTravel(admin: SupabaseClient, range: { from: string; t
 /* A work order completed in the dates may have been worked on long before: appointments are read back this far. */
 const REVENUE_LOOKBACK_DAYS = 180;
 
+/** FSM and Postgres write times with offsets; compared as text, every instant must be UTC ISO. */
+const toIso = (v: unknown): string | null => {
+  const s = str(v);
+  if (!s) return null;
+  const ms = Date.parse(s);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+};
+const nextMonthStart = (date: string) => `${addDaysToDateString(`${date.slice(0, 7)}-28`, 4).slice(0, 7)}-01`;
+
+/** The dates cut at each month's start (in the org's zone), for revenue month by month. */
+export function revenueSegments(range: { from: string; to: string }): RevenueSegments {
+  const boundaries = [{ iso: isoFrom(range.from), date: addDaysToDateString(range.from, -1) }];
+  const months = [range.from.slice(0, 7)];
+  for (let m = nextMonthStart(range.from); m <= range.to; m = nextMonthStart(m)) {
+    boundaries.push({ iso: isoFrom(m), date: addDaysToDateString(m, -1) });
+    months.push(m.slice(0, 7));
+  }
+  boundaries.push({ iso: isoFrom(range.to, 1), date: range.to });
+  return { boundaries, months };
+}
+
+const missingFinance = (error: unknown) =>
+  /progress_entries|line_states|line_invoice|work_order_states|PGRST205|42P01|schema cache/i.test(error instanceof Error ? error.message : String(error));
+
+/** Every row of a finance table, or none before the table exists. */
+async function financeRows(admin: SupabaseClient, table: string, columns: string, order: string): Promise<Record<string, unknown>[]> {
+  try {
+    return await readAllRows<Record<string, unknown>>(
+      (from, to) => admin.schema("finance").from(table).select(columns).order(order).range(from, to) as never,
+      table,
+    );
+  } catch (error) {
+    if (missingFinance(error)) return [];
+    throw error;
+  }
+}
+
 /**
- * What the revenue report counts (4 Nov): the work orders FSM completed in
- * the dates, who worked on each and for how long, the customers' ratings
- * given in the dates, and what has been invoiced against them (MAHER, as
- * recorded in Ready to invoice). Read live from Zoho FSM like every
- * report; the work orders by last change, so one completed in the dates is
- * always among them.
+ * What the portal holds for revenue (19 Nov): Operations' Complete / % done
+ * entries, the lines as last read (amount, billable), the MAHER invoices by
+ * date, and the work orders' last snapshot (for one FSM has not changed
+ * since the dates began).
+ */
+async function revenueLedger(admin: SupabaseClient) {
+  const [progress, lines, allocations, invoices, snapshots] = await Promise.all([
+    financeRows(admin, "progress_entries", "fsm_work_order_id, fsm_line_id, percent, purpose, recorded_at", "recorded_at"),
+    financeRows(admin, "line_states", "*", "fsm_line_id"),
+    financeRows(admin, "line_invoice_allocations", "invoice_id, fsm_line_id, fsm_work_order_id, amount", "id"),
+    financeRows(admin, "line_invoices", "id, invoice_date", "id"),
+    financeRows(admin, "work_order_states", "*", "fsm_work_order_id"),
+  ]);
+  const push = <T>(map: Map<string, T[]>, key: string, item: T) => map.set(key, [...(map.get(key) ?? []), item]);
+
+  const entries = new Map<string, ProgressEntry[]>();
+  for (const r of progress) {
+    const recordedAt = toIso(r.recorded_at);
+    if (!recordedAt) continue;
+    push(entries, String(r.fsm_work_order_id), {
+      lineId: str(r.fsm_line_id),
+      percent: Number(r.percent ?? 0),
+      purpose: r.purpose === "revenue_only" ? "revenue_only" : "invoice",
+      recordedAt,
+    });
+  }
+  const linesOf = new Map<string, RecognitionLine[]>();
+  for (const r of lines) {
+    /* billable arrives with 20261118160000; before it every line is billable. */
+    push(linesOf, String(r.fsm_work_order_id), { id: String(r.fsm_line_id), amount: Number(r.amount ?? 0), billable: r.billable !== false });
+  }
+  const invoiceDate = new Map(invoices.map((i) => [String(i.id), String(i.invoice_date).slice(0, 10)]));
+  const invoicesOf = new Map<string, RecognitionInvoice[]>();
+  const invoicedByWorkOrder = new Map<string, number>();
+  for (const a of allocations) {
+    const id = String(a.fsm_work_order_id);
+    const amount = Number(a.amount ?? 0);
+    push(invoicesOf, id, { lineId: str(a.fsm_line_id), amount, date: invoiceDate.get(String(a.invoice_id)) ?? "9999-12-31" });
+    invoicedByWorkOrder.set(id, (invoicedByWorkOrder.get(id) ?? 0) + amount);
+  }
+  return {
+    entries,
+    linesOf,
+    invoicesOf,
+    invoicedByWorkOrder,
+    snapshots: new Map(snapshots.map((s) => [String(s.fsm_work_order_id), s])),
+  };
+}
+
+/**
+ * What the revenue report counts (19 Nov: the portal and Zoho FSM). Zoho
+ * FSM, read live: the work orders changed since the dates began (status,
+ * completion, value, client, AMC), the quotations (value when the work
+ * order has none), appointments and time sheets (who worked and how long)
+ * and service reports (ratings). The portal: Operations' Complete / % done
+ * and the MAHER invoices recorded in Ready to invoice, with each work
+ * order's last snapshot for one FSM has not changed since. A work order
+ * counts when FSM completed it in the dates, or Operations marked it or it
+ * was invoiced in them (lib/reports/revenue.ts revenueInDates).
  */
 export async function loadRevenueInputs(
   admin: SupabaseClient,
@@ -682,11 +773,25 @@ export async function loadRevenueInputs(
     const ms = at ? Date.parse(at) : NaN;
     return Number.isFinite(ms) && ms >= fromMs && ms < endMs;
   };
-  const [{ rows: woRows }, quotations, { rows: reportRows }, invoicedByWorkOrder] = await Promise.all([
+  const segments = revenueSegments(range);
+  const [{ rows: woRows }, quotations, { rows: reportRows }, ledger] = await Promise.all([
     readModuleSince(admin, {
       module: "Work_Orders",
       sortField: "Modified_Time",
-      fields: ["Name", "Sub_Total", "Estimate", "Company", "Contact", "Status", "Completed_Time", "Closed_Time", "Created_Time", "Work_Type__C", "AMC_Contract_Ref__C"],
+      fields: [
+        "Name",
+        "Sub_Total",
+        "Estimate",
+        "Company",
+        "Contact",
+        "Status",
+        "Billing_Status",
+        "Completed_Time",
+        "Closed_Time",
+        "Created_Time",
+        "Work_Type__C",
+        "AMC_Contract_Ref__C",
+      ],
       fromIso: isoFrom(range.from),
       resource: "work_orders",
     }),
@@ -698,33 +803,63 @@ export async function loadRevenueInputs(
       fromIso: isoFrom(range.from),
       resource: "service_reports",
     }),
-    invoicedSoFar(admin),
+    revenueLedger(admin),
+  ]);
+
+  const live = new Map(woRows.map((r) => [String(r.id), r]));
+  /* Completed in FSM (in the dates or not: the calculation decides), or anything the portal holds for it. */
+  const candidates = new Set<string>([
+    ...[...live].filter(([, r]) => str(r.Status) === "Completed").map(([id]) => id),
+    ...ledger.entries.keys(),
+    ...ledger.invoicesOf.keys(),
   ]);
 
   const workOrders: RevenueWorkOrder[] = [];
   const created = new Map<string, string>();
-  for (const r of woRows) {
-    const status = str(r.Status);
-    /* Only Completed work is revenue. "Closed" in FSM means cancelled and is never invoiced (Sami, 13 Nov). */
-    const completedAt = str(r.Completed_Time) ?? str(r.Closed_Time);
-    if (status !== "Completed" || !completedAt || !inDates(completedAt)) continue;
-    const id = String(r.id);
-    const own = r.Sub_Total === null || r.Sub_Total === undefined ? 0 : Number(r.Sub_Total);
-    const estimateId = lookupId(r.Estimate);
+  for (const id of candidates) {
+    const r = live.get(id);
+    const snap = ledger.snapshots.get(id);
+    if (!r && !snap) continue;
+    /* FSM now when it changed since the dates began; else the portal's last read of it. */
+    const status = r ? str(r.Status) : str(snap?.fsm_status);
+    const billingStatus = r ? str(r.Billing_Status) : null;
+    /* Only Completed is done. "Closed" in FSM means cancelled and is never invoiced (Sami, 13 Nov). */
+    const fsmCompletedAt = status === "Completed" ? ((r ? (toIso(r.Completed_Time) ?? toIso(r.Closed_Time)) : toIso(snap?.fsm_completed_at)) ?? "") : null;
+    const ended = isEnded(status) || isNonBillable(invoicingStatus(status, billingStatus));
+    const ownRaw = r ? r.Sub_Total : snap?.sub_total;
+    const own = ownRaw === null || ownRaw === undefined ? 0 : Number(ownRaw);
+    const estimateId = r ? lookupId(r.Estimate) : null;
     const quotation = (estimateId ? quotations.byId.get(estimateId) : undefined) ?? quotations.byWorkOrder.get(id);
     const fromQuotation = quotation?.subTotal ?? 0;
     const valueSource = own > 0 ? "work_order" : fromQuotation > 0 ? "quotation" : "none";
+    const lines = ledger.linesOf.get(id) ?? [];
+    /* Non-billable lines are never revenue beyond what was invoiced of them. */
+    const nonBillable = lines.filter((l) => !l.billable).reduce((s, l) => s + l.amount, 0);
+    const worth = valueSource === "work_order" ? own : valueSource === "quotation" ? fromQuotation : 0;
+    const counted = revenueInDates(
+      {
+        value: Math.max(0, worth - nonBillable),
+        lines,
+        entries: ledger.entries.get(id) ?? [],
+        invoices: ledger.invoicesOf.get(id) ?? [],
+        fsmCompletedAt,
+        ended,
+      },
+      segments,
+      zonedDateString,
+    );
+    if (!counted) continue;
     workOrders.push({
       id,
-      number: str(r.Name),
-      clientName: lookupName(r.Company) ?? lookupName(r.Contact),
-      completedAt,
-      completedDate: zonedDateString(completedAt),
-      value: valueSource === "work_order" ? own : valueSource === "quotation" ? fromQuotation : 0,
+      number: r ? str(r.Name) : str(snap?.work_order_number),
+      clientName: r ? (lookupName(r.Company) ?? lookupName(r.Contact)) : (str(snap?.client_name) ?? str(snap?.contact_name)),
       valueSource,
-      amc: isContractWork({ workType: str(r.Work_Type__C), amcContractRef: lookupName(r.AMC_Contract_Ref__C) ?? str(r.AMC_Contract_Ref__C) }),
+      amc: r
+        ? isContractWork({ workType: str(r.Work_Type__C), amcContractRef: lookupName(r.AMC_Contract_Ref__C) ?? str(r.AMC_Contract_Ref__C) })
+        : isContractWork({ workType: str(snap?.work_order_type) }),
+      ...counted,
     });
-    const createdAt = str(r.Created_Time);
+    const createdAt = r ? toIso(r.Created_Time) : toIso(snap?.fsm_created_at);
     if (createdAt) created.set(id, createdAt);
   }
 
@@ -734,14 +869,15 @@ export async function loadRevenueInputs(
     .filter(({ r, stars }) => Number.isInteger(stars) && stars >= 1 && stars <= 5 && inDates(str(r.Created_Time)));
 
   /* Appointments from the earliest of those work orders' creation (at most half a year back) or the dates' start. */
-  const earliest = [...created.values(), isoFrom(range.from)].reduce((min, at) => (Date.parse(at) < Date.parse(min) ? at : min));
   const floor = isoFrom(addDaysToDateString(range.from, -REVENUE_LOOKBACK_DAYS));
-  const sinceIso = Date.parse(earliest) < Date.parse(floor) ? floor : new Date(Date.parse(earliest) - 86_400_000).toISOString();
+  const unknownStart = workOrders.some((w) => !created.has(w.id));
+  const earliest = [...created.values(), isoFrom(range.from)].reduce((min, at) => (Date.parse(at) < Date.parse(min) ? at : min));
+  const sinceIso = unknownStart || Date.parse(earliest) < Date.parse(floor) ? floor : new Date(Date.parse(earliest) - 86_400_000).toISOString();
   const [appointments, sheets] = await Promise.all([liveAppointments(admin, sinceIso), liveTimeSheets(admin, sinceIso)]);
-  const completedIds = new Set(workOrders.map((w) => w.id));
+  const countedIds = new Set(workOrders.map((w) => w.id));
   const ratedAppointments = new Set(rated.map(({ r }) => lookupId(r.Appointment)).filter((v): v is string => Boolean(v)));
   const worked = appointments.filter(
-    (a) => a.status !== "Cancelled" && ((a.workOrderId && completedIds.has(a.workOrderId)) || ratedAppointments.has(a.id)),
+    (a) => a.status !== "Cancelled" && ((a.workOrderId && countedIds.has(a.workOrderId)) || ratedAppointments.has(a.id)),
   );
   const { crews: appointmentCrews } = await crewsOf(admin, worked, sheets);
 
@@ -756,14 +892,14 @@ export async function loadRevenueInputs(
   }
   const crews = new Map<string, RevenueCrew>();
   for (const a of worked) {
-    if (!a.workOrderId || !completedIds.has(a.workOrderId)) continue;
+    if (!a.workOrderId || !countedIds.has(a.workOrderId)) continue;
     const crew = crews.get(a.workOrderId) ?? { technicianIds: [], minutes: {} };
     const start = a.actualStart ? Date.parse(a.actualStart) : NaN;
     const end = a.actualEnd ? Date.parse(a.actualEnd) : NaN;
     const appointmentMinutes = Number.isFinite(start) && Number.isFinite(end) && end > start ? (end - start) / 60_000 : 0;
-    for (const id of appointmentCrews.get(a.id) ?? []) {
-      if (!crew.technicianIds.includes(id)) crew.technicianIds.push(id);
-      crew.minutes[id] = (crew.minutes[id] ?? 0) + (sheetMinutes.get(`${id}|${a.id}`) ?? appointmentMinutes);
+    for (const techId of appointmentCrews.get(a.id) ?? []) {
+      if (!crew.technicianIds.includes(techId)) crew.technicianIds.push(techId);
+      crew.minutes[techId] = (crew.minutes[techId] ?? 0) + (sheetMinutes.get(`${techId}|${a.id}`) ?? appointmentMinutes);
     }
     crews.set(a.workOrderId, crew);
   }
@@ -780,26 +916,7 @@ export async function loadRevenueInputs(
       date: zonedDateString(str(r.Created_Time)!),
     };
   });
-  return { workOrders, crews, ratings, invoicedByWorkOrder };
-}
-
-/** Invoiced so far per work order, before VAT: MAHER invoices recorded in Ready to invoice (schema finance). */
-async function invoicedSoFar(admin: SupabaseClient): Promise<Map<string, number>> {
-  const out = new Map<string, number>();
-  try {
-    const rows = await readAllRows<Record<string, unknown>>(
-      (from, to) => admin.schema("finance").from("line_invoice_allocations").select("fsm_work_order_id, amount").order("id").range(from, to),
-      "invoice allocations",
-    );
-    for (const r of rows) {
-      const id = str(r.fsm_work_order_id);
-      if (id) out.set(id, (out.get(id) ?? 0) + Number(r.amount ?? 0));
-    }
-  } catch (error) {
-    /* Before the finance ledger exists nothing has been invoiced through the portal. */
-    if (!/line_invoice_allocations|PGRST205|42P01|schema cache/i.test(error instanceof Error ? error.message : String(error))) throw error;
-  }
-  return out;
+  return { workOrders, crews, ratings, invoicedByWorkOrder: ledger.invoicedByWorkOrder };
 }
 
 // ---------------------------------------------------------------------
