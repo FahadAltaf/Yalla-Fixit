@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState, type ReactNode } from "react";
+import { useId, useState } from "react";
 import { Ban, Banknote, CalendarCheck, Hammer, Users, CheckCircle2, FileText, Plus, ReceiptText, Save, Search, Send, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -37,7 +37,7 @@ import {
   type WorkPhotoKind,
 } from "@/modules/amc-contracts/additional-works-service";
 
-import { Fact, Field, Muted, Panel, PanelEmpty, PhotosPanel, SectionDialog, ReadText, errorText, shortDateTime, useActionForm } from "./call-out-shared";
+import { CrewList, Fact, FactTile, Field, Muted, Panel, PanelEmpty, PhotosPanel, ReadText, errorText, SectionDialog, shortDateTime, useActionForm } from "./call-out-shared";
 import { SendDialog } from "./send-options";
 import { useVisitCharge } from "./visit-charge";
 import type { PricedService } from "@/lib/amc/visit-charges";
@@ -761,20 +761,25 @@ export function WorkScheduleSection({ data, working, setWorking, changed }: Work
           ) : null
         }
       >
-        <dl className="divide-y text-sm">
-          <InfoRow label="Scheduled for">
-            {slot.scheduledStart ? slotLabel(slot.scheduledStart, slot.scheduledEnd) : w.scheduledFor ? `${formatContractDate(w.scheduledFor)} (no time set)` : <Muted>Not scheduled</Muted>}
-          </InfoRow>
-          <InfoRow label="Crew">
-            {slot.technicianIds.length ? (
-              slot.technicianIds.map((t) => `${technicianName(t)}${t === slot.leadTechnicianId && slot.technicianIds.length > 1 ? " (lead)" : ""}`).join(", ")
-            ) : (
-              <Muted>None yet</Muted>
-            )}
-          </InfoRow>
-          {slot.assignmentNote ? <InfoRow label="Why this crew">{slot.assignmentNote}</InfoRow> : null}
-          <InfoRow label="Trade">{w.trade ? (TRADE_LABELS[w.trade as Trade] ?? w.trade) : <Muted>Not set</Muted>}</InfoRow>
-        </dl>
+        {/* Tiles for when and what, then who goes (25 Nov 2026), as the call out reads. */}
+        <div className="grid gap-3 sm:grid-cols-2">
+          <FactTile
+            icon={<CalendarCheck />}
+            label="Scheduled for"
+            value={slot.scheduledStart ? slotLabel(slot.scheduledStart, slot.scheduledEnd) : w.scheduledFor ? formatContractDate(w.scheduledFor) : null}
+            sub={!slot.scheduledStart && w.scheduledFor ? "No time set yet" : null}
+            empty="Not scheduled"
+          />
+          <FactTile icon={<Hammer />} label="Trade" value={w.trade ? (TRADE_LABELS[w.trade as Trade] ?? w.trade) : null} empty="Not set" />
+        </div>
+        <div className="grid gap-2">
+          <p className="text-muted-foreground text-xs font-semibold tracking-wide uppercase">Crew</p>
+          <CrewList
+            people={slot.technicianIds.map((t) => ({ id: t, name: technicianName(t) ?? t, lead: slot.technicianIds.length > 1 && t === (slot.leadTechnicianId ?? slot.technicianIds[0]) }))}
+            empty="No crew yet"
+          />
+          {slot.assignmentNote ? <p className="text-muted-foreground text-xs">Why this crew: {slot.assignmentNote}</p> : null}
+        </div>
         {!can || beforeApproval ? <p className="text-muted-foreground text-sm">{stateText}</p> : null}
       </Panel>
 
@@ -859,14 +864,6 @@ export function WorkScheduleSection({ data, working, setWorking, changed }: Work
   );
 }
 
-function InfoRow({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="flex items-center justify-between gap-4 py-2.5">
-      <dt className="text-muted-foreground shrink-0">{label}</dt>
-      <dd className="min-w-0 text-right font-medium">{children}</dd>
-    </div>
-  );
-}
 
 /* ------------------------------------------------------------------ */
 /* Photos                                                              */

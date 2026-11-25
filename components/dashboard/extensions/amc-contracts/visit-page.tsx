@@ -3,9 +3,11 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { CalendarClock, ClipboardList, FileSignature, History, ListChecks, MessageCircle, PhoneCall, ShieldCheck, Wrench } from "lucide-react";
+import { CalendarClock, ClipboardList, FileSignature, FileText, FileWarning, History, ListChecks, MessageCircle, PhoneCall, ShieldCheck, UserRound, Wrench } from "lucide-react";
 
-import { SectionCard, StatCard, StatCardGrid } from "@/components/dashboard/shared/kaizen";
+import { SectionCard, StatCard, StatCardGrid, SubHeading } from "@/components/dashboard/shared/kaizen";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { FSM_QUOTATION_SKIP_LABELS } from "@/lib/amc/fsm-quotation";
 import { ErrorState, SectionSkeleton } from "@/components/dashboard/shared/kaizen-states";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -30,7 +32,7 @@ import {
   useCallOutWorkDialogs,
   type CallOutWorking,
 } from "./call-out-sections";
-import { CoverageBadge, HeaderActionsSlot, PanelSurface, shortDateTime } from "./call-out-shared";
+import { FactTile, HeaderActionsSlot, PanelSurface, shortDateTime } from "./call-out-shared";
 import { formatContractDate } from "./contract-status";
 import { DetailHeaderCard, DetailHeaderSkeleton, DetailToolbar, shortPlace } from "./detail-header";
 import { DetailList } from "./enquiries/enquiry-ui";
@@ -83,6 +85,123 @@ const STAGE_TONES: Record<FieldVisitStage, string> = {
 
 
 const muted = (text: string) => <span className="text-muted-foreground">{text}</span>;
+
+/** Text as separate items: one per line, without the bullet, dash or number it started with. */
+function textLines(text: string): string[] {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*(?:[\u2022\u2023\u25e6\u2043\u2219*\-\u2013\u2014]|\d+[.)])\s*/, "").trim())
+    .filter(Boolean);
+}
+
+/**
+ * A handyman job's team-hours as one bar (25 Nov 2026): the hours from the
+ * free handyman hours in green, the chargeable ones beyond them in amber,
+ * the total on the right and what is left of the free hours under it.
+ */
+function HandymanHoursBar({
+  hm,
+  allowance,
+}: {
+  hm: { teams: number; fromCrew: boolean; hoursUsed: number | null; hoursChargeable: number | null };
+  allowance: { unlimited: boolean; remaining: number | null; included: number | null } | null;
+}) {
+  const used = hm.hoursUsed;
+  const charged = used === null ? 0 : Math.min(used, Math.max(0, hm.hoursChargeable ?? 0));
+  const free = used === null ? 0 : used - charged;
+  const pct = (n: number) => (used ? `${(n / used) * 100}%` : "0%");
+  const left = allowance ? (allowance.unlimited ? "Unlimited free hours on this contract" : `${allowance.remaining ?? 0} of ${allowance.included ?? 0} free hours left now`) : null;
+  return (
+    <div className="grid gap-3 rounded-lg border px-4 py-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold">Handyman hours</p>
+          <p className="text-muted-foreground text-xs">
+            {hm.teams} team{hm.teams === 1 ? "" : "s"} ({hm.fromCrew ? "one per technician" : "counted from the crew"}, each with a helper), in team-hours
+          </p>
+        </div>
+        <div className="text-right">
+          <p className="text-xl leading-none font-semibold tabular-nums">{used === null ? "—" : `${used} h`}</p>
+          <p className="text-muted-foreground mt-1 text-xs">{used === null ? "Recorded at closing" : "used"}</p>
+        </div>
+      </div>
+      <div
+        className="bg-muted flex h-2.5 overflow-hidden rounded-full"
+        role="img"
+        aria-label={used === null ? "No hours recorded yet" : `${free} hours from the free hours, ${charged} chargeable`}
+      >
+        {used ? (
+          <>
+            <span className="bg-success h-full" style={{ width: pct(free) }} />
+            <span className="bg-warning h-full" style={{ width: pct(charged) }} />
+          </>
+        ) : null}
+      </div>
+      <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs">
+        <span className="inline-flex items-center gap-1.5">
+          <span className="bg-success size-2 rounded-full" />
+          <span className="font-medium tabular-nums">{used === null ? "—" : `${free} h`}</span>
+          <span className="text-muted-foreground">from the free hours</span>
+        </span>
+        <span className="inline-flex items-center gap-1.5">
+          <span className="bg-warning size-2 rounded-full" />
+          <span className={cn("font-medium tabular-nums", charged > 0 && "text-warning")}>{used === null ? "—" : `${charged} h`}</span>
+          <span className="text-muted-foreground">chargeable</span>
+        </span>
+        {left ? <span className="text-muted-foreground sm:ml-auto">{left}</span> : null}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * What is owed for Finance (25 Nov 2026): the FSM quotation number needed
+ * (before closing, or to follow after it), or why there is none.
+ */
+function FsmQuotationNotice({
+  state,
+  closed,
+  onOpen,
+}: {
+  state: { migrated: boolean; value: string | null; required: boolean; skip?: { kind: "not_chargeable" | "later"; reason: string | null } | null; outstanding?: boolean } | null;
+  closed: boolean;
+  onOpen: () => void;
+}) {
+  if (!state?.migrated) return null;
+  if (state.value) {
+    return (
+      <p className="text-muted-foreground flex items-center gap-2 text-sm">
+        <FileText className="size-4" />
+        FSM quotation <span className="text-foreground font-medium">{state.value}</span>
+      </p>
+    );
+  }
+  if (state.skip?.kind === "not_chargeable") {
+    return (
+      <Alert>
+        <FileText />
+        <AlertTitle>Not chargeable: no FSM quotation</AlertTitle>
+        {state.skip.reason ? <AlertDescription>{state.skip.reason}</AlertDescription> : null}
+      </Alert>
+    );
+  }
+  if (!state.outstanding) return null;
+  return (
+    <Alert variant="warning">
+      <FileWarning />
+      <AlertTitle>{state.skip?.kind === "later" ? FSM_QUOTATION_SKIP_LABELS.later : closed ? "FSM quotation number needed" : "FSM quotation number needed to close"}</AlertTitle>
+      <AlertDescription>
+        <p>
+          {state.skip?.kind === "later" && state.skip.reason ? `${state.skip.reason}. ` : ""}
+          Prepare the quotation in Zoho FSM and record its number: Finance cannot record the revenue or issue the tax invoice without it.
+        </p>
+        <Button size="sm" variant="outline" className="mt-1" onClick={onOpen}>
+          {closed ? "Add the number" : "Open the job sheet"}
+        </Button>
+      </AlertDescription>
+    </Alert>
+  );
+}
 
 function whenText(v: FieldVisitRow) {
   if (v.scheduledStart) return slotLabel(v.scheduledStart, v.scheduledEnd);
@@ -523,76 +642,98 @@ function CallOutOverview({ v, data, onTab }: { v: FieldVisitRow; data: Loaded<Ca
         />
       </StatCardGrid>
 
-      <SectionCard title="Call out details" description="What the client reported, who to meet on site and why it is covered or not." icon={<PhoneCall />} bodyClassName="px-5 pb-4">
-        <DetailList
-          rows={[
-            { label: "Issue", value: <span className="whitespace-pre-wrap">{c.issue}</span> },
-            { label: "Trade", value: c.trade ? (TRADE_LABELS[c.trade as keyof typeof TRADE_LABELS] ?? c.trade) : muted("Not set") },
-            { label: "Reported", value: `${shortDateTime(c.reportedAt)} · ${channelLabel(c.channel)}` },
-            ...(d.loggedInTime !== null ? [{ label: "Logged in time", value: d.loggedInTime ? "Yes" : <span className="text-danger">No, logged late</span> }] : []),
-            ...(c.onSiteContactName || c.onSiteContactPhone ? [{ label: "On-site contact", value: [c.onSiteContactName, c.onSiteContactPhone].filter(Boolean).join(" · ") }] : []),
-            {
-              label: "Contract",
-              value: v.contractId ? (
-                <Link href={`/extensions/amc-contracts/${v.contractId}`} className="text-brand hover:underline">
-                  {v.contractNumber ?? "Open"}
-                </Link>
-              ) : (
-                muted("—")
-              ),
-            },
-            { label: "Coverage", value: <CoverageBadge coverage={c.coverage} reserved={c.reserved} /> },
-            /* DEV-495: a handyman job, its teams and the team-hours used. */
-            ...(hm
-              ? [
-                  {
-                    label: "Handyman job",
-                    value: hm.fromCrew
-                      ? `${hm.teams} team${hm.teams === 1 ? "" : "s"}, one for each technician on the crew (each with a helper), on the free handyman hours`
-                      : "On the free handyman hours. The teams are counted from the crew once it is assigned (each technician with a helper).",
-                  },
-                  {
-                    label: "Hours used",
-                    value:
-                      hm.hoursUsed === null ? (
-                        muted("Recorded when the job is closed, from the technician's time on site")
-                      ) : (
-                        <span>
-                          {hm.hoursUsed} team-hour{hm.hoursUsed === 1 ? "" : "s"}
-                          {hm.hoursChargeable ? (
-                            <span className="text-warning">
-                              {" "}
-                              ({hm.hoursUsed - hm.hoursChargeable} from the free hours, {hm.hoursChargeable} chargeable)
-                            </span>
-                          ) : (
-                            <span className="text-muted-foreground"> from the free hours</span>
-                          )}
-                        </span>
-                      ),
-                  },
-                ]
-              : []),
-            /* Booked as covered against the check (goodwill): say so, then what the check said. */
-            ...(c.coverageOverrideReason ? [{ label: "Booked as covered", value: <span className="text-warning font-medium">{c.coverageOverrideReason}</span> }] : []),
-            ...(c.coverageReasons.length ? [{ label: c.coverageOverrideReason ? "The check said" : "Why", value: c.coverageReasons.join(" ") }] : []),
-          ]}
-        />
-        {/* What the crew wrote (18 Nov 2026): in full, under its label, not cut to one line. */}
-        {c.diagnosis || c.resolution ? (
-          <div className="mt-2 grid gap-4 border-t pt-4">
-            {([
-              ["Diagnosis", c.diagnosis],
-              ["Resolution", c.resolution],
-            ] as const).map(([label, text]) =>
-              text ? (
-                <div key={label} className="grid gap-1">
-                  <p className="text-muted-foreground text-sm">{label}</p>
-                  <p className="text-sm leading-relaxed whitespace-pre-wrap">{text}</p>
-                </div>
-              ) : null,
-            )}
+      {/*
+        Redesigned (25 Nov 2026, the user): the issue as the headline, the
+        facts as tiles, coverage with the handyman hours and the FSM
+        quotation in one block, and what the crew found as rows, as the job
+        sheet reads. Not label-and-value lines across the whole width.
+      */}
+      <SectionCard title="Call out details" description="What the client reported, who to meet on site and why it is covered or not." icon={<PhoneCall />} bodyClassName="px-5 pb-5">
+        <div className="grid gap-5">
+          <div className="bg-muted/30 flex items-start gap-3 rounded-xl border px-4 py-4">
+            <span className="bg-brand-50 text-brand border-brand/20 flex size-10 shrink-0 items-center justify-center rounded-lg border [&_svg]:size-5">
+              <PhoneCall />
+            </span>
+            <div className="grid min-w-0 gap-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <SubHeading>Reported issue</SubHeading>
+                <Badge variant="secondary" className={cn("border-0 font-medium", c.priority === "emergency" ? "bg-danger/10 text-danger" : "bg-mist text-ink-soft")}>
+                  {CALL_OUT_PRIORITY_LABELS[c.priority]}
+                </Badge>
+              </div>
+              <p className="text-lg leading-snug font-semibold whitespace-pre-wrap">{c.issue}</p>
+            </div>
           </div>
-        ) : null}
+
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <FactTile
+              icon={<CalendarClock />}
+              label="Reported"
+              value={shortDateTime(c.reportedAt)}
+              sub={
+                <>
+                  {channelLabel(c.channel)}
+                  {d.loggedInTime === false ? <span className="text-danger"> · logged late</span> : d.loggedInTime ? " · logged in time" : ""}
+                </>
+              }
+            />
+            <FactTile icon={<Wrench />} label="Trade" value={c.trade ? (TRADE_LABELS[c.trade as keyof typeof TRADE_LABELS] ?? c.trade) : null} empty="Not set" />
+            <FactTile icon={<UserRound />} label="On-site contact" value={c.onSiteContactName || c.onSiteContactPhone || null} sub={c.onSiteContactName && c.onSiteContactPhone ? c.onSiteContactPhone : null} empty="None given" />
+            <FactTile
+              icon={<FileText />}
+              label="Contract"
+              value={
+                v.contractId ? (
+                  <Link href={`/extensions/amc-contracts/${v.contractId}`} className="text-brand hover:underline">
+                    {v.contractNumber ?? "Open"}
+                  </Link>
+                ) : null
+              }
+              empty="—"
+            />
+          </div>
+
+          {/* No Coverage heading, badge or reason line here (25 Nov 2026, the user): the Coverage figure above says it. */}
+          <div className="grid gap-3">
+            {/* Booked as covered against the check (goodwill): still said, as it is a decision someone made. */}
+            {c.coverageOverrideReason ? (
+              <p className="text-sm">
+                <span className="text-warning font-medium">Booked as covered: </span>
+                {c.coverageOverrideReason}
+              </p>
+            ) : null}
+
+            {/* DEV-495: a handyman job's team-hours as one bar: from the free hours, then chargeable. */}
+            {hm ? <HandymanHoursBar hm={hm} allowance={a} /> : null}
+
+            <FsmQuotationNotice state={d.fsmQuotation ?? null} closed={c.status === "closed"} onOpen={() => onTab("job_sheet")} />
+          </div>
+
+          {/* What the crew wrote (18 Nov 2026): in full; the diagnosis one finding a row. */}
+          {c.diagnosis || c.resolution ? (
+            <div className="grid gap-5">
+              {c.diagnosis ? (
+                <div className="grid gap-2">
+                  <SubHeading>Diagnosis</SubHeading>
+                  <ul className="divide-y overflow-hidden rounded-lg border">
+                    {textLines(c.diagnosis).map((line, i) => (
+                      <li key={i} className="flex items-start gap-3 px-4 py-3">
+                        <span className="bg-muted/50 text-muted-foreground flex size-7 shrink-0 items-center justify-center rounded-md border text-xs font-semibold tabular-nums">{i + 1}</span>
+                        <span className="min-w-0 flex-1 pt-0.5 text-sm leading-relaxed">{line}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+              {c.resolution ? (
+                <div className="grid gap-2">
+                  <SubHeading>Resolution</SubHeading>
+                  <p className="bg-muted/30 rounded-lg border px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap">{c.resolution}</p>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
       </SectionCard>
     </>
   );

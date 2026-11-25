@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useMemo, useState } from "react";
-import { AlertTriangle, ExternalLink, PhoneCall, ShieldCheck } from "lucide-react";
+import { AlertTriangle, CalendarCheck, ExternalLink, PhoneCall, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 
 import { ActionDialogContent, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
@@ -41,14 +41,30 @@ type Preview = { key: string; data: CoverageResponse | null; error: string | nul
  * (AMC Allowances (Approve)). After logging, the acknowledgement is ready
  * to send on WhatsApp.
  *
+ * Opened from the Scheduling board with a `booking` (DEV-489, 25 Nov
+ * 2026), the call out is placed on that day, time and crew as soon as it is
+ * logged, with AMC's crew checks and access lead time; it then shows on the
+ * board as AMC work.
+ *
  * Mount it with a `key` that changes on every open, so it starts empty.
  */
+export interface CallOutBooking {
+  date: string;
+  /** HH:MM */
+  time: string;
+  durationMinutes: number;
+  technicianIds: string[];
+  /** As the person chose it, e.g. "Wed 26 Nov, 09:00 to 11:00 · Tech 1 Test". */
+  summary: string;
+}
+
 export function LogCallOutDialog({
   open,
   onOpenChange,
   contractId,
   onLogged,
   onOpenCallOut,
+  booking = null,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -57,6 +73,8 @@ export function LogCallOutDialog({
   onLogged?: () => unknown;
   /** Offer "Open call out" after logging. */
   onOpenCallOut?: (id: string) => void;
+  /** Booked from the Scheduling board: placed on this slot and crew once logged. */
+  booking?: CallOutBooking | null;
 }) {
   const { guard, dialogs: bookingDialogs } = useBookingGuards();
   const [picked, setPicked] = useState<PickedContract | null>(null);
@@ -77,6 +95,10 @@ export function LogCallOutDialog({
   const [preview, setPreview] = useState<Preview | null>(null);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<CreateCallOutResult | null>(null);
+  /* Booking from the board: why this crew (AMC asks when it is not the one it suggests), and how placing went. */
+  const [crewReason, setCrewReason] = useState("");
+  const [placed, setPlaced] = useState<boolean | null>(null);
+  const [placeError, setPlaceError] = useState<string | null>(null);
   const ids = {
     contract: useId(),
     priority: useId(),
@@ -92,6 +114,7 @@ export function LogCallOutDialog({
     override: useId(),
     overrideReason: useId(),
     handyman: useId(),
+    crewReason: useId(),
   };
 
   const targetId = contractId ?? picked?.id ?? null;
@@ -169,8 +192,37 @@ export function LogCallOutDialog({
       if (result.loggedInTime === false) toast.warning("This emergency was logged later than the SLA allows after the call.");
       setDone(result);
       await onLogged?.();
+      if (booking) await place(result.id);
     } catch (e) {
       toast.error(errorText(e, "Could not log the call out."));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /* DEV-489: the slot and crew chosen on the Scheduling board, through the call out's own schedule step. */
+  const place = async (id: string) => {
+    if (!booking) return;
+    setBusy(true);
+    try {
+      await guard((answers) =>
+        callOutsService.action(id, {
+          action: "schedule",
+          date: booking.date,
+          time: booking.time,
+          durationMinutes: booking.durationMinutes,
+          technicianIds: booking.technicianIds,
+          overrideReason: crewReason.trim() || null,
+          ...(answers.insideLeadTime ? { insideLeadTime: true } : {}),
+        }),
+      );
+      setPlaced(true);
+      setPlaceError(null);
+      toast.success("Placed on the Scheduling board");
+      await onLogged?.();
+    } catch (e) {
+      setPlaced(false);
+      setPlaceError(errorText(e, "Could not place it on the board."));
     } finally {
       setBusy(false);
     }
@@ -194,6 +246,34 @@ export function LogCallOutDialog({
 
         {done ? (
           <div className="grid gap-4">
+            {booking ? (
+              placed ? (
+                <div className="border-success/30 bg-success/5 flex items-start gap-3 rounded-lg border px-4 py-3 text-sm">
+                  <CalendarCheck className="text-success mt-0.5 size-4 shrink-0" />
+                  <div className="grid gap-0.5">
+                    <p className="font-medium">On the Scheduling board</p>
+                    <p className="text-muted-foreground text-xs">{booking.summary}. It shows as AMC work and is changed in AMC.</p>
+                  </div>
+                </div>
+              ) : placed === false ? (
+                <div className="border-warning/40 bg-warning/5 grid gap-3 rounded-lg border px-4 py-3 text-sm">
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle className="text-warning mt-0.5 size-4 shrink-0" />
+                    <div className="grid gap-0.5">
+                      <p className="font-medium">Logged, but not on the board yet</p>
+                      <p className="text-muted-foreground text-xs">{placeError}</p>
+                    </div>
+                  </div>
+                  <Field id={ids.crewReason} label="Why this crew (when AMC asks)">
+                    <Textarea id={ids.crewReason} rows={2} maxLength={500} value={crewReason} onChange={(e) => setCrewReason(e.target.value)} />
+                  </Field>
+                  <Button size="sm" variant="outline" className="justify-self-start" disabled={busy} onClick={() => void place(done.id)}>
+                    <CalendarCheck className="size-4" />
+                    Place on the board again
+                  </Button>
+                </div>
+              ) : null
+            ) : null}
             <div className="grid gap-2 rounded-lg border px-4 py-3">
               <CoverageBadge coverage={done.coverage} reserved={done.reserved} />
               <ul className="text-sm">
@@ -225,6 +305,15 @@ export function LogCallOutDialog({
           </div>
         ) : (
           <div className="grid min-w-0 gap-4">
+            {booking ? (
+              <div className="bg-muted/30 flex items-start gap-3 rounded-lg border px-4 py-3">
+                <CalendarCheck className="text-muted-foreground mt-0.5 size-4 shrink-0" />
+                <div className="grid min-w-0 gap-0.5">
+                  <p className="text-sm font-medium">Placed on the board once logged</p>
+                  <TruncatedText text={booking.summary} className="text-muted-foreground text-xs" />
+                </div>
+              </div>
+            ) : null}
             <Field id={ids.contract} label="Contract">
               {contractId ? (
                 /* Held to the dialog's width (24 Nov 2026): a long address ran past its edge; now it ends in "…" with the whole of it on hover. */
@@ -389,6 +478,12 @@ export function LogCallOutDialog({
               handyman={handyman}
             />
 
+            {booking ? (
+              <Field id={ids.crewReason} label="Why this crew (optional)" hint="AMC asks for it when the crew is not the one it suggests for the trade.">
+                <Input id={ids.crewReason} maxLength={500} value={crewReason} onChange={(e) => setCrewReason(e.target.value)} />
+              </Field>
+            ) : null}
+
             {canBookCovered ? (
               <div className="border-warning/30 bg-warning/5 grid gap-3 rounded-lg border px-4 py-3">
                 <div className="flex items-start gap-3">
@@ -448,7 +543,7 @@ export function LogCallOutDialog({
                 icon={overriding ? <ShieldCheck className="size-4" /> : <PhoneCall className="size-4" />}
                 onClick={() => void submit()}
               >
-                {overriding ? "Log as covered" : "Log call out"}
+                {overriding ? "Log as covered" : booking ? "Log and place" : "Log call out"}
               </SubmitButton>
             </>
           )}

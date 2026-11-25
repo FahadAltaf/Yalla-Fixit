@@ -544,7 +544,8 @@ async function busyOn(admin: Admin, date: string, technicianIds: string[] | null
   const jobs = (async () => {
     const { data: entries } = await admin
       .from("schedule_entries")
-      .select("id, start_at, end_at, title, client_name, assignments:schedule_entry_assignments(technician_fsm_id), schedule_versions!inner(schedule_date, is_current)")
+      /* "*" so amc_kind comes when it exists (20261125100000) and nothing fails before. */
+      .select("*, assignments:schedule_entry_assignments(technician_fsm_id), schedule_versions!inner(schedule_date, is_current)")
       .eq("schedule_versions.schedule_date", date)
       .eq("schedule_versions.is_current", true)
       .not("start_at", "is", null);
@@ -597,6 +598,8 @@ async function busyOn(admin: Admin, date: string, technicianIds: string[] | null
 
   for (const e of entries) {
     if (!e.start_at || !e.end_at) continue;
+    /* DEV-489: an AMC job on the board is the AMC record above, not a second booking. */
+    if (e.amc_kind) continue;
     for (const a of (e.assignments ?? []) as Row[]) {
       const t = String(a.technician_fsm_id);
       if (technicianIds?.length && !technicianIds.includes(t)) continue;

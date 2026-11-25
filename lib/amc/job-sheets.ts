@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { fsmQuotationSkipSchema } from "./fsm-quotation";
 import { sendChannelSchema } from "./send-channels";
 
 /**
@@ -209,7 +210,7 @@ export const jobSheetActionSchema = z.discriminatedUnion("action", [
     visit (23 Nov 2026).
   */
   /* fsmQuotationNo: a call out's or additional work's FSM quotation number (DEV-508); a PPM visit has none. */
-  z.object({ action: z.literal("close"), comment: optionalText(1000), send: sendChannelSchema.optional(), pdfBase64: reportPdf, fsmQuotationNo: z.string().trim().min(1).max(40).optional(), hoursUsed: z.number().int().min(1).max(500).optional() }).strict(),
+  z.object({ action: z.literal("close"), comment: optionalText(1000), send: sendChannelSchema.optional(), pdfBase64: reportPdf, fsmQuotationNo: z.string().trim().min(1).max(40).optional(), fsmQuotationSkip: fsmQuotationSkipSchema.optional(), hoursUsed: z.number().int().min(1).max(500).optional() }).strict(),
   z.object({ action: z.literal("return"), comment: text(1000).min(3, "Say what needs fixing") }).strict(),
   z.object({ action: z.literal("resend_report"), channel: sendChannelSchema.optional(), pdfBase64: reportPdf }).strict(),
   /* DEV-404: the coordinator sent it themselves (WhatsApp, by hand); that stops the clock. */

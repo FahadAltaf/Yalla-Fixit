@@ -718,14 +718,49 @@ function Commercial({ r }: { r: CommercialReport }) {
             { label: "Paid", value: <Money value={w.paid} className="text-xl" />, hint: `${formatCurrencyAED(w.invoiced)} invoiced` },
           ]} />
         </Panel>
-        <ListPanel title="Coordinators" description="Each owner's period: enquiries, contracts signed and lost." icon={<Users />}
+        <ListPanel title="Coordinators" description="Each owner's period (DEV-502): enquiries won, proposals sent, contracts signed, renewed and lost." icon={<Users />}
           empty="Nothing in this period."
           more="coordinators"
             items={r.coordinators.map((x) => ({
               key: x.ownerId || "unassigned",
               title: x.owner || "Unassigned",
               value: `${x.signed} signed`,
-              detail: `${x.enquiries} ${x.enquiries === 1 ? "enquiry" : "enquiries"} · ${pct(x.winRate)} won · ${formatCurrencyAED(x.signedValue)} signed · ${x.renewed} renewed · ${x.lost} lost`,
+              detail: `${x.enquiries} ${x.enquiries === 1 ? "enquiry" : "enquiries"}, ${x.won} won (${pct(x.winRate)}) · ${plural(x.proposals, "proposal")}, ${x.sent} sent · ${formatCurrencyAED(x.signedValue)} signed · ${x.renewed} renewed · ${x.lost} lost`,
+            }))}
+        />
+      </div>
+
+      {/* DEV-502: the AMCs lost in the period, each with its reason, and the reasons together. */}
+      <div className="grid items-stretch gap-6 lg:grid-cols-2">
+        <ListPanel
+          title="Lost AMCs"
+          description={`Recorded as not renewed or lapsed in the period: ${plural(r.lost.count, "contract")}, ${formatCurrencyAED(r.lost.value)} incl. VAT.`}
+          icon={<AlertTriangle />}
+          empty="No AMC was lost in this period."
+          more="lost AMCs"
+          items={r.lost.rows.map((x) => ({
+            key: x.id,
+            title: `${x.number} · ${x.customerName}`,
+            value: formatCurrencyAED(x.value),
+            detail: `${x.outcome === "lapsed" ? "Lapsed" : "Not renewed"} · ${x.reason || "No reason recorded"} · ${dayLabel(x.at)}`,
+            href: `${BASE}/${x.id}`,
+          }))}
+        />
+        <ListPanel
+          title="Why AMCs were lost"
+          description="The reasons given, by the value lost."
+          icon={<ListChecks />}
+          empty="No AMC was lost in this period."
+          more="reasons"
+          items={[...r.lost.byReason]
+            .sort((a, b) => b.value - a.value)
+            .map((x) => ({
+              key: x.reason,
+              title: x.reason || "No reason recorded",
+              value: formatCurrencyAED(x.value),
+              percent: r.lost.value ? (x.value / r.lost.value) * 100 : 0,
+              tone: "attention" as const,
+              detail: plural(x.count, "contract"),
             }))}
         />
       </div>
@@ -945,6 +980,17 @@ function reportBlocks(d: ManagementDashboard, o: OperationalReport, c: Commercia
         { key: "at", label: "Recorded" },
       ],
       rows: c.lost.rows.map((x) => ({ ...x, outcome: x.outcome === "lapsed" ? "Lapsed" : "Not renewed", at: x.at.slice(0, 10) })),
+      money: ["value"],
+    },
+    {
+      sheet: "Proposals",
+      title: "Why AMCs were lost",
+      columns: [
+        { key: "reason", label: "Reason" },
+        { key: "count", label: "Contracts" },
+        { key: "value", label: "Value lost (AED)" },
+      ],
+      rows: c.lost.byReason.map((x) => ({ ...x, reason: x.reason || "No reason recorded" })),
       money: ["value"],
     },
     {

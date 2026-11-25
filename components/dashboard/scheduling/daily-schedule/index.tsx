@@ -74,6 +74,8 @@ import {
   Eye,
   GripVertical,
   Layers,
+  ListChecks,
+  CalendarArrowUp,
   MoveHorizontal,
   SquarePen,
   Plus,
@@ -110,6 +112,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import AddEntryDialog from "./add-entry-dialog";
 import SubmitDialog from "./submit-dialog";
 import EntryDetailDialog from "./entry-detail-dialog";
+import MoveEntriesDialog from "./move-entries-dialog";
+import { LogCallOutDialog, type CallOutBooking } from "@/components/dashboard/extensions/amc-contracts/log-call-out-dialog";
+import { amcEntryHref } from "@/lib/scheduling/amc-entries";
+import { movedFrom } from "@/lib/scheduling/move-entries";
 import { fsmRecordUrl } from "./shift-utils";
 import RejectDialog from "./reject-dialog";
 import HistoryDialog from "./history-dialog";
@@ -331,6 +337,12 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
     endTime?: string;
   } | null>(null);
   const [selectedEntry, setSelectedEntry] = useState<ScheduleEntry | null>(null);
+  /* DEV-393: pick several entries, then move them to another day or a new crew in one action. */
+  const [selectMode, setSelectMode] = useState(false);
+  const [picked, setPicked] = useState<{ date: string; ids: string[] }>({ date: "", ids: [] });
+  const [moveFor, setMoveFor] = useState<ScheduleEntry[] | null>(null);
+  /* DEV-489: AMC work booked from Add entry: the slot and crew, then the call out dialog. */
+  const [amcBooking, setAmcBooking] = useState<{ key: number; booking: CallOutBooking } | null>(null);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [clearOpen, setClearOpen] = useState(false);
@@ -513,11 +525,11 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
   // cheap. It waits while a dialog is open, so it never pulls the rug.
   useEffect(() => {
     const id = setInterval(() => {
-      if (document.hidden || selectedEntry || addEntryFor || submitOpen) return;
+      if (document.hidden || selectedEntry || addEntryFor || submitOpen || moveFor || amcBooking) return;
       loadDay(date, { silent: true });
     }, 5 * 60_000);
     return () => clearInterval(id);
-  }, [date, loadDay, selectedEntry, addEntryFor, submitOpen]);
+  }, [date, loadDay, selectedEntry, addEntryFor, submitOpen, moveFor, amcBooking]);
 
   const changeZoom = (delta: number) => {
     setZoomIndex((prev) => {
@@ -756,8 +768,21 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
 
   const isEditable = version?.status === "draft" || version?.status === "draft_revision";
 
+  // The selection belongs to the day it was made on.
+  const pickedIds = picked.date === date ? picked.ids : [];
+  const pickedEntries = entries.filter((e) => pickedIds.includes(e.id));
+  const clearPicked = () => setPicked({ date, ids: [] });
+
   // A job carried over from an earlier day is changed on that day's board.
   const openEntry = useCallback((entry: ScheduleEntry) => {
+    /* DEV-393: while selecting, a click picks or drops the entry instead of opening it. */
+    if (selectMode && !entry.carried_over) {
+      setPicked((prev) => {
+        const ids = prev.date === date ? prev.ids : [];
+        return { date, ids: ids.includes(entry.id) ? ids.filter((x) => x !== entry.id) : [...ids, entry.id] };
+      });
+      return;
+    }
     if (!entry.carried_over) {
       setSelectedEntry(entry);
       return;
@@ -771,7 +796,7 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
       duration: 8000,
       action: { label: `Open ${day}`, onClick: () => setDate(entry.operating_date) },
     });
-  }, []);
+  }, [selectMode, date]);
 
   const hasCustomOrder = dayOrder !== null;
   const defaultSortMode: SortMode = hasCustomOrder ? "custom" : "site";
@@ -1393,6 +1418,24 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
               <HistoryIcon className="size-4" />
               History
             </Button>
+
+            {/* DEV-393: select entries to move them to another day or a new crew together. */}
+            {access?.canEdit && (
+              <Hint label={selectMode ? "Stop selecting" : "Select entries to move them to another day or a new crew"}>
+                <Button
+                  variant={selectMode ? "default" : "outline"}
+                  size="sm"
+                  aria-pressed={selectMode}
+                  onClick={() => {
+                    setSelectMode((v) => !v);
+                    clearPicked();
+                  }}
+                >
+                  <ListChecks className="size-4" />
+                  {selectMode ? "Selecting" : "Select"}
+                </Button>
+              </Hint>
+            )}
           </div>
         </div>
 
@@ -1680,11 +1723,94 @@ export default function DailyScheduleDashboard({ technicians: initialTechnicians
             setAddEntryFor(null);
             loadDay(date, { silent: true });
           }}
+          onBookAmc={
+            access?.canEdit
+              ? (booking) => {
+                  setAddEntryFor(null);
+                  setAmcBooking({ key: Date.now(), booking });
+                }
+              : undefined
+          }
+        />
+      )}
+
+      {amcBooking && (
+        <LogCallOutDialog
+          key={amcBooking.key}
+          open
+          booking={amcBooking.booking}
+          onOpenChange={(open) => !open && setAmcBooking(null)}
+          onLogged={() => loadDay(date, { silent: true })}
+          onOpenCallOut={(id) => {
+            const href = amcEntryHref("call_out", id);
+            if (href) window.open(href, "_blank", "noopener");
+          }}
+        />
+      )}
+
+      {/* DEV-393: what is selected, and the one action for all of it. */}
+      {pickedIds.length > 0 && (
+        <style>{`${pickedIds.map((id) => `[data-entry-id="${id}"]`).join(",")}{outline:2px solid #fff;outline-offset:-2px;filter:saturate(1.25) brightness(1.1)}`}</style>
+      )}
+      {selectMode && (
+        <div
+          role="region"
+          aria-label="Selected entries"
+          className="bg-popover text-popover-foreground fixed bottom-4 left-1/2 z-40 flex w-[calc(100%-2rem)] max-w-2xl -translate-x-1/2 flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border px-4 py-2.5 shadow-lg print:hidden"
+        >
+          <div className="min-w-0">
+            <p className="text-sm font-medium">
+              {pickedEntries.length ? `${pickedEntries.length} entr${pickedEntries.length === 1 ? "y" : "ies"} selected` : "Click entries on the board to select them"}
+            </p>
+            <p className="text-muted-foreground text-xs">Move them to another day or give them a new crew. AMC work moves through AMC.</p>
+          </div>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            <Button size="sm" variant="ghost" onClick={clearPicked} disabled={!pickedEntries.length}>
+              Clear
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => {
+                setSelectMode(false);
+                clearPicked();
+              }}
+            >
+              Done
+            </Button>
+            <Button size="sm" onClick={() => setMoveFor(pickedEntries)} disabled={!pickedEntries.length}>
+              <CalendarArrowUp className="size-4" />
+              Move
+            </Button>
+          </div>
+        </div>
+      )}
+      {moveFor && (
+        <MoveEntriesDialog
+          entries={moveFor}
+          technicians={technicians.filter(isListedTechnician)}
+          currentDate={date}
+          onOpenChange={(open) => !open && setMoveFor(null)}
+          onMoved={(allMoved) => {
+            if (allMoved) {
+              clearPicked();
+              setSelectMode(false);
+            }
+            loadDay(date, { silent: true });
+          }}
         />
       )}
 
       {selectedEntry && config && (
         <EntryDetailDialog
+          onMove={
+            access?.canEdit && !selectedEntry.carried_over
+              ? () => {
+                  setMoveFor([selectedEntry]);
+                  setSelectedEntry(null);
+                }
+              : undefined
+          }
           entry={selectedEntry}
           isEditable={isEditable}
           versionStatus={version?.status ?? null}
@@ -2437,6 +2563,8 @@ function ShiftSection({
         latest.current.isEditable &&
         !placed.allDay &&
         !entry.carried_over &&
+        /* DEV-489: AMC work is moved in AMC (service window, crew checks); it does not drag here. */
+        !entry.amc_kind &&
         !placed.clippedEnd &&
         (mode === "resize" || !placed.clippedStart);
       const track = (e.currentTarget as HTMLElement).closest<HTMLElement>("[data-track]");
@@ -3447,6 +3575,11 @@ const TechnicianRow = memo(function TechnicianRow({
           }
           if (endMin > dayEnd) runsOn.push("Runs on past midnight into the next day");
           const runsOnNote = runsOn.length > 0 ? ` · ${runsOn.join(" · ")}` : "";
+          /* DEV-393: moved here from another day; the day it was first planned for stays known. */
+          const firstDay = movedFrom(entry);
+          const movedNote = firstDay
+            ? ` · Moved from ${formatZonedDate(zonedTimeToUtc(firstDay, "12:00"), { weekday: "short", day: "numeric", month: "short" })}`
+            : "";
           const conflictsWithLeave = leave ? entryOverlapsLeave(entry, leave) : false;
           const label = entryLabel(entry);
           const timeLabel = allDay ? "All Day" : formatRange(startMin, shownEnd);
@@ -3466,9 +3599,13 @@ const TechnicianRow = memo(function TechnicianRow({
               ? resolveAppointmentState(entry.fsm_status)
               : "scheduled";
           const stateLabel = state ? APPOINTMENT_STATE_LABELS[state] : null;
+          /* DEV-489: AMC work, in the brand colour so it reads apart from notes and FSM jobs. */
+          const isAmcWork = Boolean(entry.amc_kind);
           const boxColour = syncFailed
             ? "bg-danger text-on-tone"
-            : isFreeText
+            : isAmcWork
+              ? "border border-brand/50 bg-brand/80 text-white"
+              : isFreeText
               ? "border border-dashed border-border bg-ink/40 text-white dark:bg-ink/25"
               : APPOINTMENT_STATE_STYLES[state ?? "scheduled"].bar;
 
@@ -3486,7 +3623,7 @@ const TechnicianRow = memo(function TechnicianRow({
                   : entry.entry_type === "new_appointment" && !entry.fsm_appointment_id
                     ? " · Will be created in FSM on approval"
                     : ""
-                }${overlaps ? " · Overlaps another appointment for this technician" : ""}${entry.origin === "fsm" ? " · Booked in Zoho FSM" : ""}${runsOnNote}`;
+                }${overlaps ? " · Overlaps another appointment for this technician" : ""}${entry.origin === "fsm" ? " · Booked in Zoho FSM" : ""}${isAmcWork ? ` · AMC ${entry.amc_visit_type ?? "work"}, ${entry.amc_ref ?? ""}: changed in AMC, not sent to FSM` : ""}${movedNote}${runsOnNote}`;
 
           // N1: sync-status icon.
           const synced = !isFreeText && Boolean(entry.fsm_appointment_id) && entry.sync_status === "synced";
@@ -3498,7 +3635,7 @@ const TechnicianRow = memo(function TechnicianRow({
           const laneTop = lane * laneHeight + 2;
           const laneBoxHeight = laneHeight - 4;
           // Moved only where it is drawn whole; stretched wherever its end is.
-          const resizable = isEditable && !allDay && !carried && !clippedEnd;
+          const resizable = isEditable && !allDay && !carried && !clippedEnd && !isAmcWork;
           const draggable = resizable && !clippedStart;
           const { primaryText, secondaryText } = entryText(entry, fieldVis, allDay);
 
@@ -3506,6 +3643,7 @@ const TechnicianRow = memo(function TechnicianRow({
             <Hint key={entry.id} label={beingDragged ? undefined : tooltip}>
               <button
                 type="button"
+                data-entry-id={entry.id}
                 onPointerDown={(e) => onBeginEntryDrag(e, entry, placed, id, "move")}
                 // Pointer clicks are handled on pointer-up (so a drag isn't also
                 // a click); this only catches keyboard activation.

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { syncAmcScheduleEntries, touchedIds } from "@/lib/server/amc/schedule-link";
 
 import { canOperateContract } from "@/lib/amc/access";
 import { todayInDubai } from "@/lib/amc/contracts";
@@ -39,6 +40,8 @@ export async function POST(req: NextRequest) {
   const canChange = (ownerId: string | null) => gate.visits.create || gate.visits.edit || canOperateContract(gate.actor, ownerId);
   try {
     const result = await performBoardAction(gate.admin, parsed.data, { id: gate.userId, label: gate.label }, await readAmcConfig(gate.admin), canChange, gate.canApprove);
+    /* DEV-489: the Scheduling board shows the job as it now stands (portal only, never sent to FSM). */
+    await syncAmcScheduleEntries(gate.admin, "ppm", touchedIds(parsed.data), gate.userId);
     return NextResponse.json(result);
   } catch (error) {
     return contractErrorResponse(error, "Could not change the board");

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse, after } from "next/server";
+import { AMC_ENTRY_READ_ONLY } from "@/lib/scheduling/amc-entries";
 import { z } from "zod";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
@@ -117,6 +118,9 @@ export async function POST(req: NextRequest) {
     if (sourceError) throw new Error(sourceError.message);
     if (!sourceRow) return NextResponse.json({ error: "Entry not found" }, { status: 404 });
     const source = sourceRow as unknown as SourceEntry;
+    /* DEV-489: AMC work is planned in AMC (its own service window and crew checks); it is not copied here. */
+    const { data: amcCheck } = await admin.from("schedule_entries").select("*").eq("id", entryId).maybeSingle();
+    if ((amcCheck as { amc_kind?: string | null } | null)?.amc_kind) return NextResponse.json({ error: AMC_ENTRY_READ_ONLY }, { status: 409 });
     const isNote = source.entry_type === "free_text";
 
     // For an appointment: what the copy would contain and cost, read from

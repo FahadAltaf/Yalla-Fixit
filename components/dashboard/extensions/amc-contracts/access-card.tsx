@@ -9,7 +9,6 @@ import { ActionDialogContent, ErrorState, ListSkeleton, SubmitButton, useConfirm
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -20,7 +19,7 @@ import { ACCESS_STATUS_LABELS, type AccessStatus } from "@/lib/amc/visits";
 import type { AccessRuleView, PassView } from "@/lib/server/amc/visits";
 import { clientProfileService, type AccessRuleRecord } from "@/modules/amc-contracts/client-profile-service";
 
-import { errorText } from "./call-out-shared";
+import { CompactEmpty, errorText } from "./call-out-shared";
 import { formatContractDate, formatDateTime } from "./contract-status";
 import { PassTypeBadges, PassTypeFields, newPassType, passTypeOf, type PassType } from "./pass-fields";
 import { AccessRuleDialog } from "./profile/property-panels";
@@ -228,87 +227,123 @@ export function AccessCard({
             ) : null}
           </div>
 
-          <div className="grid gap-2">
-            <p className="text-muted-foreground flex items-center gap-1.5 text-sm font-medium [&_svg]:size-3.5">
-              <KeyRound />
-              What the property needs {rules.length ? <span className="tabular-nums">({rules.length})</span> : null}
-              <span className="text-xs font-normal">Kept on the property, for every visit there.</span>
-            </p>
-            {rules.length === 0 ? (
-              <EmptyState icon={<KeyRound className="size-5" />} title="No access rules" description="This property asks for no pass or permit." />
-            ) : (
-              <ul className="grid gap-2">
-                {rules.map((r) => (
-                  <AccessRuleItem key={r.id} rule={r} onEdit={canEdit && propertyId ? () => openRule(ruleRecord(r, propertyId)) : undefined} />
-                ))}
-              </ul>
-            )}
-          </div>
+          {/*
+            Nothing asked and nothing on file (25 Nov 2026): one compact box,
+            not two tall empty ones; otherwise each part, an empty one as one line.
+          */}
+          {rules.length === 0 && passes.length === 0 ? (
+            <CompactEmpty
+              icon={<ShieldCheck />}
+              title="Nothing needed for access"
+              description="This property asks for no pass or permit, and no pass is on file."
+              action={
+                canEdit ? (
+                  <div className="flex flex-wrap gap-2">
+                    {propertyId ? (
+                      <Button size="sm" variant="outline" onClick={() => openRule(null)}>
+                        <KeyRound className="size-4" />
+                        Add rule
+                      </Button>
+                    ) : null}
+                    <Button size="sm" variant="outline" onClick={startAdd}>
+                      <Plus className="size-4" />
+                      Add pass
+                    </Button>
+                  </div>
+                ) : null
+              }
+            />
+          ) : (
+            <>
+              <div className="grid gap-2">
+                <p className="text-muted-foreground flex items-center gap-1.5 text-sm font-medium [&_svg]:size-3.5">
+                  <KeyRound />
+                  What the property needs {rules.length ? <span className="tabular-nums">({rules.length})</span> : null}
+                  <span className="text-xs font-normal">Kept on the property, for every visit there.</span>
+                </p>
+                {rules.length === 0 ? (
+                  <CompactEmpty title="No access rules" description="This property asks for no pass or permit." />
+                ) : (
+                  <ul className="grid gap-2">
+                    {rules.map((r) => (
+                      <AccessRuleItem key={r.id} rule={r} onEdit={canEdit && propertyId ? () => openRule(ruleRecord(r, propertyId)) : undefined} />
+                    ))}
+                  </ul>
+                )}
+              </div>
 
-          <div className="grid gap-2">
-            <p className="text-muted-foreground flex items-center gap-1.5 text-sm font-medium [&_svg]:size-3.5">
-              <ShieldCheck />
-              Passes {passes.length ? <span className="tabular-nums">({passes.length})</span> : null}
-            </p>
-            {passes.length === 0 ? (
-              <EmptyState
-                icon={<FileText className="size-5" />}
-                title="No pass on file"
-                description="Add the gate pass or permit with how long it is valid. A pass on the property counts for every visit there."
-                action={canEdit ? { label: "Add pass", onClick: startAdd } : undefined}
-              />
-            ) : (
-              <ul className="grid gap-2">
-                {passes.map((p) => {
-                  const runsOut = p.expiresOn !== null && Boolean(day) && p.expiresOn < day;
-                  const onProperty = p.level === "property";
-                  return (
-                    <li key={p.id} className="flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3">
-                      <span aria-hidden className="bg-muted/50 text-muted-foreground flex size-9 shrink-0 items-center justify-center rounded-md border">
-                        <FileText className="size-4" />
-                      </span>
-                      <span className="grid min-w-0 flex-1 gap-0.5">
-                        <span className="flex flex-wrap items-center gap-2">
-                          <span className="truncate text-sm font-medium" title={p.fileName}>
-                            {p.fileName}
-                          </span>
-                          <Badge variant="secondary" className={`border-0 font-medium ${runsOut ? "bg-warning/10 text-warning" : "bg-success/10 text-success"}`}>
-                            {p.expiresOn ? (runsOut ? `Ran out ${formatContractDate(p.expiresOn)}` : `Valid until ${formatContractDate(p.expiresOn)}`) : "No end date"}
-                          </Badge>
-                          {data?.passTypes ? <PassTypeBadges pass={p} rules={rules} /> : null}
-                          {onProperty ? (
-                            <Badge variant="outline" className="font-normal" title="Held by the property, for every visit there. Change it on the property's page.">
-                              Property pass
-                            </Badge>
-                          ) : null}
-                        </span>
-                        {p.notes ? <span className="text-sm whitespace-pre-wrap">{p.notes}</span> : null}
-                        <span className="text-muted-foreground text-xs">
-                          Added {formatDateTime(p.uploadedAt)}
-                          {p.uploadedBy ? ` by ${p.uploadedBy}` : ""}
-                        </span>
-                      </span>
-                      <span className="flex shrink-0 items-center gap-1">
-                        <Button size="sm" variant="outline" onClick={() => void openFile(p.id)}>
-                          Open
+              <div className="grid gap-2">
+                <p className="text-muted-foreground flex items-center gap-1.5 text-sm font-medium [&_svg]:size-3.5">
+                  <ShieldCheck />
+                  Passes {passes.length ? <span className="tabular-nums">({passes.length})</span> : null}
+                </p>
+                {passes.length === 0 ? (
+                  <CompactEmpty
+                    title="No pass on file"
+                    description="Add the gate pass or permit with how long it is valid. A pass on the property counts for every visit there."
+                    action={
+                      canEdit ? (
+                        <Button size="sm" variant="outline" onClick={startAdd}>
+                          <Plus className="size-4" />
+                          Add pass
                         </Button>
-                        {canEdit && !onProperty ? (
-                          <>
-                            <Button size="icon" variant="ghost" className="size-8" title="Change the pass" aria-label={`Change ${p.fileName}`} onClick={() => startEdit(p)}>
-                              <SquarePen className="size-4" />
+                      ) : null
+                    }
+                  />
+                ) : (
+                  <ul className="grid gap-2">
+                    {passes.map((p) => {
+                      const runsOut = p.expiresOn !== null && Boolean(day) && p.expiresOn < day;
+                      const onProperty = p.level === "property";
+                      return (
+                        <li key={p.id} className="flex flex-wrap items-center gap-3 rounded-lg border px-4 py-3">
+                          <span aria-hidden className="bg-muted/50 text-muted-foreground flex size-9 shrink-0 items-center justify-center rounded-md border">
+                            <FileText className="size-4" />
+                          </span>
+                          <span className="grid min-w-0 flex-1 gap-0.5">
+                            <span className="flex flex-wrap items-center gap-2">
+                              <span className="truncate text-sm font-medium" title={p.fileName}>
+                                {p.fileName}
+                              </span>
+                              <Badge variant="secondary" className={`border-0 font-medium ${runsOut ? "bg-warning/10 text-warning" : "bg-success/10 text-success"}`}>
+                                {p.expiresOn ? (runsOut ? `Ran out ${formatContractDate(p.expiresOn)}` : `Valid until ${formatContractDate(p.expiresOn)}`) : "No end date"}
+                              </Badge>
+                              {data?.passTypes ? <PassTypeBadges pass={p} rules={rules} /> : null}
+                              {onProperty ? (
+                                <Badge variant="outline" className="font-normal" title="Held by the property, for every visit there. Change it on the property's page.">
+                                  Property pass
+                                </Badge>
+                              ) : null}
+                            </span>
+                            {p.notes ? <span className="text-sm whitespace-pre-wrap">{p.notes}</span> : null}
+                            <span className="text-muted-foreground text-xs">
+                              Added {formatDateTime(p.uploadedAt)}
+                              {p.uploadedBy ? ` by ${p.uploadedBy}` : ""}
+                            </span>
+                          </span>
+                          <span className="flex shrink-0 items-center gap-1">
+                            <Button size="sm" variant="outline" onClick={() => void openFile(p.id)}>
+                              Open
                             </Button>
-                            <Button size="icon" variant="ghost" className="text-destructive size-8" title="Remove the pass" aria-label={`Remove ${p.fileName}`} onClick={() => remove(p)}>
-                              <Trash2 className="size-4" />
-                            </Button>
-                          </>
-                        ) : null}
-                      </span>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </div>
+                            {canEdit && !onProperty ? (
+                              <>
+                                <Button size="icon" variant="ghost" className="size-8" title="Change the pass" aria-label={`Change ${p.fileName}`} onClick={() => startEdit(p)}>
+                                  <SquarePen className="size-4" />
+                                </Button>
+                                <Button size="icon" variant="ghost" className="text-destructive size-8" title="Remove the pass" aria-label={`Remove ${p.fileName}`} onClick={() => remove(p)}>
+                                  <Trash2 className="size-4" />
+                                </Button>
+                              </>
+                            ) : null}
+                          </span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+            </>
+          )}
         </div>
       )}
 

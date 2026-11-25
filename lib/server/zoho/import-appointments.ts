@@ -374,6 +374,22 @@ export async function importFsmAppointmentsForDay(
     const alreadyOnBoard = new Set(
       (existing ?? []).filter((e) => !removedIds.has(e.id as string)).map((e) => e.fsm_appointment_id as string),
     );
+    // DEV-393: an appointment moved from this day to another on the board
+    // stays on FSM's old day until the new day is approved; it is not pulled
+    // back onto this day meanwhile. (No column before 20261125100000: none moved.)
+    if (appointments.length > 0) {
+      const { data: movedAway, error: movedError } = await admin
+        .from("schedule_entries")
+        .select("fsm_appointment_id")
+        .eq("original_operating_date", input.date)
+        .eq("needs_sync", true)
+        .neq("schedule_version_id", input.versionId)
+        .in(
+          "fsm_appointment_id",
+          appointments.map((a) => a.id),
+        );
+      if (!movedError) (movedAway ?? []).forEach((e) => alreadyOnBoard.add(e.fsm_appointment_id as string));
+    }
 
     const { data: technicians } = await admin
       .from("technician_reference")

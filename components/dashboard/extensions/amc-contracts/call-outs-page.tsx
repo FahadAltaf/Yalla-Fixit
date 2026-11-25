@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Database, PhoneCall, Plus } from "lucide-react";
+import { FileWarning, Database, PhoneCall, Plus } from "lucide-react";
 
 import { DataTable } from "@/components/data-table";
 import { PageHeading, timeAgo } from "@/components/dashboard/shared/kaizen";
@@ -73,7 +73,25 @@ export function callOutColumns({ withClient = true }: { withClient?: boolean } =
     {
       id: "status",
       header: "Status",
-      cell: ({ row }) => <CallOutStatusBadge status={row.original.status} />,
+      /* Under the status, what is still owed (25 Nov 2026): the FSM quotation number Finance needs. */
+      cell: ({ row }) => (
+        <div className="flex flex-col items-start gap-1">
+          <CallOutStatusBadge status={row.original.status} />
+          {row.original.fsmQuotation ? (
+            <span
+              className="text-warning inline-flex items-center gap-1 text-xs font-medium whitespace-nowrap"
+              title={
+                row.original.fsmQuotation === "to_follow"
+                  ? "Closed with the FSM quotation number to follow: add it on the call out's Job sheet."
+                  : "Chargeable: the FSM quotation number is needed to close it (Finance invoices from it)."
+              }
+            >
+              <FileWarning className="size-3.5" />
+              {row.original.fsmQuotation === "to_follow" ? "Quotation no. to follow" : "Quotation no. needed"}
+            </span>
+          ) : null}
+        </div>
+      ),
     },
     {
       id: "sla",

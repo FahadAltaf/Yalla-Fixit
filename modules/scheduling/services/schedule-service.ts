@@ -1,4 +1,5 @@
 import { executeRESTBackend } from "@/lib/rest-server";
+import type { MoveEntriesInput, MoveEntryResult } from "@/lib/scheduling/move-entries";
 
 export type ScheduleEntryType = "existing_appointment" | "new_appointment" | "free_text";
 export type ShiftType = "day" | "night";
@@ -59,6 +60,15 @@ export interface ScheduleEntry {
   created_by_user?: { full_name: string | null; email: string } | { full_name: string | null; email: string }[] | null;
   updated_by_user?: { full_name: string | null; email: string } | { full_name: string | null; email: string }[] | null;
   schedule_entry_assignments?: ScheduleEntryAssignment[];
+  // DEV-489 (25 Nov 2026): an AMC visit, call out or additional work shown on
+  // the board. Changed in AMC; read only here; never sent to FSM.
+  amc_kind?: "ppm" | "call_out" | "additional_work" | null;
+  amc_record_id?: string | null;
+  amc_contract_id?: string | null;
+  amc_visit_type?: string | null;
+  amc_ref?: string | null;
+  /* DEV-393: the day it was first planned for, once moved to another day. */
+  original_operating_date?: string | null;
   // Set by the day route on a job that belongs to an EARLIER day and is still
   // running on the day being shown. It is drawn, but edited on its own day.
   carried_over?: boolean;
@@ -276,6 +286,14 @@ export const scheduleService = {
     confirmedTotal?: number;
   }): Promise<{ results: CopyDayResult[]; quote?: CopyPriceQuote }> => {
     return executeRESTBackend<{ results: CopyDayResult[]; quote?: CopyPriceQuote }>("/api/scheduling/schedule/entries/copy", {
+      method: "POST",
+      body: input as unknown as Record<string, unknown>,
+    });
+  },
+
+  /* DEV-393: to another day and/or a new crew, one entry or several; AMC work through AMC. */
+  moveEntries: async (input: MoveEntriesInput): Promise<{ results: MoveEntryResult[] }> => {
+    return executeRESTBackend<{ results: MoveEntryResult[] }>("/api/scheduling/schedule/entries/move", {
       method: "POST",
       body: input as unknown as Record<string, unknown>,
     });

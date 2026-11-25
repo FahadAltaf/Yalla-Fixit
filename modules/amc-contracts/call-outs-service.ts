@@ -3,6 +3,7 @@ import type { z } from "zod";
 import type { callOutActionSchema, callOutCreateSchema, CallOutPriority } from "@/lib/amc/call-outs";
 import type { TechnicianFit, Trade } from "@/lib/amc/visits";
 import type { AllowanceRow, CallOutRecord, CoveragePreview, WorkPhoto } from "@/lib/server/amc/call-outs";
+import type { FsmQuotationState } from "@/lib/server/amc/fsm-quotation";
 import { amcRequest } from "@/lib/amc/http-cache";
 
 /**
@@ -81,6 +82,8 @@ export interface CallOutDetailResponse {
   callOut: CallOutRecord;
   /** DEV-495: a handyman job against the free hours: its teams and the team-hours recorded at closing. */
   handyman?: { teams: number; fromCrew: boolean; hoursUsed: number | null; hoursChargeable: number | null } | null;
+  /** DEV-508: the FSM quotation number, whether it is owed, and why it closed without one (25 Nov 2026). */
+  fsmQuotation?: FsmQuotationState | null;
   allowance: CallOutAllowance | null;
   photos: WorkPhoto[];
   additionalWorks: CallOutWorkSummary[];

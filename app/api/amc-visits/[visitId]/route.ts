@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { syncAmcScheduleEntry } from "@/lib/server/amc/schedule-link";
 
 import { canOperateContract, canReadContract } from "@/lib/amc/access";
 import { visitActionSchema } from "@/lib/amc/visits";
@@ -57,6 +58,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ visitId: s
   const canChange = (ownerId: string | null) => gate.visits.create || gate.visits.edit || canOperateContract(gate.actor, ownerId);
   try {
     const result = await performVisitAction(gate.admin, visitId, parsed.data, { id: gate.userId, label: gate.label }, await readAmcConfig(gate.admin), canChange);
+    /* DEV-489: the Scheduling board shows the job as it now stands (portal only, never sent to FSM). */
+    await syncAmcScheduleEntry(gate.admin, "ppm", visitId, gate.userId);
     return NextResponse.json(result);
   } catch (error) {
     return contractErrorResponse(error, "Could not update the visit");

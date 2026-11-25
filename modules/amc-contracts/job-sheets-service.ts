@@ -1,4 +1,5 @@
 import type { z } from "zod";
+import type { FsmQuotationSkip, FsmQuotationSkipKind } from "@/lib/amc/fsm-quotation";
 
 import type { jobSheetSchema, reportState, ReviewReason } from "@/lib/amc/job-sheets";
 import type { JobSheetView } from "@/lib/server/amc/job-sheets";
@@ -29,9 +30,27 @@ export type JobSheetResponse = JobSheetView & {
   canEdit: boolean;
   canReview: boolean;
   /** A call out's or additional work's FSM quotation number (DEV-508); absent on a PPM visit. */
-  fsmQuotation?: { migrated: boolean; value: string | null; required: boolean } | null;
+  fsmQuotation?: {
+    migrated: boolean;
+    value: string | null;
+    required: boolean;
+    /** Closed without the number (25 Nov 2026): not chargeable after all, or the number follows. */
+    skip?: { kind: FsmQuotationSkipKind; reason: string | null; at: string | null } | null;
+    /** The number is still owed. */
+    outstanding?: boolean;
+  } | null;
   /** A handyman job's teams, time on site and the team-hours to record (DEV-495); absent otherwise. */
-  handyman?: { teams: number; fromCrew: boolean; hoursUsed: number | null; hoursChargeable: number | null; minutesOnSite: number | null; suggestedHours: number | null } | null;
+  handyman?: {
+    teams: number;
+    fromCrew: boolean;
+    hoursUsed: number | null;
+    hoursChargeable: number | null;
+    minutesOnSite: number | null;
+    suggestedHours: number | null;
+    /** The free hours left now (null: not counted), and whether it was booked as covered. */
+    hoursLeft?: number | null;
+    covered?: boolean;
+  } | null;
 };
 
 export interface SaveJobSheetResult {
@@ -104,10 +123,19 @@ export const jobSheetsService = {
   },
   /** pdfBase64: the report as the portal built it (18 Nov 2026); without it the server prints its own. */
   /* fsmQuotationNo is for a call out or additional work (DEV-508); a PPM visit ignores it. */
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- same calls as a call out's sheet; a PPM visit has no FSM quotation or handyman hours
-  close(visitId: string, comment: string | null, send: SendChannel = "email", pdfBase64: string | null = null, _fsmQuotationNo: string | null = null, _hoursUsed: number | null = null) {
+  /* eslint-disable @typescript-eslint/no-unused-vars -- same calls as a call out's sheet; a PPM visit has no FSM quotation or handyman hours */
+  close(
+    visitId: string,
+    comment: string | null,
+    send: SendChannel = "email",
+    pdfBase64: string | null = null,
+    _fsmQuotationNo: string | null = null,
+    _hoursUsed: number | null = null,
+    _fsmQuotationSkip: FsmQuotationSkip | null = null,
+  ) {
     return request<CloseJobSheetResult>(sheetUrl(visitId), { method: "POST", body: JSON.stringify({ action: "close", comment, send, ...(pdfBase64 ? { pdfBase64 } : {}) }) });
   },
+  /* eslint-enable @typescript-eslint/no-unused-vars */
   returnSheet(visitId: string, comment: string) {
     return request<{ ok: true }>(sheetUrl(visitId), { method: "POST", body: JSON.stringify({ action: "return", comment }) });
   },
@@ -159,13 +187,13 @@ export function fieldJobSheetCalls(kind: FieldSheetKind): JobSheetCalls {
     jobSheet: (id) => request<JobSheetResponse>(fieldSheetUrl(kind, id)),
     save: (id, sheet) => post<SaveJobSheetResult>(id, { action: "save", sheet }),
     submit: (id, sheet) => post<SaveJobSheetResult>(id, { action: "submit", sheet }),
-    close: (id, comment, send = "email", pdfBase64 = null, fsmQuotationNo = null, hoursUsed = null) =>
+    close: (id, comment, send = "email", pdfBase64 = null, fsmQuotationNo = null, hoursUsed = null, fsmQuotationSkip = null) =>
       post<CloseJobSheetResult>(id, {
         action: "close",
         comment,
         send,
         ...(pdfBase64 ? { pdfBase64 } : {}),
-        ...(fsmQuotationNo ? { fsmQuotationNo } : {}),
+        ...(fsmQuotationNo ? { fsmQuotationNo } : fsmQuotationSkip ? { fsmQuotationSkip } : {}),
         ...(hoursUsed !== null ? { hoursUsed } : {}),
       }),
     returnSheet: (id, comment) => post<{ ok: true }>(id, { action: "return", comment }),

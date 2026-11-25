@@ -35,7 +35,7 @@ import { recordStatusChange } from "@/lib/server/amc/status-history";
 import { sendEmail } from "@/lib/server/send-email";
 import { initialOutcome, type SendChannel } from "@/lib/amc/send-channels";
 import { readCharge, recordChargePayment, syncWorkCharge } from "@/lib/server/amc/visit-charges";
-import { assertFsmQuotation, setFsmQuotation } from "@/lib/server/amc/fsm-quotation";
+import { assertFsmQuotation, recordFsmQuotationSkip, setFsmQuotation } from "@/lib/server/amc/fsm-quotation";
 
 /**
  * Additional works on the server (Phase 11: DEV-407). Raised from a PPM
@@ -586,9 +586,10 @@ export async function performWorkAction(admin: Admin, id: string, action: Additi
     case "complete":
       /* DEV-508: completed only with its FSM quotation number (Finance invoices from it). */
       if (action.fsmQuotationNo) await setFsmQuotation(admin, "additional_work", id, action.fsmQuotationNo, actor);
-      await assertFsmQuotation(admin, "additional_work", id);
+      const skipped = await assertFsmQuotation(admin, "additional_work", id, action.fsmQuotationNo ? null : (action.fsmQuotationSkip ?? null));
       if (!(await startedByOffice(admin, id))) throw new ContractError(`${String(row.work_no)} has not been started: start the visit first (crew, time, client and access in place).`, 409);
       await moveTo(admin, row, "completed", { completed_at: action.completedAt ?? now }, actor);
+      if (skipped) await recordFsmQuotationSkip(admin, "additional_work", id, skipped, actor);
       await followCallOut(admin, str(row.call_out_id), actor);
       return { ok: true as const };
     case "invoice":

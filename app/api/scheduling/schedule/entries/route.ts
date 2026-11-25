@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse, after } from "next/server";
+import { AMC_ENTRY_READ_ONLY } from "@/lib/scheduling/amc-entries";
 import { z } from "zod";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
@@ -306,6 +307,8 @@ export async function PUT(req: NextRequest) {
     if (existingError || !existing) {
       return NextResponse.json({ error: "Entry not found" }, { status: 404 });
     }
+    /* DEV-489: AMC work is changed in AMC (its rules: service window, crew checks); the board shows it read only. */
+    if (existing.amc_kind) return NextResponse.json({ error: AMC_ENTRY_READ_ONLY }, { status: 409 });
     await assertDraftEditable(admin, existing.schedule_version_id);
 
     const newStart = payload.startAt ?? existing.start_at;
@@ -452,6 +455,8 @@ export async function DELETE(req: NextRequest) {
     if (existingError || !existing) {
       return NextResponse.json({ error: "Entry not found" }, { status: 404 });
     }
+    /* DEV-489: AMC work is changed in AMC (its rules: service window, crew checks); the board shows it read only. */
+    if (existing.amc_kind) return NextResponse.json({ error: AMC_ENTRY_READ_ONLY }, { status: 409 });
 
     const { data: version, error: versionError } = await admin
       .from("schedule_versions")

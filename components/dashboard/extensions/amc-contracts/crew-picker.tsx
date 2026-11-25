@@ -7,7 +7,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { useTechnicianLogins } from "@/components/dashboard/shared/technician-login";
+import { NeedsLoginBadge, NeedsLoginNote, cannotRegister, useTechnicianLogins } from "@/components/dashboard/shared/technician-login";
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { TRADE_LABELS } from "@/lib/amc/client-profile";
@@ -126,6 +126,9 @@ export function CrewPicker({
       if (f.booked) toast.warning(`${f.name} is already booked at that time`, { description: "They are added. Check their other booking before you save." });
     };
     if (hasLogin(f)) return done();
+    /* No email in FSM: no login can be made, so they are not added (25 Nov 2026). */
+    const blocked = cannotRegister(f);
+    if (blocked) return void toast.error(blocked);
     /* No login yet: make it first, then add. */
     void makeLogins([f]).then((ok) => {
       if (ok) done();
@@ -160,12 +163,7 @@ export function CrewPicker({
         </Badge>
       ))}
       {/* Only where it can matter: somebody who can be added, or is on the crew. */}
-      {hasLogin(f) || (isBlocked(f) && !picked.includes(f.fsmId)) ? null : (
-        <Badge variant="outline" className="border-warning/40 text-warning font-normal" title="No mobile login yet: adding them creates one">
-          <KeyRound className="size-3" />
-          No login
-        </Badge>
-      )}
+      {hasLogin(f) || (isBlocked(f) && !picked.includes(f.fsmId)) ? null : <NeedsLoginBadge email={f.email} />}
     </>
   );
   const detail = (f: TechnicianFit) =>
@@ -247,6 +245,9 @@ export function CrewPicker({
           </AlertDescription>
         </Alert>
       ) : null}
+
+      {/* Who among those who can go still needs a login, before anyone is picked. */}
+      <NeedsLoginNote names={candidates.filter((f) => !hasLogin(f) && !picked.includes(f.fsmId)).map((f) => f.name)} />
 
       {all.length === 0 ? (
         <p className="text-muted-foreground rounded-lg border border-dashed px-3 py-4 text-center text-sm">

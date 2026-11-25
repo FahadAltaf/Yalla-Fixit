@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
-import { Copy, Download, ExternalLink, Link as LinkIcon, Loader2, Mail, MessageCircle, Send } from "lucide-react";
+import { Check, Copy, Download, ExternalLink, Link as LinkIcon, Loader2, Mail, MessageCircle, Send } from "lucide-react";
 import { toast } from "sonner";
 
 import { ActionDialogContent, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
@@ -37,36 +37,77 @@ export async function copyToClipboard(text: string, done = "Copied") {
   }
 }
 
-/** The three ways, as one segmented choice. */
+/*
+  Each way as a card (25 Nov 2026, the user: the pill toggle and the big
+  button looked rough): an icon, the way, and where it goes (the number or
+  address on file). Neutral cards, the chosen one outlined; only WhatsApp's
+  icon carries its own colour.
+*/
+const CHANNEL_TILE: Record<SendChannel, string> = {
+  whatsapp: "bg-[#25d366]/12 text-[#1da851] dark:text-[#25d366]",
+  email: "bg-muted text-foreground",
+  link: "bg-muted text-foreground",
+};
+
+function channelHint(c: SendChannel, contacts: SendContacts, hasLink: boolean): string {
+  if (c === "whatsapp") return contacts.phone ? formatPhone(contacts.phone) || contacts.phone : contacts.phone === null ? "No mobile on file" : "Message to send";
+  if (c === "email") return contacts.email ? contacts.email : contacts.email === null ? "No email on file" : "From the portal";
+  return hasLink ? "A link to paste" : "Text to paste";
+}
+
+/** The three ways, as a choice of cards. */
 export function SendChannelToggle({
   value,
   onChange,
   channels = SEND_CHANNELS,
   hasLink = true,
   disabled,
+  contacts = {},
 }: {
   value: SendChannel;
   onChange: (c: SendChannel) => void;
   channels?: readonly SendChannel[];
   hasLink?: boolean;
   disabled?: boolean;
+  /** Shown under each way: the number or address it goes to. */
+  contacts?: SendContacts;
 }) {
   return (
-    <div className="bg-muted inline-flex w-fit flex-wrap rounded-full p-0.5 text-sm" role="tablist" aria-label="Send by">
+    <div
+      role="radiogroup"
+      aria-label="Send by"
+      className={cn("grid gap-2", channels.length === 3 ? "sm:grid-cols-3" : channels.length === 2 ? "sm:grid-cols-2" : "")}
+    >
       {channels.map((c) => {
         const Icon = CHANNEL_ICON[c];
+        const on = value === c;
+        const missing = (c === "email" && contacts.email === null) || (c === "whatsapp" && contacts.phone === null);
         return (
           <button
             key={c}
             type="button"
-            role="tab"
-            aria-selected={value === c}
+            role="radio"
+            aria-checked={on}
             disabled={disabled}
             onClick={() => onChange(c)}
-            className={cn("inline-flex items-center gap-1.5 rounded-full px-3 py-1", value === c ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:text-foreground")}
+            className={cn(
+              "bg-card relative flex min-w-0 flex-col items-start gap-2 rounded-lg border p-3 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-60",
+              on ? "border-primary ring-primary/20 ring-2" : "hover:bg-muted/40",
+            )}
           >
-            <Icon className="size-3.5" />
-            {channelLabel(c, hasLink)}
+            {/* Stacked (25 Nov 2026): the icon and the tick, then the way and where it goes, so a narrow card cuts nothing. */}
+            <span className="flex w-full items-center justify-between gap-2">
+              <span className={cn("flex size-8 shrink-0 items-center justify-center rounded-md", CHANNEL_TILE[c])}>
+                <Icon className="size-4" />
+              </span>
+              {on ? <Check className="text-primary size-4 shrink-0" aria-hidden /> : null}
+            </span>
+            <span className="grid w-full min-w-0 gap-0.5">
+              <span className="text-sm leading-tight font-medium">{channelLabel(c, hasLink)}</span>
+              <span className={cn("line-clamp-2 text-xs break-words", missing ? "text-warning" : "text-muted-foreground")} title={channelHint(c, contacts, hasLink)}>
+                {channelHint(c, contacts, hasLink)}
+              </span>
+            </span>
           </button>
         );
       })}
@@ -81,6 +122,7 @@ export function SendChannelNote({
   hasLink = true,
   what,
   attach = false,
+  className,
 }: {
   channel: SendChannel;
   contacts: SendContacts;
@@ -88,6 +130,7 @@ export function SendChannelNote({
   what: string;
   /** A document the coordinator attaches to the WhatsApp message (no link in the text). */
   attach?: boolean;
+  className?: string;
 }) {
   const { email, phone } = contacts;
   const text =
@@ -106,7 +149,7 @@ export function SendChannelNote({
         : hasLink
           ? `Creates the link to ${what} and copies it, to paste in any chat.`
           : "Copies the message, to paste in any chat.";
-  return <p className={cn("text-xs", channel === "email" && email === null ? "text-warning" : "text-muted-foreground")}>{text}</p>;
+  return <p className={cn("text-xs", channel === "email" && email === null ? "text-warning" : "text-muted-foreground", className)}>{text}</p>;
 }
 
 /**
@@ -232,7 +275,7 @@ export function announceSend(channel: SendChannel, result: SendResult, noun: str
   return false;
 }
 
-const actionLabel = (c: SendChannel, hasLink: boolean) => (c === "email" ? "Send email" : c === "whatsapp" ? "Prepare WhatsApp" : hasLink ? "Create link" : "Copy text");
+const actionLabel = (c: SendChannel, hasLink: boolean) => (c === "email" ? "Send email" : c === "whatsapp" ? "Prepare message" : hasLink ? "Create link" : "Copy text");
 const ActionIcon = ({ c }: { c: SendChannel }) => (c === "email" ? <Send className="size-4" /> : c === "whatsapp" ? <MessageCircle className="size-4" /> : <LinkIcon className="size-4" />);
 
 const firstChannel = (channels: readonly SendChannel[], contacts: SendContacts, preferred?: SendChannel): SendChannel =>
@@ -334,7 +377,7 @@ export function SendDialog({
           <SendResultView channel={channel} result={result} download={download} />
         ) : (
           <div className="grid gap-3 py-1">
-            <SendChannelToggle value={channel} onChange={setChannel} channels={channels} hasLink={hasLink} disabled={busy} />
+            <SendChannelToggle value={channel} onChange={setChannel} channels={channels} hasLink={hasLink} disabled={busy} contacts={contacts} />
             <SendChannelNote channel={channel} contacts={contacts} hasLink={hasLink} what={what} attach={attach} />
             {typeof children === "function" ? children(channel) : children}
           </div>
@@ -431,11 +474,14 @@ export function SendInline({
   const emailBlocked = channel === "email" && contacts.email === null;
   return (
     <div className="grid gap-3">
-      <SendChannelToggle value={channel} onChange={setChannel} channels={channels} hasLink={hasLink} disabled={busy} />
-      <SendChannelNote channel={channel} contacts={contacts} hasLink={hasLink} what={what} attach={attach} />
-      <SubmitButton className="w-fit" onClick={() => void send()} disabled={emailBlocked} pending={busy} pendingLabel={channel === "email" ? "Sending…" : "Preparing…"} icon={<ActionIcon c={channel} />}>
-        {actionLabel(channel, hasLink)}
-      </SubmitButton>
+      <SendChannelToggle value={channel} onChange={setChannel} channels={channels} hasLink={hasLink} disabled={busy} contacts={contacts} />
+      {/* What happens, and the one action, on a line of their own. */}
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t pt-3">
+        <SendChannelNote channel={channel} contacts={contacts} hasLink={hasLink} what={what} attach={attach} className="min-w-0 flex-1 basis-56" />
+        <SubmitButton size="sm" className="shrink-0" onClick={() => void send()} disabled={emailBlocked} pending={busy} pendingLabel={channel === "email" ? "Sending…" : "Preparing…"} icon={<ActionIcon c={channel} />}>
+          {actionLabel(channel, hasLink)}
+        </SubmitButton>
+      </div>
     </div>
   );
 }

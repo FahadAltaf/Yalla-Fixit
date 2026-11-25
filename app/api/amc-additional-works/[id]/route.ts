@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { syncAmcScheduleEntry } from "@/lib/server/amc/schedule-link";
 
 import { additionalWorkActionSchema } from "@/lib/amc/call-outs";
 import { additionalWorkDetail, additionalWorkOwner, performWorkAction } from "@/lib/server/amc/additional-works";
@@ -55,7 +56,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const rights = fieldWorkRights(gate, "additional_works", scope.ownerId);
     if (!scope.found || !rights.view) return notFound();
     if (!rights.edit) return NextResponse.json({ error: "You cannot change this additional work." }, { status: 403 });
-    return NextResponse.json(await performWorkAction(gate.admin, id, parsed.data, { id: gate.userId, label: gate.label }, await readAmcConfig(gate.admin)));
+    const result = await performWorkAction(gate.admin, id, parsed.data, { id: gate.userId, label: gate.label }, await readAmcConfig(gate.admin));
+    /* DEV-489: the Scheduling board shows the job as it now stands (portal only, never sent to FSM). */
+    await syncAmcScheduleEntry(gate.admin, "additional_work", id, gate.userId);
+    return NextResponse.json(result);
   } catch (error) {
     return contractErrorResponse(error, "Could not update the additional work");
   }

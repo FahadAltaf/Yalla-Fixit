@@ -14,6 +14,7 @@ import { Card } from "@/components/ui/card";
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
@@ -35,6 +36,9 @@ import {
 } from "@/lib/amc/job-sheets";
 import { AMC_PHOTO_MAX_BYTES } from "@/lib/amc/photos";
 import { HANDYMAN_TEAM_NOTE, formatMinutes } from "@/lib/amc/handyman-hours";
+import { FSM_QUOTATION_SKIPS, FSM_QUOTATION_SKIP_LABELS, chargeableHandymanHours, type FsmQuotationSkip, type FsmQuotationSkipKind } from "@/lib/amc/fsm-quotation";
+import { callOutsService } from "@/modules/amc-contracts/call-outs-service";
+import { additionalWorksService } from "@/modules/amc-contracts/additional-works-service";
 import { PLANNABLE_STATUSES, type VisitStatus } from "@/lib/amc/ppm";
 import { cn } from "@/lib/utils";
 import {
@@ -512,6 +516,11 @@ function SheetBody({
         </div>
       ) : null}
 
+      {/* 25 Nov 2026: closed without the FSM quotation number: why, and the number added once it is ready. */}
+      {status === "closed" && data.fsmQuotation?.migrated && (data.fsmQuotation.skip || data.fsmQuotation.outstanding) && (v.kind === "call_out" || v.kind === "additional_work") ? (
+        <FsmQuotationCard kind={v.kind} id={visitId} state={data.fsmQuotation} canEdit={data.canEdit || data.canReview} onSaved={() => refresh(false)} />
+      ) : null}
+
       <SendResultDialog sent={prepared} onClose={() => setPrepared(null)} download={downloadReport} />
 
       {readOnly && status === null ? (
@@ -747,11 +756,11 @@ function SheetBody({
         open={dialog === "close"}
         onOpenChange={(open) => !open && setDialog(null)}
         data={data}
-        onClose={async (comment, send, fsmQuotationNo, hoursUsed) => {
+        onClose={async (comment, send, fsmQuotationNo, hoursUsed, fsmQuotationSkip) => {
           /* The branded PDF, as the viewer shows it, when a report goes out; else the server prints its own. */
           /* A report on every close (DEV-404). */
           const pdf = await serviceReportPdfBase64(loadReportFacts);
-          const result = await sheetCalls.close(visitId, comment, send, pdf, fsmQuotationNo, hoursUsed);
+          const result = await sheetCalls.close(visitId, comment, send, pdf, fsmQuotationNo, hoursUsed, fsmQuotationSkip);
           toast.success(`${sheetName(v)} closed`, result.remainderVisitId ? { description: "The remaining trade was planned on a new visit." } : undefined);
           if (result.report) showReport(send, result.report);
           else toast.warning("The visit is closed, but the service report could not be prepared.");
@@ -1659,20 +1668,29 @@ function CloseDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   data: JobSheetResponse;
-  onClose: (comment: string | null, send: SendChannel, fsmQuotationNo: string | null, hoursUsed: number | null) => Promise<void>;
+  onClose: (comment: string | null, send: SendChannel, fsmQuotationNo: string | null, hoursUsed: number | null, fsmQuotationSkip: FsmQuotationSkip | null) => Promise<void>;
 }) {
   const [comment, setComment] = useState("");
   const [send, setSend] = useState<SendChannel>("email");
   /* DEV-508: a chargeable call out or additional work closes with its FSM quotation number. */
   const fsm = data.fsmQuotation?.migrated ? data.fsmQuotation : null;
   const [fsmNo, setFsmNo] = useState(fsm?.value ?? "");
-  const fsmMissing = Boolean(fsm?.required && !fsmNo.trim());
   const [tried, setTried] = useState(false);
   /* DEV-495: a handyman job's team-hours, from the technician's time on site, whole hours. */
   const hm = data.handyman ?? null;
   const [hours, setHours] = useState(() => String(hm?.hoursUsed ?? hm?.suggestedHours ?? ""));
   const hoursNumber = Number(hours);
   const hoursMissing = Boolean(hm) && !(hours.trim() !== "" && Number.isInteger(hoursNumber) && hoursNumber >= 1 && hoursNumber <= 500);
+  /* Hours beyond the free hours left are chargeable, so the number is needed: said here, not only when Close is refused (25 Nov 2026). */
+  const overHours = hm && !hoursMissing ? chargeableHandymanHours(hoursNumber, hm.hoursLeft ?? null, hm.covered ?? true) : 0;
+  const fsmRequired = Boolean(fsm && (fsm.required || overHours > 0));
+  /* Closing without the number, with a reason: not chargeable after all, or the number follows (25 Nov 2026). */
+  const [skipKind, setSkipKind] = useState<FsmQuotationSkipKind | null>(null);
+  const [skipReason, setSkipReason] = useState("");
+  const skipping = fsmRequired && !fsmNo.trim() && skipKind !== null;
+  const skipReasonMissing = skipping && skipReason.trim().length < 3;
+  const fsmMissing = fsmRequired && !fsmNo.trim() && !skipping;
+  const skipId = useId();
   const hoursId = useId();
   const fsmId = useId();
   const [pending, setPending] = useState(false);
@@ -1685,10 +1703,17 @@ function CloseDialog({
   const submit = async () => {
     setTried(true);
     if (hoursMissing) return void toast.error("Enter the hours used", { description: "The team-hours, rounded to the nearest whole hour; at least 1." });
-    if (fsmMissing) return void toast.error("Enter the FSM quotation number", { description: "Finance needs it to record the revenue and issue the tax invoice." });
+    if (fsmMissing) return void toast.error("Enter the FSM quotation number", { description: "Or tick Not chargeable, or Quotation number later, and say why." });
+    if (skipReasonMissing) return void toast.error("Say why it closes without the FSM quotation number");
     setPending(true);
     try {
-      await onClose(comment.trim() || null, send, fsm && fsmNo.trim() && fsmNo.trim() !== (fsm.value ?? "") ? fsmNo.trim() : null, hm ? hoursNumber : null);
+      await onClose(
+        comment.trim() || null,
+        send,
+        fsm && fsmNo.trim() && fsmNo.trim() !== (fsm.value ?? "") ? fsmNo.trim() : null,
+        hm ? hoursNumber : null,
+        skipping && skipKind ? { kind: skipKind, reason: skipReason.trim() } : null,
+      );
       setComment("");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not close the visit.");
@@ -1753,9 +1778,9 @@ function CloseDialog({
             </p>
           </Field>
         ) : null}
-        {/* A handyman job may run over the free hours: the number can go in now (required then, the server says). */}
-        {fsm && (fsm.required || fsm.value || hm) ? (
-          <Field id={fsmId} label={fsm.required ? "FSM quotation number" : "FSM quotation number (optional)"}>
+        {/* A handyman job may run over the free hours: the number can go in now (required then). */}
+        {fsm && (fsmRequired || fsm.value || hm) ? (
+          <Field id={fsmId} label={fsmRequired && !skipping ? "FSM quotation number" : "FSM quotation number (optional)"}>
             <Input
               id={fsmId}
               value={fsmNo}
@@ -1764,13 +1789,63 @@ function CloseDialog({
               aria-invalid={(tried && fsmMissing) || undefined}
               onChange={(e) => setFsmNo(e.target.value)}
             />
-            {tried && fsmMissing ? <p role="alert" className="text-destructive text-xs">Enter the FSM quotation number to close.</p> : null}
+            {tried && fsmMissing ? (
+              <p role="alert" className="text-destructive text-xs">
+                Enter the FSM quotation number, or tick one of the options below and say why.
+              </p>
+            ) : null}
             <p className="text-muted-foreground text-xs">
-              {data.visit.kind === "call_out"
-                ? "This call out is chargeable. Prepare the quotation in Zoho FSM (the client confirmed on WhatsApp) and enter its number: Finance needs it to record the revenue and issue the tax invoice."
-                : "Finance needs the FSM quotation number to record the revenue and issue the tax invoice. Enter the number of the quotation in Zoho FSM."}
+              {overHours > 0
+                ? `${hoursNumber} hour${hoursNumber === 1 ? "" : "s"} used${hm?.covered === false ? " on a chargeable booking" : `, ${Math.max(0, hm?.hoursLeft ?? 0)} free hour${(hm?.hoursLeft ?? 0) === 1 ? "" : "s"} left`}: ${overHours} hour${overHours === 1 ? " is" : "s are"} chargeable. Prepare the quotation in Zoho FSM and enter its number: Finance needs it to record the revenue and issue the tax invoice.`
+                : fsmRequired
+                  ? data.visit.kind === "call_out"
+                    ? "This call out is chargeable. Prepare the quotation in Zoho FSM (the client confirmed on WhatsApp) and enter its number: Finance needs it to record the revenue and issue the tax invoice."
+                    : "Finance needs the FSM quotation number to record the revenue and issue the tax invoice. Enter the number of the quotation in Zoho FSM."
+                  : "Only needed when something is chargeable: hours beyond the free handyman hours, parts or extra time."}
             </p>
           </Field>
+        ) : null}
+        {/* Without the number, with a reason (25 Nov 2026): one choice at a time. */}
+        {fsmRequired && !fsmNo.trim() ? (
+          <div className="grid gap-3 rounded-lg border px-4 py-3">
+            <p className="text-sm font-medium">No quotation number yet?</p>
+            {FSM_QUOTATION_SKIPS.map((k) => (
+              <div key={k} className="flex items-start gap-3">
+                <Checkbox
+                  id={`${skipId}-${k}`}
+                  className="mt-0.5"
+                  checked={skipKind === k}
+                  disabled={pending}
+                  onCheckedChange={(on) => setSkipKind(on === true ? k : null)}
+                />
+                <div className="grid gap-0.5">
+                  <Label htmlFor={`${skipId}-${k}`} className="font-normal">
+                    {k === "not_chargeable" ? "Not chargeable" : "Add the quotation number later"}
+                  </Label>
+                  <p className="text-muted-foreground text-xs">
+                    {k === "not_chargeable"
+                      ? "The client is not charged for this after all: no quotation is needed. Finance sees the reason."
+                      : "The client is charged, but the quotation is not ready. Closing goes ahead; the number stays outstanding and is added on the job when it is."}
+                  </p>
+                </div>
+              </div>
+            ))}
+            {skipKind ? (
+              <Field id={`${skipId}-reason`} label="Reason (required)">
+                <Textarea
+                  id={`${skipId}-reason`}
+                  rows={2}
+                  maxLength={500}
+                  value={skipReason}
+                  aria-invalid={(tried && skipReasonMissing) || undefined}
+                  placeholder={skipKind === "not_chargeable" ? "e.g. Goodwill: the overrun was caused by our crew, agreed with the manager" : "e.g. Quotation being prepared in FSM, number to follow tomorrow"}
+                  onChange={(e) => setSkipReason(e.target.value)}
+                />
+                {tried && skipReasonMissing ? <p role="alert" className="text-destructive text-xs">Say why, in a few words.</p> : null}
+                <p className="text-muted-foreground text-xs">Kept with the job and in its history, with your name.</p>
+              </Field>
+            ) : null}
+          </div>
         ) : null}
         <Field id={id} label="Comment (optional)">
           <Textarea id={id} rows={3} maxLength={1000} value={comment} onChange={(e) => setComment(e.target.value)} />
@@ -1935,5 +2010,79 @@ function AddButton({ onClick, children }: { onClick: () => void; children: React
         {children}
       </Button>
     </div>
+  );
+}
+
+/**
+ * Closed without the FSM quotation number (25 Nov 2026): not chargeable
+ * after all, or the number follows. Says which and why; while the number is
+ * owed, it is entered here once the quotation is ready in Zoho FSM.
+ */
+function FsmQuotationCard({
+  kind,
+  id,
+  state,
+  canEdit,
+  onSaved,
+}: {
+  kind: "call_out" | "additional_work";
+  id: string;
+  state: NonNullable<JobSheetResponse["fsmQuotation"]>;
+  canEdit: boolean;
+  onSaved: () => Promise<void> | void;
+}) {
+  const [number, setNumber] = useState("");
+  const [saving, setSaving] = useState(false);
+  const inputId = useId();
+  const notCharged = state.skip?.kind === "not_chargeable";
+  const save = async () => {
+    const value = number.trim();
+    if (!value) return void toast.error("Enter the FSM quotation number");
+    setSaving(true);
+    try {
+      if (kind === "call_out") await callOutsService.action(id, { action: "set_fsm_quotation", fsmQuotationNo: value });
+      else await additionalWorksService.action(id, { action: "set_fsm_quotation", fsmQuotationNo: value });
+      toast.success("FSM quotation number recorded");
+      setNumber("");
+      await onSaved();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not record the number.");
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <Alert variant={notCharged ? "default" : state.outstanding ? "warning" : "success"}>
+      <FileText />
+      <AlertTitle>
+        {notCharged ? "Not chargeable: no FSM quotation" : state.outstanding ? "FSM quotation number to follow" : `FSM quotation ${state.value}`}
+      </AlertTitle>
+      <AlertDescription>
+        {state.skip ? (
+          <p>
+            {FSM_QUOTATION_SKIP_LABELS[state.skip.kind]}
+            {state.skip.at ? `, ${formatDateTime(state.skip.at)}` : ""}
+            {state.skip.reason ? `: ${state.skip.reason}` : ""}
+          </p>
+        ) : null}
+        {state.outstanding ? (
+          canEdit ? (
+            <div className="mt-2 flex flex-wrap items-end gap-2">
+              <div className="grid gap-1">
+                <Label htmlFor={inputId} className="text-xs">
+                  FSM quotation number
+                </Label>
+                <Input id={inputId} className="w-48" maxLength={40} placeholder="e.g. QT-00123" value={number} onChange={(e) => setNumber(e.target.value)} />
+              </div>
+              <SubmitButton size="sm" pending={saving} pendingLabel="Saving…" icon={<CheckCircle2 className="size-4" />} onClick={() => void save()}>
+                Record number
+              </SubmitButton>
+            </div>
+          ) : (
+            <p>Finance cannot record the revenue or issue the tax invoice until the number is added.</p>
+          )
+        ) : null}
+      </AlertDescription>
+    </Alert>
   );
 }

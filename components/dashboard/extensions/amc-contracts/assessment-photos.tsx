@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Camera, ImagePlus, Trash2 } from "lucide-react";
+import { Camera, ExternalLink, ImagePlus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
@@ -17,7 +17,18 @@ import { amcContractsService, type AssessmentPhoto } from "@/modules/amc-contrac
  * removed while it is a draft; once completed they are kept as they are.
  * Links to the files expire after ten minutes and are refreshed on load.
  */
-export function AssessmentPhotos({ assessmentId, editable, completed }: { assessmentId: string; editable: boolean; completed: boolean }) {
+export function AssessmentPhotos({
+  assessmentId,
+  editable,
+  completed,
+  onCount,
+}: {
+  assessmentId: string;
+  editable: boolean;
+  completed: boolean;
+  /** How many photos there are, once loaded (the Report tab's figure). */
+  onCount?: (count: number) => void;
+}) {
   const [photos, setPhotos] = useState<AssessmentPhoto[] | null>(null);
   const [migrated, setMigrated] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -38,6 +49,9 @@ export function AssessmentPhotos({ assessmentId, editable, completed }: { assess
   useEffect(() => {
     void load();
   }, [load]);
+  useEffect(() => {
+    if (photos) onCount?.(photos.length);
+  }, [photos, onCount]);
 
   const add = async (files: FileList | null) => {
     if (!files?.length) return;
@@ -121,28 +135,42 @@ export function AssessmentPhotos({ assessmentId, editable, completed }: { assess
           action={canAdd ? { label: "Add photos", onClick: () => input.current?.click(), variant: "outline" } : undefined}
         />
       ) : (
-        <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+        /* As the call out's job sheet (25 Nov 2026): a card per photo, its category on it, the caption and when it was taken under it. */
+        <ul className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-4">
           {photos.map((p) => (
-            <li key={p.id} className="group relative overflow-hidden rounded-lg border">
+            <li key={p.id} className="group bg-card relative overflow-hidden rounded-xl border shadow-xs">
               {p.url ? (
-                <a href={p.url} target="_blank" rel="noopener noreferrer">
+                <a href={p.url} target="_blank" rel="noopener noreferrer" className="relative block overflow-hidden" title="Open the full photo">
                   {/* eslint-disable-next-line @next/next/no-img-element -- short-lived signed URL, not optimisable */}
-                  <img src={p.url} alt={p.caption ?? "Site visit photo"} className="aspect-[4/3] w-full object-cover" loading="lazy" />
+                  <img
+                    src={p.url}
+                    alt={p.caption ?? "Site visit photo"}
+                    className="aspect-[4/3] w-full object-cover transition-transform duration-200 group-hover:scale-[1.03]"
+                    loading="lazy"
+                  />
+                  {/* The category the assessor chose on the phone. */}
+                  {p.category ? (
+                    <span className="bg-background/90 text-foreground absolute top-2 left-2 rounded-md px-2 py-0.5 text-xs font-medium shadow-sm">{p.category}</span>
+                  ) : null}
+                  {canAdd ? null : (
+                    <span className="bg-background/90 text-foreground absolute top-2 right-2 rounded-md p-1 opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
+                      <ExternalLink className="size-3.5" />
+                    </span>
+                  )}
                 </a>
               ) : (
                 <div className="bg-muted text-muted-foreground flex aspect-[4/3] items-center justify-center text-xs">Unavailable</div>
               )}
               {canAdd ? (
-                <Button size="icon" variant="secondary" className="absolute top-1.5 right-1.5 size-7 opacity-90" aria-label="Remove photo" disabled={busy} onClick={() => remove(p)}>
+                <Button size="icon" variant="secondary" className="absolute top-2 right-2 size-7 opacity-90" aria-label="Remove photo" disabled={busy} onClick={() => remove(p)}>
                   <Trash2 className="size-3.5" />
                 </Button>
               ) : null}
-              {/* The category and description the assessor gave on the phone. */}
-              {p.category ? (
-                <span className="bg-background/90 text-foreground absolute top-1.5 left-1.5 rounded-md px-2 py-0.5 text-xs font-medium shadow-sm">{p.category}</span>
-              ) : null}
-              {/* The whole caption in a tooltip when it is cut (24 Nov 2026). */}
-              {p.caption ? <TruncatedText text={p.caption} className="text-muted-foreground px-2 py-1 text-xs" /> : null}
+              <div className="grid gap-0.5 px-3 py-2.5">
+                {/* The whole caption in a tooltip when it is cut (24 Nov 2026). */}
+                <TruncatedText text={p.caption || p.category || "Site visit photo"} className="text-sm font-medium" />
+                <p className="text-muted-foreground text-xs">{photoTaken(p.createdAt)}</p>
+              </div>
             </li>
           ))}
         </ul>
@@ -150,3 +178,7 @@ export function AssessmentPhotos({ assessmentId, editable, completed }: { assess
     </SectionCard>
   );
 }
+
+/* When it was taken, in Dubai. */
+const photoTaken = (iso: string) =>
+  new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Dubai" }).format(new Date(iso));

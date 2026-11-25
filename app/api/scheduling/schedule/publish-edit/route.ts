@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { AMC_ENTRY_READ_ONLY } from "@/lib/scheduling/amc-entries";
 import { z } from "zod";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
@@ -52,6 +53,8 @@ export async function POST(req: NextRequest) {
     if (entryError || !entry) {
       return NextResponse.json({ error: "Entry not found" }, { status: 404 });
     }
+    /* DEV-489: AMC work is changed in AMC; the board shows it read only. */
+    if ((entry as { amc_kind?: string | null }).amc_kind) return NextResponse.json({ error: AMC_ENTRY_READ_ONLY }, { status: 409 });
 
     const version = (entry as any).schedule_versions;
     const publishedLike = ["published", "partially_synced"].includes(version.status);

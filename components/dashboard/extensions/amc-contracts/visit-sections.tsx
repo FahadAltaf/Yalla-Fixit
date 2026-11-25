@@ -2,7 +2,7 @@
 
 import { useId, useState, type ReactNode } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
-import { CalendarCheck, CheckCircle2, FileText, KeyRound, Link2, Mail, MessageCircle, MessageSquare, PhoneCall, Play, Plus, Save, Search, Send, ShieldCheck, SquarePen, Trash2, Users, XCircle, type LucideIcon } from "lucide-react";
+import { CalendarCheck, CalendarClock, CheckCircle2, FileText, KeyRound, Link2, Mail, MessageCircle, MessageSquare, PhoneCall, Play, Plus, Save, Search, Send, ShieldCheck, SquarePen, Trash2, Users, XCircle, type LucideIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
@@ -32,7 +32,7 @@ import { formatPhone } from "@/lib/phone/format-phone";
 import { clientProfileService, type AccessRuleRecord } from "@/modules/amc-contracts/client-profile-service";
 import { visitsService, type VisitDetail, type VisitSuggestion } from "@/modules/amc-contracts/visits-service";
 
-import { Field, Muted, Panel, PanelEmpty, SectionDialog } from "./call-out-shared";
+import { CompactEmpty, CrewList, FactTile, Field, Muted, Panel, SectionDialog } from "./call-out-shared";
 import { AccessRuleDialog } from "./profile/property-panels";
 import { SendDialog } from "./send-options";
 import { PassTypeBadges, PassTypeFields, newPassType, passTypeOf, type PassType } from "./pass-fields";
@@ -585,11 +585,38 @@ export function AccessSection({ visit: v, canEdit, working, setWorking, changed 
           ) : null
         }
       >
+        {/*
+          Nothing asked and nothing on file (25 Nov 2026): one compact box, not
+          two tall empty ones; otherwise each part, an empty one as one line.
+        */}
+        {v.accessRules.length === 0 && passList.length === 0 ? (
+          <CompactEmpty
+            icon={<ShieldCheck />}
+            title="Nothing needed for access"
+            description="This property asks for no pass or permit, and no pass is on file."
+            action={
+              canEdit ? (
+                <div className="flex flex-wrap gap-2">
+                  {v.propertyId ? (
+                    <Button size="sm" variant="outline" disabled={working !== null} onClick={() => openRule(null)}>
+                      <KeyRound className="size-4" />
+                      Add rule
+                    </Button>
+                  ) : null}
+                  <Button size="sm" variant="outline" disabled={working !== null} onClick={startAdd}>
+                    <Plus className="size-4" />
+                    Add pass
+                  </Button>
+                </div>
+              ) : null
+            }
+          />
+        ) : (
         <div className="grid gap-6">
           <div className="grid gap-2">
             <AccessHeading icon={<KeyRound />} title="What the property needs" count={v.accessRules.length} hint="Kept on the property, for every visit there." />
           {v.accessRules.length === 0 ? (
-            <PanelEmpty icon={<KeyRound />} title="No access rules" description={canEdit && v.propertyId ? "This property asks for no pass or permit yet. Add the gate pass, permit or key collection it needs." : "This property asks for no pass or permit."} />
+            <CompactEmpty title="No access rules" description={canEdit && v.propertyId ? "This property asks for no pass or permit yet. Add the gate pass, permit or key collection it needs." : "This property asks for no pass or permit."} />
           ) : (
             <ul className="grid gap-2">
               {v.accessRules.map((r, index) => (
@@ -606,7 +633,7 @@ export function AccessSection({ visit: v, canEdit, working, setWorking, changed 
         <div className="grid gap-2">
           <AccessHeading icon={<ShieldCheck />} title="Passes for this visit" count={passList.length} />
           {passList.length === 0 ? (
-            <PanelEmpty icon={<FileText />} title="No pass on file" description="Add the gate pass or permit with how long it is valid. A visit can have more than one." />
+            <CompactEmpty title="No pass on file" description="Add the gate pass or permit with how long it is valid. A visit can have more than one." />
           ) : (
             <ul className="grid gap-2">
               {passList.map((d) => {
@@ -661,6 +688,7 @@ export function AccessSection({ visit: v, canEdit, working, setWorking, changed 
           )}
         </div>
         </div>
+        )}
       </Panel>
 
       {v.propertyId ? (
@@ -893,28 +921,32 @@ export function AssignmentSection({ visit: v, canEdit, working, setWorking, chan
           ) : null
         }
       >
-        <Rows>
-          <Row label="Planned for">{v.scheduledStart ? slotLabel(v.scheduledStart, v.scheduledEnd) : <Muted>No time set yet</Muted>}</Row>
-          <Row label="Service window">
-            {v.windowStart === v.windowEnd ? formatContractDate(v.windowStart) : `${formatContractDate(v.windowStart)} – ${formatContractDate(v.windowEnd)}`}
-          </Row>
-          <Row label="Crew">
-            {v.technicians.length ? (
-              v.technicians.map((t) => t.name + (t.fsmId === lead?.fsmId && v.technicians.length > 1 ? " (lead)" : "")).join(", ")
-            ) : (
-              <Muted>None yet</Muted>
-            )}
-          </Row>
-          {v.assignmentNote ? <Row label="Why this crew">{v.assignmentNote}</Row> : null}
-          <Row label="Trades">
+        {/* Tiles for when and what the services need, then who goes (25 Nov 2026), as the call out reads. */}
+        <div className="grid gap-3 sm:grid-cols-3">
+          <FactTile icon={<CalendarCheck />} label="Planned for" value={v.scheduledStart ? slotLabel(v.scheduledStart, v.scheduledEnd) : null} empty="No time set yet" />
+          <FactTile
+            icon={<CalendarClock />}
+            label="Service window"
+            value={v.windowStart === v.windowEnd ? formatContractDate(v.windowStart) : `${formatContractDate(v.windowStart)} – ${formatContractDate(v.windowEnd)}`}
+          />
+          <FactTile
+            icon={<Users />}
+            label="Needs"
+            value={`${v.need.headcount} ${v.need.headcount === 1 ? "person" : "people"}`}
+            sub={v.need.accessTypes.length ? `Access: ${v.need.accessTypes.join(", ")}` : null}
+          />
+        </div>
+        {v.need.trades.length ? (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-muted-foreground text-xs font-semibold tracking-wide uppercase">Trades</span>
             <TradeBadges trades={v.need.trades} />
-          </Row>
-          <Row label="Needs">
-            {/* The time is hidden for now (17 Nov 2026); it still sets the default length when the crew is placed. */}
-            {v.need.headcount} {v.need.headcount === 1 ? "person" : "people"}
-          </Row>
-          <Row label="Access types">{v.need.accessTypes.length ? v.need.accessTypes.join(", ") : <Muted>None</Muted>}</Row>
-        </Rows>
+          </div>
+        ) : null}
+        <div className="grid gap-2">
+          <p className="text-muted-foreground text-xs font-semibold tracking-wide uppercase">Crew</p>
+          <CrewList people={v.technicians.map((t) => ({ id: t.fsmId, name: t.name, lead: t.fsmId === lead?.fsmId }))} empty="No crew yet" />
+          {v.assignmentNote ? <p className="text-muted-foreground text-xs">Why this crew: {v.assignmentNote}</p> : null}
+        </div>
         {canEdit && !plannable ? (
           <p className="text-muted-foreground text-sm">This visit is {(VISIT_STATUS_LABELS[v.status] ?? v.status).toLowerCase()}, so its crew and time can&apos;t be changed.</p>
         ) : null}

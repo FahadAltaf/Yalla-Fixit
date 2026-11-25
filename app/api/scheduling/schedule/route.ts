@@ -9,6 +9,7 @@ import {
   type UnplacedAppointment,
 } from "@/lib/server/zoho/import-appointments";
 import { reconcileFsmAppointments } from "@/lib/server/zoho/reconcile";
+import { mirrorAmcDay } from "@/lib/server/amc/schedule-link";
 import {
   DEFAULT_ORG_TIMEZONE,
   addDaysToDateString,
@@ -123,6 +124,8 @@ export async function GET(req: NextRequest) {
       // No fsm_imported_at column yet (migration not applied): still pull,
       // just without the throttle.
       if (claimError || (claimed?.length ?? 0) > 0) {
+        /* DEV-489: the day's AMC jobs too (portal only, never sent to FSM), on the same few-minute beat. */
+        await mirrorAmcDay(admin, date, version.id as string, profile.id);
         fsmFirstPull = !version.fsm_imported_at;
         const versionId = version.id as string;
         const refresh = async () => {

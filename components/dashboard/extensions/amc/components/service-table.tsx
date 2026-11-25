@@ -2,7 +2,7 @@
 
 import { Fragment, useState } from "react";
 import type { UseFormReturn } from "react-hook-form";
-import { SquarePen, Plus, RotateCcw, Trash2, Wrench } from "lucide-react";
+import { SquarePen, Plus, RotateCcw, Trash2, Wrench, MessageSquareText } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -15,6 +15,7 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -200,6 +201,9 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
                       cleaning, ...), each opened by a row of its own so
                       thirty-odd services can be scanned.
                     */
+                    /* DEV-501: a rate typed above the card needs a reason, asked on a line of its own under the row (25 Nov 2026). */
+                    const needsReason =
+                      row.included && !row.free && row.rateOverride && row.standardRate != null && row.basePrice != null && row.basePrice > row.standardRate;
                     const groupStarts =
                       Boolean(service.category) && service.category !== listed[index - 1]?.category;
 
@@ -220,7 +224,7 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
                         year", "Not on the card") hangs below it instead of taking room, so
                         every field sits on the row's middle line, captioned or not.
                       */}
-                      <TableRow>
+                      <TableRow className={needsReason ? "border-b-0" : undefined}>
                         <TableCell>
                           <Checkbox
                             checked={row.included}
@@ -507,19 +511,6 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
                                 ) : null}
                               </div>
                               </FieldWithNotes>
-                              {/* In the flow, as it is typed into. DEV-501: above the card needs a reason, kept with the name of who typed it. */}
-                              {row.included && !row.free && row.rateOverride && row.standardRate != null && row.basePrice != null && row.basePrice > row.standardRate ? (
-                                <Input
-                                  className="mt-1 h-7 w-44 text-[11px]"
-                                  maxLength={300}
-                                  placeholder="Why above the card?"
-                                  aria-label={`Why the rate for ${service.label} is above the rate card`}
-                                  aria-invalid={(row.rateOverrideReason ?? "").trim().length < 3}
-                                  value={row.rateOverrideReason ?? ""}
-                                  title={row.rateOverrideBy ? `Typed by ${row.rateOverrideBy}` : undefined}
-                                  onChange={(event) => updateRow(service.id, { rateOverrideReason: event.target.value })}
-                                />
-                              ) : null}
                             </div>
                           ) : (
                             <Input
@@ -555,17 +546,52 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
                           )}
                           {row.included && row.belowFloor ? (
                             <div className="text-warning text-[10px] font-normal" title={row.floorRate != null ? `Floor rate ${formatCurrencyAED(row.floorRate)}` : undefined}>
-                              {row.rateOverride
-                                ? row.floorRate != null
-                                  ? "Below the floor: needs approval"
-                                  : "Off the card: needs approval"
-                                : row.frequencyOffCard
-                                  ? "Visits off the card: needs approval"
+                              {row.frequencyOffCard
+                                ? "Visits off the card: needs approval"
+                                : row.rateOverride
+                                  ? row.floorRate != null
+                                    ? "Below the floor: needs approval"
+                                    : "Off the card: needs approval"
                                   : "Below floor after discount"}
                             </div>
                           ) : null}
                         </TableCell>
                       </TableRow>
+                      {needsReason ? (
+                        <TableRow className="hover:bg-transparent">
+                          <TableCell />
+                          <TableCell colSpan={6} className="pt-0 pb-3">
+                            {/*
+                              Quiet (25 Nov 2026, the user: "no red border, it looks rough"): a soft
+                              panel that says what was typed against the card, then the reason.
+                              Submit still refuses an empty one, and says so.
+                            */}
+                            <div className="bg-muted/30 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-[12px] border px-3 py-2.5">
+                              <div className="flex min-w-0 items-start gap-2">
+                                <MessageSquareText className="text-warning mt-0.5 size-4 shrink-0" aria-hidden />
+                                <div className="grid gap-0.5">
+                                  <Label htmlFor={`why-${service.id}`} className="text-sm font-medium">
+                                    Reason for the higher rate
+                                  </Label>
+                                  <span className="text-muted-foreground text-xs tabular-nums">
+                                    Card AED {(row.standardRate ?? 0).toFixed(2)} · typed AED {(row.basePrice ?? 0).toFixed(2)}
+                                    {row.rateOverrideBy ? ` · by ${row.rateOverrideBy}` : ""}
+                                  </span>
+                                </div>
+                              </div>
+                              <Input
+                                id={`why-${service.id}`}
+                                className="h-9 min-w-56 flex-1 rounded-[12px] text-sm"
+                                maxLength={300}
+                                placeholder="e.g. Agreed with the client for a larger site; needed to submit"
+                                value={row.rateOverrideReason ?? ""}
+                                title={row.rateOverrideBy ? `Typed by ${row.rateOverrideBy}` : undefined}
+                                onChange={(event) => updateRow(service.id, { rateOverrideReason: event.target.value })}
+                              />
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ) : null}
                       </Fragment>
                     );
                   })}

@@ -4,7 +4,7 @@ import type { FieldStartKind } from "@/lib/amc/field-start";
 import { jobSheetActionSchema } from "@/lib/amc/job-sheets";
 import { browserPdfFrom } from "@/lib/server/amc/browser-pdf";
 import { additionalWorkOwner } from "@/lib/server/amc/additional-works";
-import { callOutOwner, handymanFacts } from "@/lib/server/amc/call-outs";
+import { callOutOwner, handymanFacts, handymanHoursLeft } from "@/lib/server/amc/call-outs";
 import { minutesOnSite, suggestedTeamHours } from "@/lib/amc/handyman-hours";
 import { readAmcConfig } from "@/lib/server/amc/config";
 import { contractErrorResponse, requireContractAccess } from "@/lib/server/amc/contract-access";
@@ -57,8 +57,12 @@ export async function GET(_req: NextRequest, ctx: Params) {
       /* DEV-495: a handyman job's teams and hours. */
       kind === "call_out" ? handymanFacts(gate.admin, id) : Promise.resolve(null),
     ]);
+    /* How many free hours are left, so the close dialog says up front when the hours run over (25 Nov 2026). */
+    const left = facts ? await handymanHoursLeft(gate.admin, id).catch(() => null) : null;
     const minutes = facts ? minutesOnSite(view.sheet?.arrivedAt, view.sheet?.completedAt) : null;
-    const handyman = facts ? { ...facts, minutesOnSite: minutes, suggestedHours: suggestedTeamHours(minutes, facts.teams) } : null;
+    const handyman = facts
+      ? { ...facts, minutesOnSite: minutes, suggestedHours: suggestedTeamHours(minutes, facts.teams), hoursLeft: left?.hoursLeft ?? null, covered: left?.covered ?? true }
+      : null;
     return NextResponse.json(
       { ...view, fsmQuotation, handyman, canEdit: rights.edit, canReview: gate.visits.approve || jobSheetSupervisors(config).includes(gate.userId) },
       { headers: { "Cache-Control": "no-store" } },
@@ -88,7 +92,7 @@ export async function POST(req: NextRequest, ctx: Params) {
     }
     if (action.action === "return") return NextResponse.json(await returnFieldJobSheet(gate.admin, kind, id, action.comment, actor));
     if (action.action === "mark_report_sent") return NextResponse.json(await markFieldReportSent(gate.admin, kind, id, { channel: action.channel, note: action.note }, actor));
-    if (action.action === "close") return NextResponse.json(await closeFieldJobSheet(gate.admin, kind, id, action.comment, actor, config, action.send, browserPdfFrom(body), action.fsmQuotationNo ?? null, action.hoursUsed ?? null));
+    if (action.action === "close") return NextResponse.json(await closeFieldJobSheet(gate.admin, kind, id, action.comment, actor, config, action.send, browserPdfFrom(body), action.fsmQuotationNo ?? null, action.hoursUsed ?? null, action.fsmQuotationSkip ?? null));
     return NextResponse.json(await sendFieldServiceReport(gate.admin, kind, id, actor, config, action.channel, browserPdfFrom(body)));
   } catch (error) {
     return contractErrorResponse(error, "Could not update the job sheet");

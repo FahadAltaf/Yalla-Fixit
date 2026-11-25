@@ -30,7 +30,7 @@ import { templateText } from "@/lib/amc/message-templates";
 import { AMC_PHOTO_MAX_BYTES, PHOTO_EXTENSION, detectImageType } from "@/lib/amc/photos";
 import { assignmentProblems, suggestCrew, type Trade } from "@/lib/amc/visits";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
-import { assertFsmQuotation, setFsmQuotation } from "@/lib/server/amc/fsm-quotation";
+import { assertFsmQuotation, fsmQuotationFlags, fsmQuotationState, recordFsmQuotationSkip, setFsmQuotation, type FsmQuotationFlag } from "@/lib/server/amc/fsm-quotation";
 import { ContractError, isMissingTable } from "@/lib/server/amc/contracts";
 import { notifyEntitlementState, notifyUsers } from "@/lib/server/amc/notifications";
 import { recordSend } from "@/lib/server/amc/proposal-share";
@@ -432,6 +432,8 @@ export interface CallOutRecord {
   misuseNote: string | null;
   acknowledgedAt: string | null;
   createdAt: string;
+  /** Lists only (25 Nov 2026): the FSM quotation number is still owed ("needed"), or follows after closing ("to_follow"). */
+  fsmQuotation?: FsmQuotationFlag | null;
 }
 
 function mapCallOut(r: Row, config: AmcConfig, now: Date): CallOutRecord {
@@ -508,6 +510,9 @@ export async function listCallOuts(
   }
   let rows = ((data ?? []) as unknown as Row[]).map((r) => mapCallOut(r, config, now));
   if (filter.ownerId) rows = rows.filter((r) => r.ownerId === filter.ownerId);
+  /* Which still owe their FSM quotation number, to say so in the list (25 Nov 2026). */
+  const flags = await fsmQuotationFlags(admin, rows.map((r) => r.id)).catch(() => new Map<string, FsmQuotationFlag>());
+  rows = rows.map((r) => ({ ...r, fsmQuotation: flags.get(r.id) ?? null }));
   return { migrated: true, callOuts: rows };
 }
 
@@ -635,9 +640,12 @@ export async function callOutDetail(admin: Admin, id: string, config: AmcConfig,
   const [photos, { data: works }] = await sideReads;
   /* DEV-495: a handyman job's teams and hours (null otherwise, or before 20261124120000). */
   const handyman = await handymanFacts(admin, id).catch(() => null);
+  /* DEV-508: the FSM quotation number, owed or not, or why it closed without one (25 Nov 2026). */
+  const fsmQuotation = await fsmQuotationState(admin, "call_out", id).catch(() => null);
   return {
     callOut: record,
     handyman,
+    fsmQuotation,
     allowance: e ? { serviceLabel: e.serviceLabel, ...allowanceBalance(e), nearZero: nearZero(allowanceBalance(e), config.allowances.warningRemaining) } : null,
     photos,
     additionalWorks: ((works ?? []) as Row[]).map((w) => ({ id: String(w.id), workNo: String(w.work_no), status: String(w.status), finding: String(w.finding), total: Number(w.total ?? 0), risk: String(w.risk) })),
@@ -678,6 +686,13 @@ export async function handymanFacts(
   /* The teams are the crew's technicians (24 Nov 2026); handyman_teams marks the job and holds the booking's count. */
   const crew = teamsFromCrew(Array.isArray(data.technician_ids) ? (data.technician_ids as unknown[]).map(String) : [], Number(data.handyman_teams));
   return { ...crew, hoursUsed: num(data.hours_used), hoursChargeable: num(data.hours_chargeable) };
+}
+
+/** A handyman job's free hours left now and whether it was booked as covered (the close dialog's chargeable hours). */
+export async function handymanHoursLeft(admin: Admin, id: string): Promise<{ hoursLeft: number | null; covered: boolean }> {
+  const { data } = await admin.from("amc_call_outs").select("coverage, entitlement_id").eq("id", id).maybeSingle<Row>();
+  const covered = data?.coverage === "covered";
+  return { covered, hoursLeft: covered ? await hoursLeft(admin, str(data?.entitlement_id)) : 0 };
 }
 
 /** The hours left on an entitlement now (null: not counted). */
@@ -939,13 +954,15 @@ export async function performCallOutAction(admin: Admin, id: string, action: Cal
       if (action.fsmQuotationNo) await setFsmQuotation(admin, "call_out", id, action.fsmQuotationNo, actor);
       /* DEV-495: a handyman job closes with its team-hours; any beyond the hours left are chargeable (and need the quotation). */
       const handyman = await recordHandymanHours(admin, row, action.hoursUsed ?? null, actor);
-      await assertFsmQuotation(admin, "call_out", id);
+      /* Without the number only with a reason (not chargeable, or the number follows), kept once it has closed. */
+      const skipped = await assertFsmQuotation(admin, "call_out", id, action.fsmQuotationNo ? null : (action.fsmQuotationSkip ?? null));
       const { data: works } = await admin.from("amc_additional_works").select("work_no, status").eq("call_out_id", id);
       const open = ((works ?? []) as Row[]).filter((w) => !(SETTLED_ADDITIONAL_WORK as readonly string[]).includes(String(w.status)));
       if (open.length) {
         throw new ContractError(`The call out stays open until its additional work is done or declined (${open.map((w) => String(w.work_no)).join(", ")}).`, 409);
       }
       await setStatus(admin, row, "closed", { closed_at: new Date().toISOString(), closed_by: actor.id }, actor, action.note);
+      if (skipped) await recordFsmQuotationSkip(admin, "call_out", id, skipped, actor);
       /* The visit was delivered: a covered call out consumes its unit (an unlimited one is counted). */
       if (handyman) await consumeHandymanHours(admin, row, handyman, `Handyman job ${no} closed`, actor);
       else if (row.coverage === "covered") await settleReservation(admin, row, "consumption", `Call out ${no} closed`, actor);

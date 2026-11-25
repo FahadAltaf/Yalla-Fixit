@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import type { FsmQuotationSkip } from "@/lib/amc/fsm-quotation";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { whatsappUrl } from "@/lib/amc/approval-ladder";
@@ -432,6 +433,7 @@ export async function closeFieldJobSheet(
   browserPdf: Uint8Array | null = null,
   fsmQuotationNo: string | null = null,
   hoursUsed: number | null = null,
+  fsmQuotationSkip: FsmQuotationSkip | null = null,
 ) {
   const { record } = await loadRecord(admin, kind, id);
   const sheet = await loadSheet(admin, kind, id);
@@ -439,7 +441,7 @@ export async function closeFieldJobSheet(
   const ref = refOf(kind, record);
   /* The record first: a call out with open additional work refuses to close, and the sheet stays submitted. */
   /* DEV-508: the FSM quotation number typed in the close dialog goes on first; a chargeable one refuses without it. */
-  const fsm = fsmQuotationNo?.trim() ? { fsmQuotationNo: fsmQuotationNo.trim() } : {};
+  const fsm = fsmQuotationNo?.trim() ? { fsmQuotationNo: fsmQuotationNo.trim() } : fsmQuotationSkip ? { fsmQuotationSkip } : {};
   /* DEV-495: a handyman job's team-hours, recorded by the coordinator here. */
   const hours = hoursUsed !== null ? { hoursUsed } : {};
   if (kind === "call_out") await performCallOutAction(admin, id, { action: "close", note: comment, ...fsm, ...hours }, actor, config);

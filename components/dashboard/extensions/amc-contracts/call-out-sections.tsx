@@ -2,7 +2,7 @@
 
 import { useId, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, Ban, CalendarCheck, ChevronRight, Flag, Users, Hammer, Plus, Save, Search, Trash2, Wrench } from "lucide-react";
+import { AlertTriangle, Ban, CalendarCheck, ChevronRight, Flag, Users, Hammer, LogIn, Plus, Save, Search, Timer, Trash2, Wrench } from "lucide-react";
 import { toast } from "sonner";
 
 import { SubmitButton } from "@/components/dashboard/shared/kaizen-states";
@@ -27,6 +27,8 @@ import {
 } from "@/modules/amc-contracts/call-outs-service";
 
 import {
+  CrewList,
+  FactTile,
   Field,
   Muted,
   Panel,
@@ -213,17 +215,21 @@ export function CallOutCrewSection({ data, working, setWorking, changed }: PageS
           ) : null
         }
       >
-        <dl className="divide-y text-sm">
-          <InfoRow label="Planned for">{c.scheduledStart ? slotLabel(c.scheduledStart, c.scheduledEnd) : <Muted>No time set yet</Muted>}</InfoRow>
-          <InfoRow label="Crew">{c.technicianIds.length ? c.technicianIds.map((t) => technicianName(t)).join(", ") : <Muted>None yet</Muted>}</InfoRow>
-          <InfoRow label="Deadline">
-            <span className="inline-flex flex-wrap items-center justify-end gap-1.5">
-              <SlaBadge state={c.slaState} dueAt={null} withDue={false} />
-              {due ? <span className="font-normal">{c.priority === "emergency" ? "attend" : "visit"} by {shortDateTime(due)}</span> : null}
-            </span>
-          </InfoRow>
-          <InfoRow label="Attended">{c.attendedAt ? formatDateTime(c.attendedAt) : <Muted>Not yet</Muted>}</InfoRow>
-        </dl>
+        {/* Tiles for when, then who goes (25 Nov 2026), as the call out's details read. */}
+        <div className="grid gap-3 sm:grid-cols-3">
+          <FactTile icon={<CalendarCheck />} label="Planned for" value={c.scheduledStart ? slotLabel(c.scheduledStart, c.scheduledEnd) : null} empty="No time set yet" />
+          <FactTile
+            icon={<Timer />}
+            label="Deadline"
+            value={<SlaBadge state={c.slaState} dueAt={null} withDue={false} />}
+            sub={due ? `${c.priority === "emergency" ? "Attend" : "Visit"} by ${shortDateTime(due)}` : "No deadline"}
+          />
+          <FactTile icon={<LogIn />} label="Attended" value={c.attendedAt ? formatDateTime(c.attendedAt) : null} sub={c.attendedAt ? "Recorded on the phone" : "The crew records it on the phone"} empty="Not yet" />
+        </div>
+        <div className="grid gap-2">
+          <p className="text-muted-foreground text-xs font-semibold tracking-wide uppercase">Crew</p>
+          <CrewList people={c.technicianIds.map((t, i) => ({ id: t, name: technicianName(t) ?? t, lead: i === 0 }))} empty="No crew yet: schedule the visit to choose who goes" />
+        </div>
         {!data.canEdit ? (
           <p className="text-muted-foreground text-sm">You can see this call out, but not change it.</p>
         ) : !canSchedule ? (

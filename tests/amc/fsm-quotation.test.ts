@@ -50,7 +50,7 @@ test("closing a chargeable call out waits for the number; once recorded it may c
 
 test("additional work with a value is completed only with the number", async () => {
   const { admin } = setup();
-  assert.deepEqual(await fsmQuotationState(admin, "additional_work", WORK), { migrated: true, value: null, required: true });
+  assert.deepEqual(await fsmQuotationState(admin, "additional_work", WORK), { migrated: true, value: null, required: true, skip: null, outstanding: true });
   await assert.rejects(assertFsmQuotation(admin, "additional_work", WORK), /Finance cannot record the revenue/);
   await setFsmQuotation(admin, "additional_work", WORK, "QT-77", { id: ME, label: null });
   await assertFsmQuotation(admin, "additional_work", WORK);

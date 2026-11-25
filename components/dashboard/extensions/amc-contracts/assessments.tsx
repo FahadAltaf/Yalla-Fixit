@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
@@ -8,8 +8,10 @@ import {
   ArrowLeft,
   Boxes,
   Building2,
+  CalendarCheck,
   CalendarClock,
   CheckCircle2,
+  CircleDashed,
   ClipboardCheck,
   EllipsisVerticalIcon,
   FileSignature,
@@ -467,6 +469,9 @@ export function AssessmentDetail({ id }: { id: string }) {
   const history = useAmcData(() => (isOpened("history") ? fieldVisitsService.history(id) : Promise.resolve(null)), isOpened("history") ? `site-visit-history:${id}` : "history:none");
   const addressForm = useAddressFormAccess();
   const [addingAddress, setAddingAddress] = useState(false);
+  /* How many photos the visit has, from the photos card (the Report tab's figure). */
+  const [photoCount, setPhotoCount] = useState<number | null>(null);
+  const countPhotos = useCallback((n: number) => setPhotoCount(n), []);
   /* The shared client or address record, edited in place as on the job's Setup tab. */
   const [editingRecord, setEditingRecord] = useState<"client" | "property" | null>(null);
   /* The section being edited in its dialog. */
@@ -649,6 +654,8 @@ export function AssessmentDetail({ id }: { id: string }) {
     answered are not shown; the office sets nothing here.
   */
   const recorded = draft ? draft.items.filter((i) => i.result || i.notes?.trim()) : [];
+  /* The findings one per line, as the inspector typed them (bullets, dashes or numbers taken off). */
+  const findingLines = findingList(draft?.findings);
   const recordedGroups = [...new Map(recorded.map((i) => [checkGroup(i), i.categoryLabel])).entries()];
   const services = catalogue.data?.catalogue ?? [];
   const panel = (value: (typeof TABS)[number], children: React.ReactNode) =>
@@ -1020,23 +1027,134 @@ export function AssessmentDetail({ id }: { id: string }) {
                   top, what they recommend beside what they flagged, then the
                   checklist behind it, then the photos.
                 */}
+                {/*
+                  25 Nov 2026: laid out as the call out's job sheet: the report at
+                  a glance in four figures, then the visit's times as tiles.
+                */}
+                <StatCardGrid columns={4}>
+                  <StatCard
+                    label="Report"
+                    value={a.status === "completed" ? "Completed" : draft.attendance ? "Being filled in" : "Not started"}
+                    headline={a.completedAt ? `Completed ${dubaiDay(a.completedAt)}, ${dubaiTime(a.completedAt)}` : "Filled in by the inspector on the mobile app"}
+                    caption={
+                      a.approvedAt
+                        ? `Approved${a.approverName ? ` by ${a.approverName}` : ""}`
+                        : a.sentBackAt
+                          ? "Sent back to the inspector"
+                          : a.status === "completed"
+                            ? "Waiting for approval"
+                            : `By ${a.assessorName ?? "the inspector"}`
+                    }
+                    tone={a.approvedAt ? "good" : a.sentBackAt ? "bad" : a.status === "completed" ? "review" : "neutral"}
+                  />
+                  <StatCard
+                    label="Recommended services"
+                    value={draft.recommendedServiceIds.length}
+                    headline={
+                      draft.recommendedServiceIds.length
+                        ? `${draft.recommendedServiceIds.reduce((n, sid) => n + (draft.assetCounts[sid] ?? 1), 0)} units counted on site`
+                        : "None yet"
+                    }
+                    tone={draft.recommendedServiceIds.length ? "good" : "neutral"}
+                  />
+                  <StatCard
+                    label="Checklist"
+                    value={recorded.length ? `${summary?.ok ?? 0} / ${recorded.length}` : "0"}
+                    headline={!recorded.length ? "No checks yet" : summary?.attention ? `${summary.attention} need attention` : "All OK"}
+                    tone={!recorded.length ? "neutral" : summary?.attention ? "bad" : "good"}
+                  />
+                  <StatCard
+                    label="Photos"
+                    value={photoCount ?? "…"}
+                    headline={photoCount === null ? "Loading" : photoCount ? "From the mobile app" : "None yet"}
+                    tone={photoCount ? "good" : "neutral"}
+                  />
+                </StatCardGrid>
+
+                <SectionCard
+                  title="Times"
+                  icon={<CalendarClock />}
+                  description="When the visit was booked for, when the inspector was there, and when the report was completed."
+                  bodyClassName="px-5 pb-5"
+                >
+                  <VisitTimeTiles
+                    tiles={[
+                      {
+                        label: "Booked for",
+                        icon: <CalendarClock />,
+                        value: a.scheduledAt ? dubaiTime(a.scheduledAt) : null,
+                        sub: a.scheduledAt ? dubaiDay(a.scheduledAt) : null,
+                        empty: "Not booked",
+                      },
+                      {
+                        label: "Visited",
+                        icon: <CalendarCheck />,
+                        value: draft.assessedOn ? visitDay(draft.assessedOn) : null,
+                        sub:
+                          [draft.assessedOn ? visitWeekday(draft.assessedOn) : null, draft.attendance ? (ATTENDANCE_LABELS[draft.attendance as SiteVisitAttendance] ?? draft.attendance) : null]
+                            .filter(Boolean)
+                            .join(" · ") || null,
+                        empty: "Not yet",
+                      },
+                      {
+                        label: "Completed",
+                        icon: <CheckCircle2 />,
+                        value: a.completedAt ? dubaiTime(a.completedAt) : null,
+                        sub: a.completedAt ? dubaiDay(a.completedAt) : "When the inspector completes the report",
+                        empty: "Not yet",
+                      },
+                    ]}
+                  />
+                </SectionCard>
+
+                {/*
+                  The inspector's words as the call out's job sheet reads its own
+                  (25 Nov 2026): the summary as text across the card, each finding
+                  on its own numbered row, the notes in a soft box under them.
+                */}
                 <SectionCard
                   title="Summary and findings"
                   icon={<ClipboardCheck />}
                   description="Written by the inspector on site."
                   bodyClassName="px-5 pb-5"
+                  action={findingLines.length ? <Badge variant="secondary">{findingLines.length} finding{findingLines.length === 1 ? "" : "s"}</Badge> : undefined}
                 >
-                  <div className="grid gap-4 md:grid-cols-3">
-                    {[
-                      { label: "Summary", value: draft.summary, empty: "No summary yet." },
-                      { label: "Findings", value: draft.findings, empty: "No findings recorded." },
-                      { label: "Notes", value: draft.notes, empty: "No notes." },
-                    ].map((block) => (
-                      <div key={block.label} className="flex min-w-0 flex-col space-y-2">
-                        <SubHeading>{block.label}</SubHeading>
-                        <TextBlock empty={block.empty}>{block.value}</TextBlock>
-                      </div>
-                    ))}
+                  <div className="grid gap-5">
+                    <div className="grid gap-2">
+                      <SubHeading>Summary</SubHeading>
+                      {draft.summary?.trim() ? (
+                        <p className="text-sm leading-relaxed whitespace-pre-wrap">{draft.summary.trim()}</p>
+                      ) : (
+                        <ReportEmpty text="No summary yet" />
+                      )}
+                    </div>
+
+                    <div className="grid gap-2 border-t pt-5">
+                      <SubHeading>Findings</SubHeading>
+                      {findingLines.length ? (
+                        <ul className="divide-y overflow-hidden rounded-lg border">
+                          {findingLines.map((line, i) => (
+                            <li key={i} className="flex items-start gap-3 px-4 py-3">
+                              <span className="bg-muted/50 text-muted-foreground flex size-7 shrink-0 items-center justify-center rounded-md border text-xs font-semibold tabular-nums">
+                                {i + 1}
+                              </span>
+                              <span className="min-w-0 flex-1 pt-0.5 text-sm leading-relaxed">{line}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <ReportEmpty text="No findings recorded" />
+                      )}
+                    </div>
+
+                    <div className="grid gap-2 border-t pt-5">
+                      <SubHeading>Notes</SubHeading>
+                      {draft.notes?.trim() ? (
+                        <p className="bg-muted/30 rounded-lg border px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap">{draft.notes.trim()}</p>
+                      ) : (
+                        <ReportEmpty text="No notes" />
+                      )}
+                    </div>
                   </div>
                 </SectionCard>
 
@@ -1141,12 +1259,23 @@ export function AssessmentDetail({ id }: { id: string }) {
                               <SubHeading>{label}</SubHeading>
                               <span className="text-muted-foreground text-xs tabular-nums">{rows.length} item{rows.length === 1 ? "" : "s"}</span>
                             </div>
-                            <ul className="divide-y rounded-lg border">
+                            <ul className="divide-y overflow-hidden rounded-lg border">
                               {rows.map((i) => (
-                                <li key={i.itemKey} className="flex items-start gap-3 px-3 py-2.5">
+                                <li key={i.itemKey} className="flex items-center gap-3 px-4 py-3">
+                                  <span className="bg-muted/50 text-muted-foreground flex size-9 shrink-0 items-center justify-center rounded-md border [&_svg]:size-4">
+                                    {i.result === "ok" ? (
+                                      <CheckCircle2 className="text-success" />
+                                    ) : i.result === "attention" ? (
+                                      <TriangleAlert className="text-warning" />
+                                    ) : (
+                                      <CircleDashed />
+                                    )}
+                                  </span>
                                   <span className="min-w-0 flex-1">
-                                    <span className="block text-sm font-medium">{i.label}</span>
-                                    {i.notes ? <span className="text-muted-foreground mt-0.5 block text-xs leading-relaxed">{i.notes}</span> : null}
+                                    <span className="block truncate text-sm font-medium" title={i.label}>
+                                      {i.label}
+                                    </span>
+                                    {i.notes ? <span className="text-muted-foreground mt-0.5 block text-sm leading-relaxed">{i.notes}</span> : null}
                                   </span>
                                   <Badge variant="secondary" className={cn("shrink-0 border-0 font-medium", i.result ? RESULT_TONES[i.result] : "bg-mist text-ink-soft")}>
                                     {i.result ? RESULT_LABELS[i.result] : "Not answered"}
@@ -1160,7 +1289,7 @@ export function AssessmentDetail({ id }: { id: string }) {
                     </div>
                   )}
                 </SectionCard>
-                <AssessmentPhotos assessmentId={a.id} editable={false} completed={a.status === "completed"} />
+                <AssessmentPhotos assessmentId={a.id} editable={false} completed={a.status === "completed"} onCount={countPhotos} />
               </>,
             )}
 
@@ -1554,3 +1683,45 @@ function Area({ label, value, onChange, editable, rows, className }: { label: st
   );
 }
 
+/* Times and days in Dubai, whatever the computer is set to (as the job sheet). */
+const dubaiTime = (iso: string) => new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Dubai" }).format(new Date(iso));
+const dubaiDay = (iso: string) =>
+  new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Dubai" }).format(new Date(iso));
+
+/* A date-only day (YYYY-MM-DD): "24 Nov", and its weekday and year under it. */
+const visitDay = (date: string) => new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", timeZone: "UTC" }).format(new Date(`${date}T12:00:00Z`));
+const visitWeekday = (date: string) => {
+  const d = new Date(`${date}T12:00:00Z`);
+  return `${new Intl.DateTimeFormat("en-GB", { weekday: "short", timeZone: "UTC" }).format(d)}, ${d.getUTCFullYear()}`;
+};
+
+/** The visit's moments as tiles, the value large and the day under it (as the call out's Times). */
+function VisitTimeTiles({ tiles }: { tiles: Array<{ label: string; icon: React.ReactNode; value: string | null; sub: string | null; empty: string }> }) {
+  return (
+    <div className="grid gap-3 sm:grid-cols-3">
+      {tiles.map((tile) => (
+        <div key={tile.label} className="bg-muted/30 flex items-start gap-3 rounded-lg border px-4 py-3">
+          <span className="bg-background text-muted-foreground flex size-9 shrink-0 items-center justify-center rounded-md border [&_svg]:size-4">{tile.icon}</span>
+          <div className="min-w-0">
+            <div className="text-muted-foreground text-xs">{tile.label}</div>
+            <div className={cn("text-xl font-semibold tabular-nums", !tile.value && "text-muted-foreground text-base font-medium")}>{tile.value ?? tile.empty}</div>
+            {tile.sub ? <div className="text-muted-foreground text-xs">{tile.sub}</div> : null}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Findings as separate items: one per line, without the bullet, dash or number the inspector started it with. */
+function findingList(text: string | null | undefined): string[] {
+  return (text ?? "")
+    .split(/\r?\n/)
+    .map((line) => line.replace(/^\s*(?:[\u2022\u2023\u25e6\u2043\u2219*\-\u2013\u2014]|\d+[.)])\s*/, "").trim())
+    .filter(Boolean);
+}
+
+/** An empty part of the report, as the job sheet's empty boxes: dashed, with a short line. */
+function ReportEmpty({ text }: { text: string }) {
+  return <p className="text-muted-foreground rounded-lg border border-dashed px-4 py-4 text-center text-sm">{text}</p>;
+}

@@ -1,4 +1,6 @@
 import { z } from "zod";
+/* Closing without the number, with a reason (25 Nov 2026): not chargeable after all, or the number follows. */
+import { fsmQuotationSkipSchema } from "./fsm-quotation";
 import { handymanTeamsSchema, hoursUsedSchema } from "./handyman-hours";
 
 import { AMC_VAT_RATE_BP, filsToAed, toFils } from "@/lib/amc/pricing";
@@ -420,7 +422,7 @@ export const callOutActionSchema = z.discriminatedUnion("action", [
     })
     .strict(),
   /* hoursUsed: a handyman job's team-hours, whole hours (DEV-495). */
-  z.object({ action: z.literal("close"), note: optionalText(1000), fsmQuotationNo: fsmQuotationNoSchema.optional(), hoursUsed: hoursUsedSchema.optional() }).strict(),
+  z.object({ action: z.literal("close"), note: optionalText(1000), fsmQuotationNo: fsmQuotationNoSchema.optional(), fsmQuotationSkip: fsmQuotationSkipSchema.optional(), hoursUsed: hoursUsedSchema.optional() }).strict(),
   z.object({ action: z.literal("cancel"), reason }).strict(),
   z.object({ action: z.literal("flag_misuse"), note: text(1000).min(3, "Say why the emergency line was misused") }).strict(),
   z.object({ action: z.literal("acknowledged") }).strict(),
@@ -514,7 +516,7 @@ export const additionalWorkActionSchema = z.discriminatedUnion("action", [
       insideLeadTime: z.boolean().optional(),
     })
     .strict(),
-  z.object({ action: z.literal("complete"), completedAt: iso.optional(), fsmQuotationNo: fsmQuotationNoSchema.optional() }).strict(),
+  z.object({ action: z.literal("complete"), completedAt: iso.optional(), fsmQuotationNo: fsmQuotationNoSchema.optional(), fsmQuotationSkip: fsmQuotationSkipSchema.optional() }).strict(),
   z.object({ action: z.literal("invoice"), invoiceNumber: text(60).min(1), invoicedAt: iso.optional() }).strict(),
   z.object({ action: z.literal("pay"), paidAt: iso.optional(), reference: optionalText(120) }).strict(),
 ]);

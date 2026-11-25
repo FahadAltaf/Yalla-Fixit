@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { StatusSelect } from "@/components/data-table/toolbars/status-select";
 import { ActionDialogContent, SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
 import { Badge } from "@/components/ui/badge";
+import { TruncatedText } from "@/components/ui/truncated-text";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -620,12 +621,15 @@ export function ContractPicker({
 
   if (value) {
     return (
-      <div className="flex items-start justify-between gap-3 rounded-lg border px-3 py-2 text-sm">
-        <span className="min-w-0">
-          <span className="font-medium">{value.proposalNumber}</span> · {value.customerName || "Client"}
-          {value.propertyLabel ? <span className="text-muted-foreground block truncate text-xs">{value.propertyLabel}</span> : null}
-        </span>
-        <Button size="sm" variant="ghost" className="h-7 px-2" disabled={disabled} onClick={() => onChange(null)}>
+      /* Held to the field's width (25 Nov 2026): a long address ran past the dialog; it ends in "…" with the whole of it on hover. */
+      <div className="flex w-full min-w-0 items-start justify-between gap-3 overflow-hidden rounded-lg border px-3 py-2 text-sm">
+        <div className="grid min-w-0 flex-1">
+          <TruncatedText className="font-medium">
+            {value.proposalNumber} · {value.customerName || "Client"}
+          </TruncatedText>
+          {value.propertyLabel ? <TruncatedText text={value.propertyLabel} className="text-muted-foreground text-xs" /> : null}
+        </div>
+        <Button size="sm" variant="ghost" className="h-7 shrink-0 px-2" disabled={disabled} onClick={() => onChange(null)}>
           Change
         </Button>
       </div>
@@ -640,11 +644,13 @@ export function ContractPicker({
       ) : matches.length === 0 ? (
         <p className="text-muted-foreground text-xs">No active contract matches.</p>
       ) : (
-        <ul className="divide-y rounded-lg border text-sm">
+        <ul className="min-w-0 divide-y overflow-hidden rounded-lg border text-sm">
           {matches.map((m) => (
-            <li key={m.id}>
-              <button type="button" className="hover:bg-muted w-full px-3 py-2 text-left" onClick={() => onChange(m)}>
-                <span className="font-medium">{m.proposalNumber}</span> · {m.customerName}
+            <li key={m.id} className="min-w-0">
+              <button type="button" className="hover:bg-muted grid w-full min-w-0 px-3 py-2 text-left" onClick={() => onChange(m)} title={m.propertyLabel || undefined}>
+                <span className="truncate">
+                  <span className="font-medium">{m.proposalNumber}</span> · {m.customerName}
+                </span>
                 <span className="text-muted-foreground block truncate text-xs">{m.propertyLabel}</span>
               </button>
             </li>
@@ -899,6 +905,87 @@ export function ListToolbar({
           </Button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Facts, crews and empty parts, as the job sheet shows them (25 Nov 2026) */
+/* ------------------------------------------------------------------ */
+
+/** A fact as a small tile: an icon, the label, the value, a line under it. */
+export function FactTile({
+  icon,
+  label,
+  value,
+  sub,
+  empty = "—",
+  tone,
+}: {
+  icon: ReactNode;
+  label: string;
+  value: ReactNode | null;
+  sub?: ReactNode | null;
+  empty?: string;
+  tone?: "warning";
+}) {
+  return (
+    <div className={cn("bg-muted/30 flex h-full min-w-0 items-start gap-3 rounded-lg border px-4 py-3", tone === "warning" && "border-warning/40 bg-warning/5")}>
+      <span
+        className={cn(
+          "bg-background text-muted-foreground flex size-9 shrink-0 items-center justify-center rounded-md border [&_svg]:size-4",
+          tone === "warning" && "text-warning",
+        )}
+      >
+        {icon}
+      </span>
+      <div className="min-w-0">
+        <div className="text-muted-foreground text-xs">{label}</div>
+        <div className={cn("text-sm font-semibold", value === null && "text-muted-foreground font-medium", tone === "warning" && "text-warning")}>{value ?? empty}</div>
+        {sub ? <div className="text-muted-foreground text-xs">{sub}</div> : null}
+      </div>
+    </div>
+  );
+}
+
+const initialsOf = (name: string) =>
+  name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0]!.toUpperCase())
+    .join("") || "?";
+
+/** Who goes, one row each: their initials, name and a Lead tag on the first (or the named lead). */
+export function CrewList({ people, empty = "No crew yet" }: { people: Array<{ id: string; name: string; lead?: boolean }>; empty?: string }) {
+  if (!people.length) return <CompactEmpty title={empty} />;
+  return (
+    <ul className="divide-y overflow-hidden rounded-lg border">
+      {people.map((p) => (
+        <li key={p.id} className="flex items-center gap-3 px-4 py-2.5">
+          <span className="bg-muted text-muted-foreground flex size-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold">{initialsOf(p.name)}</span>
+          <span className="min-w-0 flex-1 truncate text-sm font-medium">{p.name}</span>
+          {p.lead && people.length > 1 ? (
+            <Badge variant="secondary" className="bg-brand-50 text-brand shrink-0 border-0 font-medium">
+              Lead
+            </Badge>
+          ) : null}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** An empty part as one compact dashed box, not a tall empty state. */
+export function CompactEmpty({ icon, title, description, action }: { icon?: ReactNode; title: string; description?: string; action?: ReactNode }) {
+  return (
+    <div className="text-muted-foreground flex flex-wrap items-center gap-3 rounded-lg border border-dashed px-4 py-3 text-sm">
+      {icon ? <span className="bg-muted/60 flex size-8 shrink-0 items-center justify-center rounded-md [&_svg]:size-4">{icon}</span> : null}
+      <div className="min-w-0 flex-1">
+        <p className="text-foreground font-medium">{title}</p>
+        {description ? <p className="text-xs">{description}</p> : null}
+      </div>
+      {action}
     </div>
   );
 }

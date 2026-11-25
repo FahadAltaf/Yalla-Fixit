@@ -6,8 +6,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { toast } from "sonner";
 
 import { ActionDialogContent, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
-import { useTechnicianLogins } from "@/components/dashboard/shared/technician-login";
-import { Badge } from "@/components/ui/badge";
+import { NeedsLoginBadge, NeedsLoginNote, cannotRegister, useTechnicianLogins } from "@/components/dashboard/shared/technician-login";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -497,6 +496,9 @@ export function CrewDialog({ open, onOpenChange, onDone, reload, visits, technic
   const pick = (t: BoardTechnician, on: boolean) => {
     if (!on) return setSelected((cur) => cur.filter((id) => id !== t.fsmId));
     if (hasLogin(t)) return setSelected((cur) => [...cur, t.fsmId]);
+    /* No email in FSM: no login can be made, so they are not added (25 Nov 2026). */
+    const blocked = cannotRegister(t);
+    if (blocked) return void toast.error(blocked);
     void makeLogins([t]).then((ok) => {
       if (ok) setSelected((cur) => (cur.includes(t.fsmId) ? cur : [...cur, t.fsmId]));
     });
@@ -546,6 +548,7 @@ export function CrewDialog({ open, onOpenChange, onDone, reload, visits, technic
           </AlertDescription>
         </Alert>
       ) : null}
+      <NeedsLoginNote names={technicians.filter((t) => !hasLogin(t) && !selected.includes(t.fsmId)).map((t) => t.name)} />
       <div className="relative">
         <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2" />
         <Input aria-label="Search technicians" placeholder="Search by name or trade" className="ps-9" value={search} onChange={(e) => setSearch(e.target.value)} />
@@ -568,12 +571,7 @@ export function CrewDialog({ open, onOpenChange, onDone, reload, visits, technic
                   <span className="flex flex-wrap items-center gap-1.5">
                     <span className="font-medium">{t.name}</span>
                     {selected[0] === t.fsmId ? <span className="text-muted-foreground">· lead</span> : null}
-                    {hasLogin(t) ? null : (
-                      <Badge variant="outline" className="border-warning/40 text-warning font-normal" title="No mobile login yet: ticking creates one">
-                        <KeyRound className="size-3" />
-                        No login
-                      </Badge>
-                    )}
+                    {hasLogin(t) ? null : <NeedsLoginBadge email={t.email} />}
                   </span>
                   <span className="text-muted-foreground block text-xs">
                     {t.trades.map((tr) => TRADE_LABELS[tr]).join(", ") || "No confirmed trade"}

@@ -1,13 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Copy, KeyRound, Link2, Smartphone } from "lucide-react";
+import { Check, Copy, KeyRound, Link2, Loader2, MailX, Smartphone } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { useConfirm } from "@/components/dashboard/shared/kaizen-states";
 import type { TechnicianLoginResult, TechnicianLoginTarget } from "@/lib/technician-accounts";
 import { technicianAccountsService, type TechnicianAccountsList } from "@/modules/users/services/technician-accounts-service";
 import { usersService } from "@/modules/users/services/users-service";
@@ -24,49 +23,216 @@ import { usersService } from "@/modules/users/services/users-service";
  * is made, and handed over, the same way wherever somebody is assigned.
  */
 export function useTechnicianLogins() {
-  const { confirm, dialog: confirmDialog } = useConfirm();
+  const [ask, setAsk] = useState<{ targets: TechnicianLoginTarget[]; resolve: (ok: boolean) => void } | null>(null);
   const [shown, setShown] = useState<TechnicianLoginResult[] | null>(null);
+  /* Kept across "Try again", so a login made before a failure is not made twice (its password would be lost). */
+  const done = useRef(new Map<string, TechnicianLoginResult>());
 
-  const createLogins = useCallback(
-    async (targets: TechnicianLoginTarget[]): Promise<TechnicianLoginResult[] | null> => {
-      if (!targets.length) return [];
-      /* Kept across "Try again", so a login made before a failure is not asked for twice (its password would be lost). */
-      const done = new Map<string, TechnicianLoginResult>();
-      const one = targets.length === 1 ? targets[0] : null;
-      const ok = await confirm({
-        title: one ? `Create a login for ${one.name}?` : `Create logins for ${targets.length} technicians?`,
-        description: one
-          ? `${one.name} has no login yet, so they can't see this work on the mobile app. A login is created with their Zoho FSM email${one.email ? ` (${one.email})` : ""} and the Inspector role. You'll get the password next, to share with them.`
-          : `${targets.map((t) => t.name).join(", ")} have no login yet, so they can't see this work on the mobile app. Each gets a login with their Zoho FSM email and the Inspector role. You'll get the passwords next, to share with them.`,
-        confirmText: one ? "Create login" : "Create logins",
-        action: async () => {
-          for (const t of targets) {
-            if (done.has(t.fsmId)) continue;
-            done.set(t.fsmId, await technicianAccountsService.createLogin(t.fsmId));
-          }
-        },
-      });
-      if (!ok) {
-        /* Cancelled after a partial batch: still show what was made, or those passwords are gone. */
-        if (done.size) setShown([...done.values()]);
-        return null;
-      }
-      technicianAccountsService.forget();
-      usersService.forgetStaff();
-      const results = targets.map((t) => done.get(t.fsmId)!).filter(Boolean);
-      if (results.some((r) => r.status !== "existing")) setShown(results);
-      return results;
-    },
-    [confirm],
-  );
+  const createLogins = useCallback(async (targets: TechnicianLoginTarget[]): Promise<TechnicianLoginResult[] | null> => {
+    if (!targets.length) return [];
+    done.current = new Map();
+    const ok = await new Promise<boolean>((resolve) => setAsk({ targets, resolve }));
+    const made = done.current;
+    if (!ok) {
+      /* Cancelled after a partial batch: still show what was made, or those passwords are gone. */
+      if (made.size) setShown([...made.values()]);
+      return null;
+    }
+    technicianAccountsService.forget();
+    usersService.forgetStaff();
+    const results = targets.map((t) => made.get(t.fsmId)!).filter(Boolean);
+    if (results.some((r) => r.status !== "existing")) setShown(results);
+    return results;
+  }, []);
+
+  const run = useCallback(async () => {
+    for (const t of ask?.targets ?? []) {
+      if (done.current.has(t.fsmId)) continue;
+      done.current.set(t.fsmId, await technicianAccountsService.createLogin(t.fsmId));
+    }
+  }, [ask]);
 
   const dialogs = (
     <>
-      {confirmDialog}
+      <CreateLoginDialog
+        targets={ask?.targets ?? null}
+        onCreate={run}
+        onSettle={(ok) => {
+          ask?.resolve(ok);
+          setAsk(null);
+        }}
+      />
       <LoginDetailsDialog results={shown} onClose={() => setShown(null)} />
     </>
   );
   return { createLogins, dialogs };
+}
+
+const initials = (name: string) =>
+  name
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((w) => w[0]!.toUpperCase())
+    .join("");
+
+/**
+ * The question before a login is made (25 Nov 2026, the user: the plain
+ * alert looked poor): who it is for, the email it uses, the role, and what
+ * happens next. The logins are made while it stays open; a failure is
+ * shown on it, so "Try again" never makes a login twice.
+ */
+function CreateLoginDialog({
+  targets,
+  onCreate,
+  onSettle,
+}: {
+  targets: TechnicianLoginTarget[] | null;
+  onCreate: () => Promise<void>;
+  onSettle: (ok: boolean) => void;
+}) {
+  const [working, setWorking] = useState(false);
+  const [failure, setFailure] = useState<string | null>(null);
+  const list = targets ?? [];
+  const many = list.length > 1;
+  const create = async () => {
+    setFailure(null);
+    setWorking(true);
+    try {
+      await onCreate();
+      onSettle(true);
+    } catch (e) {
+      setFailure(e instanceof Error ? e.message : "The login could not be made. Try again.");
+    } finally {
+      setWorking(false);
+    }
+  };
+  const close = () => {
+    if (working) return;
+    setFailure(null);
+    onSettle(false);
+  };
+  return (
+    <Dialog open={targets !== null} onOpenChange={(open) => (open ? null : close())}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-md" onEscapeKeyDown={(e) => working && e.preventDefault()} onInteractOutside={(e) => e.preventDefault()}>
+        <DialogHeader>
+          <div className="flex items-start gap-3">
+            <span className="bg-brand-50 text-brand border-brand/20 flex size-10 shrink-0 items-center justify-center rounded-lg border">
+              <KeyRound className="size-5" />
+            </span>
+            <div className="min-w-0 space-y-1 text-left">
+              <DialogTitle>{many ? `Create ${list.length} mobile logins` : "Create a mobile login"}</DialogTitle>
+              <DialogDescription>
+                {many ? "These technicians have" : `${list[0]?.name ?? "This technician"} has`} no login yet, so they can&apos;t see this job in the YFI app.
+              </DialogDescription>
+            </div>
+          </div>
+        </DialogHeader>
+
+        <ul className="divide-y overflow-hidden rounded-lg border">
+          {list.map((t) => (
+            <li key={t.fsmId} className="flex items-center gap-3 px-3 py-2.5">
+              <span className="bg-muted text-muted-foreground flex size-9 shrink-0 items-center justify-center rounded-full text-xs font-semibold">{initials(t.name)}</span>
+              <span className="grid min-w-0 flex-1">
+                <span className="truncate text-sm font-medium">{t.name}</span>
+                {t.email ? (
+                  <span className="text-muted-foreground truncate font-mono text-xs" title={t.email}>
+                    {t.email}
+                  </span>
+                ) : (
+                  <span className="text-muted-foreground text-xs">Their email in Zoho FSM</span>
+                )}
+              </span>
+              <Badge variant="secondary" className="shrink-0 border-0 font-medium">
+                Inspector
+              </Badge>
+            </li>
+          ))}
+        </ul>
+
+        <ol className="grid gap-2 text-sm">
+          {[
+            `${many ? "Each login uses the technician's" : "The login uses their"} email from Zoho FSM.`,
+            "The Inspector role: the YFI mobile app and Snagging, nothing else.",
+            `You get the ${many ? "passwords" : "password"} next, once, to hand over.`,
+          ].map((step, i) => (
+            <li key={step} className="flex items-start gap-2.5">
+              <span className="bg-muted text-muted-foreground flex size-5 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold">{i + 1}</span>
+              <span className="text-muted-foreground">{step}</span>
+            </li>
+          ))}
+        </ol>
+
+        {failure ? (
+          <p className="border-danger/30 bg-danger/5 text-danger rounded-md border px-3 py-2 text-sm" role="alert">
+            {failure}
+          </p>
+        ) : null}
+
+        <DialogFooter className="gap-2 sm:gap-2">
+          <Button type="button" variant="outline" onClick={close} disabled={working}>
+            Cancel
+          </Button>
+          <Button type="button" onClick={() => void create()} disabled={working}>
+            {working ? <Loader2 className="size-4 animate-spin" /> : <KeyRound className="size-4" />}
+            {working ? "Creating…" : failure ? "Try again" : many ? "Create logins" : "Create login"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+/*
+  Who still needs a login, said the same way on every crew screen (25 Nov
+  2026): a badge on the technician, a line above the list saying what
+  adding them does, and nobody added whose login can't be made.
+*/
+
+/** The technician's badge: needs a login, or can't have one yet (no email in Zoho FSM). */
+export function NeedsLoginBadge({ email, className }: { email: string | null | undefined; className?: string }) {
+  if (email === null || email === "") {
+    return (
+      <Badge
+        variant="outline"
+        className={`border-danger/40 text-danger font-normal ${className ?? ""}`}
+        title="No email in Zoho FSM, so no mobile login can be made. Add their email in FSM, then sync the technicians."
+      >
+        <MailX className="size-3" />
+        No email in FSM
+      </Badge>
+    );
+  }
+  return (
+    <Badge
+      variant="outline"
+      className={`border-warning/40 text-warning font-normal ${className ?? ""}`}
+      title="No mobile login yet: adding them creates one with their FSM email and the Inspector role"
+    >
+      <KeyRound className="size-3" />
+      Needs login
+    </Badge>
+  );
+}
+
+/** Above the list: how many have no login, and what happens when one is added. */
+export function NeedsLoginNote({ names }: { names: string[] }) {
+  if (!names.length) return null;
+  const who = names.length <= 3 ? names.join(", ") : `${names.slice(0, 3).join(", ")} and ${names.length - 3} more`;
+  return (
+    <p className="bg-muted/40 text-muted-foreground flex items-start gap-2 rounded-md border px-3 py-2 text-xs">
+      <KeyRound className="text-warning mt-0.5 size-3.5 shrink-0" />
+      <span>
+        <span className="text-foreground font-medium">{names.length === 1 ? "1 technician needs" : `${names.length} technicians need`} a mobile login</span> ({who}). Adding
+        one to the job creates it first, with their Zoho FSM email and the Inspector role, and shows the password to hand over, so they see the job in the YFI app.
+      </span>
+    </p>
+  );
+}
+
+/** A login can be made: they have an email in Zoho FSM. Says why not, else null. */
+export function cannotRegister(t: { name: string; email?: string | null }): string | null {
+  return t.email !== null && t.email !== "" ? null : `${t.name} has no email in Zoho FSM, so no mobile login can be made. Add their email in FSM, sync the technicians, then add them.`;
 }
 
 /** The list of technicians and their logins, for a picker; reloads after a login is made. */

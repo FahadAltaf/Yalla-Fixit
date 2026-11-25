@@ -24,9 +24,11 @@ import { Calendar } from "@/components/ui/calendar";
 import StatusBadge from "@/components/ui/status-badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { ConfirmationAlertDialog } from "@/components/ui/confirmation-alert-dialog";
-import { AlertTriangle, CalendarDays, ChevronDown, ExternalLink, Loader2, RefreshCw, Trash2, UsersRound } from "lucide-react";
+import { AlertTriangle, CalendarArrowUp, CalendarDays, ChevronDown, ExternalLink, Loader2, RefreshCw, Trash2, UsersRound } from "lucide-react";
 import TimeSelect, { formatTimeAmPm } from "@/components/ui/time-select";
 import { Hint } from "@/components/ui/hint";
+import { amcEntryHref } from "@/lib/scheduling/amc-entries";
+import { movedFrom } from "@/lib/scheduling/move-entries";
 import { reachesOutsideUsualHours, fsmRecordUrl } from "./shift-utils";
 import {
   APPOINTMENT_STATE_LABELS,
@@ -61,6 +63,8 @@ type Props = {
   dayEntries: ScheduleEntry[];
   onOpenChange: (open: boolean) => void;
   onChanged: () => void;
+  /** DEV-393: move it to another day or a new crew (AMC work through AMC). */
+  onMove?: () => void;
 };
 
 // The entry's time of day in the org's zone (not the viewer's).
@@ -95,6 +99,7 @@ export default function EntryDetailDialog({
   dayEntries,
   onOpenChange,
   onChanged,
+  onMove,
 }: Props) {
   const [removing, setRemoving] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -147,8 +152,11 @@ export default function EntryDetailDialog({
   // Who can be edited here, and how the write happens:
   //  - Draft: local edit via updateEntry (no FSM write until approval).
   //  - Published synced appointment + approver: pushes straight to FSM.
-  const canEditDraft = isEditable;
-  const canEditPublished = publishedLike && isApprover && isSyncedAppointment;
+  /* DEV-489: AMC work is changed in AMC; here it is read only. */
+  const isAmc = Boolean(entry.amc_kind);
+  const amcHref = amcEntryHref(entry.amc_kind, entry.amc_record_id);
+  const canEditDraft = isEditable && !isAmc;
+  const canEditPublished = publishedLike && isApprover && isSyncedAppointment && !isAmc;
   const canEdit = canEditDraft || canEditPublished;
 
   // 7-7: FSM refused this entry on an approved day (e.g. the appointment was
@@ -498,14 +506,47 @@ export default function EntryDetailDialog({
               {entry.entry_type === "free_text" ? entry.title || "Text entry" : `${workOrderLabel} · ${appointmentLabel}`}
             </DialogTitle>
             <DialogDescription>
-              {entry.entry_type === "free_text"
+              {isAmc
+                ? "AMC work, shown on the board so the technician's day is complete. It is planned and changed in AMC, and never written to Zoho FSM (the technician does it in the YFI app)."
+                : entry.entry_type === "free_text"
                 ? "A note on the board. Free-text entries are never written to Zoho FSM."
                 : "Appointment detail, its Zoho FSM sync state, and who last touched it."}
             </DialogDescription>
           </DialogHeader>
 
+          {isAmc ? (
+            <div className="bg-muted/30 flex flex-wrap items-center justify-between gap-3 rounded-lg border px-4 py-3">
+              <div className="min-w-0">
+                <p className="text-sm font-medium">{entry.amc_visit_type ?? "AMC work"}</p>
+                <p className="text-muted-foreground text-xs">{[entry.amc_ref, entry.client_name].filter(Boolean).join(" · ")}</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {onMove && (
+                  <Button size="sm" variant="outline" onClick={onMove}>
+                    <CalendarArrowUp className="size-4" />
+                    Move or change crew
+                  </Button>
+                )}
+                {amcHref ? (
+                  <Button asChild size="sm" variant="outline">
+                    <a href={amcHref}>
+                      <ExternalLink className="size-4" />
+                      Open in AMC
+                    </a>
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+
+          {movedFrom(entry) && (
+            <p className="text-muted-foreground text-xs">
+              Moved here from {dayLabel(movedFrom(entry)!)}, the day it was first planned for.
+            </p>
+          )}
+
           <div className="flex flex-wrap items-center gap-2">
-            <StatusBadge status={entry.entry_type.replace(/_/g, " ")} />
+            {isAmc ? <StatusBadge status="amc" /> : <StatusBadge status={entry.entry_type.replace(/_/g, " ")} />}
             <StatusBadge status={entry.sync_status.replace(/_/g, " ")} />
             <StatusBadge status={entry.shift === "night" ? "night shift" : "morning shift"} />
             {entry.origin === "fsm" && <StatusBadge status="fsm" />}
@@ -805,7 +846,7 @@ export default function EntryDetailDialog({
           {/* Copy: to other days (FR-15) on the left, to other technicians
               (FR-14) on the right. Copying an APPOINTMENT to other days waits
               for the team's decisions on how a copy is made in Zoho FSM. */}
-          {!entry.carried_over && (
+          {!entry.carried_over && !isAmc && (
             <div className="rounded-md border p-3">
               <button
                 type="button"
@@ -943,13 +984,21 @@ export default function EntryDetailDialog({
 
           {/* Actions pinned to the bottom of the dialog, so Save is reachable
               without scrolling past the technician list. */}
-          {(canEdit || isEditable) && (
+          {(canEdit || (isEditable && !isAmc)) && (
             <DialogFooter className="bg-background sticky bottom-0 z-10 sm:items-center sm:justify-between">
               {isEditable ? (
-                <Button variant="destructive" onClick={() => setConfirmOpen(true)} disabled={removing || saving}>
-                  <Trash2 className="size-4" />
-                  Remove from draft
-                </Button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button variant="destructive" onClick={() => setConfirmOpen(true)} disabled={removing || saving}>
+                    <Trash2 className="size-4" />
+                    Remove from draft
+                  </Button>
+                  {onMove && !isAmc && (
+                    <Button variant="outline" onClick={onMove} disabled={removing || saving || dirty} title={dirty ? "Save or undo your changes first" : undefined}>
+                      <CalendarArrowUp className="size-4" />
+                      Move to another day
+                    </Button>
+                  )}
+                </div>
               ) : (
                 <span />
               )}
