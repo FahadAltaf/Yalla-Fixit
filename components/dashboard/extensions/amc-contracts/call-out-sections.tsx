@@ -46,6 +46,7 @@ import { useTechnicianName } from "./people-pickers";
 import { useDialog } from "./profile/use-dialog";
 import { RaiseAdditionalWorkDialog } from "./raise-additional-work-dialog";
 import { slotDate, slotLabel, slotTime } from "./visit-status";
+import { useLeadTimeConfirm } from "./lead-time-confirm";
 
 export type CallOutWorking = "suggest" | "schedule" | "attend" | "record" | null;
 
@@ -164,7 +165,7 @@ export function CallOutNotices({ callOut: c }: { callOut: CallOutRecord }) {
   return (
     <>
       {c.misuseFlag ? (
-        <Alert variant="destructive" className="border-destructive/30 items-start p-4">
+        <Alert variant="danger">
           <Flag />
           <AlertTitle>Misuse of the emergency line</AlertTitle>
           <AlertDescription>
@@ -173,7 +174,7 @@ export function CallOutNotices({ callOut: c }: { callOut: CallOutRecord }) {
         </Alert>
       ) : null}
       {c.status === "cancelled" && c.statusReason ? (
-        <Alert className="items-start p-4">
+        <Alert>
           <Ban />
           <AlertTitle>Cancelled{c.closedAt ? ` · ${formatDateTime(c.closedAt)}` : ""}</AlertTitle>
           <AlertDescription>
@@ -249,7 +250,7 @@ export function CallOutFindingsSection({ data, working, setWorking, changed, onR
   return (
     <>
       {suggestWork ? (
-        <Alert className="border-warning/30 bg-warning/5 items-start p-4">
+        <Alert variant="warning">
           <AlertTriangle className="text-warning" />
           <AlertTitle>This looks like additional work</AlertTitle>
           <AlertDescription>
@@ -370,6 +371,7 @@ type DialogProps = Omit<SectionProps, "canEdit"> & { open: boolean; onOpenChange
 /* ------------------------------------------------------------------ */
 
 function ScheduleDialog({ callOut: c, open, onOpenChange, working, setWorking, changed }: DialogProps) {
+  const { guard, dialog: leadTimeDialog } = useLeadTimeConfirm();
   const run = useRun(setWorking);
   const placedMinutes = c.scheduledStart && c.scheduledEnd ? Math.round((Date.parse(c.scheduledEnd) - Date.parse(c.scheduledStart)) / 60_000) : null;
   const [date, setDate] = useState(() => (c.scheduledStart ? slotDate(c.scheduledStart) : todayInDubai()));
@@ -401,7 +403,7 @@ function ScheduleDialog({ callOut: c, open, onOpenChange, working, setWorking, c
         setSuggestion({ key: slotKey, data });
         setPicked(data.suggested.technicianIds);
         setOverride("");
-        if (!data.fits.some((f) => f.blockers.length === 0)) toast.warning("Nobody competent is free at that time.");
+        if (!data.fits.some((f) => f.blockers.length === 0)) toast.warning("Nobody can be picked at that time: everyone is on leave or cannot take this work.");
       },
       "Could not find technicians.",
     );
@@ -410,14 +412,17 @@ function ScheduleDialog({ callOut: c, open, onOpenChange, working, setWorking, c
     void run(
       "schedule",
       async () => {
-        await callOutsService.action(c.id, {
-          action: "schedule",
-          date,
-          time,
-          durationMinutes: minutes,
-          technicianIds: picked,
-          overrideReason: differs && override.trim() ? override.trim() : null,
-        });
+        await guard((insideLeadTime) =>
+          callOutsService.action(c.id, {
+            action: "schedule",
+            date,
+            time,
+            durationMinutes: minutes,
+            technicianIds: picked,
+            overrideReason: differs && override.trim() ? override.trim() : null,
+            insideLeadTime,
+          }),
+        );
         toast.success(c.scheduledStart ? `Call out ${c.callOutNo} rescheduled` : `Call out ${c.callOutNo} scheduled`);
         setSuggestion(null);
         onOpenChange(false);
@@ -427,64 +432,67 @@ function ScheduleDialog({ callOut: c, open, onOpenChange, working, setWorking, c
     );
 
   return (
-    <SectionDialog
-      open={open}
-      onOpenChange={onOpenChange}
-      wide
-      title={c.scheduledStart ? `Reschedule call out ${c.callOutNo}` : `Schedule call out ${c.callOutNo}`}
-      description="Pick a day and time, then find who is competent for the trade and free. Blocked technicians show why."
-      busy={working === "schedule"}
-      submit={
-        <SubmitButton
-          pending={working === "schedule"}
-          pendingLabel="Saving…"
-          disabled={working !== null || !fresh || picked.length === 0 || picked.length > 10 || reasonMissing || missingLogins > 0}
-          icon={<CalendarCheck className="size-4" />}
-          onClick={save}
-        >
-          {c.scheduledStart ? "Reschedule" : "Schedule"}
-        </SubmitButton>
-      }
-    >
-      {!c.trade ? <p className="text-warning text-xs">This call out has no trade, so every technician is offered: pick who fits the work.</p> : null}
-      <div className="grid gap-4 sm:grid-cols-3">
-        <Field id={ids.date} label="Date">
-          <DateSelect id={ids.date} value={date} onChange={setDate} />
-        </Field>
-        <Field id={ids.time} label="Start time">
-          <TimeSelect id={ids.time} step={900} value={time} onChange={setTime} />
-        </Field>
-        <Field id={ids.duration} label="Duration (minutes)">
-          <Input id={ids.duration} type="number" min={15} max={720} step={15} value={duration} onChange={(e) => setDuration(e.target.value)} />
-        </Field>
-      </div>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-muted-foreground text-xs">
-          {suggestion && !fresh
-            ? "The day or time changed: find technicians again."
-            : !validSlot
-              ? "Enter a date, a start time and 15 to 720 minutes."
-              : !fresh
-                ? "Then choose the crew."
-                : reasonMissing
-                  ? "Say why this crew was chosen instead of the suggested one."
-                  : crewSummary(picked)}
-        </p>
-        <SubmitButton variant="outline" pending={working === "suggest"} pendingLabel="Finding…" disabled={working !== null || !validSlot} icon={<Search className="size-4" />} onClick={find}>
-          Find technicians
-        </SubmitButton>
-      </div>
-      {options ? <CrewPicker options={options} picked={picked} onPickedChange={setPicked} disabled={working !== null} onMissingLoginsChange={setMissingLogins} /> : null}
-      {fresh && differs && picked.length ? (
-        <Field
-          id={ids.override}
-          label={reasonRequired ? "Why this crew" : "Why this crew (optional)"}
-          hint={reasonRequired ? "Not the suggested crew: say why. Needed to save." : "Say why, for the record."}
-        >
-          <Textarea id={ids.override} rows={2} maxLength={500} value={override} onChange={(e) => setOverride(e.target.value)} />
-        </Field>
-      ) : null}
-    </SectionDialog>
+    <>
+      {leadTimeDialog}
+      <SectionDialog
+        open={open}
+        onOpenChange={onOpenChange}
+        wide
+        title={c.scheduledStart ? `Reschedule call out ${c.callOutNo}` : `Schedule call out ${c.callOutNo}`}
+        description="Pick a day and time, then find who is competent for the trade and free. Blocked technicians show why."
+        busy={working === "schedule"}
+        submit={
+          <SubmitButton
+            pending={working === "schedule"}
+            pendingLabel="Saving…"
+            disabled={working !== null || !fresh || picked.length === 0 || picked.length > 10 || reasonMissing || missingLogins > 0}
+            icon={<CalendarCheck className="size-4" />}
+            onClick={save}
+          >
+            {c.scheduledStart ? "Reschedule" : "Schedule"}
+          </SubmitButton>
+        }
+      >
+        {!c.trade ? <p className="text-warning text-xs">This call out has no trade, so every technician is offered: pick who fits the work.</p> : null}
+        <div className="grid gap-4 sm:grid-cols-3">
+          <Field id={ids.date} label="Date">
+            <DateSelect id={ids.date} value={date} onChange={setDate} />
+          </Field>
+          <Field id={ids.time} label="Start time">
+            <TimeSelect id={ids.time} step={900} value={time} onChange={setTime} />
+          </Field>
+          <Field id={ids.duration} label="Duration (minutes)">
+            <Input id={ids.duration} type="number" min={15} max={720} step={15} value={duration} onChange={(e) => setDuration(e.target.value)} />
+          </Field>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-muted-foreground text-xs">
+            {suggestion && !fresh
+              ? "The day or time changed: find technicians again."
+              : !validSlot
+                ? "Enter a date, a start time and 15 to 720 minutes."
+                : !fresh
+                  ? "Then choose the crew."
+                  : reasonMissing
+                    ? "Say why this crew was chosen instead of the suggested one."
+                    : crewSummary(picked)}
+          </p>
+          <SubmitButton variant="outline" pending={working === "suggest"} pendingLabel="Finding…" disabled={working !== null || !validSlot} icon={<Search className="size-4" />} onClick={find}>
+            Find technicians
+          </SubmitButton>
+        </div>
+        {options ? <CrewPicker options={options} picked={picked} onPickedChange={setPicked} disabled={working !== null} onMissingLoginsChange={setMissingLogins} /> : null}
+        {fresh && differs && picked.length ? (
+          <Field
+            id={ids.override}
+            label={reasonRequired ? "Why this crew" : "Why this crew (optional)"}
+            hint={reasonRequired ? "Not the suggested crew: say why. Needed to save." : "Say why, for the record."}
+          >
+            <Textarea id={ids.override} rows={2} maxLength={500} value={override} onChange={(e) => setOverride(e.target.value)} />
+          </Field>
+        ) : null}
+      </SectionDialog>
+    </>
   );
 }
 

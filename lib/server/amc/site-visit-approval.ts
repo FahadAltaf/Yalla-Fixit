@@ -16,6 +16,8 @@ import {
 } from "@/lib/server/amc/client-profile";
 import { ContractError, isMissingTable } from "@/lib/server/amc/contracts";
 import { notifyUsers } from "@/lib/server/amc/notifications";
+import { alertCrew } from "@/lib/server/amc/crew-alerts";
+import { siteVisitDeciders } from "@/lib/server/amc/site-visit-approvers";
 import type { z } from "zod";
 
 /**
@@ -210,11 +212,30 @@ export async function siteVisitPropertyView(
 /* Approve, send back                                                  */
 /* ------------------------------------------------------------------ */
 
-function assertApprover(a: AssessmentRecord, userId: string) {
+/**
+ * Who may approve or send back this visit (24 Nov 2026): the site visit
+ * approvers in AMC configuration, and the person named on a visit booked
+ * before that (when approvers were picked per visit).
+ */
+export async function siteVisitApprovers(admin: Admin, a: Pick<AssessmentRecord, "approverId">): Promise<{ ids: string[]; names: string[]; from: string }> {
+  const d = await siteVisitDeciders(admin);
+  return { ...d, ids: a.approverId && !d.ids.includes(a.approverId) ? [...d.ids, a.approverId] : d.ids };
+}
+
+/** Whether this user may approve the visit now. */
+export async function canApproveSiteVisit(admin: Admin, a: AssessmentRecord, userId: string): Promise<boolean> {
+  if (a.status !== "completed" || a.approvedAt || !a.approverId) return false;
+  return (await siteVisitApprovers(admin, a)).ids.includes(userId);
+}
+
+async function assertApprover(admin: Admin, a: AssessmentRecord, userId: string) {
   if (a.status !== "completed") throw new ContractError("The inspector has not completed this site visit yet.", 409);
   if (a.approvedAt) throw new ContractError("This site visit is already approved.", 409);
   if (!a.approverId) throw new ContractError("This site visit has no approver.", 409);
-  if (a.approverId !== userId) throw new ContractError(`Only ${a.approverName ?? "its approver"} can approve or send back this site visit.`, 403);
+  const d = await siteVisitApprovers(admin, a);
+  if (!d.ids.includes(userId)) {
+    throw new ContractError(`Only the site visit approvers set in AMC configuration${d.names.length ? ` (${d.names.join(", ")})` : ""} can approve or send back this site visit.`, 403);
+  }
 }
 
 /**
@@ -225,7 +246,7 @@ function assertApprover(a: AssessmentRecord, userId: string) {
  */
 export async function approveSiteVisit(admin: Admin, id: string, actor: Actor): Promise<AssessmentRecord> {
   const a = await getAssessment(admin, id);
-  assertApprover(a, actor.id);
+  await assertApprover(admin, a, actor.id);
   const propertyId = a.property?.id ?? null;
   const changes = await heldSiteChanges(admin, id);
   if (changes.length && !propertyId) throw new ContractError("The site visit has no property to apply its changes to.", 409);
@@ -311,7 +332,7 @@ export async function approveSiteVisit(admin: Admin, id: string, actor: Actor): 
 /** Sends a completed site visit back to its inspector, with the reason; it is a draft again on their phone. */
 export async function sendBackSiteVisit(admin: Admin, id: string, reason: string, actor: Actor): Promise<AssessmentRecord> {
   const a = await getAssessment(admin, id);
-  assertApprover(a, actor.id);
+  await assertApprover(admin, a, actor.id);
   const text = reason.trim();
   if (text.length < 3) throw new ContractError("Say what the inspector should change.", 400);
   const now = new Date().toISOString();
@@ -341,6 +362,8 @@ export async function sendBackSiteVisit(admin: Admin, id: string, reason: string
       entityId: id,
       dedupeKey: `site_visit_sent_back:${id}:${now}`,
     });
+    /* On the inspector's phone too. */
+    await alertCrew(admin, { kind: "site_visit", id, type: "visit_sent_back", actorId: actor.id, userIds: [a.assessorId], title: `Site visit ${a.assessmentNumber} sent back`, body: text });
   }
   return getAssessment(admin, id);
 }
@@ -349,9 +372,11 @@ export async function sendBackSiteVisit(admin: Admin, id: string, reason: string
 export async function notifyApproverReady(admin: Admin, a: AssessmentRecord): Promise<void> {
   if (!a.approverId || a.approvedAt) return;
   const held = await heldSiteChanges(admin, a.id);
+  /* Every site visit approver from AMC configuration (24 Nov 2026), not one person. */
+  const { ids } = await siteVisitApprovers(admin, a);
   await notifyUsers(admin, {
     event: "site_visit_to_approve",
-    userIds: [a.approverId],
+    userIds: ids.length ? ids : [a.approverId],
     title: `Site visit ${a.assessmentNumber} is ready to approve`,
     body: `${a.assessorName ?? "The inspector"} completed it${held.length ? `, with ${held.length} change${held.length === 1 ? "" : "s"} to the property's scope and assets` : ""}.`,
     link: `/extensions/amc-contracts/assessments/${a.id}`,

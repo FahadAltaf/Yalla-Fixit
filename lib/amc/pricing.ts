@@ -229,6 +229,9 @@ export const amcServiceRowInputSchema = z.object({
   free: z.boolean().optional().default(false),
   /* The rate was changed on this proposal; the card's floor still decides whether it needs approval (16 Nov 2026). */
   rateOverride: z.boolean().optional(),
+  /* DEV-501: why the rate typed is above the rate card, and who typed it (set by the server). */
+  rateOverrideReason: z.string().max(300).optional(),
+  rateOverrideBy: z.string().max(200).nullable().optional(),
   /** Accepted for compatibility, never trusted. */
   price: z.number().optional(),
   /* What the service covers on this property ("10 FCU") (DEV-261). */
@@ -250,3 +253,19 @@ export const discountPercentSchema = z.number().finite().min(0).max(100);
 
 /* What callers pass in (free is optional and defaults to false). */
 export type AmcServiceRowInput = z.input<typeof amcServiceRowInputSchema>;
+
+/**
+ * The rows priced above the rate card on this proposal (DEV-501, BRD 5.3:
+ * users "cannot change the rate"): a ticked, charged row whose typed rate
+ * is over the card's standard rate. Each needs a reason, kept with the row
+ * with the name of whoever typed it.
+ */
+export function aboveCardRows<R extends { included?: boolean; free?: boolean | null; rateOverride?: boolean; basePrice?: number | null; standardRate?: number | null }>(rows: ReadonlyArray<R>): R[] {
+  return rows.filter((r) => r.included && !r.free && r.rateOverride && r.standardRate != null && r.basePrice != null && Number(r.basePrice) > Number(r.standardRate));
+}
+
+/** What stops a submit: a rate above the card with no reason. */
+export function aboveCardProblem(rows: ReadonlyArray<{ serviceId: string; included?: boolean; free?: boolean | null; rateOverride?: boolean; basePrice?: number | null; standardRate?: number | null; rateOverrideReason?: string | null; customName?: string }>, labelOf: (id: string) => string = (id) => id): string | null {
+  const missing = aboveCardRows(rows).filter((r) => (r.rateOverrideReason ?? "").trim().length < 3);
+  return missing.length ? `Say why the rate is above the rate card for ${missing.map((r) => labelOf(r.serviceId)).join(", ")} before submitting.` : null;
+}

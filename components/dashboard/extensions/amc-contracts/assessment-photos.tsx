@@ -6,6 +6,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
+import { TruncatedText } from "@/components/ui/truncated-text";
 import { SectionCard } from "@/components/dashboard/shared/kaizen";
 import { ListSkeleton, SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
 import { AMC_PHOTOS_PER_ASSESSMENT, AMC_PHOTO_MAX_BYTES } from "@/lib/amc/photos";
@@ -140,7 +141,8 @@ export function AssessmentPhotos({ assessmentId, editable, completed }: { assess
               {p.category ? (
                 <span className="bg-background/90 text-foreground absolute top-1.5 left-1.5 rounded-md px-2 py-0.5 text-xs font-medium shadow-sm">{p.category}</span>
               ) : null}
-              {p.caption ? <p className="text-muted-foreground truncate px-2 py-1 text-xs" title={p.caption}>{p.caption}</p> : null}
+              {/* The whole caption in a tooltip when it is cut (24 Nov 2026). */}
+              {p.caption ? <TruncatedText text={p.caption} className="text-muted-foreground px-2 py-1 text-xs" /> : null}
             </li>
           ))}
         </ul>

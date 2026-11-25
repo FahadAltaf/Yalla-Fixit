@@ -15,6 +15,7 @@ import { approversForLevel, type AmcConfig } from "@/lib/amc/config";
 import { PAYMENT_PLAN_LABELS, approvalLevelName, planFromLegacyTerms, type PaymentPlan } from "@/lib/amc/proposal-rules";
 import { amcSelfApprovalOn } from "@/lib/amc/workflow";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
+import { readAmcConfig } from "@/lib/server/amc/config";
 import { ContractError, isMissingTable } from "@/lib/server/amc/contracts";
 import { notifyProposalEvent, notifyUsers } from "@/lib/server/amc/notifications";
 import { recordStatusChange } from "@/lib/server/amc/status-history";
@@ -53,6 +54,8 @@ export interface ApprovalStep {
   decidedBy: string | null;
   decidedAt: string | null;
   comment: string | null;
+  /** Set where a caller needs it (ladder progress). */
+  submissionId?: string;
 }
 
 /** The proposal fields the ladder reads. */
@@ -102,6 +105,26 @@ async function nameMap(admin: Admin, ids: string[]): Promise<Map<string, string>
   return new Map(((data ?? []) as Row[]).map((u) => [String(u.id), (u.full_name as string | null) || (u.email as string | null) || "User"]));
 }
 
+/**
+ * A level still to decide that named nobody when the proposal was submitted
+ * takes the people AMC configuration names for it now (24 Nov 2026, the
+ * user: "if levels are defined we should follow them"). Naming a level 2
+ * approver after a proposal was submitted left its level 2 with the AMC
+ * approvers. A level that named people keeps them.
+ */
+async function withLiveApprovers(admin: Admin, steps: ApprovalStep[]): Promise<ApprovalStep[]> {
+  const open = steps.filter((s) => (s.status === "pending" || s.status === "waiting") && s.approverIds.length === 0);
+  if (!open.length) return steps;
+  const config = await readAmcConfig(admin).catch(() => null);
+  if (!config) return steps;
+  const live = new Map(open.map((s) => [s.id, approversForLevel(config, s.level)]));
+  const names = await nameMap(admin, [...live.values()].flat());
+  return steps.map((s) => {
+    const ids = live.get(s.id);
+    return ids?.length ? { ...s, approverIds: ids, approverNames: ids.map((id) => names.get(id) ?? "User") } : s;
+  });
+}
+
 /** Every step of a proposal, oldest first; `migrated: false` before 20261007150000. */
 export async function listApprovalSteps(admin: Admin, submissionId: string): Promise<{ steps: ApprovalStep[]; migrated: boolean }> {
   const { data, error } = await admin
@@ -117,7 +140,7 @@ export async function listApprovalSteps(admin: Admin, submissionId: string): Pro
   }
   const rows = (data ?? []) as unknown as Row[];
   const names = await nameMap(admin, rows.flatMap((r) => ((r.approver_ids as string[] | null) ?? []).map(String)));
-  return { steps: rows.map((r) => mapStep(r, names)), migrated: true };
+  return { steps: await withLiveApprovers(admin, rows.map((r) => mapStep(r, names))), migrated: true };
 }
 
 /** The open level, or null; `migrated: false` before 20261007150000. */
@@ -129,7 +152,32 @@ export async function pendingStep(admin: Admin, submissionId: string): Promise<{
   }
   if (!data) return { step: null, migrated: true };
   const row = data as unknown as Row;
-  return { step: mapStep(row, await nameMap(admin, ((row.approver_ids as string[] | null) ?? []).map(String))), migrated: true };
+  const [step] = await withLiveApprovers(admin, [mapStep(row, await nameMap(admin, ((row.approver_ids as string[] | null) ?? []).map(String)))]);
+  return { step, migrated: true };
+}
+
+/**
+ * For a list (24 Nov 2026): whether this person decides each proposal's open
+ * level, in one read. Proposals with no open step are left out (decided the
+ * old way, by role).
+ */
+export async function viewerDecidesSteps(
+  admin: Admin,
+  proposals: ReadonlyArray<{ id: string; owner_id: string }>,
+  userId: string,
+  isAmcApprover: boolean,
+): Promise<Map<string, boolean>> {
+  const out = new Map<string, boolean>();
+  if (!proposals.length) return out;
+  const { data, error } = await admin.from(TABLE).select(STEP_COLUMNS).in("submission_id", proposals.map((p) => p.id)).eq("status", "pending");
+  if (error) return out;
+  const rows = (data ?? []) as unknown as Row[];
+  const steps = await withLiveApprovers(admin, rows.map((r) => ({ ...mapStep(r, new Map()), submissionId: String(r.submission_id) })));
+  for (const s of steps) {
+    const p = proposals.find((x) => x.id === s.submissionId);
+    if (p) out.set(p.id, canDecideStep({ userId, ownerId: p.owner_id, approverIds: s.approverIds, isAmcApprover }));
+  }
+  return out;
 }
 
 /** Whether this person decides the open level; null when the proposal has no ladder step (decided the old way). */
@@ -147,23 +195,61 @@ export async function viewerDecidesStep(admin: Admin, proposal: { id: string; ow
  * The level's named people less the owner; when that leaves nobody, the
  * AMC Settings approvers less the owner; when that list is empty, null
  * (anyone with the AMC approve permission).
+ *
+ * `skippedOwner` (23 Nov 2026): the owner was the level's only named
+ * approver, so it went to the AMC approvers instead. The page says so;
+ * "AMC department head is decided by Sami and Behrouz" read as wrong when
+ * the level names someone else.
  */
+export interface LadderProgress {
+  /** The open level's place in this round: level 2 of 2. */
+  position: number;
+  of: number;
+  /** Levels of this round already approved, in order. */
+  approved: Array<{ levelName: string; by: string | null; at: string | null }>;
+  /** The level after this one, if any. */
+  nextLevelName: string | null;
+}
+
+/**
+ * Where the open level stands in its round (24 Nov 2026): approving level 1
+ * left the page reading "Waiting for the approver" with Approve still there
+ * (level 2 names nobody, so the AMC approvers, the same person included,
+ * decide it), as if nothing had happened.
+ */
+async function ladderProgress(admin: Admin, step: ApprovalStep): Promise<LadderProgress> {
+  const { steps } = await listApprovalSteps(admin, step.submissionId ?? "").catch(() => ({ steps: [] as ApprovalStep[] }));
+  const round = steps.filter((s) => s.versionNo === step.versionNo && s.round === step.round && s.status !== "cancelled").sort((a, b) => a.level - b.level);
+  const at = round.findIndex((s) => s.id === step.id);
+  return {
+    position: at >= 0 ? at + 1 : 1,
+    of: Math.max(round.length, 1),
+    approved: round.filter((s) => s.status === "approved" && s.level < step.level).map((s) => ({ levelName: s.levelName, by: s.decidedBy, at: s.decidedAt })),
+    nextLevelName: round.find((s) => s.level > step.level)?.levelName ?? null,
+  };
+}
+
 export async function stepDeciders(
   admin: Admin,
   proposal: { id: string; owner_id: string },
   settingsApprovers: readonly string[],
-): Promise<{ levelName: string; names: string[] | null } | null> {
-  const { step } = await pendingStep(admin, proposal.id);
-  if (!step) return null;
+): Promise<{ levelName: string; names: string[] | null; skippedOwner: string | null; progress: LadderProgress | null } | null> {
+  const { step: open } = await pendingStep(admin, proposal.id);
+  if (!open) return null;
+  const step = { ...open, submissionId: proposal.id };
+  const progress = await ladderProgress(admin, step).catch(() => null);
   const named = namedDeciders(step.approverIds, proposal.owner_id);
   if (named.length) {
-    return { levelName: step.levelName, names: named.map((id) => step.approverNames[step.approverIds.indexOf(id)] ?? "User") };
+    return { levelName: step.levelName, names: named.map((id) => step.approverNames[step.approverIds.indexOf(id)] ?? "User"), skippedOwner: null, progress };
   }
+  const ownerAt = step.approverIds.indexOf(proposal.owner_id);
+  const skippedOwner = ownerAt >= 0 ? (step.approverNames[ownerAt] ?? "User") : null;
   const emails = [...new Set(settingsApprovers.map((e) => e.trim().toLowerCase()).filter(Boolean))];
-  if (!emails.length) return { levelName: step.levelName, names: null };
+  if (!emails.length) return { levelName: step.levelName, names: null, skippedOwner, progress };
   const { data } = await admin.from("user_profile").select("id, full_name, email").in("email", emails);
-  const people = ((data ?? []) as Row[]).filter((u) => String(u.id) !== proposal.owner_id);
-  return { levelName: step.levelName, names: people.map((u) => (u.full_name as string | null) || String(u.email)) };
+  /* The owner too, now that an approver may approve their own proposal (24 Nov 2026). */
+  const people = ((data ?? []) as Row[]).filter((u) => amcSelfApprovalOn() || String(u.id) !== proposal.owner_id);
+  return { levelName: step.levelName, names: people.map((u) => (u.full_name as string | null) || String(u.email)), skippedOwner, progress };
 }
 
 /* ------------------------------------------------------------------ */
@@ -319,7 +405,8 @@ async function openLevel(
   config: AmcConfig,
   actor: Actor,
 ) {
-  const approvers = approversForLevel(config, level).filter((id) => id !== p.owner_id);
+  /* The owner is told too when they decide the level (24 Nov 2026): they may approve their own proposal. */
+  const approvers = namedDeciders(approversForLevel(config, level), p.owner_id);
   const number = p.proposal_number ?? "";
   const name = p.customer?.customerName ?? "";
   const levelName = approvalLevelName(config.approvals, level);
@@ -438,7 +525,13 @@ export async function decideStep(
     const nextRow = ((next ?? []) as Row[])[0];
     if (nextRow) {
       const escalateAt = new Date(Date.now() + config.approvals.escalateAfterHours * 3_600_000).toISOString();
-      await admin.from(TABLE).update({ status: "pending", opened_at: nowIso, escalate_at: escalateAt }).eq("id", String(nextRow.id)).eq("status", "waiting");
+      /* The level's approvers as configured now (24 Nov 2026): someone named since the proposal was submitted decides it. */
+      const nowNamed = approversForLevel(config, Number(nextRow.level));
+      await admin
+        .from(TABLE)
+        .update({ status: "pending", opened_at: nowIso, escalate_at: escalateAt, ...(nowNamed.length ? { approver_ids: nowNamed } : {}) })
+        .eq("id", String(nextRow.id))
+        .eq("status", "waiting");
       status = "awaiting_approval";
       nextLevelName = approvalLevelName(config.approvals, Number(nextRow.level));
       await openLevel(admin, p, versionNo, step.round, Number(nextRow.level), escalateAt, step.triggers, config, actor);

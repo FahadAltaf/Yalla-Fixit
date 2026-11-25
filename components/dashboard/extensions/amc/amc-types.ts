@@ -1,3 +1,4 @@
+import { CONTRACT_TYPES, type ContractType } from "@/lib/amc/contract-type";
 import { z } from "zod";
 
 import { UNIT_TYPES } from "@/lib/amc/client-profile";
@@ -144,8 +145,14 @@ export const amcServiceRowSchema = z.object({
   promotionId: z.string().nullable().optional(),
   promotionPercent: z.number().nullable().optional(),
   belowFloor: z.boolean().optional(),
+  /* Visits a year typed outside the card's list (23 Nov 2026): kept, and the proposal needs approval. */
+  frequencyOffCard: z.boolean().optional(),
+  cardFrequencies: z.array(z.number()).max(24).optional(),
   /* The rate was changed on this proposal (16 Nov 2026): kept, not set from the card; below its floor it needs approval. */
   rateOverride: z.boolean().optional(),
+  /* DEV-501: why the rate typed is above the rate card, and who typed it (set by the server). */
+  rateOverrideReason: z.string().max(300).optional(),
+  rateOverrideBy: z.string().max(200).nullable().optional(),
   /*
     What the service covers on this property, as signed contracts name it
     ("10 FCU", "3 kitchen hoods") (DEV-261). Optional, free text, and
@@ -219,6 +226,11 @@ export const amcFormSchema = z
       .max(MAX_COORDINATION_CONTACTS),
     startDate: z.string().min(1, "Start date is required"),
     endDate: z.string().min(1, "End date is required"),
+    /* DEV-500 (BRD 5.4): each proposal carries its contract type, shown in the contract heading. */
+    contractType: z
+      .enum(CONTRACT_TYPES)
+      .optional()
+      .refine((v) => Boolean(v), "Choose the contract type"),
     paymentTerms: paymentTermsSchema,
     /* DEV-366: the payment plan; paymentTerms above is kept as its legacy reading. */
     paymentPlan: z.enum(PAYMENT_PLANS).optional(),
@@ -555,6 +567,8 @@ export interface AmcSubmissionCustomer {
   coordinationContacts: OptionalCoordinationContact[];
   startDate: string;
   endDate: string;
+  /* DEV-500; absent on proposals saved before it. */
+  contractType?: ContractType;
   paymentTerms: PaymentTerms;
   proposalNumber: string;
 }
@@ -621,6 +635,8 @@ export interface AmcSubmission {
      so the list has to say whose each one is. */
   owner_name?: string | null;
   is_own?: boolean;
+  /** DEV-368: the viewer works on it as its owner would -- the owner, or the team by role. Falls back to is_own. */
+  can_act?: boolean;
   /*
     Sent with a single submission (GET ?id=): whether the person reading it
     may approve or send it back. The detail page needs it, and it used to
@@ -628,7 +644,20 @@ export interface AmcSubmission {
   */
   viewer_can_approve?: boolean;
   /** Who decides the open approval level (null names: anyone with AMC approve). */
-  approval_deciders?: { levelName: string; names: string[] | null } | null;
+  approval_deciders?: {
+    levelName: string;
+    names: string[] | null;
+    skippedOwner?: string | null;
+    /** Where the ladder stands (24 Nov 2026): level 2 of 2, who approved the levels before, what comes next. */
+    progress?: {
+      position: number;
+      of: number;
+      approved: Array<{ levelName: string; by: string | null; at: string | null }>;
+      nextLevelName: string | null;
+    } | null;
+  } | null;
+  /** What the approver checks (23 Nov 2026): each rule the proposal crosses, with its lines. Single read only. */
+  approval_checklist?: import("@/lib/amc/approval-checklist").ApprovalCheck[] | null;
   /* The operational contract made from this proposal (Active AMC), on the
      single-proposal read only. null: none yet; absent: not checked or the
      contracts table does not exist yet. */

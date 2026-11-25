@@ -108,6 +108,12 @@ test("entitlements are derived from the signed rows and signed service types", (
   assert.equal(byId["ac-ppm"].contractedPrice, 1200);
   assert.equal(byId.handyman.entitlementType, "hours");
   assert.equal(byId.handyman.includedQuantity, 6);
+  /* Over a three-year term (23 Nov 2026): the schedule's 12 visits, 18 hours. */
+  const three = Object.fromEntries(deriveEntitlements(rows, services, 36).map((x) => [x.serviceId, x]));
+  assert.equal(three["ac-ppm"].includedQuantity, 12);
+  assert.equal(three.handyman.includedQuantity, 18);
+  const half = Object.fromEntries(deriveEntitlements(rows, services, 6).map((x) => [x.serviceId, x]));
+  assert.equal(half["ac-ppm"].includedQuantity, 2, "pro rata for a part year");
   assert.equal(byId.emergency.entitlementType, "unlimited");
   assert.equal(byId.emergency.callOutClass, "emergency");
   assert.equal(byId.emergency.includedQuantity, null);

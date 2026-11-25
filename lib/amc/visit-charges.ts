@@ -46,9 +46,35 @@ export const chargeLineSchema = z
     /** The rate card's price for it, when it came from the card (a changed price is visible). */
     cardPrice: z.number().min(0).max(10_000_000).nullable().default(null),
     charged: z.boolean(),
+    /* DEV-498: why a chargeable line is free, and who decided it (kept with the line). */
+    freeReason: z.string().trim().max(300).nullable().optional(),
+    freedBy: z.string().max(200).nullable().optional(),
   })
   .strict();
 export type ChargeLine = z.infer<typeof chargeLineSchema>;
+
+/** Two lines are the same service when the rate card id matches, else the name (a custom service). */
+const sameLine = (a: Pick<ChargeLine, "serviceId" | "label">, b: Pick<ChargeLine, "serviceId" | "label">) =>
+  a.serviceId ? a.serviceId === b.serviceId : !b.serviceId && a.label.trim().toLowerCase() === b.label.trim().toLowerCase();
+
+/**
+ * The lines made free now on work the client pays for (DEV-498, 20 Nov 2026):
+ * a chargeable call out, or additional work. A line already free before is
+ * not asked again; a covered call out is free by default and is not asked.
+ */
+export function newlyFreeLines(next: ChargeLine[], before: ChargeLine[], chargeable: boolean): ChargeLine[] {
+  if (!chargeable) return [];
+  return next.filter((l) => !l.charged && !before.some((b) => !b.charged && sameLine(b, l)));
+}
+
+/** What stops a save: a line made free without a reason, or by someone without the override right. */
+export function freeLineProblems(next: ChargeLine[], before: ChargeLine[], chargeable: boolean, canMarkFree: boolean): string[] {
+  const fresh = newlyFreeLines(next, before, chargeable);
+  if (!fresh.length) return [];
+  if (!canMarkFree) return [`Making a chargeable line free needs AMC Allowances (Approve) or the AMC approver right: ${fresh.map((l) => l.label).join(", ")}.`];
+  const missing = fresh.filter((l) => (l.freeReason ?? "").trim().length < 3);
+  return missing.length ? [`Say why each line is free: ${missing.map((l) => l.label).join(", ")}.`] : [];
+}
 
 /** Charged lines only; VAT once on the subtotal, in fils. */
 export function chargeTotals(lines: Array<Pick<ChargeLine, "units" | "unitPrice" | "charged">>) {

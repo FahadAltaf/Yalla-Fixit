@@ -27,6 +27,9 @@ type WebhookBody = {
     user_id?: string;
     job_id?: string | null;
     visit_id?: string | null;
+    /* An AMC alert (DEV-398): the AMC record it opens. */
+    amc_kind?: string | null;
+    amc_id?: string | null;
     type?: string;
     title?: string;
     body?: string;
@@ -84,6 +87,8 @@ export async function POST(req: NextRequest) {
         jobId: row.job_id ?? null,
         visitId: row.visit_id ?? null,
         type: row.type ?? null,
+        amcKind: row.amc_kind ?? null,
+        amcId: row.amc_id ?? null,
       },
     }));
 

@@ -97,8 +97,11 @@ test("amendments: allowed only from the right contract status; nobody approves t
   assert.match(amendmentProblem("cancellation", "active")!, /cannot/, "a running contract is terminated, not cancelled");
   assert.equal(amendmentProblem("cancellation", "signed"), null);
   assert.equal(amendmentProblem("early_termination", "active"), null);
-  assert.equal(canDecide("u1", "u1"), false);
-  assert.equal(canDecide("u1", "u2"), true);
+  assert.equal(canDecide("u1", "u1", false), false);
+  assert.equal(canDecide("u1", "u2", false), true);
+  /* The local testing switch (24 Nov 2026): the requester may decide too. */
+  assert.equal(canDecide("u1", "u1", true), true);
+  assert.equal(canDecide("u1", "", true), false, "still needs somebody");
 });
 
 test("early termination: 30 days' notice, a pro-rata refund only with a valid reason", () => {

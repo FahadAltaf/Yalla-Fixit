@@ -390,6 +390,35 @@ export function ppmProgress(visits: Array<{ id: string; status: VisitStatus; win
   return { total: visits.length - cancelled, completed, remaining, overdue, cancelled, nextVisit: next };
 }
 
+/**
+ * The visits of the contract year a visit falls in, for its service report
+ * (23 Nov 2026): "Visits this contract year: 0 done, 66 remaining" counted
+ * all three years and left out the visit being reported, whose report is
+ * built just before it is closed. The year runs from the commencement date
+ * (12 months each); the visit reported counts as done.
+ */
+export function contractYearCounts(
+  visits: Array<{ id: string; status: string; targetDate: string | null }>,
+  reportedVisitId: string,
+  startDate: string | null,
+): { completed: number; remaining: number; total: number; yearStart: string | null; yearEnd: string | null } {
+  const reported = visits.find((v) => v.id === reportedVisitId);
+  let yearStart: string | null = null;
+  let yearEnd: string | null = null;
+  if (startDate && reported?.targetDate) {
+    let k = 0;
+    while (addMonths(startDate, 12 * (k + 1)) <= reported.targetDate && k < 100) k += 1;
+    yearStart = addMonths(startDate, 12 * k);
+    yearEnd = addDays(addMonths(startDate, 12 * (k + 1)), -1);
+  }
+  const inYear = visits.filter((v) => v.status !== "cancelled" && (!yearStart || !yearEnd || (v.targetDate !== null && v.targetDate >= yearStart && v.targetDate <= yearEnd)));
+  const isDone = (v: { id: string; status: string }) =>
+    v.id === reportedVisitId ? v.status !== "not_completed" : DONE_STATUSES.includes(v.status as VisitStatus) || v.status === "partially_completed";
+  const completed = inYear.filter(isDone).length;
+  const notDone = inYear.filter((v) => v.status === "not_completed" && v.id !== reportedVisitId).length;
+  return { completed, remaining: Math.max(0, inYear.length - completed - notDone), total: inYear.length, yearStart, yearEnd };
+}
+
 /* ------------------------------------------------------------------ */
 /* What the routes accept                                              */
 /* ------------------------------------------------------------------ */

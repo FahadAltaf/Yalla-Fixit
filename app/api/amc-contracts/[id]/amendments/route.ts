@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { canOperateContract } from "@/lib/amc/access";
 import { amendmentRequestSchema } from "@/lib/amc/amendments";
-import { listAmendments, requestAmendment } from "@/lib/server/amc/amendments";
+import { amendmentDeciders, listAmendments, requestAmendment, scheduledEnding } from "@/lib/server/amc/amendments";
 import { readAmcConfig } from "@/lib/server/amc/config";
 import { contractErrorResponse, requireContractAccess, requireManagedContract } from "@/lib/server/amc/contract-access";
 
@@ -20,8 +20,24 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   try {
     const managed = await requireManagedContract(gate, id, "read");
     if (!managed.ok) return managed.response;
+    const listed = await listAmendments(gate.admin, id);
+    /* Who decides each waiting request (24 Nov 2026), so nobody waits on a button they will never get. */
+    const waiting = listed.amendments.filter((a) => a.status === "requested");
+    const config = waiting.length ? await readAmcConfig(gate.admin) : null;
+    const amendments = config
+      ? await Promise.all(
+          listed.amendments.map(async (a) => (a.status === "requested" ? { ...a, deciders: (await amendmentDeciders(gate.admin, config, a.requestedBy)).names } : a)),
+        )
+      : listed.amendments;
     return NextResponse.json(
-      { ...(await listAmendments(gate.admin, id)), canRequest: canOperateContract(gate.actor, managed.ownerId), canApprove: gate.canApprove, userId: gate.userId },
+      {
+        ...listed,
+        amendments,
+        /* Ending on a set day (24 Nov 2026): nothing more is asked for. */
+        canRequest: canOperateContract(gate.actor, managed.ownerId) && !(await scheduledEnding(gate.admin, id)),
+        canApprove: gate.canApprove,
+        userId: gate.userId,
+      },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (error) {

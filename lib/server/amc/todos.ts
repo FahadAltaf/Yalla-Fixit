@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { approversForLevel, type AmcConfig } from "@/lib/amc/config";
+import { approversForLevel, escalationPeople, type AmcConfig } from "@/lib/amc/config";
 import { notifyUsers } from "@/lib/server/amc/notifications";
 
 /**
@@ -171,7 +171,8 @@ export function escalationRecipients(kind: AmcTodoKind, config: AmcConfig, level
       /* The supervisors (named, else the level 1 approvers): BRD 6.8, "Supervisor when the SLA is at risk". */
       return config.scheduling.supervisorUserIds.length ? config.scheduling.supervisorUserIds : approversForLevel(config, 1);
     default:
-      return approversForLevel(config, 2);
+      /* Management (BRD 6.8): the named escalation contacts (DEV-488). */
+      return escalationPeople(config);
   }
 }
 

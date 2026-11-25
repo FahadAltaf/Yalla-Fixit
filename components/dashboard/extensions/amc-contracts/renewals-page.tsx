@@ -306,7 +306,7 @@ export function RenewalsPage() {
       />
 
       {data && !data.migrated ? (
-        <Alert className="border-warning/30 bg-warning/5 items-start p-4">
+        <Alert variant="warning">
           <Database className="text-warning" />
           <AlertTitle>Renewal outcomes are not set up on this database yet</AlertTitle>
           <AlertDescription>

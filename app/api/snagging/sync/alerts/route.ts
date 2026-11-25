@@ -36,6 +36,9 @@ type AlertRow = {
   created_at: string;
   read_at: string | null;
   when_at?: string | null;
+  /* AMC alerts (DEV-398, 22 Nov 2026): the AMC visit, call out, additional work or site visit it opens. */
+  amc_kind?: string | null;
+  amc_id?: string | null;
 };
 
 /** What the phone gets: with the appointment as an instant, for its own clock. */
@@ -50,6 +53,8 @@ function toAlert(row: AlertRow) {
     created_at: row.created_at,
     read_at: row.read_at,
     when_at: row.when_at ?? null,
+    amc_kind: row.amc_kind ?? null,
+    amc_id: row.amc_id ?? null,
   };
 }
 

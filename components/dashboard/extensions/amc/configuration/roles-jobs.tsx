@@ -71,7 +71,7 @@ function RoleTemplatesCard({ isAdmin }: { isAdmin: boolean }) {
     <SectionCard
       icon={<ShieldCheck />}
       title="AMC roles"
-      description="The AMC team's roles as permission sets. Technicians work in the FSM app and need no AMC role; admins already have everything. Every role stays editable in Roles and Permissions."
+      description="The AMC team's roles as permission sets. Technicians work in the YFI mobile app and need no AMC role; admins already have everything. Every role stays editable in Roles and Permissions."
       bodyClassName="border-t"
       action={
         isAdmin && toDo.length > 0 ? (
@@ -133,7 +133,8 @@ const RUN_STATUS: Record<AmcJobRun["status"], { label: string; tone: string }> =
   failed: { label: "Failed", tone: "bg-danger/10 text-danger" },
 };
 
-function JobsCard({ canRun }: { canRun: boolean }) {
+/** The last runs of the daily jobs, and Run now (DEV-485: shown on the Daily jobs tab). */
+export function JobsCard({ canRun }: { canRun: boolean }) {
   const [data, setData] = useState<{ jobs: Array<{ key: string; label: string }>; runs: AmcJobRun[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
@@ -151,7 +152,7 @@ function JobsCard({ canRun }: { canRun: boolean }) {
 
   /* Asked first (11 Nov 2026): it acts at once, so it is confirmed like every other step. */
   const run = () =>
-    void confirm({ title: "Run the AMC jobs now?", description: "Runs every escalation and reminder at once, as the scheduler does: overdue to-dos escalate and due reminders go out. Each job is safe to run twice.", confirmText: "Run now" }).then((ok) => {
+    void confirm({ title: "Run every AMC job now?", description: "Runs every daily job at once, not only the ones switched on for the morning: overdue to-dos escalate and due reminders go to the team. Client emails stay held while they are off. Running a job twice does no harm.", confirmText: "Run now" }).then((ok) => {
       if (ok) void runNow();
     });
   const runNow = async () => {
@@ -171,8 +172,8 @@ function JobsCard({ canRun }: { canRun: boolean }) {
   return (
     <SectionCard
       icon={<Clock />}
-      title="Scheduled jobs"
-      description="Escalations and reminders. The external scheduler that runs the Snagging escalations calls these with the CRON_SECRET; Run now does the same immediately. Each job is safe to run twice."
+      title="Last runs"
+      description="Each run, from the morning schedule or Run now, with what every job did. If no scheduled run shows after 06:00, the scheduler is not calling."
       bodyClassName="border-t"
       action={
         canRun ? (
@@ -192,13 +193,6 @@ function JobsCard({ canRun }: { canRun: boolean }) {
         </div>
       ) : (
         <div className="divide-y">
-          <ul className="px-5 py-3 text-sm">
-            {data.jobs.map((j) => (
-              <li key={j.key} className="py-1">
-                {j.label}
-              </li>
-            ))}
-          </ul>
           {data.runs.length === 0 ? (
             <EmptyState icon={<Clock />} title="No runs yet" description="Each run, scheduled or started with Run now, is listed here with what it did." />
           ) : (
@@ -238,6 +232,7 @@ function JobsCard({ canRun }: { canRun: boolean }) {
 function summarise(result: Record<string, unknown> | undefined): string {
   if (!result) return "ok";
   if (result.ran === false && typeof result.reason === "string") return result.reason;
+  if (typeof result.held === "string") return result.held;
   return Object.entries(result)
     .filter(([, v]) => typeof v === "number")
     .map(([k, v]) => `${k} ${v}`)

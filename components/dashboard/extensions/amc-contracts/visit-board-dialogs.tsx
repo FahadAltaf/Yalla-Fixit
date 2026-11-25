@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { CalendarCheck, CalendarClock, KeyRound, Search, UserCheck, Users } from "lucide-react";
+import { CalendarCheck, CalendarClock, KeyRound, Search, UserCheck, Users, CircleAlert, TriangleAlert } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { toast } from "sonner";
 
 import { ActionDialogContent, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
@@ -23,6 +24,7 @@ import { visitsService, type BoardActionInput, type BoardVisit, type VisitSugges
 
 import { durationLabel, errorText, inWindow, reasonAsked, shortDate, windowLabel, type BoardTechnician } from "./visit-board-shared";
 import { CrewPicker, crewOptions } from "./crew-picker";
+import { useBookingGuards, type BookingGuard } from "./booking-guards";
 
 /**
  * The board's dialogs: place a visit (with the suggested crew), move
@@ -96,9 +98,13 @@ const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 /** Sends the change; a reason the server asks for opens its field instead of failing silently. */
-async function send(actions: BoardActionInput[], onAsked: (field: "reason" | "overrideReason") => void, reload?: () => void) {
+/* guard: an approver's reason on an expired contract (DEV-496), then "book anyway?" inside the access lead time (DEV-493). */
+async function send(actions: BoardActionInput[], onAsked: (field: "reason" | "overrideReason") => void, reload?: () => void, guard?: BookingGuard) {
   try {
-    for (const action of actions) await visitsService.boardAction(action);
+    for (const action of actions) {
+      if (guard && (action.action === "place" || action.action === "move")) await guard((answers) => visitsService.boardAction({ ...action, ...answers }));
+      else await visitsService.boardAction(action);
+    }
     return true;
   } catch (e) {
     const message = errorText(e, "Could not change the board.");
@@ -127,6 +133,7 @@ export interface PlaceRequest {
 type SuggestQuery = { date: string; time: string; duration: number | null; keep: string[] };
 
 export function PlaceDialog({ open, onOpenChange, onDone, reload, request, technicianName }: BaseProps & { request: PlaceRequest | null; technicianName: (id: string) => string }) {
+  const { guard, dialogs: leadTimeDialog } = useBookingGuards();
   const visit = request?.visit ?? null;
   const [day, setDay] = useState("");
   const [time, setTime] = useState("");
@@ -237,6 +244,7 @@ export function PlaceDialog({ open, onOpenChange, onDone, reload, request, techn
       ],
       (field) => setAsked((a) => ({ ...a, [field]: true })),
       reload,
+      guard,
     );
     setBusy(false);
     if (ok) {
@@ -263,6 +271,7 @@ export function PlaceDialog({ open, onOpenChange, onDone, reload, request, techn
         </SubmitButton>
       }
     >
+      {leadTimeDialog}
       <div className="grid gap-4 sm:grid-cols-3">
         <Field id="place-date" label="Date">
           <DateSelect id="place-date" value={day} onChange={setDay} />
@@ -284,9 +293,13 @@ export function PlaceDialog({ open, onOpenChange, onDone, reload, request, techn
         </Field>
       </div>
       {outside && visit ? (
-        <p className="border-warning/30 bg-warning/5 text-warning rounded-md border px-3 py-2 text-xs">
-          {shortDate(day)} is outside the service window ({windowLabel(visit)}): this is a reschedule, so say why. The original date is kept.
-        </p>
+        <Alert variant="warning">
+          <TriangleAlert />
+          <AlertTitle>Outside the service window</AlertTitle>
+          <AlertDescription>
+            {shortDate(day)} is outside the window ({windowLabel(visit)}): this is a reschedule, so say why. The original date is kept.
+          </AlertDescription>
+        </Alert>
       ) : null}
 
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -311,7 +324,11 @@ export function PlaceDialog({ open, onOpenChange, onDone, reload, request, techn
           ))}
         </div>
       ) : answer?.error ? (
-        <p className="border-danger/30 bg-danger/5 text-danger rounded-md border px-3 py-2 text-sm">{answer.error}</p>
+        <Alert variant="danger">
+          <CircleAlert />
+          <AlertTitle>Could not find technicians</AlertTitle>
+          <AlertDescription>{answer.error}</AlertDescription>
+        </Alert>
       ) : suggestion ? (
         <div className="grid gap-2">
           {stale ? <p className="text-warning text-xs">The date, time or duration changed: find technicians again for this slot.</p> : null}
@@ -365,6 +382,7 @@ export function PlaceDialog({ open, onOpenChange, onDone, reload, request, techn
 /* ------------------------------------------------------------------ */
 
 export function MoveDialog({ open, onOpenChange, onDone, reload, visits, date }: BaseProps & { visits: BoardVisit[]; date: string }) {
+  const { guard, dialogs: leadTimeDialog } = useBookingGuards();
   const [day, setDay] = useState("");
   const [time, setTime] = useState("");
   const [reason, setReason] = useState("");
@@ -389,6 +407,7 @@ export function MoveDialog({ open, onOpenChange, onDone, reload, visits, date }:
       [{ action: "move", visitIds: visits.map((v) => v.id), date: day, startTime: time || null, reason: reason.trim() || null }],
       () => setAsked(true),
       reload,
+      guard,
     );
     setBusy(false);
     if (ok) {
@@ -410,6 +429,7 @@ export function MoveDialog({ open, onOpenChange, onDone, reload, visits, date }:
         </SubmitButton>
       }
     >
+      {leadTimeDialog}
       <div className="grid gap-4 sm:grid-cols-2">
         <Field id="move-date" label="Date">
           <DateSelect id="move-date" value={day} onChange={setDay} />
@@ -419,12 +439,16 @@ export function MoveDialog({ open, onOpenChange, onDone, reload, visits, date }:
         </Field>
       </div>
       {outside.length ? (
-        <p className="border-warning/30 bg-warning/5 text-warning rounded-md border px-3 py-2 text-xs">
-          {outside.length === 1
-            ? `Visit ${outside[0].visitNo} (${outside[0].contractNumber}) is outside its window (${windowLabel(outside[0])})`
-            : `${plural(outside.length, "visit")} are outside their window`}
-          : this is a reschedule, so say why. The original date is kept.
-        </p>
+        <Alert variant="warning">
+          <TriangleAlert />
+          <AlertTitle>Outside the service window</AlertTitle>
+          <AlertDescription>
+            {outside.length === 1
+              ? `Visit ${outside[0].visitNo} (${outside[0].contractNumber}) is outside its window (${windowLabel(outside[0])})`
+              : `${plural(outside.length, "visit")} are outside their window`}
+            : this is a reschedule, so say why. The original date is kept.
+          </AlertDescription>
+        </Alert>
       ) : null}
       <Field id="move-reason" label={needsReason ? "Reason" : "Reason (optional)"}>
         <Textarea id="move-reason" rows={2} maxLength={500} value={reason} onChange={(e) => setReason(e.target.value)} />
@@ -506,17 +530,21 @@ export function CrewDialog({ open, onOpenChange, onDone, reload, visits, technic
     >
       {loginDialogs}
       {withoutLogin.length ? (
-        <div className="border-warning/30 bg-warning/5 flex flex-wrap items-center justify-between gap-3 rounded-lg border px-3 py-2.5">
-          <p className="text-warning min-w-0 flex-1 text-sm">
-            {withoutLogin.length === 1
-              ? `${withoutLogin[0].name} has no mobile login yet. Create it before assigning them.`
-              : `${withoutLogin.length} chosen technicians have no mobile login yet. Create them before assigning.`}
-          </p>
-          <Button type="button" size="sm" variant="outline" disabled={busy || creating} onClick={() => void makeLogins(withoutLogin)}>
-            <KeyRound className="size-4" />
-            {withoutLogin.length === 1 ? "Create login" : "Create logins"}
-          </Button>
-        </div>
+        <Alert variant="warning">
+          <KeyRound />
+          <AlertTitle>{withoutLogin.length === 1 ? "No mobile login yet" : "Some have no mobile login yet"}</AlertTitle>
+          <AlertDescription>
+            <p>
+              {withoutLogin.length === 1
+                ? `${withoutLogin[0].name} has no mobile login yet. Create it before assigning them.`
+                : `${withoutLogin.length} chosen technicians have no mobile login yet. Create them before assigning.`}
+            </p>
+            <Button type="button" size="sm" variant="outline" disabled={busy || creating} onClick={() => void makeLogins(withoutLogin)}>
+              <KeyRound className="size-4" />
+              {withoutLogin.length === 1 ? "Create login" : "Create logins"}
+            </Button>
+          </AlertDescription>
+        </Alert>
       ) : null}
       <div className="relative">
         <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2" />

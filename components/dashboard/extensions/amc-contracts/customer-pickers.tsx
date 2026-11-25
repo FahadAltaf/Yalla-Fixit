@@ -65,7 +65,14 @@ export function CustomerSearch({
         />
         <SearchIcon aria-hidden className="text-muted-foreground/80 pointer-events-none absolute start-3 top-1/2 size-4 -translate-y-1/2" />
       </div>
-      {list.error ? <p className="text-danger text-xs">{list.error}</p> : null}
+      {list.error || list.notice ? (
+        <p className="text-warning flex flex-wrap items-center gap-2 text-xs">
+          {list.error ? (/timed out|connection failed/i.test(list.error) ? "Zoho FSM did not answer in time." : list.error) : list.notice}
+          <button type="button" className="underline underline-offset-2" onClick={list.retry}>
+            Try again
+          </button>
+        </p>
+      ) : null}
       <ul
         className="max-h-56 divide-y overflow-y-auto rounded-lg border text-sm"
         onScroll={(e) => {

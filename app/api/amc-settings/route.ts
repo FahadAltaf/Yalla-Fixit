@@ -160,7 +160,14 @@ export async function PUT(req: NextRequest) {
       readAmcSettingsOverrides(admin),
       readAmcSettings(admin),
     ]);
-    const saved = await writeAmcSettingsOverrides(admin, parsed.data, profile.id);
+    /*
+      The approvers are kept as they are stored (23 Nov 2026): they are set in
+      AMC configuration → Named people (PUT /api/amc-settings/approvers), so a
+      wording save from a page opened earlier can never undo them.
+    */
+    const { approval: _ignored, ...wording } = parsed.data;
+    void _ignored;
+    const saved = await writeAmcSettingsOverrides(admin, before.approval ? { ...wording, approval: before.approval } : wording, profile.id);
     const settings = await readAmcSettings(admin);
 
     /*

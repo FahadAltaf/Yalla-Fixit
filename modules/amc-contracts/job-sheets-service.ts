@@ -25,7 +25,14 @@ export type PhotoKind = "before" | "after" | "fault" | "other";
 export type ReportState = ReturnType<typeof reportState>;
 export type ReportOutcome = SendOutcome;
 
-export type JobSheetResponse = JobSheetView & { canEdit: boolean; canReview: boolean };
+export type JobSheetResponse = JobSheetView & {
+  canEdit: boolean;
+  canReview: boolean;
+  /** A call out's or additional work's FSM quotation number (DEV-508); absent on a PPM visit. */
+  fsmQuotation?: { migrated: boolean; value: string | null; required: boolean } | null;
+  /** A handyman job's teams, time on site and the team-hours to record (DEV-495); absent otherwise. */
+  handyman?: { teams: number; fromCrew: boolean; hoursUsed: number | null; hoursChargeable: number | null; minutesOnSite: number | null; suggestedHours: number | null } | null;
+};
 
 export interface SaveJobSheetResult {
   ok: true;
@@ -54,6 +61,12 @@ export interface CloseJobSheetResult {
 }
 
 export interface JobReviewItem {
+  /** DEV-497: a planned visit's, a call out's or an additional work's job sheet. */
+  kind: "ppm" | "call_out" | "additional_work";
+  /** "Visit 3", "CO-2026-0004", "AW-2026-0001". */
+  ref: string;
+  /** Where it is reviewed: its page, on the Job sheet tab. */
+  href: string;
   visitId: string;
   contractId: string;
   contractNumber: string;
@@ -90,7 +103,9 @@ export const jobSheetsService = {
     return request<SaveJobSheetResult>(sheetUrl(visitId), { method: "POST", body: JSON.stringify({ action: "submit", sheet }) });
   },
   /** pdfBase64: the report as the portal built it (18 Nov 2026); without it the server prints its own. */
-  close(visitId: string, comment: string | null, send: SendChannel = "email", pdfBase64: string | null = null) {
+  /* fsmQuotationNo is for a call out or additional work (DEV-508); a PPM visit ignores it. */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- same calls as a call out's sheet; a PPM visit has no FSM quotation or handyman hours
+  close(visitId: string, comment: string | null, send: SendChannel = "email", pdfBase64: string | null = null, _fsmQuotationNo: string | null = null, _hoursUsed: number | null = null) {
     return request<CloseJobSheetResult>(sheetUrl(visitId), { method: "POST", body: JSON.stringify({ action: "close", comment, send, ...(pdfBase64 ? { pdfBase64 } : {}) }) });
   },
   returnSheet(visitId: string, comment: string) {
@@ -98,6 +113,10 @@ export const jobSheetsService = {
   },
   resendReport(visitId: string, channel: SendChannel = "email", pdfBase64: string | null = null) {
     return request<ServiceReportResult>(sheetUrl(visitId), { method: "POST", body: JSON.stringify({ action: "resend_report", channel, ...(pdfBase64 ? { pdfBase64 } : {}) }) });
+  },
+  /** DEV-404: the coordinator sent the report themselves (WhatsApp, by hand); this stops the clock. */
+  markReportSent(visitId: string, channel: "whatsapp" | "link" | "other", note: string | null) {
+    return request<{ ok: true; reportSentAt: string }>(sheetUrl(visitId), { method: "POST", body: JSON.stringify({ action: "mark_report_sent", channel, note }) });
   },
   /** The report's facts, drawn by the viewer and built into the PDF (18 Nov 2026). */
   reportFacts(visitId: string) {
@@ -130,7 +149,7 @@ export const jobSheetsService = {
   so the job sheet panel reads and reviews either. The id is the call out's
   or the work's; photos go to their own photo routes.
 */
-export type JobSheetCalls = Pick<typeof jobSheetsService, "jobSheet" | "save" | "submit" | "close" | "returnSheet" | "resendReport" | "reportFacts" | "addPhoto" | "removePhoto" | "reportHref">;
+export type JobSheetCalls = Pick<typeof jobSheetsService, "jobSheet" | "save" | "submit" | "close" | "returnSheet" | "resendReport" | "markReportSent" | "reportFacts" | "addPhoto" | "removePhoto" | "reportHref">;
 export type FieldSheetKind = "call_out" | "additional_work";
 const fieldSheetUrl = (kind: FieldSheetKind, id: string) => `/api/amc-field-work/${kind}/${encodeURIComponent(id)}/job-sheet`;
 
@@ -140,9 +159,18 @@ export function fieldJobSheetCalls(kind: FieldSheetKind): JobSheetCalls {
     jobSheet: (id) => request<JobSheetResponse>(fieldSheetUrl(kind, id)),
     save: (id, sheet) => post<SaveJobSheetResult>(id, { action: "save", sheet }),
     submit: (id, sheet) => post<SaveJobSheetResult>(id, { action: "submit", sheet }),
-    close: (id, comment, send = "email", pdfBase64 = null) => post<CloseJobSheetResult>(id, { action: "close", comment, send, ...(pdfBase64 ? { pdfBase64 } : {}) }),
+    close: (id, comment, send = "email", pdfBase64 = null, fsmQuotationNo = null, hoursUsed = null) =>
+      post<CloseJobSheetResult>(id, {
+        action: "close",
+        comment,
+        send,
+        ...(pdfBase64 ? { pdfBase64 } : {}),
+        ...(fsmQuotationNo ? { fsmQuotationNo } : {}),
+        ...(hoursUsed !== null ? { hoursUsed } : {}),
+      }),
     returnSheet: (id, comment) => post<{ ok: true }>(id, { action: "return", comment }),
     resendReport: (id, channel = "email", pdfBase64 = null) => post<ServiceReportResult>(id, { action: "resend_report", channel, ...(pdfBase64 ? { pdfBase64 } : {}) }),
+    markReportSent: (id, channel, note) => post<{ ok: true; reportSentAt: string }>(id, { action: "mark_report_sent", channel, note }),
     reportFacts: (id) => request<{ facts: ServiceReportFacts }>(`${fieldSheetUrl(kind, id)}/report?facts=1`),
     addPhoto: async (id, input) => {
       const kindOf = input.kind === "fault" ? "finding" : input.kind;

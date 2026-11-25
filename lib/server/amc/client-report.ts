@@ -4,6 +4,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { whatsappUrl } from "@/lib/amc/approval-ladder";
 import type { AmcConfig } from "@/lib/amc/config";
 import { todayInDubai } from "@/lib/amc/contracts";
+import { clientReportCategory } from "@/lib/amc/proposal-rules";
 import { clientEmailHtml, escapeEmailHtml } from "@/lib/email-brand";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { ContractError, loadContract } from "@/lib/server/amc/contracts";
@@ -43,7 +44,13 @@ async function rows(q: PromiseLike<{ data: unknown[] | null; error: { message: s
   return (data ?? []) as Row[];
 }
 
-export async function clientReportFacts(admin: Admin, contractId: string, config: AmcConfig) {
+/**
+ * financials false (DEV-503): the client version without money -- the
+ * visits and call outs with their dates, the additional work without its
+ * cost, and no "chargeable" wording. Amounts are left out of the data too.
+ */
+export async function clientReportFacts(admin: Admin, contractId: string, config: AmcConfig, opts: { financials?: boolean } = {}) {
+  const financials = opts.financials !== false;
   const { contract, entitlements, ownerId } = await loadContract(admin, contractId);
   const [visits, callOuts, works, reservedRows, owner] = await Promise.all([
     rows(
@@ -78,7 +85,13 @@ export async function clientReportFacts(admin: Admin, contractId: string, config
     const { data: signed } = await admin.storage.from(AMC_DOCUMENTS_BUCKET).createSignedUrls(paths, 7 * 86_400);
     for (const s of signed ?? []) if (s.path && s.signedUrl) urls.set(s.path, s.signedUrl);
   }
-  const category = contract.lifecycle?.template ?? (contract.unitType === "office" ? "commercial" : "residential");
+  /* DEV-410: commercial for every commercial property (shop, clinic, restaurant, warehouse, office). */
+  const category = clientReportCategory({
+    template: contract.lifecycle?.template ?? null,
+    propertyCategory: typeof contract.property.propertyCategory === "string" ? contract.property.propertyCategory : null,
+    propertyType: typeof contract.property.propertyType === "string" ? contract.property.propertyType : null,
+    unitType: contract.unitType,
+  });
   const customer = contract.customer as Row;
   return {
     contract: {
@@ -128,7 +141,9 @@ export async function clientReportFacts(admin: Admin, contractId: string, config
         covered: c.coverage === "covered",
         slaMet: c.sla_met === null || c.sla_met === undefined ? null : Boolean(c.sla_met),
       })),
-    additionalWork: works.map((w) => ({ number: String(w.work_no), finding: String(w.finding), status: String(w.status), total: Number(w.total ?? 0) })),
+    additionalWork: works.map((w) => ({ number: String(w.work_no), finding: String(w.finding), status: String(w.status), total: financials ? Number(w.total ?? 0) : 0 })),
+    /* DEV-503: false = the version without financial figures. */
+    financials,
     asOf: todayInDubai(),
   };
 }
@@ -155,11 +170,11 @@ export function clientReportHtml(r: ClientReport): string {
   const calls = r.callOuts
     .map(
       (c) =>
-        `<tr><td>${esc(c.number)}</td><td>${c.priority === "emergency" ? "Emergency" : "Non emergency"}</td><td>${esc(c.issue)}</td><td>${esc(day(c.attendedAt))}</td><td>${c.covered ? "Covered" : "Chargeable"}</td></tr>`,
+        `<tr><td>${esc(c.number)}</td><td>${c.priority === "emergency" ? "Emergency" : "Non emergency"}</td><td>${esc(c.issue)}</td><td>${esc(day(c.attendedAt))}</td>${r.financials === false ? "" : `<td>${c.covered ? "Covered" : "Chargeable"}</td>`}</tr>`,
     )
     .join("");
   const works = r.additionalWork
-    .map((w) => `<tr><td>${esc(w.number)}</td><td>${esc(w.finding)}</td><td>${esc(w.status.replace(/_/g, " "))}</td><td class="n">${money(w.total)}</td></tr>`)
+    .map((w) => `<tr><td>${esc(w.number)}</td><td>${esc(w.finding)}</td><td>${esc(w.status.replace(/_/g, " "))}</td>${r.financials === false ? "" : `<td class="n">${money(w.total)}</td>`}</tr>`)
     .join("");
   const remaining = r.visitsRemaining.map((v) => `<li>Visit ${v.visitNo}: between ${esc(day(v.windowStart))} and ${esc(day(v.windowEnd))}</li>`).join("");
   /* None to come: done only when some were done; otherwise none is scheduled yet. */
@@ -180,11 +195,13 @@ export function clientReportHtml(r: ClientReport): string {
     ${section("Your plan and allowances", scope ? `<table><tr><th>Service</th><th class="n">Included</th><th class="n">Used</th><th class="n">Booked</th><th class="n">Remaining</th></tr>${scope}</table>` : "", "No counted services on this contract.")}
     ${section(`Visits completed (${r.visitsDone.length})`, visits, "No planned visit completed yet.")}
     ${section(`Visits remaining (${r.visitsRemaining.length})`, remaining ? `<ul>${remaining}</ul>` : "", noneToCome)}
-    ${section(`Call outs attended (${r.callOuts.length})`, calls ? `<table><tr><th>No</th><th>Priority</th><th>Issue</th><th>Attended</th><th>Coverage</th></tr>${calls}</table>` : "", "No call outs so far.")}
+    ${section(`Call outs attended (${r.callOuts.length})`, calls ? `<table><tr><th>No</th><th>Priority</th><th>Issue</th><th>Attended</th>${r.financials === false ? "" : "<th>Coverage</th>"}</tr>${calls}</table>` : "", "No call outs so far.")}
     ${section(
       "Additional work",
       works
-        ? `<table><tr><th>No</th><th>Finding</th><th>Status</th><th class="n">AED incl. VAT</th></tr>${works}</table><p class="muted">Total AED ${money(r.additionalWork.reduce((s, w) => s + w.total, 0))}</p>`
+        ? r.financials === false
+          ? `<table><tr><th>No</th><th>Finding</th><th>Status</th></tr>${works}</table>`
+          : `<table><tr><th>No</th><th>Finding</th><th>Status</th><th class="n">AED incl. VAT</th></tr>${works}</table><p class="muted">Total AED ${money(r.additionalWork.reduce((s, w) => s + w.total, 0))}</p>`
         : "",
       "No additional work.",
     )}
@@ -229,8 +246,17 @@ async function storeReport(admin: Admin, r: ClientReport, actor: Actor, browserP
 }
 
 /** Email (PDF attached) to the client, owner copied; the WhatsApp text with the link comes back prepared. */
-export async function sendClientReport(admin: Admin, contractId: string, actor: Actor, config: AmcConfig, to?: string | null, browserPdf?: Uint8Array | null, channel: SendChannel = "email") {
-  const r = await clientReportFacts(admin, contractId, config);
+export async function sendClientReport(
+  admin: Admin,
+  contractId: string,
+  actor: Actor,
+  config: AmcConfig,
+  to?: string | null,
+  browserPdf?: Uint8Array | null,
+  channel: SendChannel = "email",
+  financials = true,
+) {
+  const r = await clientReportFacts(admin, contractId, config, { financials });
   const stored = await storeReport(admin, r, actor, browserPdf);
   const recipient = (to ?? r.contract.customerEmail ?? "").trim();
   const cc = [r.owner?.email].filter((e): e is string => Boolean(e) && e !== recipient);
@@ -272,10 +298,10 @@ export async function sendClientReport(admin: Admin, contractId: string, actor: 
     recipients: channel === "email" ? (recipient ? [{ name: r.contract.customerName, address: recipient }] : []) : channel === "whatsapp" && phone ? [{ name: r.contract.customerName, address: phone }] : [],
     cc: channel === "email" ? cc : [],
     outcome,
-    detail: `Client report as of ${r.asOf}`,
+    detail: `Client report as of ${r.asOf}${financials ? "" : " (without prices)"}`,
     sentBy: actor.id,
   });
-  await recordAmcAudit(admin, { entityType: "contract", entityId: contractId, eventType: "client_report_sent", actorId: actor.id, actorLabel: actor.label, payload: { outcome, documentId: stored.documentId } });
+  await recordAmcAudit(admin, { entityType: "contract", entityId: contractId, eventType: "client_report_sent", actorId: actor.id, actorLabel: actor.label, payload: { outcome, documentId: stored.documentId, financials } });
   /* No link in the text (18 Nov 2026): the coordinator attaches the PDF. */
   const message = `Dear ${r.contract.customerName}, please find attached the service report for your AMC ${r.contract.number}: ${r.visitsDone.length} visits done, ${r.visitsRemaining.length} to come, ${r.callOuts.length} call outs attended.`;
   return {

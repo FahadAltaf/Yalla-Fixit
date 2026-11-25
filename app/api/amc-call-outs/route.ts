@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
     const rights = fieldWorkRights(gate, "call_outs", scope.ownerId);
     if (!scope.found || !rights.view) return NextResponse.json({ error: "Contract not found." }, { status: 404 });
     if (!rights.create) return NextResponse.json({ error: "You cannot log call outs on this contract." }, { status: 403 });
-    const result = await createCallOut(gate.admin, parsed.data, { id: gate.userId, label: gate.label }, await readAmcConfig(gate.admin), rights.override);
+    const result = await createCallOut(gate.admin, parsed.data, { id: gate.userId, label: gate.label }, await readAmcConfig(gate.admin), rights.override, gate.canApprove);
     return NextResponse.json(result, { status: 201 });
   } catch (error) {
     return contractErrorResponse(error, "Could not log the call out");

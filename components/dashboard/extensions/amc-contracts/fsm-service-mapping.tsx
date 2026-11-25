@@ -153,7 +153,7 @@ export function FsmServiceMapping() {
         description="Which Zoho FSM service each AMC service corresponds to. FSM work is matched to a contract's services through this."
       />
       {data && !data.migrated ? (
-        <Alert className="border-warning/30 bg-warning/5">
+        <Alert variant="warning">
           <TriangleAlert className="text-warning" />
           <AlertTitle>The mapping cannot be changed yet</AlertTitle>
           <AlertDescription>Needs migration 20261006120000 (AMC FSM integration).</AlertDescription>

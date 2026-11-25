@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { approversForLevel, type AmcConfig } from "@/lib/amc/config";
+import { escalationPeople, type AmcConfig } from "@/lib/amc/config";
 import { fillTemplate, whatsappUrl } from "@/lib/amc/approval-ladder";
 import { termMonthsBetween, todayInDubai } from "@/lib/amc/contracts";
 import { templateText } from "@/lib/amc/message-templates";
@@ -17,6 +17,8 @@ import {
   type InstalmentStatus,
   type PaymentAction,
   type PaymentMode,
+  paymentWhenRange,
+  type PaymentWhen,
 } from "@/lib/amc/payments";
 import { planFromLegacyTerms, type CustomPlan, type PaymentPlan } from "@/lib/amc/proposal-rules";
 import { clientEmailHtml, escapeEmailHtml } from "@/lib/email-brand";
@@ -836,7 +838,8 @@ export async function performPaymentAction(
     }
     case "escalate": {
       const i = await instalmentOf(admin, contractId, action.instalmentId);
-      const management = approversForLevel(config, 2).length ? approversForLevel(config, 2) : approversForLevel(config, 1);
+      /* Management: the escalation contacts (DEV-488), else the level 2 approvers, else level 1. */
+      const management = escalationPeople(config);
       const { data: link } = await admin.from("amc_todos").select("id, todo_id").eq("dedupe_key", `installment_overdue:${action.instalmentId}`).maybeSingle<Row>();
       if (link?.todo_id && management.length) {
         await admin
@@ -990,7 +993,7 @@ const LIVE_CONTRACT_STATUSES = ["pending_initial_payment", "active", "on_hold", 
  * before anyone is told, so overlapping runs tell once.
  */
 export async function runPaymentSweep(admin: Admin, config: AmcConfig, now = new Date()) {
-  const result = { checked: 0, due: 0, overdue: 0, chequeAlerts: 0, lateFirstPayments: 0, skipped: null as string | null };
+  const result = { checked: 0, due: 0, overdue: 0, chequeAlerts: 0, lateFirstPayments: 0, clientRemindersHeld: 0, skipped: null as string | null };
   const today = todayInDubai(now);
   const system: Actor = { id: null, label: "Portal" };
 
@@ -1038,7 +1041,9 @@ export async function runPaymentSweep(admin: Admin, config: AmcConfig, now = new
         contractId: String(c.id),
         dedupeKey: `instalment_due:${String(raw.id)}`,
       });
-      await sendInstalmentReminder(admin, c, row, "due", config, system, now);
+      /* DEV-485: the client is emailed only while client emails are on. */
+      if (config.jobs.clientEmails) await sendInstalmentReminder(admin, c, row, "due", config, system, now);
+      else result.clientRemindersHeld += 1;
       result.due += 1;
     }
 
@@ -1078,7 +1083,8 @@ export async function runPaymentSweep(admin: Admin, config: AmcConfig, now = new
           config,
         ).catch((e) => console.error("[amc:payments] overdue to-do not opened:", e instanceof Error ? e.message : e));
       }
-      await sendInstalmentReminder(admin, c, row, "overdue", config, system, now);
+      if (config.jobs.clientEmails) await sendInstalmentReminder(admin, c, row, "overdue", config, system, now);
+      else result.clientRemindersHeld += 1;
       result.overdue += 1;
     }
   }
@@ -1206,7 +1212,7 @@ export type InstalmentFilter = "open" | "overdue" | "due" | "settled" | Instalme
 
 export async function listInstalments(
   admin: Admin,
-  filter: { status?: InstalmentFilter; q?: string | null; clientId?: string | null; from?: number; to?: number },
+  filter: { status?: InstalmentFilter; q?: string | null; clientId?: string | null; from?: number; to?: number; when?: PaymentWhen | null; mode?: PaymentMode | null; dueFrom?: string | null; dueTo?: string | null },
   now = new Date(),
 ): Promise<{ migrated: boolean; instalments: Array<InstalmentRecord & { contract: ContractRef | null }>; total: number; summary: BalanceSummary }> {
   const today = todayInDubai(now);
@@ -1234,6 +1240,16 @@ export async function listInstalments(
     .range(from, to);
   if (ids) page = page.in("contract_id", ids);
   if (statuses) page = page.in("status", statuses);
+  /* Finance's filters (23 Nov 2026): when it is due, and how it is expected to be paid. */
+  if (filter.when) {
+    const range = paymentWhenRange(filter.when, today);
+    if (range.from) page = page.gte("due_date", range.from);
+    if (range.to) page = page.lte("due_date", range.to);
+    if (range.late) page = page.not("status", "in", "(received,written_off,waived)");
+  }
+  if (filter.mode) page = page.eq("expected_mode", filter.mode);
+  if (filter.dueFrom) page = page.gte("due_date", filter.dueFrom);
+  if (filter.dueTo) page = page.lte("due_date", filter.dueTo);
   /* Balance and ageing over everything the filter covers (open money only), bounded. */
   let totals = admin.from("amc_instalments").select("total, received_amount, due_date, status").not("status", "in", "(received,written_off,waived)").limit(5000);
   if (ids) totals = totals.in("contract_id", ids);
@@ -1256,7 +1272,7 @@ export async function listInstalments(
 
 export async function listCheques(
   admin: Admin,
-  filter: { status?: ChequeStatus | null; q?: string | null; clientId?: string | null; from?: number; to?: number },
+  filter: { status?: ChequeStatus | null; q?: string | null; clientId?: string | null; from?: number; to?: number; when?: PaymentWhen | null; dueFrom?: string | null; dueTo?: string | null },
 ): Promise<{ migrated: boolean; cheques: Array<ChequeRecord & { contract: ContractRef | null; instalmentNo: number | null }>; total: number }> {
   const ids = await contractIdsFor(admin, filter);
   if (ids && ids.length === 0) return { migrated: true, cheques: [], total: 0 };
@@ -1272,6 +1288,14 @@ export async function listCheques(
     .range(from, to);
   if (ids) q = q.in("contract_id", ids);
   if (filter.status) q = q.eq("status", filter.status);
+  /* When the cheque is dated (23 Nov 2026). */
+  if (filter.when) {
+    const range = paymentWhenRange(filter.when, todayInDubai());
+    if (range.from) q = q.gte("cheque_date", range.from);
+    if (range.to) q = q.lte("cheque_date", range.to);
+  }
+  if (filter.dueFrom) q = q.gte("cheque_date", filter.dueFrom);
+  if (filter.dueTo) q = q.lte("cheque_date", filter.dueTo);
   const { data, error, count } = await q;
   if (error) {
     if (notMigrated(error)) return { migrated: false, cheques: [], total: 0 };

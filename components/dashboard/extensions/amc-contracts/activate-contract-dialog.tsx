@@ -2,7 +2,8 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { CalendarCheck2 } from "lucide-react";
+import { CalendarCheck2, CircleAlert } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -152,14 +153,18 @@ export function ActivateContractDialog({
             </dl>
 
             {blocked ? (
-              <div className="border-danger/30 bg-danger/5 text-danger rounded-lg border px-4 py-3 text-sm" role="alert">
-                {blocked}{" "}
-                {preview.existingContractId ? (
-                  <Link href={`/extensions/amc-contracts/${preview.existingContractId}`} className="font-medium underline">
-                    Open the contract
-                  </Link>
-                ) : null}
-              </div>
+              <Alert variant="danger">
+                <CircleAlert />
+                <AlertTitle>This contract can&apos;t be activated</AlertTitle>
+                <AlertDescription>
+                  {blocked}{" "}
+                  {preview.existingContractId ? (
+                    <Link href={`/extensions/amc-contracts/${preview.existingContractId}`} className="font-medium">
+                      Open the contract
+                    </Link>
+                  ) : null}
+                </AlertDescription>
+              </Alert>
             ) : (
               <>
                 <div className="grid gap-2">

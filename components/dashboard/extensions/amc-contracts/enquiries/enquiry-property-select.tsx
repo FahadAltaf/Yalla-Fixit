@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Loader2, Plus } from "lucide-react";
+import { Loader2, Plus, TriangleAlert } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -228,14 +229,18 @@ export function EnquiryPropertySelect({
         </p>
       ) : null}
       {chosenMissing.length > 0 && !completing ? (
-        <div className="border-warning/30 bg-warning/5 flex flex-wrap items-center justify-between gap-2 rounded-[12px] border px-3 py-2">
-          <p className="text-warning text-xs">This address is missing {chosenMissing.join(", ").toLowerCase()}.</p>
-          {addressForm && chosen ? (
-            <Button type="button" size="sm" variant="outline" className="h-7" onClick={() => setCompleting({ id: chosen.id, missing: chosenMissing })}>
-              Complete the address
-            </Button>
-          ) : null}
-        </div>
+        <Alert variant="warning">
+          <TriangleAlert />
+          <AlertTitle>The address is not complete</AlertTitle>
+          <AlertDescription>
+            <p>It is missing {chosenMissing.join(", ").toLowerCase()}.</p>
+            {addressForm && chosen ? (
+              <Button type="button" size="sm" variant="outline" onClick={() => setCompleting({ id: chosen.id, missing: chosenMissing })}>
+                Complete the address
+              </Button>
+            ) : null}
+          </AlertDescription>
+        </Alert>
       ) : stillMissing.length > 0 ? (
         <p className="text-warning text-xs">
           This address is missing {stillMissing.join(", ").toLowerCase()}. Someone with Snagging access can complete it on the Clients page.

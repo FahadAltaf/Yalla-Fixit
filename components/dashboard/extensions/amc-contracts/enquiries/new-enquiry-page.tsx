@@ -19,6 +19,7 @@ import { CHANNEL_LABELS, PREFERRED_CHANNELS, UNIT_TYPES, UNIT_TYPE_CATEGORY, UNI
 import { cn } from "@/lib/utils";
 import { amcContractsService, type PropertyOverview, type PropertyRecord } from "@/modules/amc-contracts/amc-contracts-service";
 import { enquiriesService, type CreateEnquiryInput, type EnquiryMeta } from "@/modules/amc-contracts/enquiries-service";
+import { ENQUIRY_FORM_ORDER, createEnquirySchema, enquiryFieldErrors, type EnquiryFormField } from "@/lib/amc/enquiries";
 
 import { AddressDialog, useAddressFormAccess } from "../address-dialog";
 import { ClientPicker } from "../client-picker";
@@ -233,28 +234,17 @@ function EnquiryForm({ meta, initialClientId }: { meta: EnquiryMeta; initialClie
   const reachable = !!(contact?.phone || contact?.email || draft.contactWhatsapp.trim());
   const needsSiteVisit = !!draft.propertyCategory && meta.siteVisitRequiredCategories.includes(draft.propertyCategory);
 
-  const blockers = [
-    !client ? "Choose the client, or add a new one with +." : null,
-    client && !reachable ? `${contact?.name ?? "The client"} has no phone or email on file: give a WhatsApp number.` : null,
-    !draft.source ? "Choose where the enquiry came from." : null,
-    referral && !draft.referrer.trim() ? "Say who referred them." : null,
-    draft.need.trim().length < 3 ? "Say in short what they need." : null,
-  ].filter((b): b is string => Boolean(b));
-
-  async function save() {
-    setAttempted(true);
-    if (blockers.length > 0 || !client || !contact) return;
-    setSaving(true);
-    try {
-      const t = (v: string) => (v.trim() ? v.trim() : null);
-      const input: CreateEnquiryInput = {
+  /* What is sent, built from the form; createEnquirySchema (the API's own check) validates it. */
+  function buildInput(): CreateEnquiryInput {
+    const t = (v: string) => (v.trim() ? v.trim() : null);
+    return {
         source: draft.source,
         referrer: referral ? t(draft.referrer) : null,
         enquiredAt: fromLocalInput(draft.enquiredAt) ?? undefined,
         // The client is the contact: their name, phone and email are not asked for twice.
-        contactName: contact.name,
-        contactPhone: contact.phone,
-        contactEmail: contact.email,
+        contactName: contact?.name ?? "",
+        contactPhone: contact?.phone ?? null,
+        contactEmail: contact?.email ?? null,
         contactWhatsapp: t(draft.contactWhatsapp),
         preferredChannel: draft.preferredChannel ?? null,
         preferredLanguage: t(draft.preferredLanguage),
@@ -263,12 +253,12 @@ function EnquiryForm({ meta, initialClientId }: { meta: EnquiryMeta; initialClie
         unitType: draft.unitType,
         need: draft.need.trim(),
         ownerId: draft.ownerId,
-        propertyId: client.kind === "existing" ? draft.propertyId : null,
+        propertyId: client?.kind === "existing" ? draft.propertyId : null,
         newProperty: null,
         nextFollowUpAt: fromLocalInput(draft.nextFollowUpAt),
-        customerId: client.kind === "existing" ? client.customer.id : null,
+        customerId: client?.kind === "existing" ? client.customer.id : null,
         newCustomer:
-          client.kind === "new"
+          client?.kind === "new"
             ? {
                 name: client.name,
                 customerType: client.company ? "company" : "individual",
@@ -278,8 +268,33 @@ function EnquiryForm({ meta, initialClientId }: { meta: EnquiryMeta; initialClie
                 maherId: client.maherId || null,
               }
             : null,
-      };
-      const { enquiry } = await enquiriesService.create(input);
+    };
+  }
+
+  const parsed = createEnquirySchema.safeParse(buildInput());
+  const allErrors = parsed.success ? {} : enquiryFieldErrors(parsed.error.issues);
+  /* Shown once Log enquiry has been pressed, then kept live as the form is corrected. */
+  const errors: Partial<Record<EnquiryFormField, string>> = attempted ? allErrors : {};
+  const err = (f: EnquiryFormField) => errors[f] ?? null;
+
+  async function save() {
+    setAttempted(true);
+    if (!parsed.success) {
+      const order = ENQUIRY_FORM_ORDER.filter((f) => allErrors[f]);
+      const first = order[0];
+      toast.error(order.length === 1 && first ? allErrors[first]! : `${order.length} fields need attention`, {
+        description: order.length === 1 ? undefined : order.map((f) => allErrors[f]).join(" · "),
+      });
+      if (first) {
+        const el = document.querySelector<HTMLElement>(`[data-field="${first}"]`);
+        el?.scrollIntoView({ behavior: "smooth", block: "center" });
+        el?.querySelector<HTMLElement>("input, textarea, button")?.focus({ preventScroll: true });
+      }
+      return;
+    }
+    setSaving(true);
+    try {
+      const { enquiry } = await enquiriesService.create(parsed.data);
       toast.success(`Enquiry ${enquiry.enquiryNumber} logged`);
       router.push(`${ENQUIRIES}/${enquiry.id}`);
     } catch (e) {
@@ -298,6 +313,8 @@ function EnquiryForm({ meta, initialClientId }: { meta: EnquiryMeta; initialClie
         >
           <Field
             label="Client"
+            name="client"
+            error={err("client")}
             hint={client ? undefined : "Search by last name, email or phone. A new client added with + is saved as a prospect straight away."}
           >
             {loadingClient ? (
@@ -377,46 +394,14 @@ function EnquiryForm({ meta, initialClientId }: { meta: EnquiryMeta; initialClie
             </div>
           )}
 
-          {/* No property yet: what they said about it, so the site-visit rule still applies. Once one is picked, these come from it. */}
-          {!draft.propertyId ? (
-            <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-              <Field label="Property type">
-                <SimpleSelect
-                  label="Property type"
-                  allowNone
-                  value={draft.unitType}
-                  options={UNIT_TYPES.map((u) => [u, UNIT_TYPE_LABELS[u]])}
-                  onChange={(v) => {
-                    const unit = asUnitType(v);
-                    set({
-                      unitType: unit,
-                      propertyCategory: unit ? ((UNIT_TYPE_CATEGORY[unit] as Category) ?? draft.propertyCategory) : draft.propertyCategory,
-                    });
-                  }}
-                />
-              </Field>
-              <Field label="Category">
-                <SimpleSelect
-                  label="Category"
-                  allowNone
-                  value={draft.propertyCategory}
-                  options={[
-                    ["residential", "Residential"],
-                    ["commercial", "Commercial"],
-                  ]}
-                  onChange={(v) => set({ propertyCategory: asCategory(v) })}
-                />
-              </Field>
-              <Field label="Area" htmlFor="ne-area">
-                <Input
-                  id="ne-area"
-                  placeholder="Community or district, e.g. Arabian Ranches"
-                  value={draft.area}
-                  onChange={(e) => set({ area: e.target.value })}
-                  maxLength={120}
-                />
-              </Field>
-            </div>
+          {/*
+            24 Nov 2026 (the user): no Property type, Category or Area boxes. They come
+            from the property picked or added above, so they are not typed twice.
+          */}
+          {err("property") ? (
+            <p role="alert" data-field="property" className="text-destructive text-xs">
+              {err("property")}
+            </p>
           ) : null}
           {needsSiteVisit ? (
             <p className="text-muted-foreground flex items-start gap-2 text-xs">
@@ -451,21 +436,22 @@ function EnquiryForm({ meta, initialClientId }: { meta: EnquiryMeta; initialClie
 
         <FormSection icon={MessageSquareText} title="The enquiry" description="Where they came from and what they need, in their words.">
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            <Field label="Source">
+            <Field label="Source" name="source" error={err("source")}>
               <SimpleSelect label="Source" value={draft.source} options={meta.sources.map((s) => [s, s])} onChange={(v) => set({ source: v ?? "" })} />
             </Field>
             {referral ? (
-              <Field label="Referred by" htmlFor="ne-ref">
-                <Input id="ne-ref" value={draft.referrer} onChange={(e) => set({ referrer: e.target.value })} maxLength={200} />
+              <Field label="Referred by" htmlFor="ne-ref" name="referrer" error={err("referrer")}>
+                <Input id="ne-ref" aria-invalid={!!err("referrer") || undefined} value={draft.referrer} onChange={(e) => set({ referrer: e.target.value })} maxLength={200} />
               </Field>
             ) : null}
-            <Field label="Enquired on" htmlFor="ne-when">
+            <Field label="Enquired on" htmlFor="ne-when" name="enquiredAt" error={err("enquiredAt")}>
               <DateTimeSelect id="ne-when" value={draft.enquiredAt} max={toLocalInput(new Date().toISOString())} onChange={(v) => set({ enquiredAt: v })} />
             </Field>
           </div>
-          <Field label="What they need" htmlFor="ne-need" hint="In short: services, units, timing, anything agreed.">
+          <Field label="What they need" htmlFor="ne-need" name="need" error={err("need")} hint="In short: services, units, timing, anything agreed.">
             <Textarea
               id="ne-need"
+              aria-invalid={!!err("need") || undefined}
               rows={3}
               value={draft.need}
               onChange={(e) => set({ need: e.target.value })}
@@ -490,7 +476,7 @@ function EnquiryForm({ meta, initialClientId }: { meta: EnquiryMeta; initialClie
                   : `${contact.name} has no phone or email on file. Give a WhatsApp number.`}
           </p>
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            <Field label="WhatsApp (if not the phone)" htmlFor="ne-wa">
+            <Field label="WhatsApp (if not the phone)" htmlFor="ne-wa" name="whatsapp" error={err("whatsapp")}>
               <AmcPhoneInput id="ne-wa" value={draft.contactWhatsapp} onChange={(contactWhatsapp) => set({ contactWhatsapp })} />
             </Field>
             <Field label="Preferred channel">
@@ -502,9 +488,10 @@ function EnquiryForm({ meta, initialClientId }: { meta: EnquiryMeta; initialClie
                 onChange={(v) => set({ preferredChannel: v as Draft["preferredChannel"] })}
               />
             </Field>
-            <Field label="Preferred language" htmlFor="ne-lang">
+            <Field label="Preferred language" htmlFor="ne-lang" name="preferredLanguage" error={err("preferredLanguage")}>
               <Input
                 id="ne-lang"
+                aria-invalid={!!err("preferredLanguage") || undefined}
                 placeholder="English, Arabic…"
                 value={draft.preferredLanguage}
                 onChange={(e) => set({ preferredLanguage: e.target.value })}
@@ -521,10 +508,10 @@ function EnquiryForm({ meta, initialClientId }: { meta: EnquiryMeta; initialClie
         >
           {/* The same three-column grid as Source and Enquired on, so the date and time fields line up with the ones above. */}
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            <Field label="Owner">
-              <PersonSelect label="Owner" people={meta.people} value={draft.ownerId} onChange={(id) => set({ ownerId: id })} allowNone />
+            <Field label="Owner" name="owner" error={err("owner")}>
+              <PersonSelect label="Owner" people={meta.people.filter((p) => p.can?.enquiries !== false || p.id === draft.ownerId)} value={draft.ownerId} onChange={(id) => set({ ownerId: id })} allowNone />
             </Field>
-            <Field label="Next follow-up" htmlFor="ne-next">
+            <Field label="Next follow-up" htmlFor="ne-next" name="nextFollowUpAt" error={err("nextFollowUpAt")}>
               <DateTimeSelect id="ne-next" value={draft.nextFollowUpAt} onChange={(v) => set({ nextFollowUpAt: v })} />
             </Field>
           </div>
@@ -533,13 +520,11 @@ function EnquiryForm({ meta, initialClientId }: { meta: EnquiryMeta; initialClie
 
       <div className="flex flex-col-reverse gap-3 border-t px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-6">
         <div className="min-w-0">
-          {attempted
-            ? blockers.map((reason) => (
-                <p key={reason} className="text-destructive text-xs">
-                  {reason}
-                </p>
-              ))
-            : null}
+          {attempted && Object.keys(errors).length > 0 ? (
+            <p className="text-destructive text-xs">
+              {Object.keys(errors).length === 1 ? "1 field needs attention" : `${Object.keys(errors).length} fields need attention`}: see the messages above.
+            </p>
+          ) : null}
         </div>
         <div className="flex shrink-0 flex-col-reverse gap-2 sm:flex-row sm:items-center">
           <Button variant="outline" asChild disabled={saving}>

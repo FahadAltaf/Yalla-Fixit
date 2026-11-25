@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { handymanTeamsSchema, hoursUsedSchema } from "./handyman-hours";
 
 import { AMC_VAT_RATE_BP, filsToAed, toFils } from "@/lib/amc/pricing";
 import { TRADES } from "@/lib/amc/client-profile";
@@ -63,9 +64,10 @@ export interface SlaRules {
 }
 
 /**
- * The deadlines from the contract clauses 3.1 and 3.2 (BRD 5.13): an
+ * The deadlines from the contract clauses 3.1 and 3.2 (BRD v0.4 5.13): an
  * emergency is attended within 120 minutes at any hour; a non emergency is
- * attended within 48 hours (the visit takes place within the window).
+ * scheduled within 48 hours (DEV-406, 20 Nov 2026 review: booked with the
+ * client within the hours, not attended within them).
  */
 export function slaDeadlines(priority: CallOutPriority, reportedAt: string, sla: Pick<SlaRules, "emergencyAttendMinutes" | "nonEmergencyScheduleHours">) {
   const at = Date.parse(reportedAt);
@@ -79,22 +81,33 @@ export const slaDueAt = (c: { attendDueAt: string | null; scheduleDueAt: string 
 export type SlaState = "met" | "missed" | "at_risk" | "on_track";
 
 /**
- * Met or missed once attended; otherwise at risk once the given share of
- * the window has gone, missed after the deadline. A cancelled call out has
- * no SLA.
+ * An emergency: met or missed once attended. A non emergency (DEV-406):
+ * met or missed once it is scheduled -- the flag set when it was booked
+ * (slaMet), or, for one booked before that rule, by its attendance.
+ * Otherwise at risk once the given share of the window has gone, missed
+ * after the deadline. A cancelled call out has no SLA.
  */
 export function slaState(
-  c: { reportedAt: string; attendedAt: string | null; attendDueAt: string | null; scheduleDueAt: string | null; status: CallOutStatus },
+  c: { reportedAt: string; attendedAt: string | null; attendDueAt: string | null; scheduleDueAt: string | null; status: CallOutStatus; slaMet?: boolean | null },
   now: Date,
   atRiskPercent: number,
 ): SlaState | null {
   const due = slaDueAt(c);
   if (!due || c.status === "cancelled") return null;
+  if (!c.attendDueAt && c.status !== "logged") {
+    if (c.slaMet === true) return "met";
+    if (c.slaMet === false) return "missed";
+  }
   if (c.attendedAt) return Date.parse(c.attendedAt) <= Date.parse(due) ? "met" : "missed";
   const start = Date.parse(c.reportedAt);
   const end = Date.parse(due);
   if (now.getTime() > end) return "missed";
   return now.getTime() - start >= ((end - start) * atRiskPercent) / 100 ? "at_risk" : "on_track";
+}
+
+/** DEV-406: a non emergency is met when it is booked by its schedule deadline. */
+export function scheduledInTime(scheduleDueAt: string | null, scheduledAt: string): boolean | null {
+  return scheduleDueAt ? Date.parse(scheduledAt) <= Date.parse(scheduleDueAt) : null;
 }
 
 /** "Logged within 60 minutes of the call" (emergency only). */
@@ -332,6 +345,8 @@ const trade = z.enum(TRADES as unknown as [Trade, ...Trade[]]);
 export const callOutCreateSchema = z
   .object({
     contractId: uuid,
+    /* DEV-496: an AMC approver's reason for logging it on an expired contract. */
+    expiredReason: optionalText(500),
     priority: z.enum(CALL_OUT_PRIORITIES),
     channel: z.enum(CALL_OUT_CHANNELS),
     reportedAt: iso,
@@ -344,15 +359,42 @@ export const callOutCreateSchema = z
     excluded: z.boolean().default(false),
     /* Book a chargeable call out as covered: needs AMC Allowances (Approve) and a reason. */
     overrideReason: optionalText(500),
+    /* DEV-495: a handyman job against the free hours, and how many teams go. Null: an ordinary call out. */
+    handymanTeams: handymanTeamsSchema.optional().nullable(),
   })
   .strict();
 export type CallOutCreateInput = z.infer<typeof callOutCreateSchema>;
 
-export const callOutCoverageQuerySchema = callOutCreateSchema.pick({ contractId: true, priority: true, partsExpected: true, partsValueAed: true, excluded: true });
+export const callOutCoverageQuerySchema = callOutCreateSchema.pick({ contractId: true, priority: true, partsExpected: true, partsValueAed: true, excluded: true, handymanTeams: true });
 
 const pendingWork = z.object({ description: text(1000).min(3), reason: text(500).min(1) }).strict();
 
+/* ------------------------------------------------------------------ */
+/* FSM quotation number (DEV-508, 24 Nov 2026)                         */
+/* ------------------------------------------------------------------ */
+
+/** Why closing waits for the number. */
+export const FSM_QUOTATION_NEEDED =
+  "Record the FSM quotation number first. Finance cannot record the revenue or issue the tax invoice without it: prepare the quotation in Zoho FSM and enter its number.";
+
+/** The number as typed: the FSM quotation's reference, e.g. QT-00123. */
+export const fsmQuotationNoSchema = z.string().trim().min(1, "Enter the FSM quotation number").max(40, "Keep the FSM quotation number to 40 characters");
+
+/**
+ * Whether closing needs the number (DEV-508): a chargeable call out, or a
+ * covered one that still has something to charge (parts, extra time); and
+ * additional work with a value. Free work has nothing to invoice.
+ */
+export function fsmQuotationRequired(
+  input: { kind: "call_out"; coverage: string | null; chargeTotal: number } | { kind: "additional_work"; workTotal: number },
+): boolean {
+  if (input.kind === "call_out") return input.coverage === "chargeable" || input.chargeTotal > 0;
+  return input.workTotal > 0;
+}
+
 export const callOutActionSchema = z.discriminatedUnion("action", [
+  /* DEV-508: the coordinator records the FSM quotation number, before or at closing. */
+  z.object({ action: z.literal("set_fsm_quotation"), fsmQuotationNo: fsmQuotationNoSchema }).strict(),
   z
     .object({
       action: z.literal("schedule"),
@@ -361,6 +403,8 @@ export const callOutActionSchema = z.discriminatedUnion("action", [
       durationMinutes: z.number().int().min(15).max(720),
       technicianIds: z.array(z.string().trim().min(1).max(40)).min(1).max(10),
       overrideReason: optionalText(500),
+      /* DEV-493: booked inside the property's access lead time on purpose. */
+      insideLeadTime: z.boolean().optional(),
     })
     .strict(),
   z.object({ action: z.literal("attend"), attendedAt: iso, technicianIds: z.array(z.string().trim().min(1).max(40)).max(10).optional() }).strict(),
@@ -375,7 +419,8 @@ export const callOutActionSchema = z.discriminatedUnion("action", [
       outcome: z.enum(["resolved", "pending_works"]),
     })
     .strict(),
-  z.object({ action: z.literal("close"), note: optionalText(1000) }).strict(),
+  /* hoursUsed: a handyman job's team-hours, whole hours (DEV-495). */
+  z.object({ action: z.literal("close"), note: optionalText(1000), fsmQuotationNo: fsmQuotationNoSchema.optional(), hoursUsed: hoursUsedSchema.optional() }).strict(),
   z.object({ action: z.literal("cancel"), reason }).strict(),
   z.object({ action: z.literal("flag_misuse"), note: text(1000).min(3, "Say why the emergency line was misused") }).strict(),
   z.object({ action: z.literal("acknowledged") }).strict(),
@@ -418,6 +463,8 @@ const quotationLine = z
 export const additionalWorkCreateSchema = z
   .object({
     contractId: uuid,
+    /* DEV-496: an AMC approver's reason for raising it on an expired contract. */
+    expiredReason: optionalText(500),
     source: z.enum(["visit", "call_out", "manual"]),
     visitId: uuid.optional().nullable(),
     callOutId: uuid.optional().nullable(),
@@ -434,6 +481,7 @@ export const additionalWorkCreateSchema = z
 export type AdditionalWorkCreateInput = z.infer<typeof additionalWorkCreateSchema>;
 
 export const additionalWorkActionSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("set_fsm_quotation"), fsmQuotationNo: fsmQuotationNoSchema }).strict(),
   z
     .object({
       action: z.literal("update"),
@@ -462,9 +510,11 @@ export const additionalWorkActionSchema = z.discriminatedUnion("action", [
       durationMinutes: z.number().int().min(15).max(1440).optional(),
       technicianIds: z.array(z.string().trim().min(1).max(40)).min(1).max(10).optional(),
       overrideReason: optionalText(500),
+      /* DEV-493: booked inside the property's access lead time on purpose. */
+      insideLeadTime: z.boolean().optional(),
     })
     .strict(),
-  z.object({ action: z.literal("complete"), completedAt: iso.optional() }).strict(),
+  z.object({ action: z.literal("complete"), completedAt: iso.optional(), fsmQuotationNo: fsmQuotationNoSchema.optional() }).strict(),
   z.object({ action: z.literal("invoice"), invoiceNumber: text(60).min(1), invoicedAt: iso.optional() }).strict(),
   z.object({ action: z.literal("pay"), paidAt: iso.optional(), reference: optionalText(120) }).strict(),
 ]);

@@ -9,6 +9,7 @@ import { ErrorState } from "@/components/dashboard/shared/kaizen-states";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogClose, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Switch } from "@/components/ui/switch";
 import type { ClientReport } from "@/lib/server/amc/client-report";
 import { insightsService } from "@/modules/amc-contracts/insights-service";
 
@@ -43,7 +44,12 @@ export function ClientReportViewer({
   /** Opens the send dialog; absent for someone who cannot send. */
   onSend?: () => void;
 }) {
-  const { data, error, reload } = useAmcData(() => (open ? insightsService.clientReport(contractId) : Promise.resolve(null)), open ? `report|${contractId}` : "closed");
+  /* DEV-503: the version without financial figures, for clients who should not see prices. */
+  const [financials, setFinancials] = useState(true);
+  const { data, error, reload } = useAmcData(
+    () => (open ? insightsService.clientReport(contractId, financials) : Promise.resolve(null)),
+    open ? `report|${contractId}|${financials ? 1 : 0}` : "closed",
+  );
   const report = data?.report ?? null;
   const model = useMemo(() => (report ? buildClientReportModel(report) : null), [report]);
   const [downloading, setDownloading] = useState(false);
@@ -76,6 +82,10 @@ export function ClientReportViewer({
             <DialogDescription>The service report exactly as the client receives it, as of today.</DialogDescription>
           </div>
           <div className="flex shrink-0 flex-wrap items-center gap-2">
+            <label className="text-muted-foreground mr-1 flex items-center gap-2 text-sm">
+              <Switch checked={financials} onCheckedChange={setFinancials} aria-label="Show prices in the report" disabled={downloading} />
+              Prices
+            </label>
             <Button type="button" variant="outline" size="sm" onClick={() => void download()} disabled={!report || downloading}>
               {downloading ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
               {downloading ? "Building PDF…" : "Download PDF"}

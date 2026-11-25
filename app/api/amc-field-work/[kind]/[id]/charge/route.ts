@@ -14,7 +14,9 @@ import { draftWorkCharge, priceList, readCharge, recordChargePayment, saveCallOu
 
   GET                                    the charge, and the services priced from the rate card for its property
   POST { action: "save_services", lines }  the services, each charged or free: a call out's charge, an
-                                           additional work's quotation (19 Nov 2026, until approval)
+                                           additional work's quotation (19 Nov 2026, until approval).
+                                           On a chargeable call out a line made free needs freeReason and
+                                           AMC Allowances (Approve) or the AMC approver right (DEV-498).
   POST { action: "record_payment", amount, paidOn, mode, reference, note }
 */
 
@@ -54,7 +56,15 @@ export async function GET(_req: NextRequest, ctx: Params) {
     const beforeApproval = kind === "additional_work" && ["identified", "quotation_prepared", "shared"].includes(row.status);
     const shown = charge ?? (beforeApproval ? await draftWorkCharge(gate.admin, id) : null);
     return NextResponse.json(
-      { charge: shown, ready, services, canEdit: rights.edit, servicesEditable: kind === "call_out" ? undefined : rights.edit && beforeApproval },
+      {
+        charge: shown,
+        ready,
+        services,
+        canEdit: rights.edit,
+        servicesEditable: kind === "call_out" ? undefined : rights.edit && beforeApproval,
+        /* DEV-498: may make a chargeable call out's line free (with a reason). */
+        canMarkFree: gate.canApprove || gate.actor.allowanceOverride,
+      },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (error) {
@@ -77,7 +87,7 @@ export async function POST(req: NextRequest, ctx: Params) {
         await saveWorkServices(gate.admin, id, parsed.data.lines, actor, await readAmcConfig(gate.admin));
         return NextResponse.json({ charge: await draftWorkCharge(gate.admin, id) });
       }
-      return NextResponse.json({ charge: await saveCallOutServices(gate.admin, id, parsed.data.lines, actor) });
+      return NextResponse.json({ charge: await saveCallOutServices(gate.admin, id, parsed.data.lines, actor, gate.canApprove || gate.actor.allowanceOverride) });
     }
     if (!rights.edit && !gate.payments.edit) return NextResponse.json({ error: "Recording a payment needs AMC Payments (Edit)." }, { status: 403 });
     const { action: _action, ...rest } = body as Record<string, unknown>;

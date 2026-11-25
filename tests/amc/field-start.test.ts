@@ -34,12 +34,12 @@ test("access says what is wrong with the pass", () => {
   assert.match(problems[0].text, /rejected/);
 });
 
-test("a missing access permission blocks a planned visit's crew, but is only noted for a call out", () => {
+/* 23 Nov 2026: access permissions on a technician's profile are not checked. */
+test("a property's security clearance never blocks or notes a technician", () => {
   const tech = { fsmId: "t1", name: "Ahmed", active: true, shift: null, skills: [], areas: [], hasVehicle: true, isDriver: false, accessPermissions: [] };
   const free = { onLeave: false, overlaps: 0, workloadMinutes: 0 };
   const need = { trades: [], date: "2026-11-26", accessTypes: ["Emaar Community Management"] };
-  assert.match(fitFor(tech, need, free).blockers.join(" "), /No access permission/);
-  const callOut = fitFor(tech, { ...need, accessAsNote: true }, free);
-  assert.deepEqual(callOut.blockers, []);
-  assert.match(callOut.notes.join(" "), /pass covers access/);
+  const fit = fitFor(tech, need, free);
+  assert.deepEqual(fit.blockers, []);
+  assert.doesNotMatch(fit.notes.join(" "), /permission/);
 });

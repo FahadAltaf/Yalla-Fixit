@@ -78,13 +78,13 @@ test("the phone sees the property with the visit's held changes over it", () => 
   assert.equal(s.length, 0);
 });
 
-test("only the named approver can approve, and approving puts the held changes on the property", async () => {
+test("only a site visit approver (AMC configuration, or the one named on an older visit) can approve, and approving puts the held changes on the property", async () => {
   const { admin, fake } = setup();
   fake.table("amc_site_visit_changes").push(
     { assessment_id: SITE, entity: "asset", target_id: NEW_ASSET, op: "insert", payload: asset, updated_at: "2026-11-16T08:00:00Z", applied_at: null },
     { assessment_id: SITE, entity: "scope", target_id: OLD_SCOPE, op: "delete", payload: {}, updated_at: "2026-11-16T08:01:00Z", applied_at: null },
   );
-  await assert.rejects(approveSiteVisit(admin, SITE, { id: INSPECTOR, label: "Ahmed" }), /Only Sara/);
+  await assert.rejects(approveSiteVisit(admin, SITE, { id: INSPECTOR, label: "Ahmed" }), /Only the site visit approvers/);
   assert.equal(fake.table("amc_property_assets").length, 0, "nothing applied for someone else");
 
   await approveSiteVisit(admin, SITE, { id: APPROVER, label: "Sara" });
@@ -99,11 +99,21 @@ test("only the named approver can approve, and approving puts the held changes o
 
 test("the approver can send it back with a reason; it is a draft again", async () => {
   const { admin, fake } = setup();
-  await assert.rejects(sendBackSiteVisit(admin, SITE, "Recount", { id: INSPECTOR, label: "Ahmed" }), /Only Sara/);
+  await assert.rejects(sendBackSiteVisit(admin, SITE, "Recount", { id: INSPECTOR, label: "Ahmed" }), /Only the site visit approvers/);
   await assert.rejects(sendBackSiteVisit(admin, SITE, "  ", { id: APPROVER, label: "Sara" }), /what the inspector should change/);
   await sendBackSiteVisit(admin, SITE, "Count the AC units again", { id: APPROVER, label: "Sara" });
   const row = fake.table("amc_assessments")[0];
   assert.equal(row.status, "draft");
   assert.equal(row.completed_at, null);
   assert.equal(row.sent_back_reason, "Count the AC units again");
+});
+
+test("a site visit submitted from the mobile app cannot be changed, its approver included (23 Nov 2026)", async () => {
+  const { admin, fake } = setup();
+  const { updateAssessment } = await import("@/lib/server/amc/business");
+  await assert.rejects(
+    updateAssessment(admin as never, { userId: APPROVER, canApprove: true }, SITE, { approverId: INSPECTOR }),
+    (e: Error & { status?: number }) => e.status === 409 && /submitted this site visit/.test(e.message),
+  );
+  assert.equal(fake.table("amc_assessments")[0].approver_id, APPROVER, "the approver named at submission stays");
 });

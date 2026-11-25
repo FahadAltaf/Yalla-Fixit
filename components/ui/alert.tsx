@@ -8,6 +8,14 @@ const alertVariants = cva("grid gap-0.5 rounded-lg border px-2.5 py-2 text-left 
     variant: {
       default: "bg-card text-card-foreground",
       destructive: "text-destructive bg-card *:data-[slot=alert-description]:text-destructive/90 *:[svg]:text-current",
+      /*
+        Notices with a tone (23 Nov 2026): exactly the info box (the default:
+        card, border, icon, title, muted description, same padding). Only the
+        icon takes the colour, so every notice in the portal looks the same.
+      */
+      warning: "bg-card text-card-foreground *:[svg]:text-warning",
+      danger: "bg-card text-card-foreground *:[svg]:text-danger",
+      success: "bg-card text-card-foreground *:[svg]:text-success",
     },
   },
   defaultVariants: {

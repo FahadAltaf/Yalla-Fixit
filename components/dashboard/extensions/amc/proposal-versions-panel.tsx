@@ -238,9 +238,9 @@ export function ProposalVersionsPanel({ submission }: { submission: AmcSubmissio
   );
 }
 
-/** Whether this viewer may revise the proposal: the owner, once the client has seen it. */
+/** Whether this viewer may revise the proposal: the owner or the team by role (DEV-368), once the client has seen it. */
 export function canReviseProposal(submission: AmcSubmission) {
-  return canRevise(submission.status, submission.is_own !== false);
+  return canRevise(submission.status, (submission.can_act ?? submission.is_own !== false));
 }
 
 /**

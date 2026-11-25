@@ -9,6 +9,11 @@ import { proposalValidUntil } from "@/lib/amc/proposal-rules";
 import { contractShareTexts, proposalShareTexts, recordSend, whatsappMessages } from "@/lib/server/amc/proposal-share";
 import { contractSent } from "@/lib/server/amc/contract-lifecycle";
 import { canUseAmc } from "@/components/dashboard/extensions/amc/amc-constants";
+import { canApproveAmc } from "@/components/dashboard/extensions/amc/amc-settings";
+import { proposalRights } from "@/lib/amc/proposal-team";
+import { proposalViewerRoles } from "@/lib/server/amc/proposal-roles";
+import { hasResourceAction } from "@/lib/role-permissions";
+import { ActionType, ResourceType } from "@/types/types";
 import { contractTermMonths, termFeeLabel } from "@/components/dashboard/extensions/amc/amc-date-utils";
 import { linkTokenExpiry, mintLinkToken } from "@/lib/server/link-token";
 import { sendEmail } from "@/lib/server/send-email";
@@ -231,22 +236,18 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
   /*
-    Sending is the owner's, and only the owner's.
-
-    An approver decides whether a proposal MAY go out; they do not send
-    it. It used to allow either, so an approver who opened somebody
-    else's approved proposal was shown Send and could email a client
-    about work that is not theirs -- under the owner's name, since the
-    document carries the owner's account manager and contacts.
+    The owner, or the team by role, sends it (DEV-368, 20 Nov 2026 review:
+    a colleague picks a proposal up). Approving and sending stay apart: the
+    approver right alone sends only with AMC Proposals or Operations (Edit)
+    or as the AMC approver role -- see lib/amc/proposal-team.ts. The
+    document carries the account manager chosen on the proposal, not the
+    sender's name.
   */
-  if (existing.owner_id !== profile.id) {
-    return NextResponse.json(
-      {
-        error:
-          "Only the person who raised this proposal can send it to the client.",
-      },
-      { status: 403 },
-    );
+  {
+    const canApprove = canApproveAmc(await readAmcSettings(admin), profile.email, hasResourceAction(access.accessUser, ResourceType.AMC, ActionType.APPROVE));
+    if (!proposalRights(proposalViewerRoles(access.accessUser, canApprove), existing.owner_id === profile.id).act) {
+      return NextResponse.json({ error: "Sending someone else's proposal needs AMC Proposals (Edit), or to be its owner." }, { status: 403 });
+    }
   }
   /* A document already sent can be sent again (a new email, or a fresh
      link to share). The status stays where it is. */
@@ -262,6 +263,13 @@ export async function POST(req: NextRequest) {
       },
       { status: 409 },
     );
+  }
+  /* DEV-505: the contract is sent from its record; while it is missing, it is created first (the proposal page offers it). */
+  if (document === "contract") {
+    const { data: record, error: recordError } = await admin.from("amc_contracts").select("id").eq("submission_id", id).maybeSingle();
+    if (!recordError && !record) {
+      return NextResponse.json({ error: "The contract record was not created when the client approved. Choose Create contract record on the proposal first." }, { status: 409 });
+    }
   }
 
   /*

@@ -74,7 +74,9 @@ export interface CallOutFact {
 export function callOutStats(callOuts: CallOutFact[], now: Date) {
   const row = (priority: CallOutFact["priority"]) => {
     const list = callOuts.filter((c) => c.priority === priority && c.status !== "cancelled");
-    const missed = list.filter((c) => c.slaMet === false || (!c.attendedAt && c.dueAt && Date.parse(c.dueAt) < now.getTime())).length;
+    /* Not yet met and past due: an emergency not attended, a non emergency not scheduled (DEV-406). */
+    const pending = (c: CallOutFact) => (priority === "emergency" ? !c.attendedAt : c.status === "logged");
+    const missed = list.filter((c) => c.slaMet === false || (c.slaMet === null && pending(c) && c.dueAt && Date.parse(c.dueAt) < now.getTime())).length;
     const met = list.filter((c) => c.slaMet === true).length;
     return {
       priority,
@@ -421,4 +423,117 @@ export function reportPeriod(from: string | null, to: string | null, today: stri
   if (start > end) start = end;
   if (daysBetween(start, end) > 731) start = new Date(Date.parse(`${end}T00:00:00Z`) - 731 * dayMs).toISOString().slice(0, 10);
   return { from: start, to: end };
+}
+
+/* ------------------------------------------------------------------ */
+/* Lost AMCs, new against renewed, coordinators (DEV-502)              */
+/* ------------------------------------------------------------------ */
+
+export interface CommercialContractFact {
+  id: string;
+  number: string;
+  customerName: string;
+  propertyLabel: string;
+  grandTotal: number;
+  signedAt: string | null;
+  renewedFromContractId: string | null;
+  /** renewed, renewed_revised_scope, under_negotiation, not_renewed, lapsed. */
+  renewalOutcome: string | null;
+  renewalOutcomeReason: string | null;
+  renewalOutcomeAt: string | null;
+  ownerId: string | null;
+}
+
+const LOST_OUTCOMES = ["not_renewed", "lapsed"];
+const RENEWED_OUTCOMES = ["renewed", "renewed_revised_scope"];
+
+/** AMCs lost in the period (not renewed, or lapsed): each with its value and reason, and the reasons summed. */
+export function lostAmcs(contracts: CommercialContractFact[], from: string, to: string) {
+  const lost = contracts
+    .filter((c) => c.renewalOutcome && LOST_OUTCOMES.includes(c.renewalOutcome) && inRange(c.renewalOutcomeAt, from, to))
+    .map((c) => ({
+      id: c.id,
+      number: c.number,
+      customerName: c.customerName,
+      propertyLabel: c.propertyLabel,
+      value: round2(c.grandTotal),
+      outcome: c.renewalOutcome as string,
+      reason: c.renewalOutcomeReason?.trim() || (c.renewalOutcome === "lapsed" ? "Ended without a renewal" : "Not recorded"),
+      at: String(c.renewalOutcomeAt).slice(0, 10),
+    }))
+    .sort((a, b) => b.value - a.value);
+  const byReason = new Map<string, { reason: string; count: number; value: number }>();
+  for (const l of lost) {
+    const r = byReason.get(l.reason) ?? { reason: l.reason, count: 0, value: 0 };
+    r.count += 1;
+    r.value = round2(r.value + l.value);
+    byReason.set(l.reason, r);
+  }
+  return { count: lost.length, value: round2(lost.reduce((s, l) => s + l.value, 0)), rows: lost, byReason: [...byReason.values()].sort((a, b) => b.value - a.value) };
+}
+
+/** Contracts signed in the period: new business against renewals (made from an earlier contract). */
+export function newVsRenewed(contracts: CommercialContractFact[], from: string, to: string) {
+  const signed = contracts.filter((c) => inRange(c.signedAt, from, to));
+  const renewed = signed.filter((c) => c.renewedFromContractId);
+  const fresh = signed.filter((c) => !c.renewedFromContractId);
+  const sum = (list: CommercialContractFact[]) => round2(list.reduce((s, c) => s + c.grandTotal, 0));
+  return {
+    new: { count: fresh.length, value: sum(fresh) },
+    renewed: { count: renewed.length, value: sum(renewed) },
+    renewedShare: pct(renewed.length, signed.length),
+  };
+}
+
+/**
+ * Each coordinator's period (the owner of the enquiry, proposal or
+ * contract): enquiries and how many were won, proposals and how many
+ * reached the client and were signed, value signed, and their contracts
+ * renewed or lost in the period.
+ */
+export function coordinatorPerformance(
+  input: {
+    enquiries: Array<{ ownerId: string | null; stage: string }>;
+    proposals: Array<{ ownerId: string | null; status: string; finalPrice: number }>;
+    contracts: CommercialContractFact[];
+  },
+  nameOf: (id: string) => string,
+  from: string,
+  to: string,
+) {
+  type Row = { ownerId: string; owner: string; enquiries: number; won: number; proposals: number; sent: number; signed: number; signedValue: number; renewed: number; lost: number };
+  const rows = new Map<string, Row>();
+  const row = (id: string | null) => {
+    const key = id ?? "";
+    let r = rows.get(key);
+    if (!r) {
+      r = { ownerId: key, owner: id ? nameOf(id) : "Unassigned", enquiries: 0, won: 0, proposals: 0, sent: 0, signed: 0, signedValue: 0, renewed: 0, lost: 0 };
+      rows.set(key, r);
+    }
+    return r;
+  };
+  for (const e of input.enquiries) {
+    const r = row(e.ownerId);
+    r.enquiries += 1;
+    if (e.stage === "Won") r.won += 1;
+  }
+  for (const p of input.proposals) {
+    const r = row(p.ownerId);
+    r.proposals += 1;
+    if (SENT.includes(p.status)) r.sent += 1;
+  }
+  for (const c of input.contracts) {
+    if (inRange(c.signedAt, from, to)) {
+      const r = row(c.ownerId);
+      r.signed += 1;
+      r.signedValue = round2(r.signedValue + c.grandTotal);
+    }
+    if (c.renewalOutcome && inRange(c.renewalOutcomeAt, from, to)) {
+      if (RENEWED_OUTCOMES.includes(c.renewalOutcome)) row(c.ownerId).renewed += 1;
+      if (LOST_OUTCOMES.includes(c.renewalOutcome)) row(c.ownerId).lost += 1;
+    }
+  }
+  return [...rows.values()]
+    .map((r) => ({ ...r, winRate: pct(r.won, r.enquiries), signedRate: pct(r.signed, r.sent) }))
+    .sort((a, b) => b.signedValue - a.signedValue || b.enquiries - a.enquiries);
 }

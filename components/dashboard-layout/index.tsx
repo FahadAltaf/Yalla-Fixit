@@ -35,6 +35,7 @@ import {
 } from "@/components/ui/sidebar";
 
 import { useUnreadNotifications } from "@/components/dashboard/notifications/use-unread-notifications";
+import { useLiveNotifications } from "@/components/dashboard/notifications/use-live-notifications";
 
 import DashboardHeader from "./dashboatd-header";
 import CompanyLogo from "@/public/site-logo.webp";
@@ -183,6 +184,8 @@ const CHROMELESS_ROUTES = ["/scheduling/display"];
 const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
   const { userProfile } = useAuth();
   const unread = useUnreadNotifications(Boolean(userProfile));
+  /* New notifications show at once and stay until closed (23 Nov 2026). */
+  useLiveNotifications(Boolean(userProfile));
   /* Notifications and its unread count are in the navbar (17 Nov 2026). */
   const navMain = getNavData(userProfile || ({} as User)).navMain;
   const layoutPathname = usePathname();

@@ -84,6 +84,7 @@ export const ENTITLEMENT_STATE_LABELS: Record<EntitlementState, string> = {
   available: "Available",
   low_remaining: "Low remaining",
   exhausted: "Exhausted",
+  none_in_term: "Not in the term",
   unlimited: "Unlimited",
   included: "Included",
   not_started: "Not started",
@@ -104,6 +105,8 @@ export function entitlementStateTone(state: EntitlementState): string {
     case "unlimited":
     case "included":
       return "bg-brand-100 text-brand";
+    case "none_in_term":
+      return "bg-muted text-muted-foreground";
     case "not_started":
     default:
       return "bg-brand-50 text-brand";

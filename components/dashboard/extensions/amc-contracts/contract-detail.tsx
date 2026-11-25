@@ -6,7 +6,6 @@ import { useRouter } from "next/navigation";
 import {
   AlarmClock,
   ArrowLeft,
-  Ban,
   Banknote,
   Check,
   Copy,
@@ -66,10 +65,10 @@ import { formatQuantity, unitWord } from "@/lib/amc/contracts";
 import { AMC_VAT_PERCENT } from "@/lib/amc/pricing";
 import { amcContractsService, type ContractDetail as Detail } from "@/modules/amc-contracts/amc-contracts-service";
 
-import { CancelContractDialog } from "./cancel-contract-dialog";
 import { SendClientReportDialog } from "./client-report-dialog";
 import { ClientReportViewer } from "./client-report-viewer";
 import { ContractAmendmentsPanel } from "./contract-amendments-panel";
+import { PendingAmendmentsNotice } from "./pending-amendments-notice";
 import { ContractCallOutsPanel } from "./contract-call-outs-panel";
 import { ContractCustomer } from "./contract-customer";
 import { ContractDocuments } from "./contract-documents";
@@ -90,6 +89,7 @@ import {
   formatDateTime,
 } from "./contract-status";
 import { shortDay, shortPlace } from "./detail-header";
+import { contractTypeLabel } from "@/lib/amc/contract-type";
 import { CoverageCheckDialog } from "./coverage-check-dialog";
 import { usePaymentDialogs } from "./payment-dialogs";
 import { HistoryCard, type HistoryEntry } from "./history-card";
@@ -220,6 +220,13 @@ function contractEventIcon(type: string) {
   return <Icon aria-hidden />;
 }
 
+/** "Ends in 30 days", "Ends today", from today in Dubai (24 Nov 2026). */
+function endsInLabel(lastDay: string): string {
+  const today = new Date(Date.now() + 4 * 3_600_000).toISOString().slice(0, 10);
+  const days = Math.round((Date.parse(`${lastDay}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86_400_000);
+  return days > 1 ? `Ends in ${days} days` : days === 1 ? "Ends tomorrow" : days === 0 ? "Ends today" : "Ended";
+}
+
 const TABS = ["overview", "coverage", "schedule", "call-outs", "usage", "fsm", "payments", "renewal", "amendments", "documents", "history"] as const;
 type Tab = (typeof TABS)[number];
 /* Hidden for now (10 Nov 2026): Usage (Coverage shows used and left per service) and FSM. Remove from this set to bring a tab back. */
@@ -317,7 +324,8 @@ function ContractView({
 }) {
   const [usageOpen, setUsageOpen] = useState(false);
   const [usageFor, setUsageFor] = useState<string | null>(null);
-  const [cancelling, setCancelling] = useState(false);
+  /* The amendment End contract asks for (DEV-417): the Amendments tab opens its request on it. */
+  const [requestKind, setRequestKind] = useState<"early_termination" | "cancellation" | null>(null);
   const [checking, setChecking] = useState(false);
   const [reporting, setReporting] = useState(false);
   const [viewingReport, setViewingReport] = useState(false);
@@ -420,30 +428,40 @@ function ContractView({
       ? { key: "snooze", label: "Snooze follow-up", icon: <AlarmClock className="size-4" />, onClick: () => lifecycleDialogs.open("snooze") }
       : null,
   ].filter((b): b is NonNullable<typeof b> => b !== null);
+  /*
+    DEV-417 (20 Nov 2026 review): ending a contract needs two people, so
+    these ask for it -- an early termination for an active contract, a
+    cancellation before it starts -- and a different approver decides it
+    on the Amendments tab. Nobody ends a contract alone.
+  */
+  const askToEnd = (kind: "early_termination" | "cancellation") => {
+    setRequestKind(kind);
+    setTab("amendments");
+  };
   const endItems = [
     permissions.canTerminate ? (
-      <DropdownMenuItem key="terminate" variant="destructive" onClick={() => lifecycleDialogs.openStatus("terminated")}>
+      <DropdownMenuItem key="terminate" variant="destructive" onClick={() => askToEnd("early_termination")}>
         <Power className="size-4" />
-        Terminate
+        Request early termination
       </DropdownMenuItem>
     ) : null,
     permissions.canCallOff ? (
-      <DropdownMenuItem key="calloff" variant="destructive" onClick={() => lifecycleDialogs.openStatus("cancelled")}>
+      <DropdownMenuItem key="calloff" variant="destructive" onClick={() => askToEnd("cancellation")}>
         <XCircle className="size-4" />
-        Call off
-      </DropdownMenuItem>
-    ) : null,
-    permissions.canCancel ? (
-      <DropdownMenuItem key="cancel" variant="destructive" onClick={() => setCancelling(true)}>
-        <Ban className="size-4" />
-        Cancel contract
+        Request cancellation
       </DropdownMenuItem>
     ) : null,
   ].filter(Boolean);
 
   /* The one thing about this contract worth reading before anything else. */
   const attention: { tone: "danger" | "warning" | "info"; title: string; body: string } | null =
-    contract.status === "cancelled"
+    data.ending
+      ? {
+        tone: "danger",
+        title: `Ending ${formatContractDate(data.ending.effectiveOn)}: early termination`,
+        body: `${data.ending.noticeOn ? `Notice given ${formatContractDate(data.ending.noticeOn)}. ` : ""}The contract runs until then and visits before that day go ahead; visits after it are cancelled.${data.ending.refund ? ` Refund for the unused part: AED ${data.ending.refund.toLocaleString("en-AE", { minimumFractionDigits: 2 })}.` : " No refund."} It cannot be put on hold, renewed or changed again.`,
+      }
+      : contract.status === "cancelled"
       ? {
         tone: "danger",
         title: `Cancelled ${formatDateTime(contract.cancelledAt)}`,
@@ -504,12 +522,20 @@ function ContractView({
               {contract.lifecycle?.template ? (
                 <Badge variant="outline">{contract.lifecycle.template === "commercial" ? "Commercial" : "Residential"}</Badge>
               ) : null}
+              {/* DEV-500 (BRD 5.4): the contract type from its proposal. */}
+              {contractTypeLabel(contract.customer?.contractType) ? <Badge variant="outline">{contractTypeLabel(contract.customer?.contractType)}</Badge> : null}
             </div>
             <div className="flex flex-row flex-wrap items-center gap-2">
               <h2 className="text-2xl">{contract.customerName || "Unnamed client"}</h2>
               <Badge variant="secondary" className={`border-0 font-medium ${contractStatusTone(contract.displayStatus)}`}>
                 {CONTRACT_STATUS_LABELS[contract.displayStatus]}
               </Badge>
+              {/* Ending on a set day (24 Nov 2026). */}
+              {data.ending ? (
+                <Badge variant="secondary" className="bg-danger/10 text-danger border-0 font-medium">
+                  Ending {formatContractDate(data.ending.effectiveOn)}
+                </Badge>
+              ) : null}
               <CopyId id={contract.id} />
             </div>
             <p className="text-muted-foreground text-sm">
@@ -609,13 +635,24 @@ function ContractView({
       </Card>
 
       <StatCardGrid columns={4}>
-        <StatCard
-          label="Term"
-          value={<span className="text-xl">{data.expiryLabel}</span>}
-          headline={`${formatContractDate(contract.startDate)} to ${formatContractDate(contract.endDate)}`}
-          caption={contract.termMonths ? `${contract.termMonths} months` : "Contract period"}
-          tone={contract.displayStatus === "expiring" ? "progress" : contract.displayStatus === "expired" ? "bad" : "neutral"}
-        />
+        {data.ending ? (
+          /* Ending early (24 Nov 2026): the real last day, and what it was to run to. */
+          <StatCard
+            label="Term"
+            value={<span className="text-xl">{endsInLabel(data.ending.effectiveOn)}</span>}
+            headline={`${formatContractDate(contract.startDate)} to ${formatContractDate(data.ending.effectiveOn)}`}
+            caption={`Early termination; was to run to ${formatContractDate(contract.endDate)}`}
+            tone="bad"
+          />
+        ) : (
+          <StatCard
+            label="Term"
+            value={<span className="text-xl">{data.expiryLabel}</span>}
+            headline={`${formatContractDate(contract.startDate)} to ${formatContractDate(contract.endDate)}`}
+            caption={contract.termMonths ? `${contract.termMonths} months` : "Contract period"}
+            tone={contract.displayStatus === "expiring" ? "progress" : contract.displayStatus === "expired" ? "bad" : "neutral"}
+          />
+        )}
         <StatCard
           label="Contract value"
           value={<Money value={contract.grandTotal} className="text-xl" />}
@@ -656,6 +693,9 @@ function ContractView({
           selectLabel={HIDDEN_TABS.has("usage") ? "Open the coverage tab" : "Open the usage tab"}
         />
       </StatCardGrid>
+
+      {/* An amendment waiting for a decision or to be applied, above the tabs (24 Nov 2026). */}
+      <PendingAmendmentsNotice contractId={contract.id} tab={tab} onOpen={() => setTab("amendments")} />
 
       <Tabs value={tab} onValueChange={setTab}>
         {/* Wraps onto a second line on a narrow screen rather than
@@ -797,6 +837,11 @@ function ContractView({
                 portal does not receive yet.
               </p> */}
             </SectionCard>
+            {/* DEV-499: the allowance used, by date (visits, call outs, corrections), under the balances while the Usage tab is hidden.
+                Correcting an entry needs the correction right and a reason. */}
+            {HIDDEN_TABS.has("usage") ? (
+              <UsageHistory contractId={contract.id} entitlements={entitlements} canCorrect={permissions.canCorrect} refreshKey={usageVersion} onChanged={reloadAll} />
+            ) : null}
           </>,
         )}
 
@@ -852,6 +897,8 @@ function ContractView({
         {panel(
           "amendments",
           <ContractAmendmentsPanel
+            requestKind={requestKind}
+            onRequestShown={() => setRequestKind(null)}
             contractId={contract.id}
             contractStatus={contract.status}
             contractNumber={contract.lifecycle?.contractNumber ?? contract.proposalNumber}
@@ -889,14 +936,6 @@ function ContractView({
         entitlements={entitlements}
         initialEntitlementId={usageFor}
         onRecorded={reloadAll}
-      />
-      <CancelContractDialog
-        open={cancelling}
-        onOpenChange={setCancelling}
-        contractId={contract.id}
-        proposalNumber={contract.proposalNumber}
-        customerName={contract.customerName}
-        onCancelled={reloadAll}
       />
       <CoverageCheckDialog
         open={checking}

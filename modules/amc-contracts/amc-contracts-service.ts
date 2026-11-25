@@ -213,6 +213,8 @@ export interface ContractDetail {
     /* Phase 6. */
     lifecycle?: ContractView["lifecycle"];
   };
+  /** Set while the contract runs to a fixed last day (early termination), 24 Nov 2026. */
+  ending?: { effectiveOn: string; noticeOn: string | null; refund: number | null } | null;
   expiryLabel: string;
   summary: ContractSummary;
   entitlements: Array<
@@ -554,7 +556,7 @@ export const amcContractsService = {
   },
   assessment(id: string) {
     /* `changes`: the scope and asset changes held until the approver approves; `canApprove`: this viewer is that approver (16 Nov 2026). */
-    return request<{ assessment: AssessmentRecord; canEdit: boolean; canChangeApprover?: boolean; changes?: SiteChangeView[]; canApprove?: boolean; siteAssets?: SiteAsset[]; siteScope?: SiteScopeItem[] }>(`/api/amc-contracts/assessments/${id}`);
+    return request<{ assessment: AssessmentRecord; canEdit: boolean; changes?: SiteChangeView[]; canApprove?: boolean; siteAssets?: SiteAsset[]; siteScope?: SiteScopeItem[]; checklist?: import("@/lib/amc/site-visit-checklist").SiteVisitChecklist | null }>(`/api/amc-contracts/assessments/${id}`);
   },
   createAssessment(input: { customerId: string | null; propertyId: string | null; contractId?: string | null }) {
     return request<{ assessment: AssessmentRecord }>("/api/amc-contracts/assessments", { method: "POST", body: JSON.stringify(input) });
@@ -564,8 +566,9 @@ export const amcContractsService = {
     return request<{ people: Array<{ id: string; name: string; email: string | null }>; me: string }>("/api/amc-contracts/assessments/book");
   },
   /** Who can approve a site visit (AMC approval rights). */
+  /** Who approves site visits, from AMC configuration (24 Nov 2026). */
   siteVisitApprovers() {
-    return request<{ approvers: Array<{ id: string; name: string; email: string | null }> }>("/api/amc-contracts/assessments/approvers");
+    return request<{ names: string[]; from: string }>("/api/amc-contracts/assessments/approvers");
   },
   /** The approver approves: the inspector's scope and asset changes go onto the property. */
   approveAssessment(id: string) {
@@ -575,7 +578,7 @@ export const amcContractsService = {
   sendBackAssessment(id: string, reason: string) {
     return request<{ assessment: AssessmentRecord }>(`/api/amc-contracts/assessments/${id}/send-back`, { method: "POST", body: JSON.stringify({ reason }) });
   },
-  bookSiteVisit(input: { customerId: string; propertyId: string; scheduledAt: string; assessorId: string; approverId?: string | null }) {
+  bookSiteVisit(input: { customerId: string; propertyId: string; scheduledAt: string; assessorId: string; approverId?: string | null; insideLeadTime?: boolean }) {
     return request<{ assessmentId: string; assessmentNumber: string }>("/api/amc-contracts/assessments/book", { method: "POST", body: JSON.stringify(input) });
   },
   updateAssessment(id: string, patch: Record<string, unknown>) {

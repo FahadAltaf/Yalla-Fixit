@@ -168,7 +168,6 @@ export function AmcSubmissionDetail({ id }: { id: string }) {
         submission={submission}
         canApprove={Boolean(submission.viewer_can_approve)}
         deciding={actions.deciding}
-        downloading={actions.downloadingId === submission.id}
         sending={actions.sendingId === submission.id}
         onView={actions.view}
         onApprove={actions.approve}
@@ -176,7 +175,6 @@ export function AmcSubmissionDetail({ id }: { id: string }) {
         onReject={actions.reject}
         onShare={actions.share}
         onChanged={load}
-        onDownload={actions.download}
         onSend={actions.requestSend}
       />
     </div>

@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 
 import {
+  contractYearCounts,
   buildPpmSchedule,
   classifyMove,
   clubbedWindow,
@@ -158,4 +159,23 @@ test("migration: branch-only tables, twelve statuses, history append-only, visit
   assert.doesNotMatch(sql, /ON DELETE CASCADE/);
   assert.doesNotMatch(sql, /amc_submissions/, "the live table is not touched");
   assert.doesNotMatch(sql, /DROP TABLE|SECURITY DEFINER/);
+});
+
+/* 23 Nov 2026: the report said "0 done, 66 remaining" for visit 1 of a three-year contract. */
+test("a service report counts the contract year's visits, the reported visit as done", () => {
+  const v = (id: string, status: string, targetDate: string) => ({ id, status, targetDate });
+  const visits = [
+    v("a", "submitted", "2026-11-23"),
+    v("b", "scheduled", "2027-02-23"),
+    v("c", "completed", "2027-01-04"),
+    v("d", "not_completed", "2027-05-01"),
+    v("e", "scheduled", "2027-11-23"),
+    v("f", "cancelled", "2027-03-01"),
+  ];
+  const y1 = contractYearCounts(visits, "a", "2026-11-23");
+  assert.deepEqual([y1.completed, y1.remaining, y1.total, y1.yearStart, y1.yearEnd], [2, 1, 4, "2026-11-23", "2027-11-22"]);
+  const y2 = contractYearCounts(visits, "e", "2026-11-23");
+  assert.deepEqual([y2.completed, y2.remaining, y2.yearStart], [1, 0, "2027-11-23"]);
+  /* No commencement date: the whole contract. */
+  assert.equal(contractYearCounts(visits, "a", null).total, 5);
 });

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { CalendarClock, CalendarDays, ChevronDown, Download, Eye, FileText, History, Receipt, Siren, Wrench, type LucideIcon } from "lucide-react";
 import type { ColumnDef } from "@tanstack/react-table";
@@ -48,7 +49,7 @@ function VisitStatusBadge({ status }: { status: string }) {
 function ContractCell({ contractId, contractNumber, propertyLabel, tab }: { contractId: string; contractNumber: string; propertyLabel: string; tab?: string }) {
   return (
     <>
-      <Link href={contractHref(contractId, tab)} className="font-medium tabular-nums hover:underline">
+      <Link href={contractHref(contractId, tab)} onClick={(e) => e.stopPropagation()} className="font-medium tabular-nums hover:underline">
         {contractNumber || "Contract"}
       </Link>
       {propertyLabel ? <TruncatedText className="text-muted-foreground max-w-[240px] text-xs">{propertyLabel}</TruncatedText> : null}
@@ -106,10 +107,13 @@ const SCHEDULE_COLUMNS: ColumnDef<ClientScheduleVisit>[] = [
 ];
 
 function ScheduleTable({ visits, empty }: { visits: ClientScheduleVisit[]; empty: React.ReactNode }) {
+  const router = useRouter();
   return (
     <DataTable
       columns={SCHEDULE_COLUMNS}
       data={visits}
+      /* The whole row opens the contract's schedule (23 Nov 2026). */
+      handleRowClick={(v) => router.push(contractHref(v.contractId, "schedule"))}
       loading={false}
       rowCount={visits.length}
       pageSize={500}
@@ -190,7 +194,7 @@ const SERVICE_COLUMNS: ColumnDef<ServiceHistoryEntry>[] = [
     id: "what",
     header: "What",
     cell: ({ row }) => (
-      <Link href={entryHref(row.original)} className="inline-block [&:hover_.font-medium]:underline">
+      <Link href={entryHref(row.original)} onClick={(e) => e.stopPropagation()} className="inline-block [&:hover_.font-medium]:underline">
         <IdentityCell title={row.original.title} subtitle={KIND[row.original.kind].label} icon={KIND[row.original.kind].icon} />
       </Link>
     ),
@@ -260,6 +264,7 @@ function VisitReportCell({ visitId }: { visitId: string }) {
 
 /** Visits done, call outs and additional work across the client's contracts, newest first. */
 export function ServiceHistoryPanel({ customerId }: { customerId: string }) {
+  const router = useRouter();
   const { data, error, loading, reload } = useAmcData(() => clientHistoryService.service(customerId), `client-service|${customerId}`);
   const entries = data?.entries ?? [];
 
@@ -280,6 +285,8 @@ export function ServiceHistoryPanel({ customerId }: { customerId: string }) {
         <DataTable
           columns={SERVICE_COLUMNS}
           data={entries}
+          /* The whole row opens the visit, call out or additional work (23 Nov 2026). */
+          handleRowClick={(e) => router.push(entryHref(e))}
           loading={false}
           rowCount={entries.length}
           pageSize={500}

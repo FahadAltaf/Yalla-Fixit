@@ -2,7 +2,7 @@
 
 import { useId, useState, type ReactNode } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
-import { CalendarCheck, CheckCircle2, FileText, KeyRound, Mail, MessageCircle, MessageSquare, PhoneCall, Play, Plus, Save, Search, Send, ShieldCheck, SquarePen, Trash2, Users, XCircle, type LucideIcon } from "lucide-react";
+import { CalendarCheck, CheckCircle2, FileText, KeyRound, Link2, Mail, MessageCircle, MessageSquare, PhoneCall, Play, Plus, Save, Search, Send, ShieldCheck, SquarePen, Trash2, Users, XCircle, type LucideIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
@@ -22,7 +22,7 @@ import { ACCESS_TYPE_LABELS, TRADE_LABELS, WEEKDAY_SHORT } from "@/lib/amc/clien
 import { PLANNABLE_STATUSES, VISIT_STATUS_LABELS } from "@/lib/amc/ppm";
 import {
   ATTEMPT_OUTCOME_LABELS,
-  ATTEMPT_OUTCOMES,
+  LOGGED_OUTCOMES,
   CONFIRMATION_LABELS,
   startProblems,
   type AttemptOutcome,
@@ -38,6 +38,8 @@ import { SendDialog } from "./send-options";
 import { PassTypeBadges, PassTypeFields, newPassType, passTypeOf, type PassType } from "./pass-fields";
 import { formatContractDate, formatDateTime } from "./contract-status";
 import { CrewPicker, crewOptions, crewSummary, differsFromSuggested } from "./crew-picker";
+import { useBookingGuards } from "./booking-guards";
+import { ClientLinkButton } from "./client-link-button";
 import {
   CHANNEL_LABELS,
   CHANNELS,
@@ -273,14 +275,19 @@ export function ConfirmationSection({ visit: v, canEdit, working, setWorking, ch
 
   const state = v.clientConfirmation as ConfirmationState | null;
   const { rule, attemptState: tries } = v;
-  /* Only the contract's channels (Schedule rules), all four when it names none (17 Nov 2026). */
-  const allowedChannels = CHANNELS.filter((c) => rule.attemptChannels.includes(c));
-  const offeredChannels = allowedChannels.length ? allowedChannels : CHANNELS;
-  const attemptChannel: Channel = offeredChannels.includes(channel) ? channel : offeredChannels[0];
-
-  /* The request goes by the contract's channels; with neither WhatsApp nor email allowed, both are offered. */
-  const requestChannels = (["whatsapp", "email"] as const).filter((c) => offeredChannels.includes(c));
+  /*
+    The contract's rule is for Ask to confirm (23 Nov 2026, the user): its
+    channels, count and spacing. Log an attempt records any call or
+    message, by any channel, at any time.
+  */
+  const attemptChannel: Channel = channel;
+  const requestChannels = (["whatsapp", "email"] as const).filter((c) => rule.attemptChannels.includes(c));
   const sendChannels = requestChannels.length ? requestChannels : (["whatsapp", "email"] as const);
+  const requestBlocked = tries.exhausted
+    ? `All ${rule.attemptCount} requests have been sent with no answer`
+    : tries.nextAllowedAt
+      ? `The next request can go from ${formatDateTime(tries.nextAllowedAt)}`
+      : null;
 
   const logAttempt = () =>
     void run(
@@ -307,7 +314,9 @@ export function ConfirmationSection({ visit: v, canEdit, working, setWorking, ch
                 <PhoneCall className="size-4" />
                 Log an attempt
               </Button>
-              <Button disabled={working !== null} onClick={() => setRequesting(true)}>
+              {/* DEV-507: a link where the client confirms or asks to reschedule; the answer lands on this visit. */}
+              <ClientLinkButton visitId={v.id} purpose="visit_confirmation" label="Client link" icon={<Link2 className="size-4" />} disabled={working !== null} />
+              <Button disabled={working !== null || requestBlocked !== null} title={requestBlocked ?? undefined} onClick={() => setRequesting(true)}>
                 <Send className="size-4" />
                 Ask to confirm
               </Button>
@@ -328,15 +337,15 @@ export function ConfirmationSection({ visit: v, canEdit, working, setWorking, ch
             </Row>
           ) : null}
           {v.confirmationNote ? <Row label="Note">{v.confirmationNote}</Row> : null}
-          <Row label="Attempts">
+          <Row label="Requests sent">
             {tries.tried} of {rule.attemptCount}
             {tries.exhausted ? <span className="text-danger"> · used up</span> : null}
           </Row>
-          {tries.nextAllowedAt ? <Row label="Next attempt from">{formatDateTime(tries.nextAllowedAt)}</Row> : null}
+          {tries.nextAllowedAt ? <Row label="Next request from">{formatDateTime(tries.nextAllowedAt)}</Row> : null}
           <Row label="The rule">
             <span className="font-normal">
-              Up to {rule.attemptCount}, {rule.attemptIntervalDays} {rule.attemptIntervalDays === 1 ? "day" : "days"} apart, by{" "}
-              {rule.attemptChannels.map(channelLabel).join(", ") || "any channel"}
+              Ask to confirm: up to {rule.attemptCount}, {rule.attemptIntervalDays} {rule.attemptIntervalDays === 1 ? "day" : "days"} apart, by{" "}
+              {sendChannels.map(channelLabel).join(", ")}. Logged calls and messages are not counted.
             </span>
           </Row>
         </Rows>
@@ -346,7 +355,7 @@ export function ConfirmationSection({ visit: v, canEdit, working, setWorking, ch
         open={requesting}
         onOpenChange={setRequesting}
         title="Ask the client to confirm the visit"
-        description="Asks the client to confirm the day and time. It counts as one of the attempts to reach them."
+        description={`Asks the client to confirm the day and time. It is request ${tries.tried + 1} of the ${rule.attemptCount} this contract allows.`}
         what="the confirmation request"
         noun="Confirmation request"
         channels={sendChannels}
@@ -380,7 +389,7 @@ export function ConfirmationSection({ visit: v, canEdit, working, setWorking, ch
         open={logging}
         onOpenChange={setLogging}
         title="Log an attempt"
-        description="A call or message to the client and how it went. Confirmed or declined settles the confirmation."
+        description="A call or message to the client and how it went. Not counted in the contract's requests. Confirmed or declined settles the confirmation."
         busy={working === "attempt"}
         submit={
           <SubmitButton pending={working === "attempt"} pendingLabel="Saving…" disabled={working !== null} icon={<PhoneCall className="size-4" />} onClick={logAttempt}>
@@ -395,7 +404,7 @@ export function ConfirmationSection({ visit: v, canEdit, working, setWorking, ch
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {offeredChannels.map((c) => (
+                {CHANNELS.map((c) => (
                   <SelectItem key={c} value={c}>
                     {CHANNEL_LABELS[c]}
                   </SelectItem>
@@ -409,7 +418,7 @@ export function ConfirmationSection({ visit: v, canEdit, working, setWorking, ch
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {ATTEMPT_OUTCOMES.map((o) => (
+                {LOGGED_OUTCOMES.map((o) => (
                   <SelectItem key={o} value={o}>
                     {ATTEMPT_OUTCOME_LABELS[o]}
                   </SelectItem>
@@ -566,6 +575,8 @@ export function AccessSection({ visit: v, canEdit, working, setWorking, changed 
                   Add rule
                 </Button>
               ) : null}
+              {/* DEV-494: the client uploads the pass on a link; it is kept on this visit. */}
+              <ClientLinkButton visitId={v.id} purpose="access_upload" label="Ask client for pass" icon={<Link2 className="size-4" />} disabled={working !== null} />
               <Button disabled={working !== null} onClick={startAdd}>
                 <Plus className="size-4" />
                 Add pass
@@ -792,6 +803,7 @@ const isIsoDate = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s);
 const isTime = (s: string) => /^([01]\d|2[0-3]):[0-5]\d$/.test(s);
 
 export function AssignmentSection({ visit: v, canEdit, working, setWorking, changed }: VisitSectionProps) {
+  const { guard, dialogs: leadTimeDialog } = useBookingGuards();
   const run = useRun({ setWorking });
   const [editing, setEditing] = useState(false);
   const placedMinutes = v.scheduledStart && v.scheduledEnd ? Math.round((Date.parse(v.scheduledEnd) - Date.parse(v.scheduledStart)) / 60_000) : null;
@@ -841,17 +853,20 @@ export function AssignmentSection({ visit: v, canEdit, working, setWorking, chan
           await visitsService.boardAction({ action: "reassign", visitIds: [v.id], technicianIds: picked, overrideReason: differs ? override.trim() : null });
           toast.success(`Visit ${v.visitNo}: crew changed`);
         } else {
-          await visitsService.boardAction({
-            action: "place",
-            visitId: v.id,
-            date,
-            startTime: time,
-            durationMinutes: minutes,
-            technicianIds: picked,
-            leadTechnicianId: picked[0] ?? null,
-            overrideReason: differs ? override.trim() : null,
-            reason: outsideWindow ? reason.trim() : null,
-          });
+          await guard((answers) =>
+            visitsService.boardAction({
+              action: "place",
+              visitId: v.id,
+              date,
+              startTime: time,
+              durationMinutes: minutes,
+              technicianIds: picked,
+              leadTechnicianId: picked[0] ?? null,
+              overrideReason: differs ? override.trim() : null,
+              reason: outsideWindow ? reason.trim() : null,
+              ...answers,
+            }),
+          );
           toast.success(placed ? `Visit ${v.visitNo} moved` : `Visit ${v.visitNo} placed`);
         }
         setSuggestion(null);
@@ -865,6 +880,7 @@ export function AssignmentSection({ visit: v, canEdit, working, setWorking, chan
 
   return (
     <>
+      {leadTimeDialog}
       <Panel
         title="Crew and time" icon={<Users />}
         description="When the visit is, who goes, and what the contract's services need."

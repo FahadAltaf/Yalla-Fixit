@@ -15,8 +15,8 @@ import {
   fsmClientsReady,
   linkFsmContact,
 } from "@/lib/server/snagging/fsm-clients";
-import { getFsmAccessToken } from "@/lib/server/zoho/fsm-client";
-import { getContact, listContacts, searchContacts } from "@/lib/server/zoho/fsm-contacts";
+import { FsmConfigError, getFsmAccessToken } from "@/lib/server/zoho/fsm-client";
+import { FsmApiError, getContact, listContacts, searchContacts } from "@/lib/server/zoho/fsm-contacts";
 
 /**
  * AMC's clients the way Snagging's Clients page lists them: from Zoho FSM,
@@ -58,6 +58,8 @@ export type ClientListPage = {
   clients: ClientListRow[];
   hasMore: boolean;
   source: "fsm" | "portal";
+  /** Set when Zoho FSM did not answer and the portal's own clients are listed instead (23 Nov 2026). */
+  notice?: string;
 };
 
 /** AMC-only clients shown above FSM's first page, at most. */
@@ -167,16 +169,27 @@ export async function listClientsPage(
     });
   }
 
-  const token = await getFsmAccessToken(admin);
-  const paging = { page: query.page, perPage: query.perPage };
-  const [{ rows: contacts, hasMore }, portalOnly] = await Promise.all([
-    search
-      ? searchContacts(token, search, paging)
-      : listContacts(token, paging),
-    query.page === 0
-      ? portalOnlyClients(admin, search)
-      : Promise.resolve([] as CustomerRecord[]),
-  ]);
+  /*
+    Zoho FSM slow or unreachable (23 Nov 2026): the clients already in the
+    portal are listed instead, with a notice and a way to try again, rather
+    than only an error that stops the enquiry.
+  */
+  let fsm: Awaited<ReturnType<typeof listContacts>>;
+  let portalOnly: CustomerRecord[];
+  try {
+    const token = await getFsmAccessToken(admin);
+    const paging = { page: query.page, perPage: query.perPage };
+    [fsm, portalOnly] = await Promise.all([
+      search ? searchContacts(token, search, paging) : listContacts(token, paging),
+      query.page === 0 ? portalOnlyClients(admin, search) : Promise.resolve([] as CustomerRecord[]),
+    ]);
+  } catch (error) {
+    if (!(error instanceof FsmApiError) && !(error instanceof FsmConfigError)) throw error;
+    console.warn("[amc:clients] Zoho FSM unavailable, listing portal clients:", error.message);
+    const page = await portalPage(admin, { search, page: query.page, perPage: query.perPage, lifecycle });
+    return { ...page, notice: "Zoho FSM did not answer, so these are the clients already saved in the portal. Try again in a moment to search FSM." };
+  }
+  const { rows: contacts, hasMore } = fsm;
 
   // The portal clients behind these contacts, with what AMC keeps about them.
   const byContact = new Map<string, CustomerRecord>();

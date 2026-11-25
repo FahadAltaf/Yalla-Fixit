@@ -107,6 +107,10 @@ export function fakeSupabase(seed: Record<string, Row[]> = {}, options: FakeOpti
       this.filters.push((r) => String(r[c]) <= v);
       return this;
     }
+    lt(c: string, v: string) {
+      this.filters.push((r) => String(r[c]) < v);
+      return this;
+    }
     order() {
       return this;
     }

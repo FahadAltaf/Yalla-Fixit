@@ -16,7 +16,7 @@ import {
   type ManualStatusTarget,
   type SignatoryState,
 } from "@/lib/amc/contract-lifecycle";
-import { termMonthsBetween, todayInDubai } from "@/lib/amc/contracts";
+import { includedQuantityFor, termMonthsBetween, todayInDubai } from "@/lib/amc/contracts";
 import { grandTotalFromFinal, vatOnFinal } from "@/lib/amc/pricing";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { ContractError, isMissingTable, prepareActivation } from "@/lib/server/amc/contracts";
@@ -134,6 +134,52 @@ const setStatus = setContractStatus;
 /* Creation on client approval (DEV-351, 372, 373)                     */
 /* ------------------------------------------------------------------ */
 
+/** Why a contract record could not be made, in words the owner can act on (DEV-505). */
+export const CONTRACT_CREATION_FAILURES: Record<string, string> = {
+  "no services": "the approved version has no services, so there is nothing to put on the contract",
+  "not migrated": "the database is missing the contract update; ask an admin to apply the AMC migrations",
+  error: "the database refused it",
+};
+
+/**
+ * DEV-505 (20 Nov 2026): a contract that is not created is no longer
+ * silent. The failure is written to the proposal's history and its owner
+ * is told in the portal (once a day per reason); the proposal page shows
+ * it with a retry, and the contract cannot be sent until the record exists.
+ * Never throws.
+ */
+async function reportCreationFailure(admin: Admin, submissionId: string, reason: string, detail: string | null, actor: Actor) {
+  try {
+    const { data: s } = await admin.from("amc_submissions").select("owner_id, proposal_number").eq("id", submissionId).maybeSingle<Row>();
+    const why = CONTRACT_CREATION_FAILURES[reason] ?? reason;
+    await recordAmcAudit(admin, {
+      entityType: "submission",
+      entityId: submissionId,
+      eventType: "contract_creation_failed",
+      actorId: actor.id,
+      actorLabel: actor.label,
+      origin: actor.id ? "portal" : "client",
+      payload: { reason, detail: detail?.slice(0, 500) ?? null },
+    });
+    const owner = typeof s?.owner_id === "string" ? s.owner_id : null;
+    if (owner) {
+      await notifyUsers(admin, {
+        event: "contract_creation_failed",
+        userIds: [owner],
+        title: `Contract not created: ${String(s?.proposal_number ?? "proposal")}`,
+        body: `The client approved it, but the contract record was not created: ${why}. Open the proposal and choose Create contract record.`,
+        link: `/extensions/amc/${submissionId}`,
+        entityType: "submission",
+        entityId: submissionId,
+        submissionId,
+        dedupeKey: `contract_creation_failed:${submissionId}:${reason}:${todayInDubai()}`,
+      });
+    }
+  } catch (e) {
+    console.error("[amc:contract] creation failure not reported:", e instanceof Error ? e.message : e);
+  }
+}
+
 /**
  * Creates the contract record when the client approves the proposal: its
  * number, the commercial values and entitlements of the approved version,
@@ -146,14 +192,18 @@ export async function createContractFromApproval(
   submissionId: string,
   actor: Actor,
   config: AmcConfig,
-): Promise<{ contractId: string | null; created: boolean; reason?: string }> {
+): Promise<{ contractId: string | null; created: boolean; reason?: string; message?: string }> {
+  const failed = async (reason: string, detail: string | null = null) => {
+    await reportCreationFailure(admin, submissionId, reason, detail, actor);
+    return { contractId: null, created: false, reason, message: `The contract record was not created: ${CONTRACT_CREATION_FAILURES[reason] ?? reason}.` };
+  };
   try {
     const p = await prepareActivation(admin, submissionId);
     if (p.existingContractId) return { contractId: p.existingContractId, created: false };
     if (!["proposal_approved", "contract_sent", "signed"].includes(String(p.submission.status))) {
       return { contractId: null, created: false, reason: "not approved" };
     }
-    if (p.entitlements.length === 0) return { contractId: null, created: false, reason: "no services" };
+    if (p.entitlements.length === 0) return failed("no services");
 
     const { data: extra } = await admin
       .from("amc_submissions")
@@ -208,14 +258,15 @@ export async function createContractFromApproval(
         call_out_class: e.callOutClass,
         units: e.units,
         frequency: e.frequency,
-        included_quantity: e.includedQuantity,
+        /* Over the whole term (23 Nov 2026), as the schedule plans it. */
+        included_quantity: includedQuantityFor(e.entitlementType, e.units, e.frequency, termMonthsBetween(proposedStart, proposedEnd) || 12),
         base_price: e.basePrice,
         contracted_price: e.contractedPrice,
       })),
     });
     if (error) {
       /* The old status check (no 'draft'), or a column it lacks: not migrated. */
-      if (error.code === "23514" || error.code === "42703" || error.code === "PGRST204") return { contractId: null, created: false, reason: "not migrated" };
+      if (error.code === "23514" || error.code === "42703" || error.code === "PGRST204") return failed("not migrated", error.message);
       if (error.code === "23505") {
         const again = await contractRow(admin, { submissionId });
         return { contractId: (again?.id as string | undefined) ?? null, created: false };
@@ -257,7 +308,7 @@ export async function createContractFromApproval(
     return { contractId, created: true };
   } catch (error) {
     console.error("[amc:contract] not created on approval:", error instanceof Error ? error.message : error);
-    return { contractId: null, created: false, reason: "error" };
+    return failed("error", error instanceof Error ? error.message : String(error));
   }
 }
 
@@ -684,7 +735,7 @@ async function remindInternalSignatories(admin: Admin, config: AmcConfig, now: D
 }
 
 export async function runUnsignedContractSweep(admin: Admin, config: AmcConfig, now = new Date()) {
-  const result = { checked: 0, reminded: 0, followUps: 0, internalReminders: 0, skipped: null as string | null };
+  const result = { checked: 0, reminded: 0, followUps: 0, internalReminders: 0, clientRemindersHeld: 0, skipped: null as string | null };
   result.internalReminders = await remindInternalSignatories(admin, config, now).catch((e) => {
     console.error("[amc:contract] internal signatory reminders failed:", e instanceof Error ? e.message : e);
     return 0;
@@ -736,6 +787,11 @@ export async function runUnsignedContractSweep(admin: Admin, config: AmcConfig, 
 
     const count = Number(c.reminder_count ?? 0);
     if (count >= config.contracts.unsignedReminderMax) continue;
+    /* DEV-485: no client email while client emails are off (nothing is counted, so it goes once they are on). */
+    if (!config.jobs.clientEmails) {
+      result.clientRemindersHeld += 1;
+      continue;
+    }
     const { data: claimed } = await admin
       .from("amc_contracts")
       .update({ reminder_count: count + 1, last_reminder_at: now.toISOString() })

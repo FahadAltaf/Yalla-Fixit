@@ -1,14 +1,18 @@
 import { NextResponse } from "next/server";
 
 import { contractErrorResponse, requireContractAccess } from "@/lib/server/amc/contract-access";
-import { listSiteVisitApprovers } from "@/lib/server/amc/site-visit-approvers";
+import { siteVisitDeciders } from "@/lib/server/amc/site-visit-approvers";
 
-/** GET: who can approve a site visit (AMC approval rights), for the approver field when one is booked or edited (16 Nov 2026). */
+/**
+ * GET: who approves site visits (24 Nov 2026): the approvers named in AMC
+ * configuration, shown on the booking forms. Nobody is picked per visit.
+ */
 export async function GET() {
   const gate = await requireContractAccess();
   if (!gate.ok) return gate.response;
   try {
-    return NextResponse.json({ approvers: await listSiteVisitApprovers(gate.admin) });
+    const d = await siteVisitDeciders(gate.admin);
+    return NextResponse.json({ names: d.names, from: d.from });
   } catch (error) {
     return contractErrorResponse(error, "Could not load the approvers");
   }

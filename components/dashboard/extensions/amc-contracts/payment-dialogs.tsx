@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 import {
   Ban,
   Banknote,
@@ -193,7 +193,60 @@ function RowMenu({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+/** One action offered on a payment record: the row's menu and the detail pop-up show the same list (23 Nov 2026). */
+export interface PaymentActionItem {
+  key: string;
+  label: string;
+  icon: ReactNode;
+  onSelect: () => void;
+  danger?: boolean;
+  /** Starts a group (a separator above it in a menu). */
+  group?: boolean;
+}
+
 /** What can be done to an instalment, by right; nothing at all once it is settled. */
+export function instalmentActionItems(contractId: string, instalment: InstalmentRecord, permissions: PaymentPermissions, dialogs: PaymentDialogs): PaymentActionItem[] {
+  if (isSettled(instalment.status)) return [];
+  if (!permissions.canRecord && !permissions.canApprove) return [];
+  const collect = permissions.canRecord && instalment.outstanding > 0;
+  /* To-do 6 (BRD 6.8): a late or bounced instalment can go to management before the automatic escalation. */
+  const escalate = permissions.canRecord && (instalment.status === "overdue" || instalment.status === "bounced");
+  const items: PaymentActionItem[] = [];
+  if (collect) {
+    items.push({ key: "record_payment", label: "Record payment", icon: <Banknote className="size-4" />, onSelect: () => dialogs.open(contractId, { kind: "record_payment", instalment }) });
+    items.push({ key: "record_cheque", label: "Record cheque", icon: <Landmark className="size-4" />, onSelect: () => dialogs.open(contractId, { kind: "record_cheque", instalment }) });
+  }
+  if (permissions.canRecord) {
+    items.push({ key: "reminder", label: "Send reminder", icon: <BellRing className="size-4" />, onSelect: () => void dialogs.sendReminder(contractId, instalment) });
+  }
+  if (escalate) {
+    items.push({ key: "escalate", label: "Escalate", icon: <Megaphone className="size-4" />, onSelect: () => dialogs.open(contractId, { kind: "escalate", instalment }) });
+  }
+  if (permissions.canApprove) {
+    items.push({ key: "waive", label: "Waive", icon: <Undo2 className="size-4" />, onSelect: () => dialogs.open(contractId, { kind: "waive", instalment }), group: permissions.canRecord });
+    items.push({ key: "write_off", label: "Write off", icon: <XCircle className="size-4" />, onSelect: () => dialogs.open(contractId, { kind: "write_off", instalment }), danger: true });
+  }
+  return items;
+}
+
+/** The actions as a row's menu. */
+function ActionMenu({ label, items }: { label: string; items: PaymentActionItem[] }) {
+  if (!items.length) return null;
+  return (
+    <RowMenu label={label}>
+      {items.map((item) => (
+        <Fragment key={item.key}>
+          {item.group ? <DropdownMenuSeparator /> : null}
+          <DropdownMenuItem variant={item.danger ? "destructive" : "default"} onClick={item.onSelect}>
+            {item.icon}
+            {item.label}
+          </DropdownMenuItem>
+        </Fragment>
+      ))}
+    </RowMenu>
+  );
+}
+
 export function InstalmentActions({
   contractId,
   instalment,
@@ -205,52 +258,7 @@ export function InstalmentActions({
   permissions: PaymentPermissions;
   dialogs: PaymentDialogs;
 }) {
-  if (isSettled(instalment.status)) return null;
-  const collect = permissions.canRecord && instalment.outstanding > 0;
-  /* To-do 6 (BRD 6.8): a late or bounced instalment can go to management before the automatic escalation. */
-  const escalate = permissions.canRecord && (instalment.status === "overdue" || instalment.status === "bounced");
-  if (!permissions.canRecord && !permissions.canApprove) return null;
-  return (
-    <RowMenu label={`Actions for instalment ${instalment.instalmentNo}`}>
-      {collect ? (
-        <>
-          <DropdownMenuItem onClick={() => dialogs.open(contractId, { kind: "record_payment", instalment })}>
-            <Banknote className="size-4" />
-            Record payment
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => dialogs.open(contractId, { kind: "record_cheque", instalment })}>
-            <Landmark className="size-4" />
-            Record cheque
-          </DropdownMenuItem>
-        </>
-      ) : null}
-      {permissions.canRecord ? (
-        <DropdownMenuItem disabled={dialogs.reminding === instalment.id} onClick={() => void dialogs.sendReminder(contractId, instalment)}>
-          <BellRing className="size-4" />
-          {dialogs.reminding === instalment.id ? "Sending…" : "Send reminder"}
-        </DropdownMenuItem>
-      ) : null}
-      {escalate ? (
-        <DropdownMenuItem onClick={() => dialogs.open(contractId, { kind: "escalate", instalment })}>
-          <Megaphone className="size-4" />
-          Escalate
-        </DropdownMenuItem>
-      ) : null}
-      {permissions.canApprove ? (
-        <>
-          {permissions.canRecord ? <DropdownMenuSeparator /> : null}
-          <DropdownMenuItem onClick={() => dialogs.open(contractId, { kind: "waive", instalment })}>
-            <Undo2 className="size-4" />
-            Waive
-          </DropdownMenuItem>
-          <DropdownMenuItem variant="destructive" onClick={() => dialogs.open(contractId, { kind: "write_off", instalment })}>
-            <XCircle className="size-4" />
-            Write off
-          </DropdownMenuItem>
-        </>
-      ) : null}
-    </RowMenu>
-  );
+  return <ActionMenu label={`Actions for instalment ${instalment.instalmentNo}`} items={instalmentActionItems(contractId, instalment, permissions, dialogs)} />;
 }
 
 /**
@@ -258,17 +266,7 @@ export function InstalmentActions({
  * clears or bounces, and a held or bounced one can be replaced or handed
  * back. Bouncing, replacing and returning are Finance's (Edit).
  */
-export function ChequeActions({
-  contractId,
-  cheque,
-  permissions,
-  dialogs,
-}: {
-  contractId: string;
-  cheque: ChequeTarget;
-  permissions: PaymentPermissions;
-  dialogs: PaymentDialogs;
-}) {
+export function chequeActionItems(contractId: string, cheque: ChequeTarget, permissions: PaymentPermissions, dialogs: PaymentDialogs): PaymentActionItem[] {
   const s = cheque.status;
   const items = [
     s === "held" && permissions.canRecord
@@ -287,21 +285,27 @@ export function ChequeActions({
       ? { key: "return", label: "Return", icon: <RotateCcw className="size-4" />, kind: "cheque_return" as const }
       : null,
   ].filter((item) => item !== null);
-  if (items.length === 0) return null;
-  return (
-    <RowMenu label={`Actions for cheque ${cheque.chequeNo}`}>
-      {items.map((item) => (
-        <DropdownMenuItem
-          key={item.key}
-          variant={"danger" in item && item.danger ? "destructive" : "default"}
-          onClick={() => dialogs.open(contractId, { kind: item.kind, cheque })}
-        >
-          {item.icon}
-          {item.label}
-        </DropdownMenuItem>
-      ))}
-    </RowMenu>
-  );
+  return items.map((item) => ({
+    key: item.key,
+    label: item.label,
+    icon: item.icon,
+    danger: "danger" in item && item.danger === true,
+    onSelect: () => dialogs.open(contractId, { kind: item.kind, cheque }),
+  }));
+}
+
+export function ChequeActions({
+  contractId,
+  cheque,
+  permissions,
+  dialogs,
+}: {
+  contractId: string;
+  cheque: ChequeTarget;
+  permissions: PaymentPermissions;
+  dialogs: PaymentDialogs;
+}) {
+  return <ActionMenu label={`Actions for cheque ${cheque.chequeNo}`} items={chequeActionItems(contractId, cheque, permissions, dialogs)} />;
 }
 
 /** A receipt: cash is handed over to Finance once; anything can be voided by Finance (Edit). */

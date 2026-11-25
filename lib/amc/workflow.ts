@@ -28,22 +28,24 @@ export type AmcClientAction = "approve" | "reject" | "request_revision" | "sign"
 /* ------------------------------------------------------------------ */
 
 /**
- * Decided by BRD v0.3 (5.5, 6.7): nobody approves their own proposal.
- * The approval API refuses the creator, and Approve / Send back are hidden
- * on the creator's own proposals. (Production allowed it until Oct 2026;
- * three proposals were approved by their own author by 5 Oct 2026.)
+ * An approver may approve their own request (24 Nov 2026, Sami Farah: "They
+ * should. I think it's rare tho." -- and the same when they are the only
+ * approver). Covers proposals and contract amendments. Until then BRD v0.3
+ * (5.5, 6.7) applied: nobody approved their own proposal.
+ *
+ * Being the requester is no longer a bar; being an approver still is: a
+ * level is decided by the people it names (the requester included), or,
+ * when it names nobody, by the AMC approvers.
  */
-export const AMC_SELF_APPROVAL_ALLOWED = false;
+export const AMC_SELF_APPROVAL_ALLOWED = true;
 
 /**
- * Local testing only (16 Nov 2026): NEXT_PUBLIC_AMC_SELF_APPROVAL=on lets
- * an approver decide their own proposal, so one person can walk the whole
- * flow. Never on a production build, whatever the variable says: next
- * build inlines NODE_ENV as "production", so live cannot turn it on.
- * Both values are inlined, so the server and the buttons agree.
+ * Whether a requester may decide their own request. Always now (above);
+ * NEXT_PUBLIC_AMC_SELF_APPROVAL=on was the local testing switch before
+ * that decision (16 Nov 2026), kept so a local setup reads the same.
  */
 export function amcSelfApprovalOn(): boolean {
-  return process.env.NODE_ENV !== "production" && process.env.NEXT_PUBLIC_AMC_SELF_APPROVAL === "on";
+  return AMC_SELF_APPROVAL_ALLOWED || (process.env.NODE_ENV !== "production" && process.env.NEXT_PUBLIC_AMC_SELF_APPROVAL === "on");
 }
 
 /** Whether this viewer may approve or send back this proposal. */
@@ -136,6 +138,17 @@ export const SEND_TO: Record<AmcSendDocument, string> = {
   proposal: "proposal_sent",
   contract: "contract_sent",
 };
+
+/**
+ * The contract is shown (previewed, downloaded) only once the client has
+ * approved the proposal (23 Nov 2026, the user): before that it is not a
+ * document anyone should see or pass on.
+ */
+export const CONTRACT_VISIBLE_FROM: readonly string[] = ["proposal_approved", "contract_sent", "signed"];
+
+export function contractVisible(status: string | null | undefined): boolean {
+  return CONTRACT_VISIBLE_FROM.includes(String(status ?? ""));
+}
 
 export function canSend(document: AmcSendDocument, from: string): boolean {
   return SEND_FROM[document].includes(from);

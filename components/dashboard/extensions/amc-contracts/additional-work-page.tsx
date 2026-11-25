@@ -254,7 +254,7 @@ export function AdditionalWorkPage({ id }: { id: string }) {
 
       {actions.notice}
       {w?.status === "rejected" ? (
-        <Alert variant="destructive" className="border-destructive/30 items-start p-4">
+        <Alert variant="danger">
           <XCircle />
           <AlertTitle>Rejected{w.rejectedAt ? ` ${formatDateTime(w.rejectedAt)}` : ""}</AlertTitle>
           <AlertDescription>

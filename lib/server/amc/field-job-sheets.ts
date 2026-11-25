@@ -7,7 +7,7 @@ import { TRADE_LABELS } from "@/lib/amc/client-profile";
 import type { FieldStartKind } from "@/lib/amc/field-start";
 import { reportDueAt, reportState, reviewReasons, submitProblems, LINE_OUTCOME_LABELS, OUTCOME_GROUPS, type JobSheetInput, type LineOutcome, type OutcomeGroup, type ReviewReason } from "@/lib/amc/job-sheets";
 import type { VisitStatus } from "@/lib/amc/ppm";
-import { initialOutcome, sendDelivered, type SendChannel, type SendResult } from "@/lib/amc/send-channels";
+import { initialOutcome, reachedClient, type SendChannel, type SendResult } from "@/lib/amc/send-channels";
 import { clientEmailHtml, escapeEmailHtml } from "@/lib/email-brand";
 import { performWorkAction } from "@/lib/server/amc/additional-works";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
@@ -15,6 +15,7 @@ import { performCallOutAction, workPhotos } from "@/lib/server/amc/call-outs";
 import { ContractError, isMissingTable } from "@/lib/server/amc/contracts";
 import type { JobSheetView } from "@/lib/server/amc/job-sheets";
 import { propertyAssets } from "@/lib/server/amc/job-sheets";
+import { alertCrew } from "@/lib/server/amc/crew-alerts";
 import { notifyUsers } from "@/lib/server/amc/notifications";
 import { recordSend } from "@/lib/server/amc/proposal-share";
 import { buildServiceReportModel, serviceReportTitle, type ServiceReportFacts } from "@/lib/amc/service-report";
@@ -332,7 +333,7 @@ export async function saveFieldJobSheet(admin: Admin, kind: FieldSheetKind, id: 
     }
   }
   if (submit && input.completedAt) {
-    await admin.from(TABLE[kind]).update({ report_due_at: reportDueAt(input.completedAt) }).eq("id", id);
+    await admin.from(TABLE[kind]).update({ report_due_at: reportDueAt(input.completedAt, config.sla.serviceReportHours) }).eq("id", id);
   }
 
   if (submit) {
@@ -395,6 +396,11 @@ export async function returnFieldJobSheet(admin: Admin, kind: FieldSheetKind, id
   }
   await closeAmcTodos(admin, { entityType: kind, entityId: id, kind: "job_closure_review" }, { status: "done", reason: "Returned" }).catch(() => 0);
   const ref = refOf(kind, record);
+  /* On the technician's phone too (as Snagging's sent-back visit). */
+  const submitter = str(sheet.submitted_by);
+  if (submitter) {
+    await alertCrew(admin, { kind, id, type: "visit_sent_back", actorId: actor.id, userIds: [submitter], title: `Job sheet returned: ${ref}`, body: comment });
+  }
   await notifyUsers(admin, {
     event: "job_sheet_returned",
     userIds: [ownerId, str(sheet.submitted_by)].filter((u): u is string => Boolean(u)),
@@ -424,14 +430,20 @@ export async function closeFieldJobSheet(
   config: AmcConfig,
   send: SendChannel = "email",
   browserPdf: Uint8Array | null = null,
+  fsmQuotationNo: string | null = null,
+  hoursUsed: number | null = null,
 ) {
   const { record } = await loadRecord(admin, kind, id);
   const sheet = await loadSheet(admin, kind, id);
   if (!sheet || sheet.status !== "submitted") throw new ContractError("Only a submitted job sheet can be closed.", 409);
   const ref = refOf(kind, record);
   /* The record first: a call out with open additional work refuses to close, and the sheet stays submitted. */
-  if (kind === "call_out") await performCallOutAction(admin, id, { action: "close", note: comment }, actor, config);
-  else await performWorkAction(admin, id, { action: "complete", completedAt: str(sheet.completed_at) ?? undefined }, actor, config);
+  /* DEV-508: the FSM quotation number typed in the close dialog goes on first; a chargeable one refuses without it. */
+  const fsm = fsmQuotationNo?.trim() ? { fsmQuotationNo: fsmQuotationNo.trim() } : {};
+  /* DEV-495: a handyman job's team-hours, recorded by the coordinator here. */
+  const hours = hoursUsed !== null ? { hoursUsed } : {};
+  if (kind === "call_out") await performCallOutAction(admin, id, { action: "close", note: comment, ...fsm, ...hours }, actor, config);
+  else await performWorkAction(admin, id, { action: "complete", completedAt: str(sheet.completed_at) ?? undefined, ...fsm }, actor, config);
   const now = new Date().toISOString();
   const { error } = await admin
     .from("amc_visit_job_sheets")
@@ -440,13 +452,11 @@ export async function closeFieldJobSheet(
     .eq("status", "submitted");
   if (error) throw fail(error);
   await closeAmcTodos(admin, { entityType: kind, entityId: id, kind: "job_closure_review" }, { status: "done", reason: "Closed" }).catch(() => 0);
-  let report: Awaited<ReturnType<typeof sendFieldServiceReport>> | null = null;
-  if (sheet.work_outcome !== "not_completed") {
-    report = await sendFieldServiceReport(admin, kind, id, actor, config, send, browserPdf).catch((e) => {
-      console.error("[amc:field-job-sheets] service report failed:", e instanceof Error ? e.message : e);
-      return null;
-    });
-  }
+  /* A report on every close, a work not completed included (DEV-404, 20 Nov 2026 review). */
+  const report: Awaited<ReturnType<typeof sendFieldServiceReport>> | null = await sendFieldServiceReport(admin, kind, id, actor, config, send, browserPdf).catch((e) => {
+    console.error("[amc:field-job-sheets] service report failed:", e instanceof Error ? e.message : e);
+    return null;
+  });
   await recordAmcAudit(admin, { entityType: kind, entityId: id, eventType: "job_sheet_closed", actorId: actor.id, actorLabel: actor.label, payload: { ref, reportOutcome: report?.outcome ?? null } });
   return { ok: true as const, status: kind === "call_out" ? "closed" : "completed", remainderVisitId: null, report };
 }
@@ -573,7 +583,8 @@ export async function sendFieldServiceReport(
       console.error("[amc:field-job-sheets] report email failed:", e instanceof Error ? e.message.slice(0, 200) : e);
     }
   }
-  if (sendDelivered(outcome)) await admin.from(TABLE[kind]).update({ report_sent_at: new Date().toISOString() }).eq("id", id);
+  /* DEV-404: only an email that went stops the clock; WhatsApp or a link is marked sent by the coordinator. */
+  if (reachedClient(outcome)) await admin.from(TABLE[kind]).update({ report_sent_at: new Date().toISOString() }).eq("id", id);
   const submissionId = str(one(contract.submission)?.id);
   if (submissionId) {
     await recordSend(admin, {
@@ -595,6 +606,20 @@ export async function sendFieldServiceReport(
     link: link?.signedUrl ?? null,
     file: link?.signedUrl ? { url: link.signedUrl, name: `service-report-${ref}.${ext}` } : null,
   };
+}
+
+/** DEV-404: the coordinator sent the report themselves and says so; that stops the clock. */
+export async function markFieldReportSent(admin: Admin, kind: FieldSheetKind, id: string, input: { channel: "whatsapp" | "link" | "other"; note: string | null }, actor: Actor) {
+  const { data: r, error } = await admin.from(TABLE[kind]).select("id, report_document_id, report_sent_at").eq("id", id).maybeSingle<Row>();
+  if (error) throw fail(error);
+  if (!r) throw new ContractError(kind === "call_out" ? "Call out not found." : "Additional work not found.", 404);
+  if (!str(r.report_document_id)) throw new ContractError("There is no service report yet: send it first.", 409);
+  if (str(r.report_sent_at)) throw new ContractError("The service report is already marked sent.", 409);
+  const now = new Date().toISOString();
+  const { data: claimed } = await admin.from(TABLE[kind]).update({ report_sent_at: now }).eq("id", id).is("report_sent_at", null).select("id");
+  if (!claimed?.length) throw new ContractError("The service report is already marked sent.", 409);
+  await recordAmcAudit(admin, { entityType: kind, entityId: id, eventType: "service_report_marked_sent", actorId: actor.id, actorLabel: actor.label, justification: input.note, payload: { channel: input.channel } });
+  return { ok: true as const, reportSentAt: now };
 }
 
 /** The stored report, for a short-lived link. */

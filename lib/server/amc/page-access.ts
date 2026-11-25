@@ -16,9 +16,18 @@ import { ActionType, type ResourceType } from "@/types/types";
  * therefore runs before this code is used.
  */
 export async function canSeeAmcPage(resource: ResourceType): Promise<boolean> {
+  return canSeeAnyAmcPage([resource]);
+}
+
+/**
+ * Whether any of these pages' View is granted: for a page reached from
+ * several (one visit, opened from the Visits list or a contract's Schedule
+ * tab). The record itself is still checked by its route.
+ */
+export async function canSeeAnyAmcPage(resources: readonly ResourceType[]): Promise<boolean> {
   try {
     const { accessUser } = await getAuthenticatedUserAccess();
-    return Boolean(accessUser && hasResourceAction(accessUser, resource, ActionType.VIEW));
+    return Boolean(accessUser && resources.some((r) => hasResourceAction(accessUser, r, ActionType.VIEW)));
   } catch {
     return false;
   }

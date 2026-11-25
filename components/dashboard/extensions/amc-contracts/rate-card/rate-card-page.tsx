@@ -193,7 +193,7 @@ export function RateCardPage() {
 
           {/* A working copy is a state worth seeing from every tab, so it is a banner rather than a chip. */}
           {editing ? (
-            <Alert className={problem ? "border-danger/30 bg-danger/5" : "border-warning/30 bg-warning/5"}>
+            <Alert variant={problem ? "danger" : "warning"}>
               <SquarePen className={problem ? "text-danger" : "text-warning"} />
               <AlertTitle>
                 Editing a working copy: {changes.length} change{changes.length === 1 ? "" : "s"} not published
@@ -492,7 +492,7 @@ function RateDialog({
             </Select>
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
-            <div className="grid gap-1.5">
+            <div className="grid content-start gap-1.5">
               <Label>Property model</Label>
               <Select value={value.model} onValueChange={(model) => set({ model: model as RateItem["model"] })}>
                 <SelectTrigger aria-label="Property model" className="w-full">
@@ -508,7 +508,7 @@ function RateDialog({
               </Select>
               <p className="text-muted-foreground text-xs">{MODEL_FALLBACK_HINT}</p>
             </div>
-            <div className="grid gap-1.5">
+            <div className="grid content-start gap-1.5">
               <Label>Counted</Label>
               <Select value={value.basis} onValueChange={(basis) => set({ basis: basis as RateItem["basis"] })}>
                 <SelectTrigger aria-label="How the rate is counted" className="w-full">
@@ -529,11 +529,11 @@ function RateDialog({
             <Input id="rate-unit" value={value.unit} onChange={(e) => set({ unit: e.target.value })} maxLength={60} placeholder="per AC unit" />
           </div>
           <div className="grid gap-4 sm:grid-cols-2">
-            <div className="grid gap-1.5">
+            <div className="grid content-start gap-1.5">
               <Label htmlFor="rate-standard">Standard rate (AED)</Label>
               <Input id="rate-standard" type="number" min={0} step="0.01" value={value.standardRate} onChange={(e) => set({ standardRate: e.target.value })} />
             </div>
-            <div className="grid gap-1.5">
+            <div className="grid content-start gap-1.5">
               <Label htmlFor="rate-floor">Floor rate (AED)</Label>
               <Input id="rate-floor" type="number" min={0} step="0.01" value={value.floorRate} onChange={(e) => set({ floorRate: e.target.value })} />
             </div>

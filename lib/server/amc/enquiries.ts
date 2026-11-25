@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { approversForLevel, type AmcConfig } from "@/lib/amc/config";
+import { escalationPeople, type AmcConfig } from "@/lib/amc/config";
+import { todayInDubai } from "@/lib/amc/contracts";
 import {
   CLOSED_STAGES,
   ENQUIRY_STAGE,
@@ -22,7 +23,7 @@ import {
   type UpdateEnquiryInput,
 } from "@/lib/amc/enquiries";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
-import { approverName } from "@/lib/server/amc/site-visit-approvers";
+import { approverName, siteVisitDeciders } from "@/lib/server/amc/site-visit-approvers";
 import {
   CLIENT_EMBED,
   PROPERTY_EMBED,
@@ -39,7 +40,10 @@ import {
 } from "@/lib/server/amc/business";
 import { createContact } from "@/lib/server/amc/client-profile";
 import { ContractError, isMissingTable } from "@/lib/server/amc/contracts";
+import { checkLeadTime } from "@/lib/server/amc/lead-time";
+import { alertCrew, whenLabel } from "@/lib/server/amc/crew-alerts";
 import { notifyUsers } from "@/lib/server/amc/notifications";
+import { amcPeople, type AmcPerson } from "@/lib/server/amc/people";
 import { recordStatusChange } from "@/lib/server/amc/status-history";
 
 /**
@@ -323,20 +327,33 @@ async function hasCompletedSiteVisit(admin: Admin, enquiryId: string): Promise<b
   return (count ?? 0) > 0;
 }
 
-/** Active portal users, for the owner and assessor pickers. */
-export async function listAmcPeople(admin: Admin): Promise<Array<{ id: string; name: string; email: string | null }>> {
-  const { data, error } = await admin.from("user_profile").select("id, full_name, email, is_active").order("full_name", { ascending: true }).limit(2000);
-  if (error) return [];
-  return ((data ?? []) as Row[])
-    .filter((u) => u.is_active !== false)
-    .map((u) => ({ id: String(u.id), name: str(u.full_name) ?? str(u.email) ?? "User", email: str(u.email) }));
+/**
+ * The people with AMC access, for the owner and inspector pickers (23 Nov 2026),
+ * each with what their role allows (can.enquiries for an owner, can.siteVisits
+ * for an inspector): the pickers list only those allowed.
+ */
+export async function listAmcPeople(admin: Admin): Promise<AmcPerson[]> {
+  return amcPeople(admin);
 }
 
-/* The approver goes on with the booking; before 20261116110000 (no column) the visit is booked without one. */
+/*
+  The approval goes on with the booking; before 20261116110000 (no column) the
+  visit is booked without one. Nobody is picked any more (24 Nov 2026): the
+  approvers come from AMC configuration (siteVisitDeciders), and approver_id
+  holds the first of them, which marks the visit as one to approve; any of
+  them may decide it.
+*/
 async function setApprover(admin: Admin, assessmentId: string, approverId: string | null | undefined) {
-  if (!approverId) return;
-  const name = await approverName(admin, approverId);
-  const { error } = await admin.from("amc_assessments").update({ approver_id: approverId, approver_name: name }).eq("id", assessmentId);
+  let id = approverId ?? null;
+  let name: string | null = null;
+  if (id) name = await approverName(admin, id);
+  else {
+    const deciders = await siteVisitDeciders(admin);
+    id = deciders.ids[0] ?? null;
+    name = deciders.names.length ? deciders.names.join(" or ") : null;
+  }
+  if (!id) return;
+  const { error } = await admin.from("amc_assessments").update({ approver_id: id, approver_name: name }).eq("id", assessmentId);
   if (error && !(error.code === "42703" || error.code === "PGRST204")) throw fail(error);
 }
 
@@ -692,6 +709,8 @@ export async function scheduleSiteVisit(
   const assessorName = await personName(admin, input.assessorId);
   /* Checked before anything is created, so a wrong approver books nothing. */
   if (input.approverId) await approverName(admin, input.approverId);
+  /* DEV-493: inside the property's access lead time only when the user says to book anyway. */
+  const insideLeadTime = await checkLeadTime(admin, input.propertyId, todayInDubai(new Date(input.scheduledAt)), { acknowledged: input.insideLeadTime });
 
   const assessment = await createAssessment(admin, { customerId: current.customer.id, propertyId: input.propertyId, assessorName }, actor);
   const { error } = await admin
@@ -743,7 +762,7 @@ export async function scheduleSiteVisit(
     eventType: "site_visit_scheduled",
     actorId: actor.id,
     actorLabel: actor.label,
-    payload: { assessmentId: assessment.id, assessmentNumber: assessment.assessmentNumber, scheduledAt: input.scheduledAt, assessorId: input.assessorId },
+    payload: { assessmentId: assessment.id, assessmentNumber: assessment.assessmentNumber, scheduledAt: input.scheduledAt, assessorId: input.assessorId, insideLeadTime },
   });
   if (input.assessorId !== actor.id) {
     await notifyUsers(admin, {
@@ -757,6 +776,17 @@ export async function scheduleSiteVisit(
       dedupeKey: `site_visit_assigned:${assessment.id}:${input.assessorId}`,
     });
   }
+  /* The inspector's phone (as Snagging): the new site visit, with its time. */
+  await alertCrew(admin, {
+    kind: "site_visit",
+    id: assessment.id,
+    type: "assigned",
+    actorId: actor.id,
+    userIds: [input.assessorId],
+    title: `New site visit ${assessment.assessmentNumber}`,
+    body: `${current.customer.name}: ${whenLabel(input.scheduledAt)}. Open it in the app for the details.`,
+    whenAt: input.scheduledAt,
+  });
   return { assessmentId: assessment.id, enquiry: await getEnquiry(admin, id, config) };
 }
 
@@ -769,6 +799,7 @@ export async function bookSiteVisit(admin: Admin, input: BookSiteVisitInput, act
   const property = await propertyOfCustomer(admin, input.propertyId, input.customerId);
   const assessorName = await personName(admin, input.assessorId);
   if (input.approverId) await approverName(admin, input.approverId);
+  const insideLeadTime = await checkLeadTime(admin, input.propertyId, todayInDubai(new Date(input.scheduledAt)), { acknowledged: input.insideLeadTime });
   const assessment = await createAssessment(admin, { customerId: input.customerId, propertyId: input.propertyId, assessorName }, actor);
   const { error } = await admin
     .from("amc_assessments")
@@ -788,7 +819,7 @@ export async function bookSiteVisit(admin: Admin, input: BookSiteVisitInput, act
     eventType: "site_visit_scheduled",
     actorId: actor.id,
     actorLabel: actor.label,
-    payload: { scheduledAt: input.scheduledAt, assessorId: input.assessorId, approverId: input.approverId ?? null },
+    payload: { scheduledAt: input.scheduledAt, assessorId: input.assessorId, approverId: input.approverId ?? null, insideLeadTime },
   });
   if (input.assessorId !== actor.id) {
     await notifyUsers(admin, {
@@ -802,6 +833,16 @@ export async function bookSiteVisit(admin: Admin, input: BookSiteVisitInput, act
       dedupeKey: `site_visit_assigned:${assessment.id}:${input.assessorId}`,
     });
   }
+  await alertCrew(admin, {
+    kind: "site_visit",
+    id: assessment.id,
+    type: "assigned",
+    actorId: actor.id,
+    userIds: [input.assessorId],
+    title: `New site visit ${assessment.assessmentNumber}`,
+    body: `${assessment.customer?.name ?? "Client"}: ${whenLabel(input.scheduledAt)}. Open it in the app for the details.`,
+    whenAt: input.scheduledAt,
+  });
   return { assessmentId: assessment.id, assessmentNumber: assessment.assessmentNumber };
 }
 
@@ -883,7 +924,8 @@ export async function runEnquiryIdleSweep(admin: Admin, config: AmcConfig, now =
     result.idle += 1;
   }
 
-  const management = approversForLevel(config, 2);
+  /* Management: the escalation contacts (DEV-488), else the level 2 approvers, else level 1. */
+  const management = escalationPeople(config);
   result.noManagementNamed = management.length === 0;
   const { data: stale, error: staleError } = await pick("idle_escalated_at", config.enquiries.managementEscalationDays);
   if (staleError) throw new Error(staleError.message);

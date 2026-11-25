@@ -4,7 +4,9 @@ import { canReadAssessment } from "@/lib/amc/access";
 import { contractErrorResponse, requireContractAccess } from "@/lib/server/amc/contract-access";
 import { deleteDraftAssessment, getAssessment, updateAssessment } from "@/lib/server/amc/business";
 import { UUID, updateAssessmentSchema } from "@/lib/server/amc/business-schemas";
-import { notifyApproverReady, siteVisitPropertyView } from "@/lib/server/amc/site-visit-approval";
+import { notifyApproverReady, siteVisitPropertyView, siteVisitApprovers } from "@/lib/server/amc/site-visit-approval";
+import { readAmcSettings } from "@/lib/server/amc/settings";
+import { siteVisitChecklist } from "@/lib/amc/site-visit-checklist";
 
 /** One assessment: read, edit while a draft, delete a draft. Completed assessments are history. */
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ assessmentId: string }> }) {
@@ -17,16 +19,33 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ assessment
     if (!canReadAssessment(gate.actor, assessment.createdBy, assessment.assessorId)) return NextResponse.json({ error: "Assessment not found." }, { status: 404 });
     const mayEdit = gate.canApprove || gate.actor.ops.edit || assessment.createdBy === gate.userId || assessment.assessorId === gate.userId;
     const canEdit = assessment.status === "draft" && mayEdit;
-    /* Completed, not yet approved: only its approver can still be changed (16 Nov 2026). */
-    const canChangeApprover = assessment.status === "completed" && !assessment.approvedAt && mayEdit;
+
     /*
       The scope and asset changes the inspector made on site, held until the
       approver approves (16 Nov 2026), and whether this viewer is that approver.
     */
-    const { changes, assets, scope } = await siteVisitPropertyView(gate.admin, assessment);
-    const canApprove = assessment.status === "completed" && !assessment.approvedAt && assessment.approverId === gate.userId;
+    const [{ changes, assets, scope }, photos, settings] = await Promise.all([
+      siteVisitPropertyView(gate.admin, assessment),
+      gate.admin.from("amc_assessment_photos").select("id", { count: "exact", head: true }).eq("assessment_id", assessment.id),
+      readAmcSettings(gate.admin).catch(() => null),
+    ]);
+    /* Any site visit approver from AMC configuration may decide (24 Nov 2026); their names replace the one stored at booking. */
+    const approvers = assessment.approverId ? await siteVisitApprovers(gate.admin, assessment) : null;
+    const canApprove = assessment.status === "completed" && !assessment.approvedAt && !!approvers?.ids.includes(gate.userId);
+    const shown = approvers?.names.length ? { ...assessment, approverName: approvers.names.join(" or ") } : assessment;
     /* The property's scope and assets as the inspector left them on site (16 Nov 2026). */
-    return NextResponse.json({ assessment, canEdit, canChangeApprover, changes, canApprove, siteAssets: assets, siteScope: scope });
+    /* What the approver checks (23 Nov 2026): what approving changes, and what the visit recorded (DEV-362). */
+    const checklist = assessment.status === "completed"
+      ? siteVisitChecklist({
+          ...assessment,
+          photoCount: photos.count ?? 0,
+          assets: assets.filter((x) => x.change !== "delete"),
+          scope: scope.filter((x) => x.change !== "delete"),
+          changes: changes as Parameters<typeof siteVisitChecklist>[0]["changes"],
+          serviceLabel: (id) => settings?.services?.find((s) => s.id === id)?.label ?? id,
+        })
+      : null;
+    return NextResponse.json({ assessment: shown, canEdit, changes, canApprove, approversFrom: approvers?.from ?? null, siteAssets: assets, siteScope: scope, checklist });
   } catch (error) {
     return contractErrorResponse(error, "Could not load the assessment");
   }

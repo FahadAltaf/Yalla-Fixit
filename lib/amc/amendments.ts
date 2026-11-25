@@ -1,5 +1,7 @@
 import { z } from "zod";
 
+import { amcSelfApprovalOn } from "./workflow";
+
 /**
  * Contract amendments (BRD v0.3 5.16; Phase 13: DEV-417). Scope change,
  * property change, hold, resume, transfer to a new owner or tenant, early
@@ -25,7 +27,7 @@ export const AMENDMENT_HINTS: Record<AmendmentKind, string> = {
   hold: "Pauses the contract and its schedule: no visits are offered, confirmed or chased while it is on hold.",
   resume: "Ends the hold. Visits whose window passed during the hold are planned again.",
   transfer: "A new owner or tenant takes the contract over from a date.",
-  early_termination: "30 days' notice under the contract; a pro-rata refund only with a valid reason.",
+  early_termination: "30 days' notice. A refund for the unused part of the contract, only if the reason is accepted.",
   cancellation: "Calls the contract off before it starts.",
 };
 
@@ -55,9 +57,13 @@ export function amendmentProblem(kind: AmendmentKind, contractStatus: string): s
   return `${AMENDMENT_LABELS[kind]} cannot be asked for on a contract that is ${contractStatus.replace(/_/g, " ")}.`;
 }
 
-/** Nobody approves their own request (BRD 5.5 applied to amendments). */
-export function canDecide(requestedBy: string | null, deciderId: string): boolean {
-  return Boolean(deciderId) && requestedBy !== deciderId;
+/**
+ * Nobody approves their own request (BRD 5.5 applied to amendments), except
+ * with the local testing switch (24 Nov 2026), as proposals have it:
+ * NEXT_PUBLIC_AMC_SELF_APPROVAL=on, never on a production build.
+ */
+export function canDecide(requestedBy: string | null, deciderId: string, selfApproval = amcSelfApprovalOn()): boolean {
+  return Boolean(deciderId) && (requestedBy !== deciderId || selfApproval);
 }
 
 const dayMs = 86_400_000;
@@ -118,3 +124,118 @@ export const amendmentActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("withdraw") }).strict(),
 ]);
 export type AmendmentAction = z.infer<typeof amendmentActionSchema>;
+
+/* ------------------------------------------------------------------ */
+/* What the approver checks (23 Nov 2026)                              */
+/* ------------------------------------------------------------------ */
+
+export interface AmendmentCheck {
+  key: string;
+  label: string;
+  state: "ok" | "missing" | "warn";
+  detail: string;
+}
+
+/**
+ * The approver's checklist on a requested amendment (23 Nov 2026, the user:
+ * the same checklist as proposals and site visits): who asked, why, whether
+ * the contract allows it now, the dates, and what each kind needs looked at
+ * (the notice period and refund of a termination, that a cancellation calls
+ * every visit off, a transfer's new party, a hold's end).
+ */
+export function amendmentChecklist(
+  a: { kind: AmendmentKind; reason: string; requestedBy: string | null; requestedByName: string | null; effectiveOn: string | null; details: Record<string, unknown> },
+  ctx: { contractStatus: string; viewerId: string; today: string; propertyLabel?: string | null },
+): AmendmentCheck[] {
+  const d = a.details ?? {};
+  const s = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : null);
+  const n = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : null);
+  const aed = (v: number) => `AED ${v.toLocaleString("en-AE", { maximumFractionDigits: 2 })}`;
+  const checks: AmendmentCheck[] = [];
+  const own = Boolean(a.requestedBy) && a.requestedBy === ctx.viewerId;
+  checks.push(
+    own && amcSelfApprovalOn()
+      ? { key: "who", label: "Requested by", state: "ok", detail: "You asked for it. As an approver you may decide it yourself." }
+      : own
+      ? { key: "who", label: "Requested by", state: "warn", detail: "You asked for it, so someone else approves it." }
+      : { key: "who", label: "Requested by", state: "ok", detail: `${a.requestedByName ?? "Someone else"}: not the approver, as the rule asks.` },
+  );
+  const why = a.reason.trim();
+  checks.push(
+    why.length >= 10
+      ? { key: "reason", label: "Reason", state: "ok", detail: why.length > 140 ? `${why.slice(0, 137)}…` : why }
+      : { key: "reason", label: "Reason", state: "warn", detail: `Very short ("${why}"). Ask for more if it does not explain the change.` },
+  );
+  const problem = amendmentProblem(a.kind, ctx.contractStatus);
+  checks.push(
+    problem
+      ? { key: "allowed", label: "Allowed now", state: "missing", detail: problem }
+      : { key: "allowed", label: "Allowed now", state: "ok", detail: `The contract is ${ctx.contractStatus.replace(/_/g, " ")}, where a ${AMENDMENT_LABELS[a.kind].toLowerCase()} can be made.` },
+  );
+  if (a.effectiveOn && a.kind !== "cancellation") {
+    checks.push(
+      a.effectiveOn < ctx.today
+        ? { key: "date", label: "Effective date", state: "warn", detail: `${a.effectiveOn} is in the past. Applying acts on it at once.` }
+        : { key: "date", label: "Effective date", state: "ok", detail: a.effectiveOn },
+    );
+  }
+  switch (a.kind) {
+    case "early_termination": {
+      const notice = s(d.noticeOn);
+      const earliest = notice ? terminationEffective(notice, null) : null;
+      checks.push(
+        notice && a.effectiveOn && earliest && a.effectiveOn >= earliest
+          ? { key: "notice", label: "Notice period", state: "ok", detail: `Notice ${notice}; takes effect ${a.effectiveOn}, at least 30 days later as the contract asks.` }
+          : { key: "notice", label: "Notice period", state: "warn", detail: "Check the 30 days of notice: the dates do not show it." },
+      );
+      const refund = n(d.refundIfValid);
+      const received = n(d.received);
+      checks.push({
+        key: "refund",
+        label: "Refund",
+        state: "warn",
+        detail: `You decide whether the reason is accepted. Accepted: a refund for the unused part of the contract, about ${aed(refund ?? 0)}${received !== null ? ` (${aed(received)} received so far)` : ""}. Not accepted: no refund.`,
+      });
+      break;
+    }
+    case "cancellation":
+      checks.push({ key: "final", label: "Cannot be undone", state: "warn", detail: "Every visit is called off and the contract ends before it starts." });
+      break;
+    case "transfer": {
+      const to = (d.to ?? {}) as Record<string, unknown>;
+      const contact = [s(to.customerEmail), s(to.customerPhone)].filter(Boolean);
+      checks.push(
+        contact.length
+          ? { key: "party", label: "New party", state: "ok", detail: `${s(to.customerName) ?? "Named"}${s(to.role) ? ` (${s(to.role)})` : ""}: ${contact.join(", ")}` }
+          : { key: "party", label: "New party", state: "missing", detail: `${s(to.customerName) ?? "The new party"} has no email or phone, so they cannot be reached.` },
+      );
+      break;
+    }
+    case "hold":
+      checks.push(
+        s(d.until)
+          ? { key: "until", label: "Hold ends", state: "ok", detail: String(d.until) }
+          : { key: "until", label: "Hold ends", state: "warn", detail: "No end date: the contract stays on hold until someone resumes it." },
+      );
+      break;
+    case "property_change":
+      checks.push({
+        key: "property",
+        label: "New property",
+        state: s(d.propertyLabel) ? "ok" : "missing",
+        detail: s(d.propertyLabel) ? `From ${ctx.propertyLabel || "the current property"} to ${s(d.propertyLabel)}` : "No property named.",
+      });
+      break;
+    case "scope_change":
+      checks.push({
+        key: "scope",
+        label: "What applying does",
+        state: "ok",
+        detail: d.mode === "replace_contract" ? "Ends this contract and opens a full new proposal, which goes through its own approval." : "Opens a new proposal for the extra services, which goes through its own approval.",
+      });
+      break;
+    case "resume":
+      break;
+  }
+  return checks;
+}

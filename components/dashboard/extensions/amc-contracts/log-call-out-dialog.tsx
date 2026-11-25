@@ -14,15 +14,18 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Textarea } from "@/components/ui/textarea";
+import { TruncatedText } from "@/components/ui/truncated-text";
 import DateTimeSelect from "@/components/ui/date-time-select";
 import { useDebounce } from "@/hooks/use-debounce";
 import { CALL_OUT_CHANNEL_LABELS, CALL_OUT_CHANNELS, CALL_OUT_PRIORITIES, CALL_OUT_PRIORITY_LABELS, type CallOutChannel, type CallOutPriority } from "@/lib/amc/call-outs";
+import { HANDYMAN_CREW_NOTE, HANDYMAN_TEAM_NOTE } from "@/lib/amc/handyman-hours";
 import { TRADE_LABELS, TRADES } from "@/lib/amc/client-profile";
 import type { Trade } from "@/lib/amc/visits";
 import { callOutsService, type CoverageResponse, type CreateCallOutResult } from "@/modules/amc-contracts/call-outs-service";
 
 import { ContractPicker, CoverageBadge, Field, errorText, fromLocalInput, nowLocalInput, shortDateTime, type PickedContract } from "./call-out-shared";
 import { SendInline } from "./send-options";
+import { useBookingGuards } from "./booking-guards";
 import { AmcPhoneInput } from "@/components/dashboard/extensions/amc/components/amc-phone-input";
 
 const NONE = "__none";
@@ -55,6 +58,7 @@ export function LogCallOutDialog({
   /** Offer "Open call out" after logging. */
   onOpenCallOut?: (id: string) => void;
 }) {
+  const { guard, dialogs: bookingDialogs } = useBookingGuards();
   const [picked, setPicked] = useState<PickedContract | null>(null);
   const [priority, setPriority] = useState<CallOutPriority>("non_emergency");
   const [channel, setChannel] = useState<CallOutChannel>("call");
@@ -67,6 +71,8 @@ export function LogCallOutDialog({
   const [partsValue, setPartsValue] = useState("");
   const [excluded, setExcluded] = useState(false);
   const [override, setOverride] = useState(false);
+  /* DEV-495: a handyman job uses the free handyman hours; the teams sent multiply the hours. */
+  const [handyman, setHandyman] = useState(false);
   const [overrideReason, setOverrideReason] = useState("");
   const [preview, setPreview] = useState<Preview | null>(null);
   const [busy, setBusy] = useState(false);
@@ -85,13 +91,16 @@ export function LogCallOutDialog({
     excluded: useId(),
     override: useId(),
     overrideReason: useId(),
+    handyman: useId(),
   };
 
   const targetId = contractId ?? picked?.id ?? null;
   const partsValueAed = partsExpected && partsValue.trim() !== "" && Number.isFinite(Number(partsValue)) ? Math.max(0, Number(partsValue)) : null;
+  /* Marks a handyman job; the teams are counted from the crew when it is assigned (24 Nov 2026). */
+  const handymanTeams = handyman ? 1 : null;
   const query = useMemo(
-    () => (targetId ? JSON.stringify({ contractId: targetId, priority, partsExpected, partsValueAed, excluded }) : null),
-    [targetId, priority, partsExpected, partsValueAed, excluded],
+    () => (targetId ? JSON.stringify({ contractId: targetId, priority, partsExpected, partsValueAed, excluded, handymanTeams }) : null),
+    [targetId, priority, partsExpected, partsValueAed, excluded, handymanTeams],
   );
   const debounced = useDebounce(query, 350);
 
@@ -138,8 +147,9 @@ export function LogCallOutDialog({
     if (Date.parse(reportedIso) > Date.now() + 5 * 60_000) return void toast.error("The call cannot be in the future.");
     setBusy(true);
     try {
-      const result = await callOutsService.create({
+      const result = await guard((answers) => callOutsService.create({
         contractId: targetId,
+        expiredReason: answers.expiredReason ?? null,
         priority,
         channel,
         reportedAt: reportedIso,
@@ -151,7 +161,8 @@ export function LogCallOutDialog({
         partsValueAed,
         excluded,
         overrideReason: overriding ? overrideReason.trim() : null,
-      });
+        handymanTeams,
+      }));
       toast.success(`Call out ${result.callOutNo} logged`, {
         description: `${result.coverage === "covered" ? "Covered" : "Chargeable"}${result.reserved ? ", one unit of the allowance booked" : ""}.`,
       });
@@ -171,6 +182,7 @@ export function LogCallOutDialog({
   return (
     <Dialog open={open} onOpenChange={(next) => !locked && onOpenChange(next)}>
       <ActionDialogContent busy={locked} className="max-h-[88vh] overflow-y-auto sm:max-w-2xl">
+        {bookingDialogs}
         <DialogHeader>
           <DialogTitle>{done ? `Call out ${done.callOutNo} logged` : "Log call out"}</DialogTitle>
           <DialogDescription>
@@ -212,14 +224,17 @@ export function LogCallOutDialog({
             </div>
           </div>
         ) : (
-          <div className="grid gap-4">
+          <div className="grid min-w-0 gap-4">
             <Field id={ids.contract} label="Contract">
               {contractId ? (
-                <div className="rounded-lg border px-3 py-2 text-sm">
+                /* Held to the dialog's width (24 Nov 2026): a long address ran past its edge; now it ends in "…" with the whole of it on hover. */
+                <div className="w-full min-w-0 overflow-hidden rounded-lg border px-3 py-2 text-sm">
                   {p ? (
                     <>
-                      <span className="font-medium">{p.contract.number}</span> · {p.contract.customerName || "Client"}
-                      {p.contract.propertyLabel ? <span className="text-muted-foreground block truncate text-xs">{p.contract.propertyLabel}</span> : null}
+                      <TruncatedText className="font-medium">
+                        {p.contract.number} · {p.contract.customerName || "Client"}
+                      </TruncatedText>
+                      {p.contract.propertyLabel ? <TruncatedText text={p.contract.propertyLabel} className="text-muted-foreground text-xs" /> : null}
                     </>
                   ) : shown?.error ? (
                     <span className="text-muted-foreground">This contract</span>
@@ -294,6 +309,32 @@ export function LogCallOutDialog({
               </Field>
             </div>
 
+            {/* DEV-495: a handyman job draws on the contract's free handyman hours, counted in team-hours. */}
+            {p?.handymanBalance || handyman ? (
+              <div className="grid gap-3 rounded-lg border px-4 py-3">
+                <div className="flex items-start gap-3">
+                  <Checkbox id={ids.handyman} className="mt-0.5" checked={handyman} onCheckedChange={(on) => setHandyman(on === true)} />
+                  <div className="grid gap-1">
+                    <Label htmlFor={ids.handyman} className="font-normal">
+                      Handyman job: use the free handyman hours
+                    </Label>
+                    <p className="text-muted-foreground text-xs">
+                      {p?.handymanBalance
+                        ? p.handymanBalance.unlimited
+                          ? `${p.handymanLabel ?? "Handyman"}: unlimited hours on this contract.`
+                          : `${p.handymanLabel ?? "Handyman"}: ${p.handymanBalance.remaining} of ${p.handymanBalance.included} hours left (${p.handymanBalance.used} used). The hours used come off when the job is closed.`
+                        : "This contract has no free handyman hours."}
+                    </p>
+                  </div>
+                </div>
+                {handyman ? (
+                  <p className="text-muted-foreground pl-7 text-xs">
+                    {HANDYMAN_CREW_NOTE} {HANDYMAN_TEAM_NOTE}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+
             {/* Two plain questions: each one, if ticked, makes part or all of the job chargeable. */}
             <div className="grid gap-4 rounded-lg border px-4 py-3">
               <div>
@@ -345,6 +386,7 @@ export function LogCallOutDialog({
               slaDue={slaDue}
               priority={priority}
               hasContract={Boolean(targetId)}
+              handyman={handyman}
             />
 
             {canBookCovered ? (
@@ -423,12 +465,15 @@ function CoveragePanel({
   slaDue,
   priority,
   hasContract,
+  handyman = false,
 }: {
   loading: boolean;
   preview: Preview | null;
   slaDue: string | null;
   priority: CallOutPriority;
   hasContract: boolean;
+  /** DEV-495: the balance shown is the free handyman hours. */
+  handyman?: boolean;
 }) {
   if (!hasContract) {
     return <p className="text-muted-foreground rounded-lg border border-dashed px-4 py-4 text-center text-sm">Choose a contract to see whether this is covered.</p>;
@@ -493,7 +538,7 @@ function CoveragePanel({
       ) : null}
       <dl className="grid gap-2 border-t pt-3 text-sm sm:grid-cols-2">
         <div className="grid gap-0.5">
-          <dt className="text-muted-foreground text-xs">Allowance for this kind of call out</dt>
+          <dt className="text-muted-foreground text-xs">{handyman ? "Free handyman hours" : "Allowance for this kind of call out"}</dt>
           <dd className="font-medium">
             {!b
               ? "None on this contract"
@@ -501,7 +546,7 @@ function CoveragePanel({
                 ? `Unlimited (${b.used} used${b.reserved ? `, ${b.reserved} booked` : ""})`
                 : b.included === null
                   ? "Included, not counted"
-                  : `${b.remaining} of ${b.included} left (${b.used} used${b.reserved ? `, ${b.reserved} booked` : ""})`}
+                  : `${b.remaining} of ${b.included}${handyman ? " hours" : ""} left (${b.used} used${b.reserved ? `, ${b.reserved} booked` : ""})`}
           </dd>
         </div>
         <div className="grid gap-0.5">

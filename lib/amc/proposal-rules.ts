@@ -45,8 +45,9 @@ export function reopensInPlace(status: string): boolean {
   return (REOPENABLE_STATUSES as readonly string[]).includes(status);
 }
 
-export function canRevise(status: string, isOwner: boolean): boolean {
-  return isOwner && ((REVISABLE_STATUSES as readonly string[]).includes(status) || reopensInPlace(status));
+/** canAct: the owner, or the team by role (DEV-368, lib/amc/proposal-team.ts). */
+export function canRevise(status: string, canAct: boolean): boolean {
+  return canAct && ((REVISABLE_STATUSES as readonly string[]).includes(status) || reopensInPlace(status));
 }
 
 export const reviseSchema = z
@@ -184,4 +185,26 @@ export function rateModelFor(propertyType: PropertyType | string | null | undefi
 /** The category a property type usually belongs to. */
 export function categoryForType(propertyType: PropertyType): "residential" | "commercial" | null {
   return UNIT_TYPE_CATEGORY[propertyType];
+}
+
+/**
+ * The client report's opening (DEV-410, 20 Nov 2026 review): commercial for
+ * every commercial property -- shops, clinics, restaurants, warehouses as
+ * well as offices -- not only an "office" unit type. The contract's own
+ * template decides first, then the property's category, then its type.
+ */
+export function clientReportCategory(input: {
+  template?: string | null;
+  propertyCategory?: string | null;
+  propertyType?: string | null;
+  unitType?: string | null;
+}): "residential" | "commercial" {
+  if (input.template === "commercial" || input.template === "residential") return input.template;
+  if (input.propertyCategory === "commercial" || input.propertyCategory === "residential") return input.propertyCategory;
+  for (const type of [input.propertyType, input.unitType]) {
+    if (!type) continue;
+    const known = (UNIT_TYPE_CATEGORY as Record<string, "residential" | "commercial" | null>)[type];
+    if (known) return known;
+  }
+  return rateModelFor(input.propertyType ?? input.unitType ?? null, input.propertyCategory) === "office" ? "commercial" : "residential";
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
 import { DataTable } from "@/components/data-table";
 import { Banknote, Plus, ReceiptText, SquarePen, Trash2 } from "lucide-react";
@@ -29,6 +30,7 @@ import {
   MATERIAL_FEE_SERVICE,
   PAYMENT_TIMING_LABELS,
   chargeTotals,
+  newlyFreeLines,
   type ChargeLine,
   type ChargePaymentMode,
   type PricedService,
@@ -49,7 +51,7 @@ import { useAmcData } from "./use-amc-data";
 
 type Kind = "call_out" | "additional_work";
 /* servicesEditable: an additional work's services can change (before approval, 19 Nov 2026). */
-type ChargeResponse = { charge: VisitCharge | null; ready: boolean; services: PricedService[]; canEdit: boolean; servicesEditable?: boolean };
+type ChargeResponse = { charge: VisitCharge | null; ready: boolean; services: PricedService[]; canEdit: boolean; servicesEditable?: boolean; canMarkFree?: boolean };
 
 const url = (kind: Kind, id: string) => `/api/amc-field-work/${kind}/${encodeURIComponent(id)}/charge`;
 const post = (kind: Kind, id: string, body: Record<string, unknown>) => amcRequest(url(kind, id), { method: "POST", body: JSON.stringify(body) });
@@ -205,6 +207,8 @@ export function ChargeCard({
           /* The material fee follows the materials: never edited as a service. */
           initial={(charge?.lines ?? []).filter((l) => l.serviceId !== MATERIAL_FEE_SERVICE)}
           freeByDefault={coverage === "covered"}
+          chargeable={kind === "call_out" && coverage === "chargeable"}
+          canMarkFree={Boolean(data.canMarkFree)}
           onSaved={changed}
         />
       ) : null}
@@ -238,6 +242,12 @@ function ChargeTable({ charge }: { charge: VisitCharge }) {
                   <span className="font-medium break-words">{l.label}</span>
                   {l.cardPrice !== null && l.cardPrice !== l.unitPrice ? (
                     <span className="text-muted-foreground mt-0.5 block text-xs">Rate card {l.cardPrice.toFixed(2)}</span>
+                  ) : null}
+                  {!l.charged && l.freeReason ? (
+                    <span className="text-muted-foreground mt-0.5 block text-xs break-words">
+                      Free: {l.freeReason}
+                      {l.freedBy ? ` · ${l.freedBy}` : ""}
+                    </span>
                   ) : null}
                 </TableCell>
                 <TableCell className="align-top text-right text-sm tabular-nums">{l.units}</TableCell>
@@ -293,6 +303,8 @@ function ServicesDialog({
   services,
   initial,
   freeByDefault,
+  chargeable = false,
+  canMarkFree = false,
   onSaved,
 }: {
   open: boolean;
@@ -302,6 +314,9 @@ function ServicesDialog({
   services: PricedService[];
   initial: ChargeLine[];
   freeByDefault: boolean;
+  /** A chargeable call out (DEV-498): a line made free needs a reason and the right. */
+  chargeable?: boolean;
+  canMarkFree?: boolean;
   onSaved: () => void | Promise<void>;
 }) {
   const [lines, setLines] = useState<ChargeLine[]>(initial);
@@ -319,6 +334,9 @@ function ServicesDialog({
   const addCustom = () => setLines((all) => [...all, { serviceId: null, label: "", unit: null, units: 1, unitPrice: 0, cardPrice: null, charged: !freeByDefault }]);
   const set = (i: number, patch: Partial<ChargeLine>) => setLines((all) => all.map((l, j) => (j === i ? { ...l, ...patch } : l)));
   const unnamed = lines.some((l) => !l.label.trim());
+  /* The lines made free in this dialog on a chargeable call out: each needs its reason (DEV-498). */
+  const freshFree = new Set(newlyFreeLines(lines, initial, chargeable));
+  const reasonMissing = [...freshFree].some((l) => (l.freeReason ?? "").trim().length < 3);
   const save = async () => {
     setBusy(true);
     try {
@@ -348,6 +366,11 @@ function ServicesDialog({
           <DialogDescription>
             Pick the services for this {kind === "call_out" ? "call out" : "work"}. Each is priced from the rate card for the property, or add a custom service with its own name and
             price; switch off Charge for any that are free.{kind === "additional_work" ? " They are the quotation the client approves." : ""}
+            {chargeable
+              ? canMarkFree
+                ? " This call out is chargeable: say why any line is free; it is kept in the history."
+                : " This call out is chargeable: making a line free needs AMC Allowances (Approve) or the AMC approver right."
+              : ""}
           </DialogDescription>
         </DialogHeader>
         <div className="grid gap-3 py-1">
@@ -406,13 +429,36 @@ function ServicesDialog({
                     <Label className="text-xs">Price (AED, ex VAT)</Label>
                     <Input type="number" min={0} step="0.01" value={l.unitPrice} onChange={(e) => set(i, { unitPrice: Math.max(0, Number(e.target.value) || 0) })} />
                   </div>
-                  <label className="flex h-9 items-center gap-2 text-sm">
-                    <Switch checked={l.charged} onCheckedChange={(v) => set(i, { charged: v })} aria-label={`Charge ${l.label || "the custom service"}`} />
+                  <label
+                    className="flex h-9 items-center gap-2 text-sm"
+                    title={chargeable && !canMarkFree && l.charged ? "Making a line free needs AMC Allowances (Approve) or the AMC approver right." : undefined}
+                  >
+                    <Switch
+                      checked={l.charged}
+                      disabled={chargeable && !canMarkFree && l.charged}
+                      onCheckedChange={(v) => set(i, { charged: v, ...(v ? { freeReason: null } : {}) })}
+                      aria-label={`Charge ${l.label || "the custom service"}`}
+                    />
                     {l.charged ? "Charge" : "Free"}
                   </label>
                   <Button size="icon" variant="ghost" className="text-destructive size-9" aria-label={`Remove ${l.label || "the custom service"}`} onClick={() => setLines((all) => all.filter((_, j) => j !== i))}>
                     <Trash2 className="size-4" />
                   </Button>
+                  {freshFree.has(l) ? (
+                    <div className="grid gap-1 sm:col-span-5">
+                      <Label className="text-xs" htmlFor={`free-reason-${i}`}>
+                        Why is it free?
+                      </Label>
+                      <Input
+                        id={`free-reason-${i}`}
+                        value={l.freeReason ?? ""}
+                        maxLength={300}
+                        placeholder="e.g. Goodwill: the first visit did not fix it"
+                        aria-invalid={(l.freeReason ?? "").trim().length < 3}
+                        onChange={(e) => set(i, { freeReason: e.target.value })}
+                      />
+                    </div>
+                  ) : null}
                 </li>
               ))}
             </ul>
@@ -442,7 +488,7 @@ function ServicesDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
             Cancel
           </Button>
-          <SubmitButton pending={busy} pendingLabel="Saving…" disabled={unnamed || lines.some((l) => !(l.units > 0))} icon={<Plus className="size-4" />} onClick={() => void save()}>
+          <SubmitButton pending={busy} pendingLabel="Saving…" disabled={unnamed || reasonMissing || lines.some((l) => !(l.units > 0))} icon={<Plus className="size-4" />} onClick={() => void save()}>
             Save services
           </SubmitButton>
         </DialogFooter>
@@ -552,6 +598,7 @@ export function VisitChargesSection({ contractId, canRecord }: { contractId: str
     () => amcRequest<{ charges: VisitCharge[]; ready: boolean }>(`/api/amc-contracts/${encodeURIComponent(contractId)}/visit-charges`),
     `visit-charges|${contractId}`,
   );
+  const router = useRouter();
   const [paying, setPaying] = useState<VisitCharge | null>(null);
   const charges = useMemo(() => data?.charges ?? [], [data]);
   const due = charges.filter((c) => c.status === "due").reduce((s, c) => s + c.total, 0);
@@ -564,7 +611,7 @@ export function VisitChargesSection({ contractId, canRecord }: { contractId: str
         cell: ({ row }) => {
           const c = row.original;
           return (
-            <a className="block text-sm hover:underline" href={chargeHref(c)}>
+            <a className="block text-sm hover:underline" href={chargeHref(c)} onClick={(e) => e.stopPropagation()}>
               <span className="font-medium">{c.ref ?? "—"}</span>
               <span className="text-muted-foreground block text-xs">{c.kind === "call_out" ? "Call out" : "Additional work"}</span>
             </a>
@@ -613,7 +660,14 @@ export function VisitChargesSection({ contractId, canRecord }: { contractId: str
         cell: ({ row }) =>
           canRecord && row.original.status === "due" ? (
             <div className="flex justify-end">
-              <Button size="sm" variant="outline" onClick={() => setPaying(row.original)}>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setPaying(row.original);
+                }}
+              >
                 <Banknote className="size-4" />
                 Record payment
               </Button>
@@ -645,6 +699,8 @@ export function VisitChargesSection({ contractId, canRecord }: { contractId: str
       <DataTable
         columns={columns}
         data={charges}
+        /* The whole row opens the call out or the additional work (23 Nov 2026). */
+        handleRowClick={(c) => router.push(chargeHref(c))}
         loading={false}
         rowCount={charges.length}
         pageSize={500}

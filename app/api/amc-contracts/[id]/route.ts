@@ -20,6 +20,9 @@ import {
 } from "@/lib/server/amc/contract-access";
 import { usageStats } from "@/lib/server/amc/contract-operations";
 import { listSignatories } from "@/lib/server/amc/contract-lifecycle";
+import { scheduledEnding } from "@/lib/server/amc/amendments";
+import { setContractStatus } from "@/lib/server/amc/contract-state";
+import { cancelVisitsFrom } from "@/lib/server/amc/renewals";
 import { AWAITING_SIGNATURE, PRE_ACTIVATION, canSignInternally, type ContractStatus } from "@/lib/amc/contract-lifecycle";
 
 /**
@@ -34,10 +37,25 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   const { id } = await ctx.params;
 
   try {
-    const loaded = await requireManagedContract(gate, id, "read");
+    let loaded = await requireManagedContract(gate, id, "read");
     if (!loaded.ok) return loaded.response;
-    const { contract, entitlements } = loaded;
     const today = todayInDubai();
+    /*
+      A scheduled ending (early termination, or a contract replaced by a new
+      one), 24 Nov 2026. When its day has come it is carried out on opening,
+      so it never waits on the daily job (not running on live yet).
+    */
+    const ending = await scheduledEnding(gate.admin, id);
+    if (ending && ending.effectiveOn <= today && (loaded.contract.status === "active" || loaded.contract.status === "on_hold")) {
+      const reason = `Terminated on notice of ${ending.noticeOn ?? "—"}`;
+      await setContractStatus(gate.admin, id, loaded.contract.status, "terminated", { status_reason: reason }, { id: null, label: "AMC" }, "Early termination took effect");
+      await cancelVisitsFrom(gate.admin, id, ending.effectiveOn, "Contract terminated");
+      loaded = await requireManagedContract(gate, id, "read");
+      if (!loaded.ok) return loaded.response;
+    }
+    const { contract, entitlements } = loaded;
+    /* Still running, with its last day set. */
+    const endingSoon = ending && (contract.status === "active" || contract.status === "on_hold") ? ending : null;
 
     const [stats, auditResult, sourceResult, renewalResult, snapshotResult, signing] = await Promise.all([
       usageStats(gate.admin, id),
@@ -83,6 +101,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
 
     return NextResponse.json({
       contract,
+      ending: endingSoon,
       expiryLabel: expiryLabel(contract, today),
       summary,
       entitlements: entitlements.map((e) => ({
@@ -117,16 +136,17 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
         /* A contract waiting for its first payment is past activation: it starts when the payment is in. */
         canActivate: contract.status === "signed" && canOperateContract(gate.actor, loaded.ownerId),
         canEditTerms: PRE_ACTIVATION.includes(contract.status as ContractStatus) && canOperateContract(gate.actor, loaded.ownerId),
-        canHold: (contract.status === "active" || contract.status === "on_hold") && canOperateContract(gate.actor, loaded.ownerId),
-        canTerminate: gate.canApprove && (contract.status === "active" || contract.status === "on_hold"),
+        /* Ending on a set day (24 Nov 2026): no hold, no second ending, no renewal. */
+        canHold: !endingSoon && (contract.status === "active" || contract.status === "on_hold") && canOperateContract(gate.actor, loaded.ownerId),
+        canTerminate: !endingSoon && gate.canApprove && (contract.status === "active" || contract.status === "on_hold"),
         canCallOff: gate.canApprove && PRE_ACTIVATION.includes(contract.status as ContractStatus),
         /* Usage can be recorded only while the contract is in force; the
            server also checks the usage date against the period. */
         canRecordUsage: contract.status === "active" && inForce && canRecordUsage(gate.actor, loaded.ownerId),
         /* Correcting the record is allowed whatever the state, to whoever may correct. */
         canCorrect: canCorrectUsage(gate.actor, loaded.ownerId),
-        canCancel: gate.canApprove && contract.status === "active",
-        canRenew: canOperateContract(gate.actor, loaded.ownerId) && contract.status !== "cancelled" && !contract.renewedByContractId && !renewalResult.data,
+        canCancel: !endingSoon && gate.canApprove && contract.status === "active",
+        canRenew: !endingSoon && canOperateContract(gate.actor, loaded.ownerId) && contract.status !== "cancelled" && !contract.renewedByContractId && !renewalResult.data,
         /* Phase 8: the PPM schedule is changed by those who operate the contract, while it is active or on hold. */
         canSchedule: (contract.status === "active" || contract.status === "on_hold") && canOperateContract(gate.actor, loaded.ownerId),
         /* Phase 7 payments: Finance (AMC Payments) on any contract; the owner records what came in. */

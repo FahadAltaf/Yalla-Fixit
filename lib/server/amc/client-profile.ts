@@ -778,7 +778,8 @@ export async function uploadDocument(
   admin: Admin,
   meta: z.infer<typeof documentMetaSchema> & { customerId: string | null },
   file: { bytes: Uint8Array; fileName: string },
-  actor: Actor,
+  /* id null: the client, on a link without a login (DEV-494). */
+  actor: { id: string | null; label: string | null },
 ): Promise<DocumentRecord> {
   if (file.bytes.byteLength === 0) throw new ContractError("The file is empty.", 400);
   if (file.bytes.byteLength > AMC_DOCUMENT_MAX_BYTES) throw new ContractError("The file is larger than 20 MB.", 400);

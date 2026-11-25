@@ -3,6 +3,8 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { servicesForProperty } from "@/components/dashboard/extensions/amc/amc-settings";
 import { rateItemFor } from "@/lib/amc/rate-card";
 import {
+  freeLineProblems,
+  newlyFreeLines,
   MATERIAL_FEE_SERVICE,
   chargeTotals,
   type ChargeLine,
@@ -105,16 +107,33 @@ async function upsertCharge(admin: Admin, kind: ChargeKind, id: string, contract
  * A call out's services and price: each line from the rate card (its card
  * price kept beside the one used), charged or free. Kept as they are once
  * the charge is paid.
+ *
+ * DEV-498 (20 Nov 2026): on a chargeable call out a line made free needs a
+ * reason and someone with AMC Allowances (Approve) or the AMC approver
+ * right (canMarkFree). The reason and who decided stay on the line, and
+ * each one is written to the call out's history.
  */
-export async function saveCallOutServices(admin: Admin, id: string, lines: ChargeLine[], actor: Actor) {
-  const { data: o, error } = await admin.from("amc_call_outs").select("id, call_out_no, contract_id, status").eq("id", id).maybeSingle<Row>();
+export async function saveCallOutServices(admin: Admin, id: string, lines: ChargeLine[], actor: Actor, canMarkFree = false) {
+  const { data: o, error } = await admin.from("amc_call_outs").select("id, call_out_no, contract_id, status, coverage").eq("id", id).maybeSingle<Row>();
   if (error) throw fail(error);
   if (!o) throw new ContractError("Call out not found.", 404);
   if (o.status === "closed" || o.status === "cancelled") throw new ContractError(`Call out ${String(o.call_out_no)} is ${String(o.status)}: its services are kept as they are.`, 409);
   const existing = await readCharge(admin, "call_out", id);
   if (existing.charge?.status === "paid") throw new ContractError("The charge is paid: its services are kept as they are.", 409);
+  const before = existing.charge?.lines ?? [];
+  const chargeable = o.coverage === "chargeable";
+  const problems = freeLineProblems(lines, before, chargeable, canMarkFree);
+  if (problems.length) throw new ContractError(problems[0], canMarkFree ? 400 : 403);
+  const fresh = new Set(newlyFreeLines(lines, before, chargeable));
   const prices = new Map((await priceList(admin, String(o.contract_id))).map((p) => [p.serviceId, p.rate]));
-  const kept = lines.map((l) => ({ ...l, cardPrice: l.serviceId ? (prices.get(l.serviceId) ?? null) : null }));
+  const kept = lines.map((l) => {
+    const base = { ...l, cardPrice: l.serviceId ? (prices.get(l.serviceId) ?? null) : null };
+    if (l.charged) return { ...base, freeReason: null, freedBy: null };
+    if (fresh.has(l)) return { ...base, freeReason: (l.freeReason ?? "").trim(), freedBy: actor.label };
+    /* Free before: its reason and who decided are kept as they were. */
+    const was = before.find((b) => !b.charged && (b.serviceId ? b.serviceId === l.serviceId : !l.serviceId && b.label.trim().toLowerCase() === l.label.trim().toLowerCase()));
+    return { ...base, freeReason: was?.freeReason ?? null, freedBy: was?.freedBy ?? null };
+  });
   const totals = chargeTotals(kept);
   const charge = await upsertCharge(
     admin,
@@ -125,6 +144,16 @@ export async function saveCallOutServices(admin: Admin, id: string, lines: Charg
     actor,
   );
   await recordAmcAudit(admin, { entityType: "call_out", entityId: id, eventType: "charge_services_saved", actorId: actor.id, actorLabel: actor.label, payload: { total: totals.total, lines: kept.length } });
+  for (const l of kept.filter((_, i) => fresh.has(lines[i]))) {
+    await recordAmcAudit(admin, {
+      entityType: "call_out",
+      entityId: id,
+      eventType: "charge_line_marked_free",
+      actorId: actor.id,
+      actorLabel: actor.label,
+      payload: { service: l.label, serviceId: l.serviceId, units: l.units, unitPrice: l.unitPrice, value: Math.round(l.units * l.unitPrice * 100) / 100, reason: l.freeReason },
+    });
+  }
   return charge;
 }
 

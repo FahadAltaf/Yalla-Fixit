@@ -75,6 +75,7 @@ import {
   type Channel,
   type ConfirmationState,
 } from "./visit-status";
+import { ConfirmationUrgencyBadge, visitDayOf } from "./visit-board-shared";
 
 /**
  * A contract's PPM schedule (Phase 8), loaded by the contract page itself
@@ -171,7 +172,7 @@ export function ContractSchedulePanel({ contractId, schedule }: { contractId: st
   }
   if (!data.migrated) {
     return (
-      <Alert className="border-warning/30 bg-warning/5 items-start p-4">
+      <Alert variant="warning">
         <Database className="text-warning" />
         <AlertTitle>The schedule needs a database update</AlertTitle>
         <AlertDescription>
@@ -494,6 +495,7 @@ function VisitRow({ visit, actions, onOpen }: { visit: ScheduleVisit; actions: R
             {CONFIRMATION_SHORT[confirmation]}
           </Badge>
         ) : null}
+        <ConfirmationUrgencyBadge value={visit.clientConfirmation ?? null} day={visitDayOf(visit)} status={visit.status} />
         {access ? (
           <Badge variant="secondary" className={`border-0 font-medium ${ACCESS_TONE[access]}`}>
             Pass {ACCESS_STATUS_LABELS[access].toLowerCase()}

@@ -34,6 +34,7 @@ import {
   type ReviewReason,
 } from "@/lib/amc/job-sheets";
 import { AMC_PHOTO_MAX_BYTES } from "@/lib/amc/photos";
+import { HANDYMAN_TEAM_NOTE, formatMinutes } from "@/lib/amc/handyman-hours";
 import { PLANNABLE_STATUSES, type VisitStatus } from "@/lib/amc/ppm";
 import { cn } from "@/lib/utils";
 import {
@@ -310,7 +311,7 @@ export function JobSheetPanel({
   }
   if (!current.data.migrated) {
     return (
-      <Alert className="border-warning/30 bg-warning/5 items-start p-4">
+      <Alert variant="warning">
         <Database className="text-warning" />
         <AlertTitle>Job sheets need a database update</AlertTitle>
         <AlertDescription>
@@ -372,7 +373,7 @@ function SheetBody({
   const photosSlot = useContext(SheetPhotos);
   const [form, setForm] = useState<FormState>(() => initialForm(data));
   const [working, setWorking] = useState<Working>(null);
-  const [dialog, setDialog] = useState<"return" | "close" | "send" | null>(null);
+  const [dialog, setDialog] = useState<"return" | "close" | "send" | "mark_sent" | null>(null);
   /* The service report on screen, as the proposal and the contract (18 Nov 2026). */
   const [viewingReport, setViewingReport] = useState(false);
   const loadReportFacts = () => sheetCalls.reportFacts(visitId);
@@ -496,7 +497,7 @@ function SheetBody({
       />
 
       {status === "returned" && sheet.reviewComment ? (
-        <Alert className="border-warning/30 bg-warning/5 items-start p-4">
+        <Alert variant="warning">
           <Undo2 className="text-warning" />
           <AlertTitle>Returned by the supervisor{sheet.returnCount > 1 ? ` (${sheet.returnCount} times)` : ""}</AlertTitle>
           <AlertDescription>
@@ -613,13 +614,11 @@ function SheetBody({
               <dl className="grid gap-4 text-sm">
                 <LongFact label="Quality concern">
                   {sheet.qualityConcern ? (
-                    <div className="border-warning/30 bg-warning/5 rounded-lg border px-3 py-2.5">
-                      <p className="text-warning flex items-center gap-1.5 font-medium">
-                        <AlertTriangle className="size-4" />
-                        Raised by the crew
-                      </p>
-                      {sheet.qualityNote ? <p className="mt-1 leading-relaxed whitespace-pre-wrap">{sheet.qualityNote}</p> : null}
-                    </div>
+                    <Alert variant="warning">
+                      <AlertTriangle />
+                      <AlertTitle>Raised by the crew</AlertTitle>
+                      {sheet.qualityNote ? <AlertDescription className="whitespace-pre-wrap">{sheet.qualityNote}</AlertDescription> : null}
+                    </Alert>
                   ) : (
                     <span className="font-medium">None</span>
                   )}
@@ -676,11 +675,20 @@ function SheetBody({
             headerSlot,
           )
         ) : null
-      ) : status === "closed" && headerSlot && data.canReview && (v.reportDocumentId || v.status !== "not_completed") ? (
+      ) : status === "closed" && headerSlot && data.canReview ? (
+        /* A report on every close, a visit not completed included (DEV-404). */
         createPortal(
-          <SubmitButton variant="outline" pending={working === "resend"} pendingLabel="Sending…" disabled={busy} icon={<Send className="size-4" />} onClick={resend}>
-            {v.reportDocumentId ? "Resend report" : "Send report"}
-          </SubmitButton>,
+          <>
+            {v.reportDocumentId && !v.reportSentAt ? (
+              <Button variant="outline" disabled={busy} onClick={() => setDialog("mark_sent")}>
+                <CheckCircle2 className="size-4" />
+                Mark report sent
+              </Button>
+            ) : null}
+            <SubmitButton variant="outline" pending={working === "resend"} pendingLabel="Sending…" disabled={busy} icon={<Send className="size-4" />} onClick={resend}>
+              {v.reportDocumentId ? "Resend report" : "Send report"}
+            </SubmitButton>
+          </>,
           headerSlot,
         )
       ) : status === "submitted" ? (
@@ -702,18 +710,26 @@ function SheetBody({
             </div>
           ) : null}
         </div>
-      ) : status === "closed" && data.canReview && (v.reportDocumentId || v.status !== "not_completed") ? (
+      ) : status === "closed" && data.canReview ? (
         <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
           <p className="text-muted-foreground text-sm">
             {v.reportSentAt
-              ? `The service report was emailed ${formatDateTime(v.reportSentAt)}.`
+              ? `The service report reached the client ${formatDateTime(v.reportSentAt)}.`
               : v.reportDocumentId
-                ? "The service report has not reached the client by email yet."
+                ? "The service report has not reached the client yet: email it, or mark it sent once you sent it by WhatsApp."
                 : "The service report was not made when the visit closed."}
           </p>
-          <SubmitButton variant="outline" pending={working === "resend"} pendingLabel="Sending…" disabled={busy} icon={<Send className="size-4" />} onClick={resend}>
-            {v.reportDocumentId ? "Resend report" : "Send report"}
-          </SubmitButton>
+          <div className="flex flex-wrap gap-2">
+            {v.reportDocumentId && !v.reportSentAt ? (
+              <Button variant="outline" disabled={busy} onClick={() => setDialog("mark_sent")}>
+                <CheckCircle2 className="size-4" />
+                Mark report sent
+              </Button>
+            ) : null}
+            <SubmitButton variant="outline" pending={working === "resend"} pendingLabel="Sending…" disabled={busy} icon={<Send className="size-4" />} onClick={resend}>
+              {v.reportDocumentId ? "Resend report" : "Send report"}
+            </SubmitButton>
+          </div>
         </div>
       ) : null}
 
@@ -731,11 +747,11 @@ function SheetBody({
         open={dialog === "close"}
         onOpenChange={(open) => !open && setDialog(null)}
         data={data}
-        onClose={async (comment, send) => {
+        onClose={async (comment, send, fsmQuotationNo, hoursUsed) => {
           /* The branded PDF, as the viewer shows it, when a report goes out; else the server prints its own. */
-          const reports = data.lines.some((l) => l.outcome === "completed" || l.outcome === "partially_completed");
-          const pdf = reports ? await serviceReportPdfBase64(loadReportFacts) : null;
-          const result = await sheetCalls.close(visitId, comment, send, pdf);
+          /* A report on every close (DEV-404). */
+          const pdf = await serviceReportPdfBase64(loadReportFacts);
+          const result = await sheetCalls.close(visitId, comment, send, pdf, fsmQuotationNo, hoursUsed);
           toast.success(`${sheetName(v)} closed`, result.remainderVisitId ? { description: "The remaining trade was planned on a new visit." } : undefined);
           if (result.report) showReport(send, result.report);
           else toast.warning("The visit is closed, but the service report could not be prepared.");
@@ -752,6 +768,16 @@ function SheetBody({
         download={downloadReport}
         onSend={async (channel) => sheetCalls.resendReport(visitId, channel, await serviceReportPdfBase64(loadReportFacts))}
         onDone={() => refresh(true)}
+      />
+      <MarkReportSentDialog
+        open={dialog === "mark_sent"}
+        onOpenChange={(open) => !open && setDialog(null)}
+        onSave={async (channel, note) => {
+          await sheetCalls.markReportSent(visitId, channel, note);
+          toast.success("Service report marked sent");
+          setDialog(null);
+          await refresh(true);
+        }}
       />
       <RaiseAdditionalWorkDialog
         key={raising.key}
@@ -1633,21 +1659,36 @@ function CloseDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   data: JobSheetResponse;
-  onClose: (comment: string | null, send: SendChannel) => Promise<void>;
+  onClose: (comment: string | null, send: SendChannel, fsmQuotationNo: string | null, hoursUsed: number | null) => Promise<void>;
 }) {
   const [comment, setComment] = useState("");
   const [send, setSend] = useState<SendChannel>("email");
+  /* DEV-508: a chargeable call out or additional work closes with its FSM quotation number. */
+  const fsm = data.fsmQuotation?.migrated ? data.fsmQuotation : null;
+  const [fsmNo, setFsmNo] = useState(fsm?.value ?? "");
+  const fsmMissing = Boolean(fsm?.required && !fsmNo.trim());
+  const [tried, setTried] = useState(false);
+  /* DEV-495: a handyman job's team-hours, from the technician's time on site, whole hours. */
+  const hm = data.handyman ?? null;
+  const [hours, setHours] = useState(() => String(hm?.hoursUsed ?? hm?.suggestedHours ?? ""));
+  const hoursNumber = Number(hours);
+  const hoursMissing = Boolean(hm) && !(hours.trim() !== "" && Number.isInteger(hoursNumber) && hoursNumber >= 1 && hoursNumber <= 500);
+  const hoursId = useId();
+  const fsmId = useId();
   const [pending, setPending] = useState(false);
-  /* A report is made when some work was done. */
-  const reports = data.lines.some((l) => l.outcome === "completed" || l.outcome === "partially_completed");
+  /* A report on every close, a visit not completed included (DEV-404). */
+  const reports = true;
   const id = useId();
   const remaining = data.lines.filter((l) => l.outcome !== "completed");
   const reasons = data.sheet.reviewReasons;
 
   const submit = async () => {
+    setTried(true);
+    if (hoursMissing) return void toast.error("Enter the hours used", { description: "The team-hours, rounded to the nearest whole hour; at least 1." });
+    if (fsmMissing) return void toast.error("Enter the FSM quotation number", { description: "Finance needs it to record the revenue and issue the tax invoice." });
     setPending(true);
     try {
-      await onClose(comment.trim() || null, send);
+      await onClose(comment.trim() || null, send, fsm && fsmNo.trim() && fsmNo.trim() !== (fsm.value ?? "") ? fsmNo.trim() : null, hm ? hoursNumber : null);
       setComment("");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not close the visit.");
@@ -1690,6 +1731,47 @@ function CloseDialog({
             <p className="text-warning">Check before closing: {reasons.map((r) => REVIEW_REASON_LABELS[r].toLowerCase()).join(", ")}.</p>
           ) : null}
         </div>
+        {hm ? (
+          <Field id={hoursId} label="Hours used (team-hours)">
+            <Input
+              id={hoursId}
+              type="number"
+              min={1}
+              max={500}
+              step={1}
+              className="sm:w-32"
+              value={hours}
+              aria-invalid={(tried && hoursMissing) || undefined}
+              onChange={(e) => setHours(e.target.value)}
+            />
+            {tried && hoursMissing ? <p role="alert" className="text-destructive text-xs">Enter the hours as a whole number, at least 1.</p> : null}
+            <p className="text-muted-foreground text-xs">
+              {hm.minutesOnSite !== null
+                ? `The technician recorded ${formatMinutes(hm.minutesOnSite)} on site, with ${hm.teams} team${hm.teams === 1 ? "" : "s"}${hm.fromCrew ? " (one for each technician on the crew)" : ""}: ${hm.suggestedHours} hour${hm.suggestedHours === 1 ? "" : "s"} to the nearest whole hour. `
+                : `${hm.teams} team${hm.teams === 1 ? "" : "s"}${hm.fromCrew ? " from the crew" : ""}; the technician's time on site is not on the job sheet. `}
+              {HANDYMAN_TEAM_NOTE} A job counts at least 1 hour. The hours come off the free handyman hours; any beyond what is left are chargeable.
+            </p>
+          </Field>
+        ) : null}
+        {/* A handyman job may run over the free hours: the number can go in now (required then, the server says). */}
+        {fsm && (fsm.required || fsm.value || hm) ? (
+          <Field id={fsmId} label={fsm.required ? "FSM quotation number" : "FSM quotation number (optional)"}>
+            <Input
+              id={fsmId}
+              value={fsmNo}
+              maxLength={40}
+              placeholder="e.g. QT-00123"
+              aria-invalid={(tried && fsmMissing) || undefined}
+              onChange={(e) => setFsmNo(e.target.value)}
+            />
+            {tried && fsmMissing ? <p role="alert" className="text-destructive text-xs">Enter the FSM quotation number to close.</p> : null}
+            <p className="text-muted-foreground text-xs">
+              {data.visit.kind === "call_out"
+                ? "This call out is chargeable. Prepare the quotation in Zoho FSM (the client confirmed on WhatsApp) and enter its number: Finance needs it to record the revenue and issue the tax invoice."
+                : "Finance needs the FSM quotation number to record the revenue and issue the tax invoice. Enter the number of the quotation in Zoho FSM."}
+            </p>
+          </Field>
+        ) : null}
         <Field id={id} label="Comment (optional)">
           <Textarea id={id} rows={3} maxLength={1000} value={comment} onChange={(e) => setComment(e.target.value)} />
         </Field>
@@ -1717,6 +1799,72 @@ function CloseDialog({
 /* Pieces                                                              */
 /* ------------------------------------------------------------------ */
 
+
+/**
+ * DEV-404 (20 Nov 2026 review): a WhatsApp text or a copied link does not
+ * reach the client by itself, so it does not stop the report's clock. Once
+ * the coordinator has sent it, they say so here; it is logged with them.
+ */
+function MarkReportSentDialog({
+  open,
+  onOpenChange,
+  onSave,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSave: (channel: "whatsapp" | "link" | "other", note: string | null) => Promise<void>;
+}) {
+  const [channel, setChannel] = useState<"whatsapp" | "link" | "other">("whatsapp");
+  const [note, setNote] = useState("");
+  const [pending, setPending] = useState(false);
+  const id = useId();
+  const save = async () => {
+    setPending(true);
+    try {
+      await onSave(channel, note.trim() || null);
+      setNote("");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not mark the report sent.");
+    } finally {
+      setPending(false);
+    }
+  };
+  return (
+    <Dialog open={open} onOpenChange={(next) => !pending && onOpenChange(next)}>
+      <ActionDialogContent busy={pending} className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Mark the service report sent</DialogTitle>
+          <DialogDescription>
+            Only when it has reached the client: the 48-hour clock stops and your name is kept with it. An email sent from the portal marks itself.
+          </DialogDescription>
+        </DialogHeader>
+        <Field id={`${id}-channel`} label="How it was sent">
+          <Select value={channel} onValueChange={(value) => setChannel(value as typeof channel)}>
+            <SelectTrigger id={`${id}-channel`} className="w-full">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="whatsapp">WhatsApp</SelectItem>
+              <SelectItem value="link">Link shared</SelectItem>
+              <SelectItem value="other">Other</SelectItem>
+            </SelectContent>
+          </Select>
+        </Field>
+        <Field id={`${id}-note`} label="Note (optional)">
+          <Textarea id={`${id}-note`} rows={2} maxLength={300} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Sent to the tenant's WhatsApp at 3 pm" />
+        </Field>
+        <DialogFooter>
+          <Button variant="outline" disabled={pending} onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <SubmitButton pending={pending} pendingLabel="Saving…" icon={<CheckCircle2 className="size-4" />} onClick={() => void save()}>
+            Mark sent
+          </SubmitButton>
+        </DialogFooter>
+      </ActionDialogContent>
+    </Dialog>
+  );
+}
 
 function Field({ id, label, hint, children }: { id: string; label: string; hint?: ReactNode; children: ReactNode }) {
   return (

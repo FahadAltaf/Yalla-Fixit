@@ -580,7 +580,8 @@ export function PhotosPanel<K extends string>({
 export type PickedContract = Pick<ContractListRow, "id" | "proposalNumber" | "customerName" | "propertyLabel">;
 
 /* Call outs and additional work go on a contract in force (the server checks again). */
-const LIVE_STATUSES: readonly string[] = ["active", "expiring", "on_hold"];
+/* Expired too (DEV-496): an AMC approver may book on one, with a reason; the server checks. */
+const LIVE_STATUSES: readonly string[] = ["active", "expiring", "on_hold", "expired"];
 
 /**
  * Search the contracts list (the same call as Check coverage) and pick an

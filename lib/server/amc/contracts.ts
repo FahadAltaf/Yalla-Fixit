@@ -8,6 +8,7 @@ import {
   daysRemaining,
   deriveEntitlements,
   signedCommercials,
+  includedQuantityFor,
   termMonthsBetween,
   type ContractEntitlement,
   type ContractForRules,
@@ -448,7 +449,8 @@ export async function activateContract(
       call_out_class: e.callOutClass,
       units: e.units,
       frequency: e.frequency,
-      included_quantity: e.includedQuantity,
+      /* Over the whole term (23 Nov 2026), as the schedule plans it. */
+      included_quantity: includedQuantityFor(e.entitlementType, e.units, e.frequency, termMonthsBetween(input.startDate, input.endDate) || 12),
       base_price: e.basePrice,
       contracted_price: e.contractedPrice,
     })),

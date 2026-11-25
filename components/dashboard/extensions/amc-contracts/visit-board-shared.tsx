@@ -5,7 +5,9 @@ import { ArrowUpRight, CalendarPlus, GripVertical, History, PhoneCall } from "lu
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { CONFIRMATION_LABELS, type AccessStatus } from "@/lib/amc/visits";
+import { todayInDubai } from "@/lib/amc/contracts";
+import { PLANNABLE_STATUSES } from "@/lib/amc/ppm";
+import { CONFIRMATION_LABELS, confirmationUrgency, type AccessStatus, type ConfirmationUrgencyLevel } from "@/lib/amc/visits";
 import { cn } from "@/lib/utils";
 import type { BoardData, BoardVisit } from "@/modules/amc-contracts/visits-service";
 import { TruncatedText } from "@/components/ui/truncated-text";
@@ -144,6 +146,28 @@ export function ConfirmationBadge({ value }: { value: string | null }) {
   );
 }
 
+/* DEV-491: an unconfirmed visit coloured by the days left (calm, soon, urgent). */
+const URGENCY_TONE: Record<ConfirmationUrgencyLevel, string> = {
+  calm: "bg-brand-50 text-brand",
+  soon: "bg-warning/10 text-warning",
+  urgent: "bg-danger/10 text-danger",
+};
+
+/** How pressing the client's confirmation is, while it is awaited (asked and not confirmed). */
+export function ConfirmationUrgencyBadge({ value, day, status }: { value: string | null; day: string | null; status?: string | null }) {
+  if (!day || !value || value === "confirmed" || (status && !(PLANNABLE_STATUSES as readonly string[]).includes(status))) return null;
+  const u = confirmationUrgency(day, todayInDubai(), value);
+  if (!u) return null;
+  return (
+    <Badge variant="secondary" className={cn("border-0 font-medium", URGENCY_TONE[u.level])} title="Not confirmed by the client yet">
+      {u.label}
+    </Badge>
+  );
+}
+
+/** The visit's day: the slot when placed, else the tentative date. */
+export const visitDayOf = (v: { scheduledStart?: string | null; targetDate: string }) => (v.scheduledStart ? todayInDubai(new Date(v.scheduledStart)) : v.targetDate);
+
 export function AccessBadge({ value }: { value: AccessStatus | null }) {
   const badge = value ? ACCESS_BADGES[value] : null;
   if (!badge) return null;
@@ -232,6 +256,7 @@ export function ToPlaceCard({
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-muted-foreground text-xs tabular-nums">Window {windowLabel(visit)}</span>
             <ConfirmationBadge value={visit.clientConfirmation} />
+            <ConfirmationUrgencyBadge value={visit.clientConfirmation} day={visitDayOf(visit)} status={visit.status} />
             <AccessBadge value={visit.accessStatus} />
           </div>
           <RescheduledMark original={visit.originalTargetDate} />

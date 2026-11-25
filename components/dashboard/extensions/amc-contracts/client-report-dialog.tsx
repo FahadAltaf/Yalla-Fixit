@@ -6,6 +6,7 @@ import { Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { insightsService } from "@/modules/amc-contracts/insights-service";
 
 import { clientReportFileName, clientReportPdf } from "./client-report-viewer";
@@ -48,6 +49,7 @@ export function SendClientReportDialog({
 }) {
   /* null: not changed, so the client's email as on file. */
   const [typed, setTyped] = useState<string | null>(null);
+  const [financials, setFinancials] = useState(true);
   const email = typed ?? defaultEmail ?? "";
   const to = email.trim();
   const valid = !to || EMAIL.test(to);
@@ -66,7 +68,7 @@ export function SendClientReportDialog({
       canSend={(channel) => channel !== "email" || valid}
       /* WhatsApp carries no link (18 Nov 2026): the PDF is downloaded and attached. */
       download={async () => {
-        const { report } = await insightsService.clientReport(contractId);
+        const { report } = await insightsService.clientReport(contractId, financials);
         const blob = await clientReportPdf(report);
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
@@ -78,15 +80,23 @@ export function SendClientReportDialog({
       onSend={async (channel) => {
         /* The branded PDF, as the viewer shows it; if it cannot be built here the server prints its own. */
         const pdf = await insightsService
-          .clientReport(contractId)
+          .clientReport(contractId, financials)
           .then(({ report }) => clientReportPdf(report))
           .then(toBase64)
           .catch(() => null);
-        return insightsService.sendClientReport(contractId, channel === "email" ? to || null : null, pdf, channel);
+        return insightsService.sendClientReport(contractId, channel === "email" ? to || null : null, pdf, channel, financials);
       }}
     >
       {(channel) => (
         <>
+          {/* DEV-503: the version without financial figures. */}
+          <label className="flex items-center justify-between gap-3 rounded-lg border px-3 py-2 text-sm">
+            <span>
+              <span className="font-medium">Include prices</span>
+              <span className="text-muted-foreground block text-xs">Off: the visits and call outs with their dates, without any amounts or additional work costs.</span>
+            </span>
+            <Switch checked={financials} onCheckedChange={setFinancials} aria-label="Include prices in the report" />
+          </label>
           {channel === "email" ? (
             <div className="grid gap-1.5">
               <Label htmlFor="amc-client-report-to">Client email (optional)</Label>

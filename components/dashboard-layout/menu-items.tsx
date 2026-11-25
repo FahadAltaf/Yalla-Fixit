@@ -323,8 +323,13 @@ export const baseSectionsItems: MenuItem[] = [
            sections claim longer prefixes, so this only wins on those. */
         resource: ResourceType.AMC_CONTRACTS,
       },
-      // { title: "Renewals", url: "/extensions/amc-contracts/renewals", resource: ResourceType.AMC_RENEWALS },
-      // { title: "Payments", url: "/extensions/amc-contracts/payments", canSee: canViewAmcPayments },
+      /*
+        DEV-487 (20 Nov 2026; BRD v0.4 5.17 first release): the screens hidden
+        on 10 Nov are back, each on the same permission its page asks for, so
+        a role sees exactly what it can open -- the coordinator, supervisor,
+        Finance and administrator templates grant them (lib/amc/role-templates.ts).
+      */
+      { title: "Renewals", url: "/extensions/amc-contracts/renewals", resource: ResourceType.AMC_RENEWALS },
       {
         title: "Clients",
         url: "/extensions/amc-contracts/customers",
@@ -344,18 +349,36 @@ export const baseSectionsItems: MenuItem[] = [
         canSee: (user: User) => canViewAmcVisits(user) || hasResourceAction(user, ResourceType.AMC_SITE_VISITS, ActionType.VIEW),
         match: ["/extensions/amc-contracts/assessments", "/extensions/amc-contracts/additional-works"],
       },
-      // { title: "Visit board", url: "/extensions/amc-contracts/board", canSee: canViewAmcVisits },
-      // { title: "Job reviews", url: "/extensions/amc-contracts/job-reviews", canSee: canViewAmcVisits },
-      // { title: "Call outs", url: "/extensions/amc-contracts/call-outs", resource: ResourceType.AMC_CALL_OUTS },
-      // { title: "Additional work", url: "/extensions/amc-contracts/additional-works", resource: ResourceType.AMC_ADDITIONAL_WORKS },
-      /* Technicians left the AMC menu (11 Nov 2026): a technician's AMC skills are edited from Workforce -> People (row menu, AMC skills). */
-      // { title: "Reports", url: "/extensions/amc-contracts/reports", resource: ResourceType.AMC_REPORTS },
+      /* The coordinators' month of planned visits: not contacted, contacted, confirmed (DEV-492). */
+      { title: "PPM month", url: "/extensions/amc-contracts/ppm-month", canSee: canViewAmcVisits },
+      /* The supervisor's review of submitted job sheets (BRD 5.12). */
+      { title: "Job reviews", url: "/extensions/amc-contracts/job-reviews", canSee: canViewAmcVisits },
+      /* Finance: instalments, cheques and collections (BRD 5.8). */
+      { title: "Payments", url: "/extensions/amc-contracts/payments", canSee: canViewAmcPayments },
+      { title: "Reports", url: "/extensions/amc-contracts/reports", resource: ResourceType.AMC_REPORTS },
       { title: "Rate card", url: "/extensions/amc-contracts/rate-card", canSee: canViewAmcRateCard },
-      // { title: "FSM mapping", url: "/extensions/amc-contracts/fsm-services", resource: ResourceType.AMC_FSM_MAPPING },
-      // { title: "Operations settings", url: "/extensions/amc-contracts/settings", resource: ResourceType.AMC_OPERATIONS_SETTINGS },
-      /* Admins also have it under Settings; this is for managers and
-         department heads with AMC Configuration who are not admins. */
-      // { title: "Configuration", url: "/settings/amc/configuration", canSee: canViewAmcConfig },
+      /*
+        24 Nov 2026 (the user): FSM mapping is off the menu, and Operations
+        settings are a tab of AMC configuration (Settings), not a page here.
+      */
+      /*
+        DEV-488: the people the business names at release (approvers, Finance,
+        supervisors, signatories, escalation) are set in AMC configuration.
+        Admins reach it under Settings; a manager or department head with AMC
+        Configuration who does not see Settings reaches it here.
+      */
+      {
+        title: "Configuration",
+        url: "/settings/amc/configuration",
+        canSee: (user: User) => canViewAmcConfig(user) && !hasResourceAction(user, ResourceType.SETTINGS, ActionType.VIEW),
+      },
+      /*
+        Still out of the menu, on purpose:
+          * Visit board: one Scheduling board for all work (DEV-489), not an AMC board.
+          * Call outs, Additional work: in the Visits list, with a Type (11 Nov 2026).
+          * Technicians: AMC skills are edited from Workforce -> People (11 Nov 2026).
+        Their pages still open by address for anyone allowed.
+      */
     ],
   },
   /*
@@ -518,7 +541,8 @@ export const getNavData = (user: User) => {
           already called Settings, "AMC settings" and "Snagging settings"
           said the same word twice.
         */
-        { title: "AMC", url: "/settings/amc", canSee: canUseAmc },
+        /* 23 Nov 2026: the wording printed on proposals and contracts; the rules are in AMC configuration. */
+        { title: "AMC wording", url: "/settings/amc", canSee: canUseAmc },
         { title: "AMC configuration", url: "/settings/amc/configuration", canSee: canViewAmcConfig },
         /*
           The rate card and the quotation wording, which used to sit under

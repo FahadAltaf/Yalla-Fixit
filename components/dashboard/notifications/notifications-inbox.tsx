@@ -10,7 +10,7 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
 import type { InAppNotification } from "@/lib/server/notifications/inbox";
 import { cn } from "@/lib/utils";
-import { notificationsService } from "@/modules/reporting/reporting-service";
+import { NOTIFICATION_ARRIVED, notificationsService } from "@/modules/reporting/reporting-service";
 
 const PAGE = 30;
 type Filter = "unread" | "all";
@@ -48,6 +48,13 @@ export function NotificationsInbox() {
 
   useEffect(() => {
     void load(filter);
+  }, [load, filter]);
+
+  /* A new notification arrived live (23 Nov 2026): show it without a reload. */
+  useEffect(() => {
+    const reload = () => void load(filter);
+    window.addEventListener(NOTIFICATION_ARRIVED, reload);
+    return () => window.removeEventListener(NOTIFICATION_ARRIVED, reload);
   }, [load, filter]);
 
   const more = async () => {

@@ -7,6 +7,7 @@ import {
   accessAlertDue,
   assignmentProblems,
   attemptState,
+  LOGGED_OUTCOMES,
   boardActionSchema,
   confirmationDue,
   crewNeed,
@@ -50,17 +51,26 @@ test("crew and time from the visit's lines and the standard durations", () => {
   assert.deepEqual(n, { trades: ["ac", "plumbing"], durationMinutes: 60 + 40 + 60, headcount: 2 });
 });
 
-test("only competent technicians, with a valid certificate, free, with the access permission", () => {
+/* DEV-490 (BRD v0.4 5.11): no restriction by skill; on leave cannot be picked; already booked is marked and can be picked. */
+test("every technician can be picked except those on leave; skills and bookings are notes", () => {
   const ok = fitFor(tech("a", [{ trade: "ac", level: "competent", certificateExpires: null }]), need, free);
   assert.deepEqual([ok.covers, ok.blockers], [["ac"], []]);
-  assert.match(fitFor(tech("b", [{ trade: "ac", level: "trainee", certificateExpires: null }]), need, free).blockers[0], /Not confirmed/, "a trainee is not competent");
-  assert.match(fitFor(tech("c", [{ trade: "ac", level: "expert", certificateExpires: "2026-10-01" }]), need, free).blockers[0], /Certificate expired/);
-  assert.match(fitFor(tech("d", [{ trade: "plumbing", level: "expert", certificateExpires: null }]), need, free).blockers[0], /Not confirmed/, "never a merely similar technician");
+  const trainee = fitFor(tech("b", [{ trade: "ac", level: "trainee", certificateExpires: null }]), need, free);
+  assert.deepEqual(trainee.blockers, [], "a trainee can be picked");
+  assert.match(trainee.notes.join(" "), /No AMC skill/);
+  assert.match(fitFor(tech("c", [{ trade: "ac", level: "expert", certificateExpires: "2026-10-01" }]), need, free).notes.join(" "), /Certificate expired/);
+  const other = fitFor(tech("d", [{ trade: "plumbing", level: "expert", certificateExpires: null }]), need, free);
+  assert.deepEqual(other.blockers, [], "another trade can be picked");
+  assert.ok(ok.score > other.score, "the skilled technician ranks first");
   assert.ok(fitFor(tech("e", [{ trade: "ac", level: "competent", certificateExpires: null }]), need, { ...free, onLeave: true }).blockers.includes("On leave that day"));
-  assert.ok(fitFor(tech("f", [{ trade: "ac", level: "competent", certificateExpires: null }]), need, { ...free, overlaps: 1 }).blockers.includes("Already booked at that time"));
+  const booked = fitFor(tech("f", [{ trade: "ac", level: "competent", certificateExpires: null }]), need, { ...free, overlaps: 1 });
+  assert.deepEqual(booked.blockers, [], "already booked can still be picked");
+  assert.equal(booked.booked, true);
+  assert.ok(booked.notes.includes("Already booked at that time"));
+  assert.ok(ok.score > booked.score, "the free one ranks first");
+  /* A clearance on the property no longer blocks anyone (23 Nov 2026). */
   const clearance = { ...need, accessTypes: ["Emaar security"] };
-  assert.match(fitFor(tech("g", [{ trade: "ac", level: "competent", certificateExpires: null }]), clearance, free).blockers[0], /No access permission/);
-  assert.equal(fitFor(tech("h", [{ trade: "ac", level: "competent", certificateExpires: null }], { accessPermissions: ["emaar security"] }), clearance, free).blockers.length, 0);
+  assert.equal(fitFor(tech("g", [{ trade: "ac", level: "competent", certificateExpires: null }]), clearance, free).blockers.length, 0);
 });
 
 test("the suggested crew covers every trade, preferring one technician who covers several", () => {
@@ -72,9 +82,12 @@ test("the suggested crew covers every trade, preferring one technician who cover
   ];
   assert.deepEqual(suggestCrew(fits, twoTrades.trades), { technicianIds: ["both"], uncovered: [] });
   assert.deepEqual(suggestCrew(fits.slice(0, 1), twoTrades.trades).uncovered, ["plumbing"]);
-  assert.deepEqual(assignmentProblems(fits.slice(0, 1), twoTrades.trades), ["Nobody in the crew covers plumbing"]);
+  assert.deepEqual(assignmentProblems(fits.slice(0, 1)), [], "a crew without the skill is not refused (DEV-490)");
+  const bookedBoth = fitFor(tech("bb", [{ trade: "ac", level: "expert", certificateExpires: null }]), need, { ...free, overlaps: 1 });
+  assert.deepEqual(suggestCrew([bookedBoth], ["ac"]), { technicianIds: [], uncovered: ["ac"] }, "a booked technician is never suggested");
+  assert.deepEqual(assignmentProblems([bookedBoth]), [], "but can be picked");
   const blocked = fitFor(tech("x", [{ trade: "ac", level: "competent", certificateExpires: null }]), need, { ...free, onLeave: true });
-  assert.deepEqual(assignmentProblems([blocked], ["ac"]), ["X: on leave that day"], "blocked like leave");
+  assert.deepEqual(assignmentProblems([blocked]), ["X: on leave that day"], "blocked like leave");
 });
 
 test("double booking: time ranges overlap", () => {
@@ -82,18 +95,25 @@ test("double booking: time ranges overlap", () => {
   assert.equal(slotsOverlap({ start: "2026-11-10T05:00:00Z", end: "2026-11-10T06:00:00Z" }, { start: "2026-11-10T06:00:00Z", end: "2026-11-10T07:00:00Z" }), false, "back to back is fine");
 });
 
-test("confirmation: due N days before the window; attempts used up with no answer", () => {
+test("confirmation: due N days before the window; the rule counts Ask to confirm requests only", () => {
   assert.equal(confirmationDue("2026-11-10", "2026-11-02", 7), false);
   assert.equal(confirmationDue("2026-11-10", "2026-11-03", 7), true);
   const rule = { attemptCount: 3, attemptIntervalDays: 2 };
   const at = (d: string) => `2026-11-0${d}T08:00:00.000Z`;
-  const two = [{ outcome: "message_sent" as const, attemptedAt: at("1") }, { outcome: "no_answer" as const, attemptedAt: at("3") }];
+  const sent = (d: string) => ({ outcome: "message_sent" as const, attemptedAt: at(d) });
+  /* A call logged by hand is not counted and does not push the next request back (23 Nov 2026). */
+  const two = [sent("1"), { outcome: "no_answer" as const, attemptedAt: at("3") }, sent("3")];
   const s2 = attemptState(two, rule, new Date(at("4")));
   assert.deepEqual([s2.tried, s2.exhausted], [2, false]);
-  assert.equal(s2.nextAllowedAt, at("5"), "two days after the last attempt");
-  const three = attemptState([...two, { outcome: "no_answer", attemptedAt: at("5") }], rule, new Date(at("6")));
+  assert.equal(s2.nextAllowedAt, at("5"), "two days after the last request");
+  assert.equal(attemptState([sent("1"), { outcome: "no_answer", attemptedAt: at("3") }], rule, new Date(at("3"))).nextAllowedAt, null, "a logged call does not start a wait");
+  const three = attemptState([...two, sent("5")], rule, new Date(at("6")));
   assert.equal(three.exhausted, true);
-  assert.equal(attemptState([...two, { outcome: "confirmed", attemptedAt: at("5") }], rule, new Date(at("6"))).exhausted, false);
+  /* Answered: not used up, and no wait for another request. */
+  const answered = attemptState([...two, { outcome: "confirmed", attemptedAt: at("5") }], rule, new Date(at("5")));
+  assert.equal(answered.exhausted, false);
+  assert.equal(answered.nextAllowedAt, null);
+  assert.ok(!(LOGGED_OUTCOMES as readonly string[]).includes("message_sent"), "Request sent is Ask to confirm's own");
 });
 
 test("access: pending where the property has rules; a pass that runs out has expired; alert when near", () => {

@@ -241,7 +241,12 @@ export function VisitPage({ id }: { id: string }) {
               <Badge variant="secondary" className={cn("border-0 font-medium", STAGE_TONES[crewSubmitted ? "review" : v.stage])}>
                 {FIELD_VISIT_STAGE_LABELS[crewSubmitted ? "review" : v.stage]}
               </Badge>
-              <span className="text-muted-foreground text-sm">{crewSubmitted ? "Submitted by the crew" : v.statusLabel}</span>
+              {/* The status in words only when it says more than the badge ("Confirmed" twice, 23 Nov 2026). */}
+              {(() => {
+                const words = crewSubmitted ? "Submitted by the crew" : v.statusLabel;
+                const badge = FIELD_VISIT_STAGE_LABELS[crewSubmitted ? "review" : v.stage];
+                return words && words.trim().toLowerCase() !== badge.trim().toLowerCase() ? <span className="text-muted-foreground text-sm">{words}</span> : null;
+              })()}
             </span>
           }
           subline={[shortPlace(v.propertyLabel), whenText(v), v.crew.length ? `${v.crew[0].name}${v.crew.length > 1 ? ` +${v.crew.length - 1}` : ""}` : "No crew yet"].filter(Boolean).join(" · ")}
@@ -421,7 +426,7 @@ function PpmOverview({ v, data, onTab }: { v: FieldVisitRow; data: Loaded<PpmDat
         <StatCard
           label="Client"
           value={d.clientConfirmation ? (CONFIRMATION_LABELS[confirmation] ?? confirmation) : "Not requested yet"}
-          headline={d.confirmedAt ? `Confirmed ${shortDateTime(d.confirmedAt)}` : `${d.attemptState.tried} of ${d.rule.attemptCount} attempts${d.attemptState.exhausted ? ", used up" : ""}`}
+          headline={d.confirmedAt ? `Confirmed ${shortDateTime(d.confirmedAt)}` : `${d.attemptState.tried} of ${d.rule.attemptCount} requests sent${d.attemptState.exhausted ? ", used up" : ""}`}
           caption={d.attempts.length ? `Last by ${channelLabel(d.attempts[d.attempts.length - 1].channel)}` : "Not contacted yet"}
           tone={confirmed ? "good" : d.attemptState.exhausted ? "bad" : "review"}
           onSelect={() => onTab("client")}
@@ -478,6 +483,7 @@ function CallOutOverview({ v, data, onTab }: { v: FieldVisitRow; data: Loaded<Ca
   if (!d) return <SectionSkeleton />;
   const c = d.callOut;
   const a = d.allowance;
+  const hm = d.handyman ?? null;
   const due = c.attendDueAt ?? c.scheduleDueAt;
   const lead = v.crew.find((x) => x.lead) ?? v.crew[0];
   return (
@@ -486,14 +492,14 @@ function CallOutOverview({ v, data, onTab }: { v: FieldVisitRow; data: Loaded<Ca
         <StatCard
           label="Deadline"
           value={c.slaState ? (SLA_LABEL[c.slaState] ?? c.slaState) : "—"}
-          headline={due ? `${c.attendDueAt ? "Attend" : "Visit"} by ${shortDateTime(due)}` : "No deadline"}
+          headline={due ? `${c.attendDueAt ? "Attend" : "Schedule"} by ${shortDateTime(due)}` : "No deadline"}
           caption={`${CALL_OUT_PRIORITY_LABELS[c.priority]} · reported ${shortDateTime(c.reportedAt)}`}
           tone={c.slaState === "missed" ? "bad" : c.slaState === "at_risk" ? "review" : c.slaState === "met" ? "good" : "progress"}
         />
         <StatCard
           label="Coverage"
           value={c.coverage === "covered" ? "Covered" : "Chargeable"}
-          headline={c.coverageOverrideReason ? "Booked as covered (goodwill)" : !a ? "No allowance on this contract" : a.unlimited ? "Unlimited allowance" : a.included === null ? "Included, not counted" : `${a.remaining} of ${a.included} left`}
+          headline={c.coverageOverrideReason ? "Booked as covered (goodwill)" : !a ? "No allowance on this contract" : a.unlimited ? "Unlimited allowance" : a.included === null ? "Included, not counted" : `${a.remaining} of ${a.included}${hm ? " hours" : ""} left`}
           caption={a && !a.unlimited ? `${a.used} used${a.reserved ? `, ${a.reserved} booked` : ""}` : undefined}
           tone={c.coverage === "covered" ? "good" : "review"}
         />
@@ -536,6 +542,36 @@ function CallOutOverview({ v, data, onTab }: { v: FieldVisitRow; data: Loaded<Ca
               ),
             },
             { label: "Coverage", value: <CoverageBadge coverage={c.coverage} reserved={c.reserved} /> },
+            /* DEV-495: a handyman job, its teams and the team-hours used. */
+            ...(hm
+              ? [
+                  {
+                    label: "Handyman job",
+                    value: hm.fromCrew
+                      ? `${hm.teams} team${hm.teams === 1 ? "" : "s"}, one for each technician on the crew (each with a helper), on the free handyman hours`
+                      : "On the free handyman hours. The teams are counted from the crew once it is assigned (each technician with a helper).",
+                  },
+                  {
+                    label: "Hours used",
+                    value:
+                      hm.hoursUsed === null ? (
+                        muted("Recorded when the job is closed, from the technician's time on site")
+                      ) : (
+                        <span>
+                          {hm.hoursUsed} team-hour{hm.hoursUsed === 1 ? "" : "s"}
+                          {hm.hoursChargeable ? (
+                            <span className="text-warning">
+                              {" "}
+                              ({hm.hoursUsed - hm.hoursChargeable} from the free hours, {hm.hoursChargeable} chargeable)
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground"> from the free hours</span>
+                          )}
+                        </span>
+                      ),
+                  },
+                ]
+              : []),
             /* Booked as covered against the check (goodwill): say so, then what the check said. */
             ...(c.coverageOverrideReason ? [{ label: "Booked as covered", value: <span className="text-warning font-medium">{c.coverageOverrideReason}</span> }] : []),
             ...(c.coverageReasons.length ? [{ label: c.coverageOverrideReason ? "The check said" : "Why", value: c.coverageReasons.join(" ") }] : []),

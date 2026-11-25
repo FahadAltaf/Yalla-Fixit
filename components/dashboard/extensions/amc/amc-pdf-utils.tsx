@@ -170,7 +170,14 @@ export async function generateBrandedPdfBlob(
       await settle(tempDiv);
 
       const measured = measureAmcLayoutHeights(tempDiv);
-      bodyHeight = measured.bodyHeight;
+      /*
+        Room under the last line (23 Nov 2026): the last page's window ended
+        exactly at the body's last line, and html2canvas draws text a few
+        pixels lower than the page lays it out, so the service report's
+        closing line came out cut in half. Every other page ends at the top
+        of the next block, which leaves that room already.
+      */
+      bodyHeight = measured.bodyHeight + 24;
       sliceOffsets = computeBodySliceOffsets(
         measured.bodyHeight,
         measured.viewportHeight,

@@ -291,20 +291,44 @@ export function Field({
   label,
   htmlFor,
   hint,
+  error,
+  name,
   children,
   className,
 }: {
   label: string;
   htmlFor?: string;
   hint?: React.ReactNode;
+  /** A validation message (24 Nov 2026): shown in place of the hint, the control outlined in red. */
+  error?: string | null;
+  /** Marks the field so a form can scroll to its first error. */
+  name?: string;
   children: React.ReactNode;
   className?: string;
 }) {
   return (
-    <div className={cn("grid min-w-0 content-start gap-2", className)}>
-      <Label htmlFor={htmlFor}>{label}</Label>
+    <div
+      data-field={name}
+      data-invalid={error ? "true" : undefined}
+      className={cn(
+        "grid min-w-0 content-start gap-2",
+        /* Selects, pickers and the phone box take no aria-invalid of their own. */
+        error &&
+          "[&_[data-slot=select-trigger]]:border-destructive [&_[data-slot=popover-trigger]]:border-destructive [&_[data-slot=input-group]]:border-destructive [&_.PhoneInput]:border-destructive",
+        className,
+      )}
+    >
+      <Label htmlFor={htmlFor} className={cn(error && "text-destructive")}>
+        {label}
+      </Label>
       {children}
-      {hint ? <p className="text-muted-foreground text-xs">{hint}</p> : null}
+      {error ? (
+        <p role="alert" className="text-destructive text-xs">
+          {error}
+        </p>
+      ) : hint ? (
+        <p className="text-muted-foreground text-xs">{hint}</p>
+      ) : null}
     </div>
   );
 }

@@ -227,6 +227,7 @@ export function renderAmcDocumentHtml(title: string, model: AmcDocumentModel, ta
   .num { color: ${BRAND}; font-weight: 700; }
   table { border-collapse: collapse; margin: 6px 0; font-size: 9.5pt; page-break-inside: auto; }
   tr { page-break-inside: avoid; }
+  p + table, ul + table, ol + table { margin-top: 12px; }
   ul { margin: 4px 0 4px 18px; padding: 0; }
   .sigs { display: flex; gap: 40px; margin-top: 28px; } .sigs > div { flex: 1; }
   .sigline { height: 56px; border-bottom: 1px solid ${MUTED}; }

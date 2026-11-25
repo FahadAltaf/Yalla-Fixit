@@ -12,8 +12,8 @@ import {
   type AmendmentStatus,
 } from "@/lib/amc/amendments";
 import { servicesForProperty } from "@/components/dashboard/extensions/amc/amc-settings";
-import { approversForLevel, type AmcConfig } from "@/lib/amc/config";
-import { addMonths, todayInDubai } from "@/lib/amc/contracts";
+import type { AmcConfig } from "@/lib/amc/config";
+import { addMonths, includedQuantityFor, termMonthsBetween, todayInDubai } from "@/lib/amc/contracts";
 import { addDays, firstWorkingDay } from "@/lib/amc/ppm";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { getProperty } from "@/lib/server/amc/business";
@@ -23,6 +23,7 @@ import { notifyUsers } from "@/lib/server/amc/notifications";
 import { priceSubmission } from "@/lib/server/amc/pricing";
 import { cancelVisitsFrom, touchRenewal } from "@/lib/server/amc/renewals";
 import { readAmcSettings } from "@/lib/server/amc/settings";
+import { configuredDeciders } from "@/lib/server/amc/site-visit-approvers";
 import { recordStatusChange } from "@/lib/server/amc/status-history";
 
 /**
@@ -40,6 +41,10 @@ const str = (v: unknown): string | null => (typeof v === "string" && v.trim() ? 
 const NOT_MIGRATED = "Amendments are not set up on this database yet (migration 20261012140000).";
 function fail(error: { code?: string; message: string }): ContractError {
   if (isMissingTable(error) || error.code === "42703" || error.code === "PGRST204") return new ContractError(NOT_MIGRATED, 503);
+  /* Deciding your own amendment needs 20261124100000 (24 Nov 2026), which drops the old two-person check. */
+  if (error.code === "23514" && /amc_amendments_not_self_decided/.test(error.message)) {
+    return new ContractError("Deciding an amendment you asked for needs a database update (migration 20261124100000). Until it is applied, another approver decides it.", 409);
+  }
   return new ContractError(error.message, error.code === "23514" || error.code === "23505" ? 409 : 400);
 }
 
@@ -58,6 +63,8 @@ export interface AmendmentRecord {
   decisionComment: string | null;
   appliedAt: string | null;
   resultSubmissionId: string | null;
+  /** Who decides it, while it waits (24 Nov 2026). */
+  deciders?: string[];
 }
 
 export async function listAmendments(admin: Admin, contractId: string): Promise<{ migrated: boolean; amendments: AmendmentRecord[] }> {
@@ -135,6 +142,9 @@ export async function requestAmendment(admin: Admin, contractId: string, input: 
   const { contract } = await loadContract(admin, contractId);
   const problem = amendmentProblem(input.kind, contract.status);
   if (problem) throw new ContractError(problem, 409);
+  /* Ending on a set day (24 Nov 2026): nothing more is asked for on it. */
+  const ending = await scheduledEnding(admin, contractId);
+  if (ending) throw new ContractError(`This contract ends on ${ending.effectiveOn} (early termination), so no other change can be asked for.`, 409);
   const { data: open } = await admin.from("amc_contract_amendments").select("id").eq("contract_id", contractId).eq("kind", input.kind).in("status", ["requested", "approved"]).limit(1);
   if (open?.length) throw new ContractError(`A ${AMENDMENT_LABELS[input.kind].toLowerCase()} is already waiting on this contract.`, 409);
   const { details, effectiveOn } = await detailsFor(admin, contractId, input);
@@ -147,10 +157,10 @@ export async function requestAmendment(admin: Admin, contractId: string, input: 
   const id = String(data.id);
   await recordStatusChange(admin, { entityType: "amendment", entityId: id, from: null, to: "requested", reason: input.reason, actor, details: { contractId, kind: input.kind } });
   const number = contract.lifecycle?.contractNumber ?? contract.proposalNumber;
-  const approvers = approversForLevel(config, 1).filter((u) => u !== actor.id);
+  const deciders = await amendmentDeciders(admin, config, actor.id);
   await notifyUsers(admin, {
     event: "amendment_requested",
-    userIds: approvers.length ? approvers : approversForLevel(config, 2).filter((u) => u !== actor.id),
+    userIds: deciders.ids,
     title: `${AMENDMENT_LABELS[input.kind]} to approve: AMC ${number}`,
     body: `${contract.customerName}: ${input.reason.slice(0, 200)}`,
     link: `/extensions/amc-contracts/${contractId}?tab=amendments`,
@@ -160,6 +170,96 @@ export async function requestAmendment(admin: Admin, contractId: string, input: 
     dedupeKey: `amendment_requested:${id}`,
   });
   return { id };
+}
+
+/**
+ * Who decides an amendment (24 Nov 2026): the level 1 approvers, else level
+ * 2, else level 3, else the AMC Settings approvers -- never the person who
+ * asked. A termination asked for by the only level 1 approver used to be
+ * sent to nobody (level 2 named no one), though Sami and Behrouz could
+ * approve it.
+ */
+export async function amendmentDeciders(admin: Admin, config: AmcConfig, requesterId: string | null): Promise<{ ids: string[]; names: string[]; from: string }> {
+  /* The one chain from AMC configuration, shared with site visits (24 Nov 2026). */
+  return configuredDeciders(admin, config, requesterId);
+}
+
+/**
+ * The contract's last day when an early termination (or a replacing
+ * contract) has set one, else null (24 Nov 2026). Null too on a database
+ * without the termination columns.
+ */
+export async function scheduledEnding(admin: Admin, contractId: string): Promise<{ effectiveOn: string; noticeOn: string | null; refund: number | null } | null> {
+  const { data, error } = await admin.from("amc_contracts").select("termination_effective_on, termination_notice_on, termination_refund").eq("id", contractId).maybeSingle<Row>();
+  if (error || !data || !str(data.termination_effective_on)) return null;
+  return {
+    effectiveOn: String(data.termination_effective_on).slice(0, 10),
+    noticeOn: str(data.termination_notice_on)?.slice(0, 10) ?? null,
+    refund: data.termination_refund === null || data.termination_refund === undefined ? null : Number(data.termination_refund),
+  };
+}
+
+/**
+ * Instalments falling due after the contract ends are not owed (24 Nov
+ * 2026): unpaid ones are waived with the reason, so nobody is reminded or
+ * chased for them. One with money already against it is left for Finance.
+ * The refund (proRataRefund) is worked out on what was received.
+ */
+async function waiveInstalmentsAfter(admin: Admin, contractId: string, lastDay: string, reason: string): Promise<number> {
+  const { data, error } = await admin
+    .from("amc_instalments")
+    .update({ status: "waived", status_reason: reason, status_changed_at: new Date().toISOString() })
+    .eq("contract_id", contractId)
+    .gt("due_date", lastDay)
+    .eq("received_amount", 0)
+    .not("status", "in", "(received,written_off,waived)")
+    .select("id");
+  if (error) {
+    if (!isMissingTable(error)) console.warn("[amc:amendments] instalments not waived:", error.message);
+    return 0;
+  }
+  return (data ?? []).length;
+}
+
+/**
+ * The allowances once the contract ends early (24 Nov 2026): a scheduled
+ * service keeps the visits still planned before its last day; one with no
+ * schedule (call outs, hours) its share of the time served. Never below
+ * what is already used or booked. Before this the coverage still showed
+ * the full term after a termination.
+ */
+async function fitAllowancesToEnd(admin: Admin, contractId: string, startDate: string, lastDay: string): Promise<number> {
+  const [{ data: ents, error }, { data: lines }] = await Promise.all([
+    admin.from("amc_contract_entitlements").select("id, entitlement_type, units, frequency, included_quantity, used_quantity, reserved_quantity").eq("contract_id", contractId),
+    admin.from("amc_visit_lines").select("entitlement_id, status, visit:amc_visits!amc_visit_lines_visit_id_fkey(status)").eq("contract_id", contractId),
+  ]);
+  if (error) {
+    if (!isMissingTable(error)) console.warn("[amc:amendments] allowances not fitted:", error.message);
+    return 0;
+  }
+  const scheduled = new Map<string, number>();
+  for (const l of (lines ?? []) as Row[]) {
+    const id = String(l.entitlement_id);
+    const visit = (Array.isArray(l.visit) ? l.visit[0] : l.visit) as Row | null;
+    const kept = l.status !== "cancelled" && visit?.status !== "cancelled";
+    scheduled.set(id, (scheduled.get(id) ?? 0) + (kept ? 1 : 0));
+  }
+  const servedMonths = Math.max(1, termMonthsBetween(startDate, lastDay) || 1);
+  let changed = 0;
+  for (const e of (ents ?? []) as Row[]) {
+    const type = String(e.entitlement_type);
+    if (type !== "visits" && type !== "hours") continue;
+    const id = String(e.id);
+    const floor = Number(e.used_quantity ?? 0) + Number(e.reserved_quantity ?? 0);
+    const fitted = scheduled.has(id)
+      ? (scheduled.get(id) ?? 0)
+      : (includedQuantityFor(type as "visits" | "hours", Number(e.units ?? 1), Number(e.frequency ?? 1), servedMonths) ?? 0);
+    const next = Math.max(floor, fitted);
+    if (next === Number(e.included_quantity)) continue;
+    const { error: upError } = await admin.from("amc_contract_entitlements").update({ included_quantity: next }).eq("id", id);
+    if (!upError) changed += 1;
+  }
+  return changed;
 }
 
 async function loadAmendment(admin: Admin, contractId: string, amendmentId: string): Promise<Row> {
@@ -290,18 +390,24 @@ async function applyAmendment(admin: Admin, contractId: string, row: Row, actor:
         .update({ termination_notice_on: details.noticeOn, termination_effective_on: effectiveOn, termination_refund: refund.refund, updated_at: new Date().toISOString() })
         .eq("id", contractId);
       if (error) throw fail(error);
-      /* On or after its date it takes effect now; otherwise the daily renewals job carries it out. */
+      /* On or after its date it takes effect now; otherwise on its day (opening the contract, or the daily job). */
       if (effectiveOn <= today) {
         await setContractStatus(admin, contractId, contract.status, "terminated", { status_reason: reason }, actor, reason);
         await cancelVisitsFrom(admin, contractId, effectiveOn, "Contract terminated");
+      } else {
+        /* The visits after its last day will not happen: off the schedule now (24 Nov 2026), not on the day. */
+        await cancelVisitsFrom(admin, contractId, effectiveOn, `Contract ends ${effectiveOn} (early termination)`);
       }
-      return { details: { effectiveOn, refund: refund.refund, received, servedDays: refund.servedDays, totalDays: refund.totalDays } };
+      const instalmentsWaived = await waiveInstalmentsAfter(admin, contractId, effectiveOn, `Not owed: the contract ends ${effectiveOn} (early termination)`);
+      const allowancesFitted = await fitAllowancesToEnd(admin, contractId, contract.startDate, effectiveOn);
+      return { details: { effectiveOn, refund: refund.refund, received, servedDays: refund.servedDays, totalDays: refund.totalDays, instalmentsWaived, allowancesFitted } };
     }
 
     case "cancellation": {
       const nowIso = new Date().toISOString();
       await setContractStatus(admin, contractId, contract.status, "cancelled", { cancelled_at: nowIso, cancelled_by: actor.id, cancellation_reason: reason, status_reason: reason }, actor, reason);
       await cancelVisitsFrom(admin, contractId, "0001-01-01", "Contract cancelled");
+      await waiveInstalmentsAfter(admin, contractId, "0001-01-01", "Not owed: the contract was cancelled");
       return { details: {} };
     }
 
@@ -315,6 +421,9 @@ async function applyAmendment(admin: Admin, contractId: string, row: Row, actor:
           .update({ termination_notice_on: today, termination_effective_on: effectiveOn < today ? today : effectiveOn, termination_refund: 0, updated_at: new Date().toISOString() })
           .eq("id", contractId);
         if (error) throw fail(error);
+        await cancelVisitsFrom(admin, contractId, effectiveOn < today ? today : effectiveOn, "Replaced by a new contract");
+        await waiveInstalmentsAfter(admin, contractId, effectiveOn < today ? today : effectiveOn, "Not owed: replaced by a new contract");
+        await fitAllowancesToEnd(admin, contractId, contract.startDate, effectiveOn < today ? today : effectiveOn);
       }
       await touchRenewal(admin, contractId);
       return { details: { proposalCreated: true }, submissionId };

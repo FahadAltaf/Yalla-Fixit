@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Check, CircleAlert, KeyRound, Search, UserRound } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 import { SubmitButton } from "@/components/dashboard/shared/kaizen-states";
 import { useTechnicianLogins } from "@/components/dashboard/shared/technician-login";
@@ -218,10 +219,11 @@ export function AssessorPicker({
       </div>
 
       {failed && !searching ? (
-        <p className="border-danger/30 bg-danger/5 text-danger flex items-center gap-2 rounded-lg border px-3 py-2 text-sm" role="alert">
-          <CircleAlert className="size-4 shrink-0" aria-hidden />
-          {failed}
-        </p>
+        <Alert variant="danger">
+          <CircleAlert aria-hidden />
+          <AlertTitle>Could not check who is free</AlertTitle>
+          <AlertDescription>{failed}</AlertDescription>
+        </Alert>
       ) : null}
 
       {searching ? (

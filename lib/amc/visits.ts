@@ -102,18 +102,15 @@ export interface VisitNeed {
   date: string;
   /** Community or area of the property, when known. */
   area?: string | null;
-  /** Access permissions the property's rules call for (gate pass types). */
+  /**
+   * The property's security clearances, shown on the visit for information.
+   * They no longer decide who can be assigned (23 Nov 2026, the user): access
+   * is arranged per visit (Access tab, checked at Start visit).
+   */
   accessTypes: string[];
   /**
-   * A call out or additional work (18 Nov 2026): a technician with AMC skills
-   * may go; access is settled by the visit's own passes (Access tab, checked
-   * at Start visit), so a missing permission on their profile is only noted.
-   */
-  accessAsNote?: boolean;
-  /**
-   * A call out or additional work (19 Nov 2026): any technician can be found
-   * and chosen, AMC skills or not. A confirmed skill for the trade still
-   * ranks them first and makes the suggestion; without one it is only noted.
+   * Kept for callers written before DEV-490; it no longer changes anything:
+   * no AMC work restricts by skill now (BRD v0.4 5.11).
    */
   skillAsNote?: boolean;
 }
@@ -138,6 +135,8 @@ export interface TechnicianFit {
   workloadMinutes: number;
   /** Higher is a better pick. */
   score: number;
+  /** Already booked at that time (DEV-490): shown and marked, and can still be picked. */
+  booked?: boolean;
   /** The portal login, when there is one (undefined when not known). */
   accountId?: string | null;
   email?: string | null;
@@ -147,9 +146,13 @@ const competent = (s: { level: SkillLevel; certificateExpires: string | null }, 
   s.level !== "trainee" && (!s.certificateExpires || s.certificateExpires >= date);
 
 /**
- * One technician against one visit. Never a "merely similar" technician
- * (BRD 5.11): covering none of the visit's trades is a blocker, as is
- * leave, a double booking, or a missing access permission.
+ * One technician against one visit (BRD v0.4 5.11, DEV-490, 20 Nov 2026):
+ * every technician is listed. No restriction by skill for AMC work -- a
+ * confirmed skill for the trade ranks a technician first and makes the
+ * suggestion, its absence is only noted. On leave: shown, marked, cannot be
+ * picked. Already booked: shown, marked, can still be picked. Not active in
+ * FSM: cannot be picked. The property's access rules no longer decide who
+ * can be picked (23 Nov 2026, the user): access is arranged per visit.
  */
 export function fitFor(t: TechnicianFacts, need: VisitNeed, busy: TechnicianBusy): TechnicianFit {
   const blockers: string[] = [];
@@ -159,23 +162,19 @@ export function fitFor(t: TechnicianFacts, need: VisitNeed, busy: TechnicianBusy
   /* No trade named (a call out of an unknown kind): any free technician fits. */
   if (need.trades.length > 0 && covers.length === 0) {
     const expired = need.trades.some((trade) => t.skills.some((s) => s.trade === trade && s.level !== "trainee" && s.certificateExpires && s.certificateExpires < need.date));
-    if (need.skillAsNote) notes.push(expired ? "Certificate expired for this trade" : "No AMC skill for this trade on their profile");
-    else blockers.push(expired ? "Certificate expired for this trade" : "Not confirmed for this trade");
+    notes.push(expired ? "Certificate expired for this trade" : "No AMC skill for this trade on their profile");
   }
   if (busy.onLeave) blockers.push("On leave that day");
-  if (busy.overlaps > 0) blockers.push("Already booked at that time");
-  const missingAccess = need.accessTypes.filter((a) => !t.accessPermissions.some((p) => p.trim().toLowerCase() === a.trim().toLowerCase()));
-  if (missingAccess.length) {
-    if (need.accessAsNote) notes.push(`No ${missingAccess.join(", ")} permission on their profile: the visit's pass covers access`);
-    else blockers.push(`No access permission: ${missingAccess.join(", ")}`);
-  }
+  const booked = busy.overlaps > 0;
+  if (booked) notes.push("Already booked at that time");
   if (need.area && t.areas.length && !t.areas.some((a) => need.area!.toLowerCase().includes(a.toLowerCase()) || a.toLowerCase().includes(need.area!.toLowerCase()))) {
     notes.push("Usually works another area");
   }
   if (!t.hasVehicle) notes.push("No vehicle");
   const expert = covers.some((trade) => t.skills.some((s) => s.trade === trade && s.level === "expert"));
-  const score = covers.length * 100 + (expert ? 10 : 0) - Math.round(busy.workloadMinutes / 30) - notes.length * 5;
-  return { fsmId: t.fsmId, name: t.name, covers, blockers, notes, workloadMinutes: busy.workloadMinutes, score, accountId: t.accountId ?? null, email: t.email ?? null };
+  /* A booked technician can be picked, but the free ones rank first. */
+  const score = covers.length * 100 + (expert ? 10 : 0) - Math.round(busy.workloadMinutes / 30) - notes.length * 5 - (booked ? 60 : 0);
+  return { fsmId: t.fsmId, name: t.name, covers, blockers, notes, workloadMinutes: busy.workloadMinutes, score, booked, accountId: t.accountId ?? null, email: t.email ?? null };
 }
 
 /**
@@ -184,7 +183,8 @@ export function fitFor(t: TechnicianFacts, need: VisitNeed, busy: TechnicianBusy
  * nobody (the coordinator sees which).
  */
 export function suggestCrew(fits: TechnicianFit[], trades: Trade[]): { technicianIds: string[]; uncovered: Trade[] } {
-  const eligible = fits.filter((f) => f.blockers.length === 0).sort((a, b) => b.score - a.score);
+  /* The suggestion is free and skilled: a booked technician can be picked by hand, never suggested (DEV-490). */
+  const eligible = fits.filter((f) => f.blockers.length === 0 && !f.booked).sort((a, b) => b.score - a.score);
   const chosen: TechnicianFit[] = [];
   const left = new Set(trades);
   while (left.size) {
@@ -204,13 +204,9 @@ export function suggestCrew(fits: TechnicianFit[], trades: Trade[]): { technicia
  * What blocks assigning this crew (BRD 5.11 / DEV-397): any technician
  * with a blocker, or a trade nobody in the crew covers. Empty = allowed.
  */
-export function assignmentProblems(fits: TechnicianFit[], trades: Trade[], opts: { skillAsNote?: boolean } = {}): string[] {
-  const problems = fits.flatMap((f) => f.blockers.map((b) => `${f.name}: ${b.toLowerCase()}`));
-  const covered = new Set(fits.flatMap((f) => f.covers));
-  /* A call out or additional work (19 Nov 2026): nobody needs the AMC skill for the trade. */
-  const missing = opts.skillAsNote ? [] : trades.filter((t) => !covered.has(t));
-  if (missing.length) problems.push(`Nobody in the crew covers ${missing.join(", ")}`);
-  return problems;
+export function assignmentProblems(fits: TechnicianFit[]): string[] {
+  /* DEV-490: only what cannot be picked refuses a crew (leave, inactive, a planned visit's access); skills and bookings do not. */
+  return fits.flatMap((f) => f.blockers.map((b) => `${f.name}: ${b.toLowerCase()}`));
 }
 
 /** Two time ranges (ISO) overlap. */
@@ -246,22 +242,62 @@ export function confirmationDue(windowStart: string, today: string, leadDays: nu
   return today >= due.toISOString().slice(0, 10);
 }
 
+/** Where a planned visit stands with the client (DEV-492): confirmed, contacted (an attempt or request logged) or not yet. */
+export type PpmContactState = "confirmed" | "contacted" | "not_contacted";
+export const PPM_CONTACT_LABELS: Record<PpmContactState, string> = { confirmed: "Confirmed", contacted: "Contacted", not_contacted: "Not contacted yet" };
+export function ppmContactState(clientConfirmation: string | null | undefined, attempts: number): PpmContactState {
+  if (clientConfirmation === "confirmed") return "confirmed";
+  return attempts > 0 || clientConfirmation === "no_answer" || clientConfirmation === "declined" ? "contacted" : "not_contacted";
+}
+
+export type ConfirmationUrgencyLevel = "calm" | "soon" | "urgent";
+export interface ConfirmationUrgency {
+  level: ConfirmationUrgencyLevel;
+  /** Days from today to the visit day (negative once it has passed). */
+  daysLeft: number;
+  label: string;
+}
+
 /**
- * Whether the attempts are used up with no answer (BRD: three attempts two
- * days apart by default) and when the next attempt may be made.
+ * How pressing an unconfirmed PPM visit is (DEV-491, 20 Nov 2026): by the
+ * days left to its day (the slot when placed, else the tentative date).
+ * Four days or more: calm; two or three: soon; tomorrow, today or past:
+ * urgent. Nothing once the client has confirmed.
+ */
+export function confirmationUrgency(visitDay: string, today: string, clientConfirmation: string | null | undefined): ConfirmationUrgency | null {
+  if (clientConfirmation === "confirmed") return null;
+  const daysLeft = Math.round((Date.parse(`${visitDay}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / 86_400_000);
+  if (!Number.isFinite(daysLeft)) return null;
+  const level: ConfirmationUrgencyLevel = daysLeft <= 1 ? "urgent" : daysLeft <= 3 ? "soon" : "calm";
+  const label =
+    daysLeft < 0 ? `Visit day passed ${-daysLeft} day${daysLeft === -1 ? "" : "s"} ago` : daysLeft === 0 ? "Visit today" : daysLeft === 1 ? "Visit tomorrow" : `Visit in ${daysLeft} days`;
+  return { level, daysLeft, label };
+}
+
+/**
+ * The contract's attempt rule (BRD: three attempts two days apart by
+ * default), applied to the requests sent with Ask to confirm only (23 Nov
+ * 2026, the user): how many were sent, whether they are used up with no
+ * answer, and when the next may go. A call or message logged by hand
+ * ("Log an attempt") is a record of what happened, not counted or spaced;
+ * its answer (confirmed, declined, reschedule) still settles it. Once the
+ * client has answered there is no wait for the next request.
  */
 export function attemptState(
   attempts: Array<{ outcome: AttemptOutcome; attemptedAt: string }>,
   rule: { attemptCount: number; attemptIntervalDays: number },
   now: Date,
 ): { tried: number; exhausted: boolean; nextAllowedAt: string | null } {
-  const unanswered = attempts.filter((a) => a.outcome === "no_answer" || a.outcome === "message_sent");
+  const requests = attempts.filter((a) => a.outcome === "message_sent");
   const answered = attempts.some((a) => a.outcome === "confirmed" || a.outcome === "declined" || a.outcome === "reschedule_requested");
-  const tried = unanswered.length;
-  const last = attempts.map((a) => a.attemptedAt).sort().at(-1) ?? null;
-  const nextAllowedAt = last ? new Date(Date.parse(last) + rule.attemptIntervalDays * 86_400_000).toISOString() : null;
+  const tried = requests.length;
+  const last = requests.map((a) => a.attemptedAt).sort().at(-1) ?? null;
+  const nextAllowedAt = !answered && last ? new Date(Date.parse(last) + rule.attemptIntervalDays * 86_400_000).toISOString() : null;
   return { tried, exhausted: !answered && tried >= rule.attemptCount, nextAllowedAt: nextAllowedAt && nextAllowedAt > now.toISOString() ? nextAllowedAt : null };
 }
+
+/** What "Log an attempt" records: a call or message and how it went. "Request sent" is Ask to confirm's own. */
+export const LOGGED_OUTCOMES = ATTEMPT_OUTCOMES.filter((o) => o !== "message_sent");
 
 /* ------------------------------------------------------------------ */
 /* Access (DEV-399)                                                    */
@@ -344,11 +380,15 @@ export const boardActionSchema = z.discriminatedUnion("action", [
       leadTechnicianId: z.string().trim().max(40).optional().nullable(),
       overrideReason: optionalText(500),
       reason: optionalText(500),
+      /* DEV-493: booked inside the property's access lead time on purpose. */
+      insideLeadTime: z.boolean().optional(),
+      /* DEV-496: an AMC approver's reason for booking on an expired contract. */
+      expiredReason: optionalText(500),
     })
     .strict(),
   /* Move one or several to another day / time; crews stay. Outside the window is a reschedule (reason). */
   z
-    .object({ action: z.literal("move"), visitIds: z.array(uuid).min(1).max(50), date: isoDate, startTime: hhmm.optional().nullable(), reason: optionalText(500) })
+    .object({ action: z.literal("move"), visitIds: z.array(uuid).min(1).max(50), date: isoDate, startTime: hhmm.optional().nullable(), reason: optionalText(500), insideLeadTime: z.boolean().optional(), expiredReason: optionalText(500) })
     .strict(),
   /* Change the crew of one or several. */
   z

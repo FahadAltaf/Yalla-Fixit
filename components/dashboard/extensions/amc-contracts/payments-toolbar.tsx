@@ -1,9 +1,8 @@
 "use client";
 
-import { useId } from "react";
+import { useId, type ReactNode } from "react";
 import { LoaderCircleIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
 
-import { StatusSelect } from "@/components/data-table/toolbars/status-select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,9 +19,7 @@ export function PaymentsToolbar({
   onSearchChange,
   searchLabel,
   loading,
-  statusOptions,
-  status,
-  onStatusChange,
+  filters,
   pageSize,
   onPageSizeChange,
   onRefresh,
@@ -31,9 +28,8 @@ export function PaymentsToolbar({
   onSearchChange: (value: string) => void;
   searchLabel: string;
   loading: boolean;
-  statusOptions: ReadonlyArray<{ value: string; label: string }>;
-  status: string;
-  onStatusChange: (value: string) => void;
+  /** The Filters button (status, due date, mode...), as the other lists (23 Nov 2026). */
+  filters: ReactNode;
   pageSize: number;
   onPageSizeChange: (size: number) => void;
   onRefresh: () => void;
@@ -60,7 +56,7 @@ export function PaymentsToolbar({
               {loading ? <LoaderCircleIcon aria-label="Loading..." className="animate-spin" role="status" size={16} /> : <SearchIcon aria-hidden="true" size={16} />}
             </div>
           </div>
-          <StatusSelect options={statusOptions} value={status} onChange={onStatusChange} />
+          {filters}
         </div>
 
         <div className="flex gap-3 sm:flex-row sm:items-center sm:gap-4">

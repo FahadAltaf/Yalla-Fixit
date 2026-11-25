@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useState } from "react";
 import type { UseFormReturn } from "react-hook-form";
 import { SquarePen, Plus, RotateCcw, Trash2, Wrench } from "lucide-react";
 
@@ -15,7 +15,6 @@ import {
   FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "@/components/ui/input-group";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -26,7 +25,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { nearestAllowedFrequency } from "@/lib/amc/rate-card";
+import { cn } from "@/lib/utils";
 import { formatCurrencyAED } from "@/utils/format-currency";
 
 import { isFrequencyEditable } from "../amc-constants";
@@ -40,6 +39,7 @@ import {
   type AmcService,
 } from "../amc-types";
 import { CustomServiceDialog, type CustomServiceDraft } from "./custom-service-dialog";
+import { ServiceScopeButton } from "./service-scope-button";
 
 /* What the frequency counts, where it is not visits a year (Scope of Works Library). */
 const FREQUENCY_UNIT: Partial<Record<AmcService["frequencyType"], string>> = {
@@ -80,6 +80,7 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
   const formValues = form.watch();
   const totals = calculateAmcTotals(formValues);
   const propertyType = form.watch("propertyType");
+  const propertyRecordId = form.watch("propertyRecordId") ?? null;
   const availableServices = servicesForProperty({ services: [...catalogue] }, [propertyType, unitType]);
   const enabledCount = catalogue.filter((service) => service.enabled !== false).length;
   /*
@@ -114,23 +115,11 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
   const flagUnpriced = form.formState.errors.serviceRows?.message === BASE_PRICE_MESSAGE;
 
   /*
-    A ticked line at a frequency the card does not allow is moved to the
-    nearest one it does, rather than being refused only on submit (a draft
-    started from an enquiry or a site visit may carry the default of 1).
+    Visits a year are typed (23 Nov 2026, the user): a number the card does
+    not list is kept and marked for approval, not moved to the nearest one
+    the card allows. A proposal started from an enquiry or a site visit is
+    still put on the card's numbers when it is made (snapToCardFrequencies).
   */
-  useEffect(() => {
-    if (!allowedFrequencies) return;
-    let changed = false;
-    const next = serviceRows.map((row) => {
-      const service = catalogue.find((s) => s.id === row.serviceId);
-      if (!row.included || !service || !isFrequencyEditable(service.frequencyType)) return row;
-      const frequency = nearestAllowedFrequency(allowedFrequencies(row.serviceId), row.frequency);
-      if (frequency === row.frequency) return row;
-      changed = true;
-      return { ...row, frequency };
-    });
-    if (changed) form.setValue("serviceRows", next, { shouldValidate: true, shouldDirty: true });
-  }, [serviceRows, allowedFrequencies, catalogue, form]);
 
   const updateRow = (
     serviceId: string,
@@ -226,6 +215,11 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
                           </TableCell>
                         </TableRow>
                       ) : null}
+                      {/*
+                        Centred (24 Nov 2026, the user). A caption under a field ("hours a
+                        year", "Not on the card") hangs below it instead of taking room, so
+                        every field sits on the row's middle line, captioned or not.
+                      */}
                       <TableRow>
                         <TableCell>
                           <Checkbox
@@ -280,13 +274,20 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
                             signed contracts name it. Only on a ticked row,
                             since only those print.
                           */}
+                          {/*
+                            Equipment is entered in the Details dialog with the visit details
+                            (24 Nov 2026). A custom service, or a proposal with no property on
+                            file, has no dialog, so it keeps the field here.
+                          */}
                           {row.included ? (
+                          <div className="mt-2 flex flex-wrap items-center gap-2">
+                            {service.custom || !propertyRecordId ? (
                             /*
                               Labelled inside the field, so a value such as
                               "98" still reads as the equipment and not as
                               a stray number beside the service name.
                             */
-                            <InputGroup className="mt-2 h-8 w-full max-w-[260px] rounded-[12px]">
+                            <InputGroup className="h-8 w-full max-w-[260px] rounded-[12px]">
                               <InputGroupAddon className="text-muted-foreground gap-1.5 pr-0 text-[11px] font-medium">
                                 <Wrench className="size-3.5" aria-hidden />
                                 Equipment
@@ -302,6 +303,20 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
                                 }
                               />
                             </InputGroup>
+                            ) : null}
+                            {/* The line's equipment and visit details (months, days, duration) in one dialog. */}
+                            {!service.custom && propertyRecordId ? (
+                              <ServiceScopeButton
+                                propertyId={propertyRecordId}
+                                serviceId={service.id}
+                                label={service.label}
+                                units={row.units}
+                                frequency={row.frequency}
+                                equipment={row.equipment}
+                                onEquipmentChange={(equipment) => updateRow(service.id, { equipment })}
+                              />
+                            ) : null}
+                          </div>
                           ) : null}
                         </TableCell>
                         <TableCell>
@@ -335,25 +350,23 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
                             somebody forgot to switch on. The word that
                             will print on the contract is shown instead.
                           */}
-                          {frequencyEditable && (allowedFrequencies?.(service.id).length ?? 0) > 0 ? (
-                            /* The card limits it: only its frequencies are offered. */
-                            <Select
-                              value={String(row.frequency)}
-                              disabled={!row.included}
-                              onValueChange={(value) => updateRow(service.id, { frequency: Number(value) })}
-                            >
-                              <SelectTrigger className="h-8 w-full text-xs" aria-label={`Frequency for ${service.label}`}>
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                {allowedFrequencies!(service.id).map((n) => (
-                                  <SelectItem key={n} value={String(n)}>
-                                    {n} a year
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
-                          ) : frequencyEditable ? (
+                          {frequencyEditable ? (
+                          <FieldWithNotes
+                            notes={
+                              <>
+                              {/* What the card lists, so a number outside it is a choice, not a surprise. */}
+                              {row.included && (allowedFrequencies?.(service.id).length ?? 0) > 0 ? (
+                                <span className={cn("block text-[11px]", row.frequencyOffCard ? "text-warning" : "text-muted-foreground")}>
+                                  Card: {allowedFrequencies!(service.id).join(", ")}
+                                </span>
+                              ) : null}
+                              {/* What the number counts, where it is not visits a year. */}
+                              {FREQUENCY_UNIT[service.frequencyType] ? (
+                                <span className="text-muted-foreground block text-[11px]">{FREQUENCY_UNIT[service.frequencyType]}</span>
+                              ) : null}
+                              </>
+                            }
+                          >
                             <Input
                               type="number"
                               min={1}
@@ -372,12 +385,7 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
                                 })
                               }
                             />
-                          ) : null}
-                          {/* What the number counts, where it is not visits a year. */}
-                          {frequencyEditable && FREQUENCY_UNIT[service.frequencyType] ? (
-                            <span className="text-muted-foreground mt-0.5 block text-[11px]">
-                              {FREQUENCY_UNIT[service.frequencyType]}
-                            </span>
+                          </FieldWithNotes>
                           ) : null}
                           {frequencyEditable ? null : (
                             <span className="text-muted-foreground text-xs">
@@ -448,7 +456,24 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
                               or off the card, the proposal goes for approval. The
                               arrow puts the card's rate back.
                             */
-                            <div className="grid gap-1 text-xs">
+                            <div className="text-xs">
+                              <FieldWithNotes
+                                notes={
+                                  <>
+                              {row.rateOverride && row.standardRate != null ? (
+                                <span className="text-muted-foreground text-[10px]">Card {formatCurrencyAED(row.standardRate)}</span>
+                              ) : null}
+                              {row.rateOverride && row.standardRate != null ? null : row.standardRate == null && !row.rateItemId ? (
+                                <span className={row.included && row.basePrice === undefined ? "text-destructive text-[10px]" : "text-muted-foreground text-[10px]"}>Not on the card</span>
+                              ) : null}
+                              {row.promotionPercent && !row.rateOverride ? (
+                                <Badge variant="secondary" className="bg-success/10 text-success w-fit border-0 px-1.5 py-0 text-[10px] font-medium">
+                                  Promotion −{row.promotionPercent}%
+                                </Badge>
+                              ) : null}
+                                  </>
+                                }
+                              >
                               <div className="flex items-center gap-1">
                                 <Input
                                   type="number"
@@ -481,15 +506,19 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
                                   </Button>
                                 ) : null}
                               </div>
-                              {row.rateOverride && row.standardRate != null ? (
-                                <span className="text-muted-foreground text-[10px]">Card {formatCurrencyAED(row.standardRate)}</span>
-                              ) : row.standardRate == null && !row.rateItemId ? (
-                                <span className={row.included && row.basePrice === undefined ? "text-destructive text-[10px]" : "text-muted-foreground text-[10px]"}>Not on the card</span>
-                              ) : null}
-                              {row.promotionPercent && !row.rateOverride ? (
-                                <Badge variant="secondary" className="bg-success/10 text-success w-fit border-0 px-1.5 py-0 text-[10px] font-medium">
-                                  Promotion −{row.promotionPercent}%
-                                </Badge>
+                              </FieldWithNotes>
+                              {/* In the flow, as it is typed into. DEV-501: above the card needs a reason, kept with the name of who typed it. */}
+                              {row.included && !row.free && row.rateOverride && row.standardRate != null && row.basePrice != null && row.basePrice > row.standardRate ? (
+                                <Input
+                                  className="mt-1 h-7 w-44 text-[11px]"
+                                  maxLength={300}
+                                  placeholder="Why above the card?"
+                                  aria-label={`Why the rate for ${service.label} is above the rate card`}
+                                  aria-invalid={(row.rateOverrideReason ?? "").trim().length < 3}
+                                  value={row.rateOverrideReason ?? ""}
+                                  title={row.rateOverrideBy ? `Typed by ${row.rateOverrideBy}` : undefined}
+                                  onChange={(event) => updateRow(service.id, { rateOverrideReason: event.target.value })}
+                                />
                               ) : null}
                             </div>
                           ) : (
@@ -526,7 +555,13 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
                           )}
                           {row.included && row.belowFloor ? (
                             <div className="text-warning text-[10px] font-normal" title={row.floorRate != null ? `Floor rate ${formatCurrencyAED(row.floorRate)}` : undefined}>
-                              {row.rateOverride ? (row.floorRate != null ? "Below the floor: needs approval" : "Off the card: needs approval") : "Below floor after discount"}
+                              {row.rateOverride
+                                ? row.floorRate != null
+                                  ? "Below the floor: needs approval"
+                                  : "Off the card: needs approval"
+                                : row.frequencyOffCard
+                                  ? "Visits off the card: needs approval"
+                                  : "Below floor after discount"}
                             </div>
                           ) : null}
                         </TableCell>
@@ -634,6 +669,24 @@ export function ServiceTable({ form, catalogue, rateCard = false, discountNote, 
           Services not offered on this kind of property are hidden.
         </p>
       )}
+    </div>
+  );
+}
+
+/**
+ * A field on its row's middle line with its notes under it (24 Nov 2026).
+ * The notes ("hours a year", "Not on the card") are mirrored, unseen, above
+ * the field, so the field stays centred whether it has notes or not, and the
+ * row grows to hold them instead of the notes running over the row's line.
+ */
+function FieldWithNotes({ notes, children }: { notes: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col">
+      <div aria-hidden className="invisible grid gap-0.5 whitespace-nowrap select-none">
+        {notes}
+      </div>
+      {children}
+      <div className="grid gap-0.5 whitespace-nowrap">{notes}</div>
     </div>
   );
 }

@@ -34,7 +34,7 @@ export function SubmissionStatusBanner({
   /* Red, as on the proposal's page and its status badge: the team has to act. */
   if (status === "proposal_rejected") {
     return (
-      <Alert className="border-danger/30 bg-danger/5">
+      <Alert variant="danger">
         <Undo2 className="text-danger size-4" />
         <AlertTitle>
           {clientName?.trim() || "The client"} asked for changes
@@ -56,7 +56,7 @@ export function SubmissionStatusBanner({
 
   if (status === "sent_back") {
     return (
-      <Alert className="border-danger/30 bg-danger/5">
+      <Alert variant="danger">
         <Undo2 className="text-danger size-4" />
         <AlertTitle>
           Sent back by the approver

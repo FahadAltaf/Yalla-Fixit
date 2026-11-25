@@ -44,6 +44,9 @@ import { ActionType, ResourceType } from "@/types/types";
 
 import { formatContractDate } from "./contract-status";
 import { ChequeActions, usePaymentDialogs, type PaymentDialogs } from "./payment-dialogs";
+import { PaymentDetailDialog, type PaymentDetailTarget } from "./payment-detail-dialog";
+import { ReportFiltersButton } from "@/components/data-table/toolbars/report-toolbar";
+import { PAYMENT_MODES, PAYMENT_WHEN, PAYMENT_WHEN_LABELS, type PaymentWhen } from "@/lib/amc/payments";
 import { ChequeStatusBadge, DaysOverdue, InstalmentStatusBadge } from "./payment-status";
 import { PaymentsToolbar } from "./payments-toolbar";
 import { useUrlTab } from "./profile/use-url-tab";
@@ -96,6 +99,13 @@ export function PaymentsPage() {
   const setChequeCount = useCallback((n: number) => setCounts((c) => ({ ...c, cheques: n })), []);
   /* Bumped after an action, so both tables load again. */
   const [version, setVersion] = useState(0);
+  /* A row's pop-up (23 Nov 2026), and a due-date filter an ageing card sets. */
+  const [detail, setDetail] = useState<PaymentDetailTarget | null>(null);
+  const [preset, setPreset] = useState<{ when: string; n: number } | null>(null);
+  const showLate = (when: PaymentWhen | "any") => {
+    setTab("instalments");
+    setPreset((p) => ({ when, n: (p?.n ?? 0) + 1 }));
+  };
 
   /* The balance over all open money, whatever the tables are filtered to; also the access check. */
   const loadSummary = useCallback(
@@ -176,7 +186,7 @@ export function PaymentsPage() {
       {heading}
 
       {!migrated ? (
-        <Alert className="border-warning/30 bg-warning/5 items-start p-4">
+        <Alert variant="warning">
           <Database className="text-warning" />
           <AlertTitle>Payments need a database update</AlertTitle>
           <AlertDescription>
@@ -209,6 +219,9 @@ export function PaymentsPage() {
                 value={<Money value={summary.ageing[bucket]} className="text-xl" />}
                 headline={summary.ageing[bucket] > 0 ? "Overdue" : "Nothing this late"}
                 tone={summary.ageing[bucket] > 0 ? AGEING_TONE[bucket] : "neutral"}
+                /* Opens the instalments this late (23 Nov 2026). */
+                onSelect={() => showLate(BUCKET_WHEN[bucket])}
+                selectLabel={`Show the instalments ${AGEING_LABELS[bucket].toLowerCase()} late`}
               />
             ))}
           </StatCardGrid>
@@ -234,7 +247,7 @@ export function PaymentsPage() {
           </TabsList>
           {panel(
             "instalments",
-            <InstalmentsTable version={version} onTotal={setInstalmentCount} onRefresh={refreshAll} />,
+            <InstalmentsTable version={version} onTotal={setInstalmentCount} onRefresh={refreshAll} preset={preset} onOpen={setDetail} />,
           )}
           {panel(
             "cheques",
@@ -244,15 +257,24 @@ export function PaymentsPage() {
               dialogs={dialogs}
               onTotal={setChequeCount}
               onRefresh={refreshAll}
+              onOpen={setDetail}
             />,
           )}
         </Tabs>
       ) : null}
 
       {dialogs.dialogs}
+      <PaymentDetailDialog target={detail} onOpenChange={(open) => !open && setDetail(null)} dialogs={dialogs} version={version} />
     </div>
   );
 }
+
+const BUCKET_WHEN = { d1_30: "overdue_1_30", d31_60: "overdue_31_60", d61_90: "overdue_61_90", d90_plus: "overdue_90_plus" } as const;
+
+/* Finance's filters beside the status (23 Nov 2026). "any" is no filter. */
+const WHEN_OPTIONS = (kind: "instalments" | "cheques") =>
+  PAYMENT_WHEN.filter((w) => (kind === "cheques" ? !w.startsWith("overdue") : w !== "past_30")).map((w) => ({ value: w, label: PAYMENT_WHEN_LABELS[w] }));
+const MODE_OPTIONS = PAYMENT_MODES.map((m) => ({ value: m, label: PAYMENT_MODE_LABELS[m] }));
 
 /**
  * Server paging for one of Finance's tables: the search waits for typing
@@ -272,6 +294,10 @@ function usePagedList<Row>(
   const [status, setStatus] = useState(initialStatus);
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(25);
+  const [when, setWhen] = useState("any");
+  const [mode, setMode] = useState("any");
+  const [dueFrom, setDueFrom] = useState("");
+  const [dueTo, setDueTo] = useState("");
   const q = useDebounce(search.trim(), 300);
   const ticket = useRef(0);
 
@@ -280,7 +306,16 @@ function usePagedList<Row>(
     setLoading(true);
     setError(null);
     try {
-      const result = await fetchPage({ status, q, page: page + 1, pageSize });
+      const result = await fetchPage({
+        status,
+        q,
+        page: page + 1,
+        pageSize,
+        when: when === "any" ? null : when,
+        mode: mode === "any" ? null : mode,
+        dueFrom: dueFrom || null,
+        dueTo: dueTo || null,
+      });
       if (mine !== ticket.current) return;
       setRows(result.rows);
       setTotal(result.total);
@@ -292,7 +327,7 @@ function usePagedList<Row>(
     } finally {
       if (mine === ticket.current) setLoading(false);
     }
-  }, [fetchPage, status, q, page, pageSize]);
+  }, [fetchPage, status, q, page, pageSize, when, mode, dueFrom, dueTo]);
 
   useEffect(() => {
     void load();
@@ -321,18 +356,44 @@ function usePagedList<Row>(
       setPageSize(size);
       setPage(0);
     },
+    when,
+    setWhen: (value: string) => {
+      setWhen(value);
+      setPage(0);
+    },
+    mode,
+    setMode: (value: string) => {
+      setMode(value);
+      setPage(0);
+    },
+    dueFrom,
+    dueTo,
+    setDueRange: (from: string, to: string) => {
+      setDueFrom(from);
+      setDueTo(to);
+      setPage(0);
+    },
   };
 }
 
-type ListFetch<Row> = (params: { status: string; q: string; page: number; pageSize: number }) => Promise<{ rows: Row[]; total: number }>;
+type ListFetch<Row> = (params: {
+  status: string;
+  q: string;
+  page: number;
+  pageSize: number;
+  when: string | null;
+  mode: string | null;
+  dueFrom: string | null;
+  dueTo: string | null;
+}) => Promise<{ rows: Row[]; total: number }>;
 
-const fetchInstalments: ListFetch<InstalmentListRow> = async ({ status, q, page, pageSize }) => {
-  const r = await paymentsService.listInstalments({ status: status === "all" ? null : (status as InstalmentFilter), q, page, pageSize });
+const fetchInstalments: ListFetch<InstalmentListRow> = async ({ status, q, page, pageSize, when, mode, dueFrom, dueTo }) => {
+  const r = await paymentsService.listInstalments({ status: status === "all" ? null : (status as InstalmentFilter), q, page, pageSize, when, mode, dueFrom, dueTo });
   return { rows: r.instalments, total: r.total };
 };
 
-const fetchCheques: ListFetch<ChequeListRow> = async ({ status, q, page, pageSize }) => {
-  const r = await paymentsService.listCheques({ status: status === "all" ? null : (status as ChequeStatus), q, page, pageSize });
+const fetchCheques: ListFetch<ChequeListRow> = async ({ status, q, page, pageSize, when, dueFrom, dueTo }) => {
+  const r = await paymentsService.listCheques({ status: status === "all" ? null : (status as ChequeStatus), q, page, pageSize, when, dueFrom, dueTo });
   return { rows: r.cheques, total: r.total };
 };
 
@@ -346,11 +407,30 @@ function ClientCell({ contract, extra }: { contract: InstalmentListRow["contract
   );
 }
 
-function InstalmentsTable({ version, onTotal, onRefresh }: { version: number; onTotal: (n: number) => void; onRefresh: () => void }) {
-  const router = useRouter();
+function InstalmentsTable({
+  version,
+  onTotal,
+  onRefresh,
+  preset,
+  onOpen,
+}: {
+  version: number;
+  onTotal: (n: number) => void;
+  onRefresh: () => void;
+  preset: { when: string; n: number } | null;
+  onOpen: (target: PaymentDetailTarget) => void;
+}) {
   const list = usePagedList(fetchInstalments, "open", version);
   const { total } = list;
   useEffect(() => onTotal(total), [total, onTotal]);
+  /* An ageing card was clicked: show those, whatever the status filter was. */
+  const { setWhen, setStatus } = list;
+  useEffect(() => {
+    if (!preset) return;
+    setWhen(preset.when);
+    setStatus("open");
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per click (preset.n)
+  }, [preset?.n]);
 
   const columns: ColumnDef<InstalmentListRow>[] = [
     { id: "client", header: "Client", cell: ({ row }) => <ClientCell contract={row.original.contract} /> },
@@ -377,7 +457,7 @@ function InstalmentsTable({ version, onTotal, onRefresh }: { version: number; on
     { id: "late", header: "Overdue", cell: ({ row }) => <span className="text-sm"><DaysOverdue days={row.original.daysOverdue} /></span> },
   ];
 
-  const searched = Boolean(list.search.trim());
+  const searched = Boolean(list.search.trim()) || list.when !== "any" || list.mode !== "any" || Boolean(list.dueFrom || list.dueTo);
   return (
     <>
       {list.error ? <ErrorState title="Could not load the instalments" message={list.error} onRetry={() => void list.load()} retrying={list.loading} /> : null}
@@ -393,16 +473,42 @@ function InstalmentsTable({ version, onTotal, onRefresh }: { version: number; on
           onPageChange={list.setPage}
           onPageSizeChange={list.setPageSize}
           onGlobalFilterChange={list.setSearch}
-          handleRowClick={(row) => router.push(contractHref(row.contractId))}
+          /* The row opens its pop-up: details, actions, and the way to the contract (23 Nov 2026). */
+          handleRowClick={(row) =>
+            onOpen({
+              kind: "instalment",
+              id: row.id,
+              contractId: row.contractId,
+              ref: `Instalment ${row.instalmentNo}`,
+              client: row.contract?.customerName || "Unnamed client",
+              contractNumber: row.contract?.contractNumber || null,
+              property: row.contract?.propertyLabel || null,
+            })
+          }
           toolbar={
             <PaymentsToolbar
+              filters={
+                <ReportFiltersButton
+                  filters={{ status: list.status, when: list.when === "any" ? "" : list.when, mode: list.mode === "any" ? "" : list.mode, from: list.dueFrom, to: list.dueTo }}
+                  onFiltersChange={(next) => {
+                    if ((next.status || "open") !== list.status) list.setStatus(next.status || "open");
+                    if ((next.when || "any") !== list.when) list.setWhen(next.when || "any");
+                    if ((next.mode || "any") !== list.mode) list.setMode(next.mode || "any");
+                    if ((next.from ?? "") !== list.dueFrom || (next.to ?? "") !== list.dueTo) list.setDueRange(next.from ?? "", next.to ?? "");
+                  }}
+                  selects={[
+                    { key: "status", allLabel: "Status", required: true, defaultValue: "open", options: INSTALMENT_FILTERS },
+                    { key: "when", allLabel: "Any due date", options: WHEN_OPTIONS("instalments") },
+                    { key: "mode", allLabel: "Any expected mode", options: MODE_OPTIONS },
+                  ]}
+                  dateLabel="Due between"
+                  clearable={["when", "mode", "from", "to"]}
+                />
+              }
               search={list.search}
               onSearchChange={list.setSearch}
               searchLabel="Search instalments"
               loading={list.loading}
-              statusOptions={INSTALMENT_FILTERS}
-              status={list.status}
-              onStatusChange={list.setStatus}
               pageSize={list.pageSize}
               onPageSizeChange={list.setPageSize}
               onRefresh={() => {
@@ -430,6 +536,9 @@ function InstalmentsTable({ version, onTotal, onRefresh }: { version: number; on
                       onClick: () => {
                         list.setSearch("");
                         list.setStatus("open");
+                        list.setWhen("any");
+                        list.setMode("any");
+                        list.setDueRange("", "");
                       },
                     }
                   : undefined
@@ -448,14 +557,15 @@ function ChequesTable({
   dialogs,
   onTotal,
   onRefresh,
+  onOpen,
 }: {
   version: number;
   permissions: PaymentPermissions;
   dialogs: PaymentDialogs;
   onTotal: (n: number) => void;
   onRefresh: () => void;
+  onOpen: (target: PaymentDetailTarget) => void;
 }) {
-  const router = useRouter();
   const list = usePagedList(fetchCheques, "all", version);
   const { total } = list;
   useEffect(() => onTotal(total), [total, onTotal]);
@@ -497,7 +607,7 @@ function ChequesTable({
     },
   ];
 
-  const filtered = Boolean(list.search.trim()) || list.status !== "all";
+  const filtered = Boolean(list.search.trim()) || list.status !== "all" || list.when !== "any" || Boolean(list.dueFrom || list.dueTo);
   return (
     <>
       {list.error ? <ErrorState title="Could not load the cheques" message={list.error} onRetry={() => void list.load()} retrying={list.loading} /> : null}
@@ -513,16 +623,39 @@ function ChequesTable({
           onPageChange={list.setPage}
           onPageSizeChange={list.setPageSize}
           onGlobalFilterChange={list.setSearch}
-          handleRowClick={(row) => router.push(contractHref(row.contractId))}
+          handleRowClick={(row) =>
+            onOpen({
+              kind: "cheque",
+              id: row.id,
+              contractId: row.contractId,
+              ref: `Cheque ${row.chequeNo}`,
+              client: row.contract?.customerName || "Unnamed client",
+              contractNumber: row.contract?.contractNumber || null,
+              property: row.contract?.propertyLabel || null,
+            })
+          }
           toolbar={
             <PaymentsToolbar
+              filters={
+                <ReportFiltersButton
+                  filters={{ status: list.status === "all" ? "" : list.status, when: list.when === "any" ? "" : list.when, from: list.dueFrom, to: list.dueTo }}
+                  onFiltersChange={(next) => {
+                    if ((next.status || "all") !== list.status) list.setStatus(next.status || "all");
+                    if ((next.when || "any") !== list.when) list.setWhen(next.when || "any");
+                    if ((next.from ?? "") !== list.dueFrom || (next.to ?? "") !== list.dueTo) list.setDueRange(next.from ?? "", next.to ?? "");
+                  }}
+                  selects={[
+                    { key: "status", allLabel: "All statuses", options: CHEQUE_FILTERS.filter((o) => o.value !== "all") },
+                    { key: "when", allLabel: "Any cheque date", options: WHEN_OPTIONS("cheques") },
+                  ]}
+                  dateLabel="Dated between"
+                  clearable={["status", "when", "from", "to"]}
+                />
+              }
               search={list.search}
               onSearchChange={list.setSearch}
               searchLabel="Search cheques"
               loading={list.loading}
-              statusOptions={CHEQUE_FILTERS}
-              status={list.status}
-              onStatusChange={list.setStatus}
               pageSize={list.pageSize}
               onPageSizeChange={list.setPageSize}
               onRefresh={() => {
@@ -544,6 +677,8 @@ function ChequesTable({
                       onClick: () => {
                         list.setSearch("");
                         list.setStatus("all");
+                        list.setWhen("any");
+                        list.setDueRange("", "");
                       },
                     }
                   : undefined
@@ -716,7 +851,7 @@ export function ClientPaymentsPanel({ clientId }: { clientId: string }) {
   if (!data) return <ErrorState title="Could not load the payments" message={error} onRetry={() => void load()} retrying={loading} />;
   if (!data.migrated) {
     return (
-      <Alert className="border-warning/30 bg-warning/5 items-start p-4">
+      <Alert variant="warning">
         <Database className="text-warning" />
         <AlertTitle>Payments need a database update</AlertTitle>
         <AlertDescription>The payments tables are not on this database yet (migration 20261008100100). Ask an admin to apply it.</AlertDescription>

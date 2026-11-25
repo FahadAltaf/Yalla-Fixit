@@ -113,14 +113,23 @@ export const CALL_OUT_CLASS_BY_SERVICE_ID: Record<string, CallOutClass> = {
  * the units on the row (e.g. 3 AC units x 4 visits = 12 visits, or 4 visits
  * that cover all 3 units). Until decided, the allowance is the frequency
  * (visits or hours a year) and the units are kept alongside it.
+ *
+ * Over the whole term (23 Nov 2026): a three-year contract at 4 visits a
+ * year allows 12, as its PPM schedule plans 12 (lib/amc/ppm.ts
+ * visitsOverTerm). It used to allow 4, so the contract read "21 of 22
+ * visits left" beside a schedule of 66. Pro rata for a part year; a visit
+ * allowance is a whole number, at least 1.
  */
 export function includedQuantityFor(
   type: EntitlementType,
   units: number,
   frequency: number,
+  termMonths = 12,
 ): number | null {
   void units;
-  if (type === "visits" || type === "hours") return frequency;
+  const years = Math.max(1, termMonths || 12) / 12;
+  if (type === "visits") return Math.max(1, Math.round(frequency * years));
+  if (type === "hours") return Math.round(frequency * years * 100) / 100;
   return null;
 }
 
@@ -363,6 +372,8 @@ export interface SignedServiceDefinition {
 export function deriveEntitlements(
   rows: ReadonlyArray<SignedServiceRow>,
   services: ReadonlyArray<SignedServiceDefinition>,
+  /** The contract's term: the allowances cover all of it (23 Nov 2026). */
+  termMonths = 12,
 ): ContractEntitlement[] {
   const byId = new Map(services.map((service) => [service.id, service]));
   const order = new Map(services.map((service, index) => [service.id, index]));
@@ -382,7 +393,7 @@ export function deriveEntitlements(
         callOutClass: CALL_OUT_CLASS_BY_SERVICE_ID[row.serviceId] ?? null,
         units,
         frequency,
-        includedQuantity: includedQuantityFor(type, units, frequency),
+        includedQuantity: includedQuantityFor(type, units, frequency, termMonths),
         usedQuantity: 0,
         basePrice: row.basePrice === undefined || row.basePrice === null ? null : roundAed(row.basePrice),
         contractedPrice: roundAed(Number(row.price ?? 0)),
@@ -413,7 +424,16 @@ export function isExhausted(
   e: Pick<ContractEntitlement, "entitlementType" | "includedQuantity" | "usedQuantity">,
 ): boolean {
   const left = remainingQuantity(e);
-  return left !== null && left <= 0;
+  return left !== null && left <= 0 && !noneInTerm(e);
+}
+
+/**
+ * Nothing allowed and nothing used (24 Nov 2026): a service the contract no
+ * longer reaches, as after an early termination before its next visit. Not
+ * "used up", which says something was used.
+ */
+export function noneInTerm(e: Pick<ContractEntitlement, "entitlementType" | "includedQuantity" | "usedQuantity">): boolean {
+  return (e.entitlementType === "visits" || e.entitlementType === "hours") && (e.includedQuantity ?? 0) <= 0 && (e.usedQuantity ?? 0) <= 0;
 }
 
 /** Share of the allowance used, 0-100, or null when there is no allowance. */
@@ -716,6 +736,7 @@ export type EntitlementState =
   | "available"
   | "low_remaining"
   | "exhausted"
+  | "none_in_term"
   | "unlimited"
   | "included"
   | "not_started"
@@ -734,6 +755,7 @@ export function entitlementState(
   if (e.entitlementType === "unlimited") return "unlimited";
   const left = remainingQuantity(e) ?? 0;
   const included = e.includedQuantity ?? 0;
+  if (noneInTerm(e)) return "none_in_term";
   if (left <= 0) return "exhausted";
   if (included > 0 && left / included <= LOW_REMAINING_FRACTION) return "low_remaining";
   return "available";

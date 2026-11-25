@@ -49,6 +49,12 @@ export interface StoredServiceRow {
   belowFloor?: boolean;
   /** The rate was changed on this proposal (16 Nov 2026). */
   rateOverride?: boolean;
+  /** DEV-501: why it is above the card, and who typed it. */
+  rateOverrideReason?: string;
+  rateOverrideBy?: string | null;
+  /** Visits a year off the card (23 Nov 2026), and the card's numbers, for the approver. */
+  frequencyOffCard?: boolean;
+  cardFrequencies?: number[];
 }
 
 export type PricedSubmission =
@@ -140,6 +146,9 @@ export function priceSubmission({
         price: row.price,
         ...(entered?.equipment?.trim() ? { equipment: entered.equipment.trim() } : {}),
         ...(entered?.rateOverride === true && !row.free ? { rateOverride: true } : {}),
+        ...(entered?.rateOverride === true && !row.free && entered.rateOverrideReason?.trim()
+          ? { rateOverrideReason: entered.rateOverrideReason.trim(), rateOverrideBy: entered.rateOverrideBy ?? null }
+          : {}),
         ...(entered?.customName !== undefined ? { customName: entered.customName } : {}),
         ...(entered?.customScope !== undefined ? { customScope: entered.customScope } : {}),
         ...(rate
@@ -150,6 +159,7 @@ export function priceSubmission({
               promotionId: rate.promotionId,
               promotionPercent: rate.promotionPercent,
               belowFloor: rate.belowFloor,
+              ...(rate.frequencyOffCard ? { frequencyOffCard: true, cardFrequencies: rate.cardFrequencies ?? [] } : {}),
             }
           : {}),
       };
@@ -182,4 +192,22 @@ export function submittableProblem(
       .join(", ")}).`;
   }
   return null;
+}
+
+/**
+ * Who typed each reason for a rate above the card (DEV-501): the saver,
+ * unless the reason is the one already saved (then its author stays). The
+ * request's own rateOverrideBy is never trusted.
+ */
+export function stampRateOverrides<R extends { serviceId: string; rateOverrideReason?: string | null; rateOverrideBy?: string | null }>(
+  rows: ReadonlyArray<R>,
+  previous: ReadonlyArray<{ serviceId: string; rateOverrideReason?: string | null; rateOverrideBy?: string | null }>,
+  actorLabel: string | null,
+): R[] {
+  return rows.map((r) => {
+    const reason = r.rateOverrideReason?.trim();
+    if (!reason) return { ...r, rateOverrideBy: null };
+    const was = previous.find((p) => p.serviceId === r.serviceId);
+    return { ...r, rateOverrideBy: was && was.rateOverrideReason?.trim() === reason ? (was.rateOverrideBy ?? actorLabel) : actorLabel };
+  });
 }

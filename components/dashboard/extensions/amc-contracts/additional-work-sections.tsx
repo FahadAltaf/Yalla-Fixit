@@ -46,6 +46,7 @@ import { CrewPicker, crewOptions, crewSummary } from "./crew-picker";
 import { TechnicianSelect, useTechnicianName } from "./people-pickers";
 import { PartiesEditor, partiesInput, partiesProblem, partyDrafts, type PartyDrafts } from "./raise-additional-work-dialog";
 import { slotDate, slotLabel, slotTime } from "./visit-status";
+import { useLeadTimeConfirm } from "./lead-time-confirm";
 
 /*
   One additional work (Phase 11: DEV-407), as sections of its page
@@ -672,6 +673,7 @@ const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((
  * database update it can be scheduled for a day only.
  */
 export function WorkScheduleSection({ data, working, setWorking, changed }: WorkSectionProps) {
+  const { guard, dialog: leadTimeDialog } = useLeadTimeConfirm();
   const { work: w, slot, canEdit } = data;
   const run = useRun(setWorking);
   const technicianName = useTechnicianName();
@@ -708,7 +710,7 @@ export function WorkScheduleSection({ data, working, setWorking, changed }: Work
         setSuggestion({ key: slotKey, data: result });
         setPicked(result.suggested.technicianIds);
         setOverride("");
-        if (!result.fits.some((f) => f.blockers.length === 0)) toast.warning("Nobody competent is free at that time.");
+        if (!result.fits.some((f) => f.blockers.length === 0)) toast.warning("Nobody can be picked at that time: everyone is on leave or cannot take this work.");
       },
       "Could not find technicians.",
     );
@@ -717,9 +719,13 @@ export function WorkScheduleSection({ data, working, setWorking, changed }: Work
     void run(
       "schedule",
       async () => {
-        await additionalWorksService.action(
-          w.id,
-          dayOnly ? { action: "schedule", date } : { action: "schedule", date, time, durationMinutes: minutes, technicianIds: picked, overrideReason: override.trim() || null },
+        await guard((insideLeadTime) =>
+          additionalWorksService.action(
+            w.id,
+            dayOnly
+              ? { action: "schedule", date, insideLeadTime }
+              : { action: "schedule", date, time, durationMinutes: minutes, technicianIds: picked, overrideReason: override.trim() || null, insideLeadTime },
+          ),
         );
         toast.success(w.status === "scheduled" ? `${w.workNo} rescheduled` : `${w.workNo} scheduled`);
         setSuggestion(null);
@@ -742,6 +748,7 @@ export function WorkScheduleSection({ data, working, setWorking, changed }: Work
 
   return (
     <>
+      {leadTimeDialog}
       <Panel
         title="When and who" icon={<CalendarCheck />}
         description="The slot and the crew doing the work. The technician who found it is on the Overview."

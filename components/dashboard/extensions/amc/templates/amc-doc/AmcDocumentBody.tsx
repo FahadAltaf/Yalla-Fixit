@@ -103,7 +103,7 @@ function TableCell({ cell, width, header }: { cell: Cell; width: number; header?
   );
 }
 
-function renderBlock(block: Block, key: number, keepWithPrevious: boolean, pdf: boolean): ReactNode {
+function renderBlock(block: Block, key: number, keepWithPrevious: boolean, pdf: boolean, afterText = false): ReactNode {
   /* An element right after a heading is not a place to break. */
   const breakAttr = keepWithPrevious ? {} : { "data-amc-break": "" };
 
@@ -166,6 +166,7 @@ function renderBlock(block: Block, key: number, keepWithPrevious: boolean, pdf: 
             marginLeft: block.width ? "auto" : undefined,
             borderCollapse: "collapse",
             tableLayout: "fixed",
+            marginTop: afterText ? "12px" : undefined,
             marginBottom: "12px",
           }}
         >
@@ -336,7 +337,9 @@ export function AmcDocumentBody({ model }: { model: AmcDocumentModel }) {
       {model.blocks.map((block, index) => {
         const previous = model.blocks[index - 1];
         const keep = previous?.kind === "heading" || previous?.kind === "subheading" || previous?.kind === "label";
-        return renderBlock(block, index, keep, pdf);
+        /* A table right after text gets room above it (24 Nov 2026): the report's intro ran into its figures. */
+        const afterText = previous?.kind === "paragraph" || previous?.kind === "bullets" || previous?.kind === "numbered" || previous?.kind === "term";
+        return renderBlock(block, index, keep, pdf, afterText);
       })}
     </div>
   );

@@ -69,14 +69,14 @@ export function TemplatesEditor({
     {
       kind: "email",
       title: "Emails",
-      description: "Sent from the portal. Email 4 is a draft until the companion workbook text arrives.",
+      description: "Sent from the portal. A message marked Draft keeps its wording until the final text is agreed; you can change it here.",
       icon: <Mail />,
     },
     {
       kind: "message",
       title: "WhatsApp and SMS messages",
       description:
-        "The portal prepares the text and the coordinator sends it from WhatsApp (SMS as the fallback). Drafts until the companion workbook text arrives.",
+        "The portal prepares the text and the coordinator sends it from WhatsApp, or by SMS when WhatsApp is not possible.",
       icon: <MessageCircle />,
     },
   ];
@@ -130,7 +130,6 @@ function TemplateRow({
     <div className="space-y-3 px-5 py-4">
       <div className="flex flex-wrap items-center gap-2">
         <h3 className="text-sm font-medium">{t.label}</h3>
-        <span className="text-muted-foreground text-xs">{t.source}</span>
         {t.draft ? (
           <Badge variant="secondary" className="bg-mist text-ink-soft border-0 font-medium">
             Draft

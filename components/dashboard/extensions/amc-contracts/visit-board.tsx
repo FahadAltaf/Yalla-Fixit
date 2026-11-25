@@ -218,7 +218,7 @@ export function VisitBoard() {
       {loading ? <VisitBoardBodySkeleton /> : null}
 
       {data && !data.migrated ? (
-        <Alert className="border-warning/30 bg-warning/5 items-start p-4">
+        <Alert variant="warning">
           <Database className="text-warning" />
           <AlertTitle>The visit board needs a database update</AlertTitle>
           <AlertDescription>

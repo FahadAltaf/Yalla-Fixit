@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ShieldCheck } from "lucide-react";
+import { ShieldCheck, TriangleAlert } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -155,9 +156,11 @@ export function CoverageCheckDialog({
 
         <div className="grid gap-4 py-2">
           {contract && contract.active === false ? (
-            <p className="border-warning/30 bg-warning/5 text-warning rounded-md border px-3 py-2 text-xs">
-              This contract is not active yet ({contract.statusLabel ?? "not active"}): nothing is covered until it is activated.
-            </p>
+            <Alert variant="warning">
+              <TriangleAlert />
+              <AlertTitle>This contract is not active yet</AlertTitle>
+              <AlertDescription>{contract.statusLabel ?? "Not active"}: nothing is covered until it is activated.</AlertDescription>
+            </Alert>
           ) : null}
           {!contract ? (
             <div className="grid gap-2">

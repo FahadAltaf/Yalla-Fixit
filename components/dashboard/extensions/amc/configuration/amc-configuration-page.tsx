@@ -13,12 +13,17 @@ import { useAuth } from "@/context/AuthContext";
 import type { AmcConfig, AmcConfigSection } from "@/lib/amc/config";
 import type { AmcTemplatesConfig } from "@/lib/amc/message-templates";
 import { amcPlatformService, type AmcConfigResponse } from "@/modules/amc-platform/amc-platform-service";
+import { amcSettingsService } from "@/modules/amc-submissions";
 
 import { CONFIG_VIEWS, SECTION_DEFS, VISIBLE_CONFIG_VIEWS, type ConfigView } from "./config-fields";
-import { RolesAndJobs } from "./roles-jobs";
+import { NamedPeopleCard, namedPeopleMissing } from "./named-people-card";
+import { JobsCard, RolesAndJobs } from "./roles-jobs";
 import { ConfigSectionForm } from "./section-form";
 import { TemplatesEditor } from "./templates-editor";
 import { ModuleGuide } from "@/components/dashboard/extensions/amc-contracts/module-guide";
+import { AmcOpsSettingsSections } from "@/components/dashboard/extensions/amc-contracts/amc-ops-settings";
+import { hasResourceAction } from "@/lib/role-permissions";
+import { ActionType, ResourceType } from "@/types/types";
 
 /**
  * AMC configuration (DEV-419): the values the business changes without a
@@ -34,13 +39,61 @@ export function AmcConfigurationPage() {
   const [data, setData] = useState<AmcConfigResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  /* The Operations tab is for whoever holds AMC Operations settings (24 Nov 2026), as its page was. */
+  const canOps = hasResourceAction(userProfile, ResourceType.AMC_OPERATIONS_SETTINGS, ActionType.VIEW);
+  const views = VISIBLE_CONFIG_VIEWS.filter((v) => v.value !== "operations" || canOps);
   const viewParam = searchParams.get("view");
-  const view: ConfigView = VISIBLE_CONFIG_VIEWS.some((v) => v.value === viewParam) ? (viewParam as ConfigView) : "approvals";
+  const view: ConfigView = views.some((v) => v.value === viewParam) ? (viewParam as ConfigView) : "people";
   const setView = (next: ConfigView) => {
     const params = new URLSearchParams(searchParams.toString());
     params.set("view", next);
     router.replace(`${pathname}?${params.toString()}`, { scroll: false });
   };
+
+  /* Opening a section from Named people: the tab, then that section scrolled into view once it shows. */
+  const [scrollTo, setScrollTo] = useState<AmcConfigSection | null>(null);
+  const openSection = (next: ConfigView, section: AmcConfigSection) => {
+    setScrollTo(section);
+    setView(next);
+  };
+  useEffect(() => {
+    if (!scrollTo) return;
+    /* The tab changes through the address, so the section shows a moment later: look for it for up to 3 s. */
+    let tries = 0;
+    const timer = window.setInterval(() => {
+      const el = document.getElementById(`config-section-${scrollTo}`);
+      tries += 1;
+      if (el || tries > 30) {
+        window.clearInterval(timer);
+        el?.scrollIntoView({ behavior: "smooth", block: "start" });
+        setScrollTo(null);
+      }
+    }, 100);
+    return () => window.clearInterval(timer);
+  }, [scrollTo]);
+
+  /* The AMC approvers (all levels), kept in AMC settings, shown and saved in Named people (23 Nov 2026). */
+  const [approverEmails, setApproverEmails] = useState<string[] | null>(null);
+  useEffect(() => {
+    let gone = false;
+    amcSettingsService
+      .getSettings()
+      .then((r) => !gone && setApproverEmails(r.settings.approval?.approvers ?? []))
+      .catch(() => !gone && setApproverEmails(null));
+    return () => {
+      gone = true;
+    };
+  }, []);
+  const saveApprovers = useCallback(async (emails: string[]) => {
+    try {
+      const r = await amcSettingsService.saveApprovers(emails);
+      setApproverEmails(r.approvers);
+      toast.success("Saved.");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not save");
+      throw e;
+    }
+  }, []);
 
   /* Bumped to load again (Retry, and after every save). */
   const [reloadKey, setReloadKey] = useState(0);
@@ -106,8 +159,8 @@ export function AmcConfigurationPage() {
       <Heading />
 
       {!data.migrated ? (
-        <Alert>
-          <TriangleAlert className="size-4" />
+        <Alert variant="warning">
+          <TriangleAlert />
           <AlertTitle>Showing the defaults</AlertTitle>
           <AlertDescription>
             The Phase 1 database update (20261007110000) has not been applied yet, so nothing can be saved. The values below are the defaults every AMC screen uses until then.
@@ -115,7 +168,7 @@ export function AmcConfigurationPage() {
         </Alert>
       ) : null}
       {data.invalid.length > 0 ? (
-        <Alert variant="destructive">
+        <Alert variant="danger">
           <TriangleAlert className="size-4" />
           <AlertTitle>Some saved values no longer fit</AlertTitle>
           <AlertDescription>
@@ -127,24 +180,25 @@ export function AmcConfigurationPage() {
       <PillTabs<ConfigView>
         value={view}
         onChange={setView}
-        tabs={VISIBLE_CONFIG_VIEWS.map((v) => ({
+        tabs={views.map((v) => ({
           value: v.value,
           label: v.label,
-          count: v.value === "history" ? data.history.length : undefined,
+          count: v.value === "history" ? data.history.length : v.value === "people" ? namedPeopleMissing(data.config) || undefined : undefined,
         }))}
       />
 
       {sections.map((def) => (
-        <ConfigSectionForm
-          key={def.section}
-          def={def}
-          value={data.config[def.section]}
-          defaults={data.defaults[def.section]}
-          canEdit={data.canEdit[def.section]}
-          migrated={data.migrated}
-          users={data.users}
-          onSave={(value) => save(def.section, value as never)}
-        />
+        <div key={def.section} id={`config-section-${def.section}`} className="scroll-mt-24">
+          <ConfigSectionForm
+            def={def}
+            value={data.config[def.section]}
+            defaults={data.defaults[def.section]}
+            canEdit={data.canEdit[def.section]}
+            migrated={data.migrated}
+            users={data.users}
+            onSave={(value) => save(def.section, value as never)}
+          />
+        </div>
       ))}
 
       {view === "templates" ? (
@@ -157,6 +211,23 @@ export function AmcConfigurationPage() {
       ) : null}
 
       {view === "roles" ? <RolesAndJobs isAdmin={isAdmin} canRunJobs={data.canEdit.proposals && data.migrated} /> : null}
+
+      {/* DEV-485: the morning's runs, under what runs. */}
+      {view === "jobs" ? <JobsCard canRun={data.canEdit.proposals && data.migrated} /> : null}
+
+      {/* DEV-488: everyone named for go-live; each row opens the tab where it is set. */}
+      {view === "people" ? (
+        <NamedPeopleCard
+          config={data.config}
+          users={data.users}
+          onOpen={openSection}
+          onSave={save}
+          canEdit={data.canEdit}
+          generalApprovers={approverEmails ? { emails: approverEmails, canEdit: isAdmin, save: saveApprovers } : null}
+        />
+      ) : null}
+
+      {view === "operations" ? <AmcOpsSettingsSections /> : null}
 
       {view === "history" ? <ConfigHistory data={data} /> : null}
     </div>

@@ -15,6 +15,7 @@ import {
   slaDeadlines,
   slaDueAt,
   slaState,
+  scheduledInTime,
   type AllowanceBalance,
   type CallOutAction,
   type CallOutCreateInput,
@@ -29,6 +30,7 @@ import { templateText } from "@/lib/amc/message-templates";
 import { AMC_PHOTO_MAX_BYTES, PHOTO_EXTENSION, detectImageType } from "@/lib/amc/photos";
 import { assignmentProblems, suggestCrew, type Trade } from "@/lib/amc/visits";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
+import { assertFsmQuotation, setFsmQuotation } from "@/lib/server/amc/fsm-quotation";
 import { ContractError, isMissingTable } from "@/lib/server/amc/contracts";
 import { notifyEntitlementState, notifyUsers } from "@/lib/server/amc/notifications";
 import { recordSend } from "@/lib/server/amc/proposal-share";
@@ -40,7 +42,12 @@ import { initialOutcome, type SendChannel } from "@/lib/amc/send-channels";
 import { clientEmailHtml, escapeEmailHtml } from "@/lib/email-brand";
 import { sendEmail } from "@/lib/server/send-email";
 import { crewFitsForSlot, dubaiSlot } from "@/lib/server/amc/visits";
+import { checkFieldLeadTime } from "@/lib/server/amc/lead-time";
+import { alertCrewChange } from "@/lib/server/amc/crew-alerts";
+import { approveExpiredBooking } from "@/lib/server/amc/expired-booking";
+import { contractExpiredOn } from "@/lib/amc/expired-booking";
 import { effectiveExclusions } from "@/lib/amc/scope-defaults";
+import { handymanEntitlement, splitHandymanHours, teamsFromCrew } from "@/lib/amc/handyman-hours";
 
 /**
  * Call outs on the server (Phase 11: DEV-405, 406, 408, 409, to-do 8).
@@ -160,6 +167,9 @@ export function callOutEntitlement(contract: CallOutContract, priority: CallOutP
 }
 
 export interface CoveragePreview extends CoverageAnswer {
+  /** DEV-495: the contract's free handyman hours, whatever is being booked (null: none). */
+  handymanBalance: AllowanceBalance | null;
+  handymanLabel: string | null;
   entitlementId: string | null;
   serviceLabel: string | null;
   exclusions: string | null;
@@ -169,21 +179,39 @@ export interface CoveragePreview extends CoverageAnswer {
 
 export function previewCoverage(
   contract: CallOutContract,
-  input: Pick<CallOutCreateInput, "priority" | "partsExpected" | "partsValueAed" | "excluded"> & { reportedAt?: string },
+  input: Pick<CallOutCreateInput, "priority" | "partsExpected" | "partsValueAed" | "excluded" | "handymanTeams"> & { reportedAt?: string },
   config: AmcConfig,
 ): CoveragePreview {
-  const e = callOutEntitlement(contract, input.priority);
+  /* DEV-495: a handyman job draws on the free hours, not a call out of its priority. */
+  const hours = handymanEntitlement(contract.entitlements);
+  const handyman = Boolean(input.handymanTeams);
+  const e = handyman ? hours : callOutEntitlement(contract, input.priority);
   const reportedAt = input.reportedAt ?? new Date().toISOString();
-  const answer = checkCallOutCoverage({
+  const checked = checkCallOutCoverage({
     contractInForce: isInForce({ status: contract.status as "active", startDate: contract.startDate, endDate: contract.endDate }, dateOf(reportedAt)),
     entitlement: e,
+    /* At least an hour left to book on the free hours; the hours actually used come off at closing. */
     quantity: 1,
     partsExpected: input.partsExpected,
     partsValueAed: input.partsValueAed ?? null,
     excluded: input.excluded,
   });
+  const answer: CoverageAnswer = handyman
+    ? {
+        ...checked,
+        /* Nothing is held at booking: the hours used are recorded when the job closes. */
+        reserves: false,
+        reasons: !e
+          ? ["Chargeable.", "This contract has no free handyman hours."]
+          : checked.coverage === "covered" && checked.balance && !checked.balance.unlimited
+            ? [`Covered: ${e.serviceLabel}, ${checked.balance.remaining} of ${checked.balance.included} hours left before this job.`, ...checked.reasons.slice(1)]
+            : checked.reasons,
+      }
+    : checked;
   return {
     ...answer,
+    handymanBalance: hours ? allowanceBalance(hours) : null,
+    handymanLabel: hours?.serviceLabel ?? null,
     entitlementId: e?.id ?? null,
     serviceLabel: e?.serviceLabel ?? null,
     exclusions: e?.exclusions ?? null,
@@ -196,10 +224,14 @@ export function previewCoverage(
 /* Logging a call out                                                  */
 /* ------------------------------------------------------------------ */
 
-export async function createCallOut(admin: Admin, input: CallOutCreateInput, actor: Actor, config: AmcConfig, canOverride: boolean) {
+export async function createCallOut(admin: Admin, input: CallOutCreateInput, actor: Actor, config: AmcConfig, canOverride: boolean, canApproveExpired = false) {
   const contract = await loadCallOutContract(admin, input.contractId);
-  if (!["active", "on_hold"].includes(contract.status)) throw new ContractError("Call outs are logged against an active contract.", 409);
+  /* DEV-496: on an expired contract only with an AMC approver's reason, logged on the contract. */
+  const facts = { id: contract.id, status: contract.status, endDate: contract.endDate, number: contract.number };
+  const expired = contractExpiredOn(facts, dateOf(input.reportedAt));
+  if (!expired && !["active", "on_hold"].includes(contract.status)) throw new ContractError("Call outs are logged against an active contract.", 409);
   if (Date.parse(input.reportedAt) > Date.now() + 5 * 60_000) throw new ContractError("The call cannot be in the future.", 400);
+  if (expired) await approveExpiredBooking(admin, { contract: facts, day: dateOf(input.reportedAt), what: "Call out logged", reason: input.expiredReason, canApprove: canApproveExpired }, actor);
   const preview = previewCoverage(contract, input, config);
   let coverage = preview.coverage;
   let overrideReason: string | null = null;
@@ -227,10 +259,17 @@ export async function createCallOut(admin: Admin, input: CallOutCreateInput, act
       sla_attend_due_at: preview.sla.attendDueAt,
       sla_schedule_due_at: preview.sla.scheduleDueAt,
       created_by: actor.id,
+      /* DEV-495: only on a handyman job, so an ordinary call out books as before the column exists. */
+      ...(input.handymanTeams ? { handyman_teams: input.handymanTeams } : {}),
     })
     .select("id, call_out_no, created_at")
     .single<Row>();
-  if (error) throw fail(error);
+  if (error) {
+    if (input.handymanTeams && (error.code === "42703" || error.code === "PGRST204")) {
+      throw new ContractError("Handyman jobs need a database update first (migration 20261124120000). Ask an admin to apply it.", 409);
+    }
+    throw fail(error);
+  }
   const id = String(created.id);
   const callOutNo = String(created.call_out_no);
 
@@ -403,6 +442,7 @@ function mapCallOut(r: Row, config: AmcConfig, now: Date): CallOutRecord {
     attendDueAt: str(r.sla_attend_due_at),
     scheduleDueAt: str(r.sla_schedule_due_at),
     status: r.status as CallOutStatus,
+    slaMet: r.sla_met === null || r.sla_met === undefined ? null : Boolean(r.sla_met),
   };
   return {
     id: String(r.id),
@@ -593,8 +633,11 @@ export async function callOutDetail(admin: Admin, id: string, config: AmcConfig,
   const contract = await loadCallOutContract(admin, record.contractId);
   const e = contract.entitlements.find((x) => x.id === str(row.entitlement_id)) ?? null;
   const [photos, { data: works }] = await sideReads;
+  /* DEV-495: a handyman job's teams and hours (null otherwise, or before 20261124120000). */
+  const handyman = await handymanFacts(admin, id).catch(() => null);
   return {
     callOut: record,
+    handyman,
     allowance: e ? { serviceLabel: e.serviceLabel, ...allowanceBalance(e), nearZero: nearZero(allowanceBalance(e), config.allowances.warningRemaining) } : null,
     photos,
     additionalWorks: ((works ?? []) as Row[]).map((w) => ({ id: String(w.id), workNo: String(w.work_no), status: String(w.status), finding: String(w.finding), total: Number(w.total ?? 0), risk: String(w.risk) })),
@@ -618,6 +661,82 @@ async function setStatus(admin: Admin, row: Row, to: CallOutStatus, changes: Row
   if (error) throw fail(error);
   if (!data?.length) throw new ContractError("Someone else changed this call out. Reload and try again.", 409);
   await recordStatusChange(admin, { entityType: "call_out", entityId: String(row.id), from, to, reason, actor });
+}
+
+/* ------------------------------------------------------------------ */
+/* Handyman hours (DEV-495)                                            */
+/* ------------------------------------------------------------------ */
+
+/** A handyman job's teams and recorded hours; null for an ordinary call out, or before 20261124120000. */
+export async function handymanFacts(
+  admin: Admin,
+  id: string,
+): Promise<{ teams: number; fromCrew: boolean; hoursUsed: number | null; hoursChargeable: number | null } | null> {
+  const { data, error } = await admin.from("amc_call_outs").select("handyman_teams, hours_used, hours_chargeable, technician_ids").eq("id", id).maybeSingle<Row>();
+  if (error || !data || data.handyman_teams === null || data.handyman_teams === undefined) return null;
+  const num = (v: unknown) => (v === null || v === undefined ? null : Number(v));
+  /* The teams are the crew's technicians (24 Nov 2026); handyman_teams marks the job and holds the booking's count. */
+  const crew = teamsFromCrew(Array.isArray(data.technician_ids) ? (data.technician_ids as unknown[]).map(String) : [], Number(data.handyman_teams));
+  return { ...crew, hoursUsed: num(data.hours_used), hoursChargeable: num(data.hours_chargeable) };
+}
+
+/** The hours left on an entitlement now (null: not counted). */
+async function hoursLeft(admin: Admin, entitlementId: string | null): Promise<number | null> {
+  if (!entitlementId) return 0;
+  const { data } = await admin.from("amc_contract_entitlements").select("included_quantity, used_quantity, reserved_quantity").eq("id", entitlementId).maybeSingle<Row>();
+  if (!data || data.included_quantity === null) return null;
+  return Math.max(0, Number(data.included_quantity) - Number(data.used_quantity ?? 0) - Number(data.reserved_quantity ?? 0));
+}
+
+/**
+ * Records a handyman job's team-hours at closing: the coordinator's whole
+ * hours (or those already recorded), split into what the free hours cover
+ * and what is left for the client. Null for an ordinary call out.
+ */
+async function recordHandymanHours(admin: Admin, row: Row, hoursUsed: number | null, actor: Actor) {
+  const id = String(row.id);
+  const facts = await handymanFacts(admin, id);
+  if (!facts) return null;
+  const used = hoursUsed ?? facts.hoursUsed;
+  if (used === null) throw new ContractError("Record the hours used: the team-hours, rounded to the nearest whole hour.", 409);
+  /* A chargeable job (no hours left when booked) uses none of the allowance. */
+  const split = row.coverage === "covered" ? splitHandymanHours(used, await hoursLeft(admin, str(row.entitlement_id))) : { covered: 0, chargeable: used };
+  const { error } = await admin.from("amc_call_outs").update({ hours_used: used, hours_chargeable: split.chargeable, updated_at: new Date().toISOString() }).eq("id", id);
+  if (error) throw fail(error);
+  if (used !== facts.hoursUsed) {
+    await recordAmcAudit(admin, {
+      entityType: "call_out",
+      entityId: id,
+      eventType: "handyman_hours_recorded",
+      actorId: actor.id,
+      actorLabel: actor.label,
+      payload: { teams: facts.teams, hoursUsed: used, covered: split.covered, chargeable: split.chargeable, previous: facts.hoursUsed },
+    });
+  }
+  return { teams: facts.teams, hoursUsed: used, ...split };
+}
+
+/** The covered team-hours come off the free hours. */
+async function consumeHandymanHours(admin: Admin, row: Row, hours: { teams: number; covered: number; chargeable: number }, note: string, actor: Actor) {
+  const entitlementId = str(row.entitlement_id);
+  if (!entitlementId || hours.covered <= 0) return;
+  const { error } = await admin.from("amc_entitlement_usage").insert({
+    contract_id: String(row.contract_id),
+    entitlement_id: entitlementId,
+    kind: "consumption",
+    quantity: hours.covered,
+    occurred_at: new Date().toISOString(),
+    source: "system",
+    call_out_id: String(row.id),
+    notes: `${note}: ${hours.covered} team-hour${hours.covered === 1 ? "" : "s"} (${hours.teams} team${hours.teams === 1 ? "" : "s"})${hours.chargeable ? `, ${hours.chargeable} beyond the allowance chargeable` : ""}`,
+    created_by: actor.id,
+  });
+  if (error) {
+    if (error.code === "23505") return; /* already settled */
+    console.warn("[amc:call-outs] handyman hours not settled:", error.message);
+    return;
+  }
+  await notifyEntitlementState(admin, String(row.contract_id), entitlementId, actor);
 }
 
 async function settleReservation(admin: Admin, row: Row, kind: "consumption" | "release", note: string, actor: Actor) {
@@ -660,10 +779,6 @@ export async function callOutNeed(admin: Admin, row: Row, trades: Trade[], date:
     date,
     area: str(property.community) ?? str(property.propertyDetail) ?? null,
     accessTypes: ((rules ?? []) as Row[]).filter((r) => r.access_type === "security_clearance").map((r) => str(r.issuer) ?? "Security clearance"),
-    /* Call outs and additional work (18 Nov 2026): access is the visit's pass, so a technician's missing permission does not block them. */
-    accessAsNote: true,
-    /* Any technician can be found and chosen (19 Nov 2026): an AMC skill for the trade ranks them first, its absence is only noted. */
-    skillAsNote: true,
   };
 }
 
@@ -708,7 +823,7 @@ export async function checkCrewForSlot(
   const trades = input.trade ? [input.trade] : [];
   const need = await callOutNeed(admin, { contract_id: input.contractId }, trades, input.date);
   const fits = await crewFitsForSlot(admin, need, slot, input.technicianIds, input.ignoreIds);
-  const problems = assignmentProblems(fits, trades, { skillAsNote: need.skillAsNote });
+  const problems = assignmentProblems(fits);
   if (problems.length) throw new ContractError(problems.join(" "), 409);
   const suggested = suggestCrew(await crewFitsForSlot(admin, need, slot, null, input.ignoreIds), trades).technicianIds;
   const same = suggested.length === input.technicianIds.length && suggested.every((t) => input.technicianIds.includes(t));
@@ -739,7 +854,7 @@ export async function performCallOutAction(admin: Admin, id: string, action: Cal
       const trades = str(row.trade) ? [str(row.trade) as Trade] : [];
       const need = await callOutNeed(admin, row, trades, action.date);
       const fits = await crewFitsForSlot(admin, need, slot, action.technicianIds, [id]);
-      const problems = assignmentProblems(fits, trades, { skillAsNote: need.skillAsNote });
+      const problems = assignmentProblems(fits);
       if (problems.length) throw new ContractError(problems.join(" "), 409);
       /* The same rule as a PPM visit (BRD 5.13 / 5.11): another crew than the suggested one needs a reason. */
       const suggested = suggestCrew(await crewFitsForSlot(admin, need, slot, null, [id]), trades).technicianIds;
@@ -747,23 +862,43 @@ export async function performCallOutAction(admin: Admin, id: string, action: Cal
       if (suggested.length && !same && !action.overrideReason) {
         throw new ContractError("This is not the suggested crew: say why it was chosen instead.", 400);
       }
+      /* DEV-493: inside the property's access lead time only when the user says to book anyway. */
+      await checkFieldLeadTime(admin, { kind: "call_out", id, contractId: String(row.contract_id), day: action.date, acknowledged: action.insideLeadTime }, actor);
       await setStatus(admin, row, "scheduled", {
         scheduled_start: slot.start,
         scheduled_end: slot.end,
         technician_ids: action.technicianIds,
         lead_technician_id: action.technicianIds[0],
         assignment_override_reason: action.overrideReason,
+        /* DEV-406: a non emergency meets its SLA by being booked in time; judged once, when first scheduled. */
+        ...(status === "logged" && !str(row.sla_attend_due_at) ? { sla_met: scheduledInTime(str(row.sla_schedule_due_at), new Date().toISOString()) } : {}),
       }, actor);
+      const rc = one(row.contract) ?? {};
+      await alertCrewChange(admin, {
+        kind: "call_out",
+        id,
+        what: `call out ${no}${row.priority === "emergency" ? " (emergency)" : ""}`,
+        where: [str(rc.customer_name), str(rc.property_label)].filter(Boolean).join(", ") || no,
+        before: { ids: Array.isArray(row.technician_ids) ? (row.technician_ids as unknown[]).map(String) : [], start: str(row.scheduled_start) },
+        after: { ids: action.technicianIds, start: slot.start },
+        actorId: actor.id,
+      });
       return { ok: true as const };
     }
     case "attend": {
       move("attended");
       if (!(await startedByOffice(admin, id))) throw new ContractError(`Call out ${no} has not been started: start the visit first (crew and access in place).`, 409);
       if (Date.parse(action.attendedAt) < Date.parse(String(row.reported_at))) throw new ContractError("Attendance cannot be before the call.", 400);
-      const due = str(row.sla_attend_due_at) ?? str(row.sla_schedule_due_at);
+      /* An emergency's SLA is its attendance; a non emergency's was judged when it was booked (DEV-406). */
+      const due = str(row.sla_attend_due_at);
+      const scheduleDue = str(row.sla_schedule_due_at);
       await setStatus(admin, row, "attended", {
         attended_at: action.attendedAt,
-        sla_met: due ? Date.parse(action.attendedAt) <= Date.parse(due) : null,
+        ...(due
+          ? { sla_met: Date.parse(action.attendedAt) <= Date.parse(due) }
+          : status === "logged" && scheduleDue
+            ? { sla_met: Date.parse(action.attendedAt) <= Date.parse(scheduleDue) }
+            : {}),
         ...(action.technicianIds?.length ? { technician_ids: action.technicianIds } : {}),
       }, actor);
       await closeAmcTodos(admin, { entityType: "call_out", entityId: id, kind: "call_out" }, { status: "done", reason: "Attended" }).catch(() => 0);
@@ -794,8 +929,17 @@ export async function performCallOutAction(admin: Admin, id: string, action: Cal
         ),
       };
     }
+    case "set_fsm_quotation": {
+      await setFsmQuotation(admin, "call_out", id, action.fsmQuotationNo, actor);
+      return { ok: true as const };
+    }
     case "close": {
       move("closed");
+      /* DEV-508: a chargeable call out closes with its FSM quotation number. */
+      if (action.fsmQuotationNo) await setFsmQuotation(admin, "call_out", id, action.fsmQuotationNo, actor);
+      /* DEV-495: a handyman job closes with its team-hours; any beyond the hours left are chargeable (and need the quotation). */
+      const handyman = await recordHandymanHours(admin, row, action.hoursUsed ?? null, actor);
+      await assertFsmQuotation(admin, "call_out", id);
       const { data: works } = await admin.from("amc_additional_works").select("work_no, status").eq("call_out_id", id);
       const open = ((works ?? []) as Row[]).filter((w) => !(SETTLED_ADDITIONAL_WORK as readonly string[]).includes(String(w.status)));
       if (open.length) {
@@ -803,7 +947,8 @@ export async function performCallOutAction(admin: Admin, id: string, action: Cal
       }
       await setStatus(admin, row, "closed", { closed_at: new Date().toISOString(), closed_by: actor.id }, actor, action.note);
       /* The visit was delivered: a covered call out consumes its unit (an unlimited one is counted). */
-      if (row.coverage === "covered") await settleReservation(admin, row, "consumption", `Call out ${no} closed`, actor);
+      if (handyman) await consumeHandymanHours(admin, row, handyman, `Handyman job ${no} closed`, actor);
+      else if (row.coverage === "covered") await settleReservation(admin, row, "consumption", `Call out ${no} closed`, actor);
       else if (row.reservation_id) await settleReservation(admin, row, "release", `Call out ${no} closed as chargeable`, actor);
       await closeAmcTodos(admin, { entityType: "call_out", entityId: id, kind: "call_out" }, { status: "done", reason: "Closed" }).catch(() => 0);
       return { ok: true as const };

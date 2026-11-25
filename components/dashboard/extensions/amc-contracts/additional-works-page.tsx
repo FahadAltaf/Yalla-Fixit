@@ -165,7 +165,7 @@ export function AdditionalWorksPage() {
       />
 
       {data && !data.migrated ? (
-        <Alert className="border-warning/30 bg-warning/5 items-start p-4">
+        <Alert variant="warning">
           <Database className="text-warning" />
           <AlertTitle>Additional work is not set up on this database yet</AlertTitle>
           <AlertDescription>The additional-work tables are not on this database yet (migration 20261012120000). Ask an admin to apply it.</AlertDescription>

@@ -11,7 +11,8 @@ import { rolesService } from "@/modules/roles/services/roles-service";
 import { ResourceType, ActionType, Role, RoleAccess } from "@/types/types";
 import { Card } from "@/components/ui/card";
 import { DataTable } from "@/components/data-table";
-import { HIDDEN_RESOURCES, RESOURCE_ACTIONS, RESOURCE_PARENT, orderResources } from "./constants";
+import { HIDDEN_RESOURCES, RESOURCE_ACTIONS, RESOURCE_PARENT, getResourceDisplayName, orderResources } from "./constants";
+import { useConfirm } from "@/components/dashboard/shared/kaizen-states";
 import { toast } from "sonner";
 import { EmptyState } from "@/components/ui/empty-state";
 import { RouteIcon } from "lucide-react";
@@ -287,8 +288,47 @@ export default function PermissionManagementPage() {
     }
   };
 
+  /*
+    Select all / Remove all on a module with pages (23 Nov 2026): every
+    permission on every page shown under it, or none, after a confirmation
+    that names the role, the module and how many pages change.
+  */
+  const { confirm, dialog: confirmDialog } = useConfirm();
+  const handleModuleBulk = (moduleResource: ResourceType, mode: "all" | "none") => {
+    if (!selectedRoleId) return;
+    const pages = Object.values(ResourceType).filter((r) => RESOURCE_PARENT[r] === moduleResource && !HIDDEN_RESOURCES.includes(r));
+    if (!pages.length) return;
+    const roleName = listRoles.find((r) => r.id === selectedRoleId)?.name ?? "this role";
+    const moduleName = getResourceDisplayName(moduleResource);
+    void confirm({
+      title: mode === "all" ? `Give ${roleName} all of ${moduleName}?` : `Remove all of ${moduleName} from ${roleName}?`,
+      description:
+        mode === "all"
+          ? `Every permission on all ${pages.length} pages of ${moduleName} is turned on for ${roleName}, including approvals. Everyone with this role gets them straight away.`
+          : `Every permission on all ${pages.length} pages of ${moduleName} is turned off for ${roleName}. Everyone with this role loses them straight away.`,
+      confirmText: mode === "all" ? "Select all" : "Remove all",
+      variant: mode === "all" ? "default" : "destructive",
+      action: async () => {
+        const current = permissions.filter((p) => pages.includes(p.resource as ResourceType));
+        for (const perm of current) await permissionsService.deletePermission(perm.id);
+        if (mode === "all") {
+          await permissionsService.bulkCreatePermissions(
+            selectedRoleId,
+            pages.flatMap((resource) =>
+              (RESOURCE_ACTIONS[resource] ?? [ActionType.VIEW]).map((action) => ({ resource, action, enabled: true, record_access: "All Records" })),
+            ),
+          );
+        }
+        toast.success(mode === "all" ? `${moduleName}: all permissions on` : `${moduleName}: all permissions off`);
+        setOpenModules((open) => new Set(open).add(moduleResource));
+        await fetchPermissions();
+      },
+    });
+  };
+
   return (
     <Card className="py-0 gap-0">
+      {confirmDialog}
       <PermissionDataTableToolbar
         fetchRecords={fetchPermissions}
         roles={listRoles}
@@ -305,6 +345,7 @@ export default function PermissionManagementPage() {
               {
                 isOpen: (resource) => openModules.has(resource),
                 onToggle: toggleModule,
+                onBulk: handleModuleBulk,
               },
               handleRecordAccessChange
             )}

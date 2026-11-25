@@ -144,3 +144,11 @@ test("the routes gate filling in, reviewing and reading separately; the sweep ru
   assert.match(read("lib/server/amc/jobs.ts"), /key: "job_sheets"/);
   assert.match(read("app/(dashboard)/extensions/amc-contracts/job-reviews/page.tsx"), /canSeeAmcPage\(ResourceType\.AMC_VISITS\)/);
 });
+
+/* 23 Nov 2026: Close visit failed with "Unrecognized key: pdfBase64". */
+test("close and resend_report accept the report PDF the portal built; other actions still refuse unknown keys", () => {
+  assert.equal(jobSheetActionSchema.safeParse({ action: "close", comment: "Done", send: "link", pdfBase64: "JVBERi0x" }).success, true);
+  assert.equal(jobSheetActionSchema.safeParse({ action: "resend_report", channel: "email", pdfBase64: "JVBERi0x" }).success, true);
+  assert.equal(jobSheetActionSchema.safeParse({ action: "close", comment: null }).success, true, "the PDF is optional");
+  assert.equal(jobSheetActionSchema.safeParse({ action: "return", comment: "Fix it", pdfBase64: "JVBERi0x" }).success, false);
+});

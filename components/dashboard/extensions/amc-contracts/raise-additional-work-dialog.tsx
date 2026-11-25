@@ -29,6 +29,7 @@ import { additionalWorksService } from "@/modules/amc-contracts/additional-works
 
 import { ContractPicker, Field, errorText, type PickedContract } from "./call-out-shared";
 import { TechnicianSelect } from "./people-pickers";
+import { useBookingGuards } from "./booking-guards";
 import { AmcPhoneInput } from "@/components/dashboard/extensions/amc/components/amc-phone-input";
 
 const NONE = "__none";
@@ -167,6 +168,7 @@ export function RaiseAdditionalWorkDialog({
   context?: string;
   onRaised?: (work: { id: string; workNo: string }) => unknown;
 }) {
+  const { guard, dialogs: bookingDialogs } = useBookingGuards();
   const [picked, setPicked] = useState<PickedContract | null>(null);
   const [finding, setFinding] = useState(initialFinding ?? "");
   const [risk, setRisk] = useState<WorkRisk>("low");
@@ -188,8 +190,9 @@ export function RaiseAdditionalWorkDialog({
     if (problem || !targetId) return;
     setBusy(true);
     try {
-      const result = await additionalWorksService.create({
+      const result = await guard((answers) => additionalWorksService.create({
         contractId: targetId,
+        expiredReason: answers.expiredReason ?? null,
         source,
         visitId: source === "visit" ? visitId : null,
         callOutId: source === "call_out" ? callOutId : null,
@@ -198,7 +201,7 @@ export function RaiseAdditionalWorkDialog({
         finding: finding.trim(),
         risk,
         parties: partiesInput(parties, false),
-      });
+      }));
       toast.success(`Additional work ${result.workNo} raised`);
       onOpenChange(false);
       await onRaised?.(result);
@@ -212,6 +215,7 @@ export function RaiseAdditionalWorkDialog({
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
       <ActionDialogContent busy={busy} className="max-h-[88vh] overflow-y-auto sm:max-w-xl">
+        {bookingDialogs}
         <DialogHeader>
           <DialogTitle>Raise additional work</DialogTitle>
           <DialogDescription>

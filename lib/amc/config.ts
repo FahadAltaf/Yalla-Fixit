@@ -1,3 +1,4 @@
+import { DAILY_JOB_PARTS, FIRST_RELEASE_PARTS } from "@/lib/amc/daily-jobs";
 import { z } from "zod";
 
 import { templatesConfigSchema } from "./message-templates";
@@ -54,6 +55,13 @@ const approvalsSchema = z
     nonStandardPlanLevel: int(1, 3),
     belowFloorLevel: int(1, 3),
     escalateAfterHours: int(1, 720),
+    /*
+      DEV-488 (20 Nov 2026): who escalations go to -- an idle enquiry, an
+      overdue to-do, a renewal nobody acts on, an overdue instalment. None
+      named: the level 2 approvers, else level 1 (as before). Defaulted so a
+      section saved before it still validates.
+    */
+    escalationUserIds: uuidList.default([]),
   })
   .strict();
 
@@ -197,6 +205,14 @@ const todosSchema = z
   })
   .strict();
 
+/* DEV-485: what the scheduler runs each day, and whether daily jobs may email clients. */
+const jobsSchema = z
+  .object({
+    scheduled: z.array(z.enum(DAILY_JOB_PARTS)).max(DAILY_JOB_PARTS.length),
+    clientEmails: z.boolean(),
+  })
+  .strict();
+
 export const AMC_CONFIG_SCHEMAS = {
   approvals: approvalsSchema,
   payments: paymentsSchema,
@@ -211,6 +227,7 @@ export const AMC_CONFIG_SCHEMAS = {
   additionalWork: additionalWorkSchema,
   clientReport: clientReportSchema,
   todos: todosSchema,
+  jobs: jobsSchema,
   /* Email and WhatsApp/SMS texts: saved changes only (lib/amc/message-templates.ts). */
   templates: templatesConfigSchema,
 } as const;
@@ -234,6 +251,8 @@ export const AMC_CONFIG_SECTION_LEVEL: Record<AmcConfigSection, "management" | "
   additionalWork: "admin",
   clientReport: "admin",
   todos: "admin",
+  /* Switching on client emails or more jobs is a business decision (DEV-485). */
+  jobs: "management",
   templates: "admin",
 };
 
@@ -262,6 +281,7 @@ export const AMC_CONFIG_DEFAULTS: AmcConfig = {
     nonStandardPlanLevel: 1,
     belowFloorLevel: 1,
     escalateAfterHours: 24,
+    escalationUserIds: [],
   },
   payments: {
     singlePaymentBelowAed: 4_000,
@@ -372,6 +392,10 @@ export const AMC_CONFIG_DEFAULTS: AmcConfig = {
   todos: {
     emailReminders: false,
   },
+  jobs: {
+    scheduled: [...FIRST_RELEASE_PARTS],
+    clientEmails: false,
+  },
   templates: {},
 };
 
@@ -440,6 +464,14 @@ export function diffAmcConfigSection(
 export function approversForLevel(config: AmcConfig, level: number): string[] {
   const a = config.approvals;
   return level === 1 ? a.level1ApproverIds : level === 2 ? a.level2ApproverIds : level === 3 ? a.level3ApproverIds : [];
+}
+
+/** Who escalations go to (DEV-488): the named escalation contacts, else the level 2 approvers, else level 1. */
+export function escalationPeople(config: AmcConfig): string[] {
+  const named = config.approvals.escalationUserIds ?? [];
+  if (named.length) return named;
+  const l2 = approversForLevel(config, 2);
+  return l2.length ? l2 : approversForLevel(config, 1);
 }
 
 /** Whether a date (YYYY-MM-DD) is a weekend day or a holiday. */

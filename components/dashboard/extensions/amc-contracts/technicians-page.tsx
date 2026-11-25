@@ -204,7 +204,7 @@ export function TechniciansPage() {
       />
 
       {data && !data.migrated ? (
-        <Alert className="border-warning/30 bg-warning/5 items-start p-4">
+        <Alert variant="warning">
           <Database className="text-warning" />
           <AlertTitle>Technician skills need a database update</AlertTitle>
           <AlertDescription>

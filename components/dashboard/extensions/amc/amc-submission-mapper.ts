@@ -44,6 +44,7 @@ export function formDataToSubmissionPayload(
     coordinationContacts: data.coordinationContacts,
     startDate: data.startDate,
     endDate: data.endDate,
+    contractType: data.contractType,
     paymentTerms: data.paymentTerms,
     proposalNumber: data.proposalNumber,
   };
@@ -150,6 +151,8 @@ export function submissionToFormData(submission: AmcDocumentSource): AmcFormData
       submission.customer.endDate ??
       getDefaultEndDate(submission.customer.startDate),
     paymentTerms: submission.customer.paymentTerms,
+    /* Not chosen before DEV-500: the wizard asks for it on the next edit. */
+    contractType: submission.customer.contractType as AmcFormData["contractType"],
     paymentPlan: submission.payment_plan ?? undefined,
     paymentPlanCustom: submission.payment_plan_custom ?? null,
     proposalNumber: submission.customer.proposalNumber,

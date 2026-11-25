@@ -39,3 +39,11 @@ export const initialOutcome = (channel: SendChannel): SendOutcome =>
 
 /** Whether it reached the client, or was handed to the coordinator to send. */
 export const sendDelivered = (outcome: SendOutcome) => outcome !== "failed" && outcome !== "no_recipient";
+
+/**
+ * Whether the portal itself got it to the client (DEV-404, 20 Nov 2026
+ * review): an email that went. A prepared WhatsApp text or a copied link
+ * has not reached anyone yet, so it does not stop the service report's
+ * clock; the coordinator marks the report sent once they sent it.
+ */
+export const reachedClient = (outcome: SendOutcome) => outcome === "sent";

@@ -9,6 +9,7 @@ import { AMC_CONFIG_DEFAULTS, validateAmcConfigSection } from "@/lib/amc/config"
 import {
   ENQUIRY_STAGE,
   checkStageChange,
+  proposalStartGate,
   cleanAssetCounts,
   createEnquirySchema,
   dubaiDayBounds,
@@ -67,6 +68,16 @@ test("site visit rule: commercial needs a completed visit before a proposal, fla
   assert.equal(blocked.ok ? 0 : blocked.status, 409);
   assert.equal(siteVisitRequired(config, "commercial"), true);
   assert.equal(siteVisitRequired(config, null), false);
+});
+
+/* DEV-362 (20 Nov 2026 review): "flag" offers Create proposal with a warning; only "block" holds it back. */
+test("Create proposal: open, flagged or blocked by the site visit rule", () => {
+  const missing = { siteVisitNeeded: true, hasCompletedSiteVisit: false };
+  assert.equal(proposalStartGate({ ...missing, rule: "flag" }), "flag", "flag is a warning, not a block");
+  assert.equal(proposalStartGate({ ...missing, rule: "block" }), "block");
+  assert.equal(proposalStartGate({ ...missing, rule: undefined }), "block", "rule not loaded yet: held back");
+  assert.equal(proposalStartGate({ siteVisitNeeded: true, hasCompletedSiteVisit: true, rule: "block" }), "open");
+  assert.equal(proposalStartGate({ siteVisitNeeded: false, hasCompletedSiteVisit: false, rule: "block" }), "open");
 });
 
 test("booking a site visit moves the enquiry forward only", () => {

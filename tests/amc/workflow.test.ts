@@ -7,6 +7,7 @@ import {
   canSend,
   checkInternalTransition,
   clientTransition,
+  contractVisible,
 } from "@/lib/amc/workflow";
 
 const STATUSES = [
@@ -45,12 +46,14 @@ test("approve / send back: approvers only, only while awaiting approval", () => 
   }
 });
 
-test("nobody approves their own proposal (BRD v0.3 5.5, 6.7)", () => {
-  assert.equal(AMC_SELF_APPROVAL_ALLOWED, false);
-  assert.equal(canDecideProposal({ canApprove: true, isOwner: true }), false);
+test("an approver may approve their own proposal (24 Nov 2026, Sami); without the switch nobody does", () => {
+  assert.equal(AMC_SELF_APPROVAL_ALLOWED, true);
+  assert.equal(canDecideProposal({ canApprove: true, isOwner: true }), true);
   assert.equal(canDecideProposal({ canApprove: true, isOwner: false }), true);
   const own = checkInternalTransition({ action: "approve", from: "awaiting_approval", isOwner: true, canApprove: true });
-  assert.equal(own.ok ? null : own.status, 403);
+  assert.equal(own.ok, true);
+  const ownOff = checkInternalTransition({ action: "approve", from: "awaiting_approval", isOwner: true, canApprove: true, selfApprovalAllowed: false });
+  assert.equal(ownOff.ok ? null : ownOff.status, 403);
 
   // The explicit switch agrees; an approver without the right is refused too.
   const off = { selfApprovalAllowed: false };
@@ -81,4 +84,12 @@ test("client answers: the right link, at the right stage", () => {
     assert.equal(clientTransition("approve", "proposal", from).ok, false, from);
   }
   assert.equal(clientTransition("sign", "contract", "signed").ok, false);
+});
+
+/* 23 Nov 2026: the contract shows only once the client has approved the proposal. */
+test("the contract is visible only after the client approves the proposal", () => {
+  for (const s of ["draft", "awaiting_approval", "sent_back", "approved", "proposal_sent", "proposal_rejected", null, undefined]) {
+    assert.equal(contractVisible(s), false, String(s));
+  }
+  for (const s of ["proposal_approved", "contract_sent", "signed"]) assert.equal(contractVisible(s), true, s);
 });

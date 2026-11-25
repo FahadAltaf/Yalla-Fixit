@@ -55,8 +55,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       case "snooze_follow_up":
         return NextResponse.json(await snoozeContractFollowUp(gate.admin, id, body, actor));
       case "status":
-        if ((body.to === "terminated" || body.to === "cancelled") && !gate.canApprove) {
-          return NextResponse.json({ error: "Only an AMC approver can terminate or call off a contract." }, { status: 403 });
+        /* DEV-417: terminating or calling off goes through an amendment, decided by a second approver. */
+        if (body.to === "terminated" || body.to === "cancelled") {
+          return NextResponse.json({ error: "Ending a contract needs two people (DEV-417): request an early termination or a cancellation on the contract's Amendments tab, and a different AMC approver decides it." }, { status: 409 });
         }
         return NextResponse.json(await changeContractStatus(gate.admin, id, body, actor));
     }

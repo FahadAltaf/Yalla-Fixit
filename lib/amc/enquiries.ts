@@ -160,6 +160,8 @@ export const siteVisitSchema = z
     assessorId: z.string().uuid("Choose the inspector"),
     /* Who approves it once the inspector completes it (16 Nov 2026). */
     approverId: z.string().uuid("Choose the approver").nullable().optional(),
+    /* DEV-493: booked inside the property's access lead time on purpose. */
+    insideLeadTime: z.boolean().optional(),
   })
   .strict();
 
@@ -171,10 +173,75 @@ export const bookSiteVisitSchema = z
     scheduledAt: instant,
     assessorId: z.string().uuid("Choose the inspector"),
     approverId: z.string().uuid("Choose the approver").nullable().optional(),
+    insideLeadTime: z.boolean().optional(),
   })
   .strict();
 
 export type CreateEnquiryInput = z.infer<typeof createEnquirySchema>;
+
+/** The fields of the New enquiry form that a validation message can sit under. */
+export type EnquiryFormField =
+  | "client"
+  | "property"
+  | "source"
+  | "referrer"
+  | "enquiredAt"
+  | "need"
+  | "whatsapp"
+  | "preferredLanguage"
+  | "owner"
+  | "nextFollowUpAt";
+
+/** Top-to-bottom order on the form: the first one is scrolled to. */
+export const ENQUIRY_FORM_ORDER: readonly EnquiryFormField[] = [
+  "client",
+  "property",
+  "source",
+  "referrer",
+  "enquiredAt",
+  "need",
+  "whatsapp",
+  "preferredLanguage",
+  "owner",
+  "nextFollowUpAt",
+];
+
+/**
+ * createEnquirySchema's issues as one message per form field (24 Nov 2026):
+ * the form shows each under its own field, from the same schema the API
+ * checks, instead of a list of reasons beside the button. The client's name,
+ * phone and email come from the client record, so their issues sit under
+ * Client; "no way to reach them" sits under WhatsApp, where it is fixed.
+ */
+export function enquiryFieldErrors(issues: readonly { path: readonly PropertyKey[]; message: string; code?: string }[]): Partial<Record<EnquiryFormField, string>> {
+  const out: Partial<Record<EnquiryFormField, string>> = {};
+  /* No client chosen: there is no contact yet, so "no way to reach them" would only repeat it. */
+  const noClient = issues.some((i) => i.path[0] === "customerId");
+  /* The schema's own wording for a rule (a refine) before a field's, e.g. "Choose the client" before "Name the contact". */
+  const ordered = [...issues.filter((i) => i.code === "custom"), ...issues.filter((i) => i.code !== "custom")];
+  for (const issue of ordered) {
+    if (noClient && issue.code === "custom" && issue.path[0] === "contactPhone") continue;
+    const key = String(issue.path[0] ?? "");
+    const field: EnquiryFormField | null =
+      key === "customerId" || key === "newCustomer" || key === "contactName" || key === "contactEmail"
+        ? "client"
+        : key === "contactPhone"
+          ? issue.code === "custom"
+            ? "whatsapp"
+            : "client"
+          : key === "contactWhatsapp"
+            ? "whatsapp"
+            : key === "propertyId" || key === "newProperty" || key === "unitType" || key === "propertyCategory" || key === "area"
+              ? "property"
+              : key === "ownerId"
+                ? "owner"
+                : key === "source" || key === "referrer" || key === "enquiredAt" || key === "need" || key === "preferredLanguage" || key === "nextFollowUpAt"
+                  ? key
+                  : null;
+    if (field && !out[field]) out[field] = issue.message;
+  }
+  return out;
+}
 export type UpdateEnquiryInput = z.infer<typeof updateEnquirySchema>;
 export type StageChangeInput = z.infer<typeof stageChangeSchema>;
 export type FollowUpInput = z.infer<typeof followUpSchema>;
@@ -213,6 +280,17 @@ export interface StageRulesConfig {
 /** Whether configuration asks for a site visit before a proposal for this category (BRD 5.2, Q5). */
 export function siteVisitRequired(config: Pick<StageRulesConfig, "proposals">, category: string | null | undefined): boolean {
   return !!category && config.proposals.siteVisitRequiredCategories.includes(category);
+}
+
+/**
+ * Create proposal on an enquiry (DEV-362, 20 Nov 2026 review): "open" when
+ * no site visit is needed or one is completed; otherwise the AMC rule
+ * decides -- "block" holds it back, "flag" offers it with a warning. An
+ * unknown rule (meta not loaded yet) is treated as a block.
+ */
+export function proposalStartGate(input: { siteVisitNeeded: boolean; hasCompletedSiteVisit: boolean; rule: "flag" | "block" | null | undefined }): "open" | "flag" | "block" {
+  if (!input.siteVisitNeeded || input.hasCompletedSiteVisit) return "open";
+  return input.rule === "flag" ? "flag" : "block";
 }
 
 /** Whether `stage` comes at or after `reference` in this order (unknown stages never do). */

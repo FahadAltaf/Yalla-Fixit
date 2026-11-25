@@ -23,7 +23,7 @@ export async function recordClientDecision(
   admin: Admin,
   input: { id: string; answer: ClientAnswer; clientName: string; note?: string | null; evidenceDocumentId: string },
   actor: Actor,
-): Promise<{ status: string }> {
+): Promise<{ status: string; contractWarning?: string | null }> {
   const { data: doc } = await admin
     .from("amc_documents")
     .select("id, level, entity_id")
@@ -88,6 +88,7 @@ export async function recordClientDecision(
     facts: { signedByName: input.clientName.trim(), reason: approved ? null : note },
   });
   /* Phase 6: the contract record from the client's approval. */
-  if (approved) await createContractFromApproval(admin, input.id, actor, await readAmcConfig(admin));
-  return { status };
+  const contract = approved ? await createContractFromApproval(admin, input.id, actor, await readAmcConfig(admin)) : null;
+  /* DEV-505: the failure is shown to whoever recorded the answer, not only logged. */
+  return { status, contractWarning: contract && !contract.contractId ? (contract.message ?? "The contract record was not created.") : null };
 }

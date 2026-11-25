@@ -62,7 +62,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
-type ListParams = { q?: string; clientId?: string; page?: number; pageSize?: number };
+type ListParams = { q?: string; clientId?: string; page?: number; pageSize?: number; when?: string | null; mode?: string | null; dueFrom?: string | null; dueTo?: string | null };
 
 function listQuery(view: "instalments" | "cheques", status: string | null | undefined, params: ListParams) {
   const query = new URLSearchParams({ view });
@@ -71,6 +71,10 @@ function listQuery(view: "instalments" | "cheques", status: string | null | unde
   if (params.clientId) query.set("clientId", params.clientId);
   if (params.page) query.set("page", String(params.page));
   if (params.pageSize) query.set("pageSize", String(params.pageSize));
+  if (params.when) query.set("when", params.when);
+  if (params.mode) query.set("mode", params.mode);
+  if (params.dueFrom) query.set("dueFrom", params.dueFrom);
+  if (params.dueTo) query.set("dueTo", params.dueTo);
   return `/api/amc-payments?${query.toString()}`;
 }
 

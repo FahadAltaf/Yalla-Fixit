@@ -51,6 +51,7 @@ import { readAmcSettings } from "@/lib/server/amc/settings";
 import { fsmFetch, getFsmAccessToken, FsmConfigError } from "@/lib/server/zoho/fsm-client";
 import { servicesForProperty } from "@/components/dashboard/extensions/amc/amc-settings";
 import { listScope } from "@/lib/server/amc/client-profile";
+import { alertCrew, whenLabel } from "@/lib/server/amc/crew-alerts";
 import { isFrequencyEditable } from "@/components/dashboard/extensions/amc/amc-constants";
 
 /**
@@ -1326,7 +1327,6 @@ export async function createAssessment(
   }
   const customerId = input.customerId ?? property?.customerId ?? null;
   if (customerId) await getCustomer(admin, customerId);
-  const checklist = await listChecklist(admin);
   const { data, error } = await admin
     .from("amc_assessments")
     .insert({
@@ -1345,26 +1345,17 @@ export async function createAssessment(
     .select("id")
     .single<{ id: string }>();
   if (error) throw fail(error);
-  if (checklist.length) {
-    const { error: itemsError } = await admin.from("amc_assessment_items").insert(
-      checklist.map((c) => ({
-        assessment_id: data.id,
-        item_key: c.itemKey,
-        category_key: c.categoryKey,
-        category_label: c.categoryLabel,
-        label: c.label,
-        sort_order: c.sortOrder,
-      })),
-    );
-    if (itemsError) throw fail(itemsError);
-  }
+  /*
+    No checklist copied in (24 Nov 2026, the user): the inspector builds and
+    answers the checklist on the mobile app, which syncs it to the visit.
+  */
   await recordAmcAudit(admin, {
     entityType: "assessment",
     entityId: data.id,
     eventType: "assessment_created",
     actorId: actor.id,
     actorLabel: actor.label,
-    payload: { customerId, propertyId: property?.id ?? null, contractId: input.contractId ?? null, items: checklist.length },
+    payload: { customerId, propertyId: property?.id ?? null, contractId: input.contractId ?? null, items: 0 },
   });
   return getAssessment(admin, data.id);
 }
@@ -1398,26 +1389,14 @@ export async function updateAssessment(admin: Admin, who: Visibility, id: string
   const current = await getAssessment(admin, id);
   if (current.status !== "draft") {
     /*
-      Completed but not yet approved: its approver can still change (16 Nov
-      2026), say when the one named is away. Nothing else about it can.
+      Submitted from the mobile app: nothing about it changes any more, its
+      approver included (23 Nov 2026, the user). The approver named when it
+      was submitted approves it or sends it back.
     */
-    const asked = (Object.keys(patch) as Array<keyof AssessmentPatch>).filter((k) => patch[k] !== undefined);
-    const onlyApprover = asked.length > 0 && asked.every((k) => k === "approverId");
-    if (current.status !== "completed" || current.approvedAt || !onlyApprover) {
-      throw new ContractError(current.approvedAt ? "An approved site visit cannot be changed." : "A completed site visit cannot be changed; only its approver can, until it is approved.", 409);
-    }
-    if (!canEditAssessment(who, current)) throw new ContractError("Only its inspector or an AMC approver can edit this site visit.", 403);
-    if (!patch.approverId) throw new ContractError("A completed site visit needs an approver.", 400);
-    if (patch.approverId === current.approverId) return current;
-    const name = await approverName(admin, patch.approverId);
-    const { error } = await admin
-      .from("amc_assessments")
-      .update({ approver_id: patch.approverId, approver_name: name, updated_at: new Date().toISOString() })
-      .eq("id", id)
-      .eq("status", "completed")
-      .is("approved_at", null);
-    if (error) throw fail(error);
-    return getAssessment(admin, id);
+    throw new ContractError(
+      current.approvedAt ? "An approved site visit cannot be changed." : "The inspector has submitted this site visit from the mobile app, so it cannot be changed. Its approver approves it or sends it back.",
+      409,
+    );
   }
   if (!canEditAssessment(who, current)) throw new ContractError("Only its inspector or an AMC approver can edit this assessment.", 403);
   /*
@@ -1500,7 +1479,28 @@ export async function updateAssessment(admin: Admin, who: Visibility, id: string
       .eq("item_key", item.itemKey);
     if (itemError) throw fail(itemError);
   }
-  return getAssessment(admin, id);
+  const saved = await getAssessment(admin, id);
+  /* The inspector's phone (as Snagging): a new inspector is told it is theirs, the old one that it is not, a new time is told. */
+  const was = current.assessorId ?? null;
+  const now = saved.assessorId ?? null;
+  const label = `site visit ${saved.assessmentNumber}`;
+  const client = saved.customer?.name ?? "Client";
+  if (now !== was) {
+    if (now) await alertCrew(admin, { kind: "site_visit", id, type: "assigned", actorId: who.userId, userIds: [now], title: `New ${label}`, body: `${client}: ${whenLabel(saved.scheduledAt)}. Open it in the app for the details.`, whenAt: saved.scheduledAt });
+    if (was) await alertCrew(admin, { kind: "site_visit", id, type: "rescheduled", actorId: who.userId, userIds: [was], noLink: true, title: `Taken off ${label}`, body: `${client}: it is no longer on your list.` });
+  } else if (now && patch.scheduledAt !== undefined && (patch.scheduledAt ? Date.parse(patch.scheduledAt) : null) !== (current.scheduledAt ? Date.parse(current.scheduledAt) : null)) {
+    await alertCrew(admin, {
+      kind: "site_visit",
+      id,
+      type: "rescheduled",
+      actorId: who.userId,
+      userIds: [now],
+      title: `Site visit ${saved.assessmentNumber} moved`,
+      body: `${client}: now ${whenLabel(saved.scheduledAt)}${current.scheduledAt ? ` (was ${whenLabel(current.scheduledAt)})` : ""}.`,
+      whenAt: saved.scheduledAt,
+    });
+  }
+  return saved;
 }
 
 export async function completeAssessment(admin: Admin, who: Visibility, id: string, actor: Actor): Promise<AssessmentRecord> {

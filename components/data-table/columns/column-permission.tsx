@@ -1,7 +1,8 @@
 "use client";
 
 import { ColumnDef } from "@tanstack/react-table";
-import { ChevronRight } from "lucide-react";
+import { CheckCheck, ChevronRight, XCircle } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { ResourceType, ActionType } from "@/types/types";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
@@ -40,6 +41,8 @@ export function getPermissionColumns(
   expansion?: {
     isOpen: (resource: ResourceType) => boolean;
     onToggle: (resource: ResourceType) => void;
+    /** Every permission on every page of a module, or none (23 Nov 2026); the page confirms first. */
+    onBulk?: (resource: ResourceType, mode: "all" | "none") => void;
   },
   /*
     "All Records" or "Own Records". Only the Todos module reads it (a role
@@ -149,11 +152,26 @@ export function getPermissionColumns(
       header: "Permissions",
       cell: ({ row }) => {
         /*
-          A module with pages of its own shows no controls here. The
-          pages carry the grants; a switch on this row would set a
-          permission that nothing reads.
+          A module with pages of its own shows no switch here (the pages
+          carry the grants), but can give or take all of its pages at once
+          (23 Nov 2026), each after a confirmation.
         */
-        if (expansion && hasChildren(row.original.resource)) return null;
+        if (expansion && hasChildren(row.original.resource)) {
+          if (!expansion.onBulk) return null;
+          const resource = row.original.resource;
+          return (
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" size="sm" variant="outline" onClick={() => expansion.onBulk?.(resource, "all")}>
+                <CheckCheck className="size-3.5" />
+                Select all
+              </Button>
+              <Button type="button" size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => expansion.onBulk?.(resource, "none")}>
+                <XCircle className="size-3.5" />
+                Remove all
+              </Button>
+            </div>
+          );
+        }
         const { resource, selectedActions, availableActions, enabled } =
           row.original;
         const isDashboard = resource === ResourceType.DASHBOARD;

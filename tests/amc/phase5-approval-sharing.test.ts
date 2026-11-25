@@ -58,9 +58,16 @@ test("who decides a level: the named approvers, else the AMC approvers, never th
   assert.equal(canDecideStep({ userId: "a", ownerId: "o", approverIds: ["a", "b"], isAmcApprover: false }), true);
   assert.equal(canDecideStep({ userId: "c", ownerId: "o", approverIds: ["a", "b"], isAmcApprover: true }), false, "named people only");
   assert.equal(canDecideStep({ userId: "c", ownerId: "o", approverIds: [], isAmcApprover: true }), true, "nobody named: the AMC approvers");
-  assert.equal(canDecideStep({ userId: "o", ownerId: "o", approverIds: ["o"], isAmcApprover: true }), false, "no self-approval");
-  assert.equal(canDecideStep({ userId: "c", ownerId: "o", approverIds: ["o"], isAmcApprover: true }), true, "a level naming only its owner falls to the AMC approvers");
-  assert.equal(canDecideStep({ userId: "c", ownerId: "o", approverIds: ["o"], isAmcApprover: false }), false, "not to anyone else");
+  /* 24 Nov 2026 (Sami): an approver may approve their own proposal, even as the only one. */
+  assert.equal(canDecideStep({ userId: "o", ownerId: "o", approverIds: ["o"], isAmcApprover: true }), true, "the owner named for the level decides it");
+  assert.equal(canDecideStep({ userId: "c", ownerId: "o", approverIds: ["o"], isAmcApprover: true }), false, "a level naming its owner is the owner's");
+  assert.equal(canDecideStep({ userId: "o", ownerId: "o", approverIds: ["a"], isAmcApprover: true }), false, "not a level named for someone else");
+  assert.equal(canDecideStep({ userId: "o", ownerId: "o", approverIds: [], isAmcApprover: true }), true, "nobody named: the owner as an AMC approver");
+  assert.equal(canDecideStep({ userId: "o", ownerId: "o", approverIds: [], isAmcApprover: false }), false, "an owner who is no approver does not");
+  /* Without self-approval, the old rule. */
+  assert.equal(canDecideStep({ userId: "o", ownerId: "o", approverIds: ["o"], isAmcApprover: true }, false), false, "no self-approval");
+  assert.equal(canDecideStep({ userId: "c", ownerId: "o", approverIds: ["o"], isAmcApprover: true }, false), true, "a level naming only its owner falls to the AMC approvers");
+  assert.equal(canDecideStep({ userId: "c", ownerId: "o", approverIds: ["o"], isAmcApprover: false }, false), false, "not to anyone else");
 });
 
 test("an open level escalates one level up; the last level to itself", () => {

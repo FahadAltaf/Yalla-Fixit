@@ -29,14 +29,15 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Invalid request" }, { status: 400 });
   const gate = await requireProposalViewer(parsed.data.id);
   if (!gate.ok) return gate.response;
-  if (!canRevise(gate.proposal.status, gate.isOwner)) {
+  /* DEV-368: the owner or the team by role revises it. */
+  if (!canRevise(gate.proposal.status, gate.canAct)) {
     return NextResponse.json(
       {
-        error: gate.isOwner
+        error: gate.canAct
           ? `A proposal that is ${gate.proposal.status.replace(/_/g, " ")} is not revised: it has not been shared, or the contract stage has begun.`
-          : "Only the proposal's owner can revise it.",
+          : "Revising a proposal needs AMC Proposals (Edit), or to be its owner.",
       },
-      { status: gate.isOwner ? 409 : 403 },
+      { status: gate.canAct ? 409 : 403 },
     );
   }
   try {

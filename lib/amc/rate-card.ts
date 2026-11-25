@@ -247,6 +247,10 @@ export interface RateFields {
   promotionId: string | null;
   promotionPercent: number | null;
   belowFloor: boolean;
+  /** Visits a year typed outside the card's list (23 Nov 2026): kept, and the proposal needs approval. */
+  frequencyOffCard?: boolean;
+  /** The card's visits a year for the line, when it is off them (for the approver). */
+  cardFrequencies?: number[];
 }
 
 /**
@@ -315,12 +319,18 @@ export function applyRateCard<R extends CardRow>(
       /* No rate, no price: a ticked line cannot be submitted until the card has one. */
       return { ...row, ...none, basePrice: null };
     }
-    if (row.included && countsVisits(row.serviceId) && item.allowedFrequencies.length > 0 && !item.allowedFrequencies.includes(Math.trunc(row.frequency))) {
-      problems.push(`${labelOf(row.serviceId)} can be ${item.allowedFrequencies.join(", ")} times a year on the card, not ${row.frequency}.`);
-    }
+    /*
+      Visits a year the card does not list (23 Nov 2026, the user): typed in
+      and kept, like a rate changed on the proposal, and the proposal goes for
+      approval. It used to be refused, and the box offered the card's list only.
+    */
+    const frequencyOffCard =
+      row.included && !row.free && countsVisits(row.serviceId) && item.allowedFrequencies.length > 0 && !item.allowedFrequencies.includes(Math.trunc(row.frequency));
+    if (frequencyOffCard) belowFloor = true;
+    const offCard = frequencyOffCard ? { frequencyOffCard, cardFrequencies: [...item.allowedFrequencies] } : { frequencyOffCard };
     /* Being retyped (the box emptied): left unpriced, not snapped back to the card; submitting asks for a price. */
     if (manual === null && row.rateOverride === true && !row.free) {
-      return { ...row, basePrice: null, rateItemId: item.id, standardRate: item.standardRate, floorRate: item.floorRate, promotionId: null, promotionPercent: null, belowFloor: false };
+      return { ...row, basePrice: null, rateItemId: item.id, standardRate: item.standardRate, floorRate: item.floorRate, promotionId: null, promotionPercent: null, belowFloor: frequencyOffCard, ...offCard };
     }
     if (manual !== null) {
       const under = row.included && (manual + 1e-9 < item.floorRate || lineBelowFloor(manual, item.floorRate, discountPercent));
@@ -333,7 +343,8 @@ export function applyRateCard<R extends CardRow>(
         floorRate: item.floorRate,
         promotionId: null,
         promotionPercent: null,
-        belowFloor: under,
+        belowFloor: under || frequencyOffCard,
+        ...offCard,
       };
     }
     const promo = promotionFor(card, row.serviceId, model, day);
@@ -348,7 +359,8 @@ export function applyRateCard<R extends CardRow>(
       floorRate: item.floorRate,
       promotionId: promo?.id ?? null,
       promotionPercent: promo?.percentOff ?? null,
-      belowFloor: under,
+      belowFloor: under || frequencyOffCard,
+      ...offCard,
     };
   });
   return { rows: priced, belowFloor, problems };

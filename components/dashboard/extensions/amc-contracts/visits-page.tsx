@@ -272,7 +272,7 @@ export function VisitsPage() {
       />
 
       {data && !data.migrated ? (
-        <Alert className="border-warning/30 bg-warning/5 items-start p-4">
+        <Alert variant="warning">
           <Database className="text-warning" />
           <AlertTitle>The visits list is not set up on this database yet</AlertTitle>
           <AlertDescription>It reads the amc_field_visits view (migration 20261111100000). Ask an admin to apply it.</AlertDescription>

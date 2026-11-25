@@ -31,6 +31,7 @@ import {
 } from "./amc-submission-mapper";
 import { buildAmcPdf } from "./amc-document-utils";
 import { EditingStatus, SubmissionStatusBanner } from "./submission-status-banner";
+import { contractVisible } from "@/lib/amc/workflow";
 import { AmcPreviewDialog } from "./amc-preview-dialog";
 import { computeAmcData, syncServiceRowsForUnitType } from "./amc-pricing";
 import {
@@ -89,6 +90,7 @@ const STEP_FIELDS: Partial<Record<number, (keyof AmcFormData)[]>> = {
   2: [
     "serviceRows",
     "discountPercent",
+    "contractType",
     "optionalSections",
     "priceListRows",
     "fixedPriceRates",
@@ -793,6 +795,7 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
         documentType={previewDoc ?? "proposal"}
         onDocumentTypeChange={setPreviewDoc}
         data={previewData}
+        contractAvailable={contractVisible(submissionMeta?.status)}
         downloading={downloading !== null}
         onDownload={(documentType, format) => void handleDownload(documentType, format)}
       />
@@ -842,15 +845,17 @@ export function AmcWizard({ submissionId }: { submissionId?: string } = {}) {
                       <FileText className="size-4" />
                       Preview proposal
                     </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setPreviewDoc("contract")}
-                    >
-                      <ScrollText className="size-4" />
-                      Preview contract
-                    </Button>
+                    {contractVisible(submissionMeta?.status) ? (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setPreviewDoc("contract")}
+                      >
+                        <ScrollText className="size-4" />
+                        Preview contract
+                      </Button>
+                    ) : null}
                   </div>
                 ) : null}
               </div>

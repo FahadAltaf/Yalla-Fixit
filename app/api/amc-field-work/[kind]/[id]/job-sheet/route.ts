@@ -4,10 +4,12 @@ import type { FieldStartKind } from "@/lib/amc/field-start";
 import { jobSheetActionSchema } from "@/lib/amc/job-sheets";
 import { browserPdfFrom } from "@/lib/server/amc/browser-pdf";
 import { additionalWorkOwner } from "@/lib/server/amc/additional-works";
-import { callOutOwner } from "@/lib/server/amc/call-outs";
+import { callOutOwner, handymanFacts } from "@/lib/server/amc/call-outs";
+import { minutesOnSite, suggestedTeamHours } from "@/lib/amc/handyman-hours";
 import { readAmcConfig } from "@/lib/server/amc/config";
 import { contractErrorResponse, requireContractAccess } from "@/lib/server/amc/contract-access";
-import { closeFieldJobSheet, fieldJobSheetView, returnFieldJobSheet, saveFieldJobSheet, sendFieldServiceReport } from "@/lib/server/amc/field-job-sheets";
+import { fsmQuotationState } from "@/lib/server/amc/fsm-quotation";
+import { closeFieldJobSheet, fieldJobSheetView, markFieldReportSent, returnFieldJobSheet, saveFieldJobSheet, sendFieldServiceReport } from "@/lib/server/amc/field-job-sheets";
 import { UUID, fieldWorkRights } from "@/lib/server/amc/field-work-access";
 import { jobSheetSupervisors } from "@/lib/server/amc/job-sheets";
 
@@ -47,9 +49,18 @@ export async function GET(_req: NextRequest, ctx: Params) {
   try {
     const { gate, kind, rights, response } = await gateFor(kindParam, id);
     if (!gate) return response;
-    const [view, config] = await Promise.all([fieldJobSheetView(gate.admin, kind, id), readAmcConfig(gate.admin)]);
+    const [view, config, fsmQuotation, facts] = await Promise.all([
+      fieldJobSheetView(gate.admin, kind, id),
+      readAmcConfig(gate.admin),
+      /* DEV-508: the FSM quotation number, and whether closing needs it. */
+      fsmQuotationState(gate.admin, kind, id).catch(() => null),
+      /* DEV-495: a handyman job's teams and hours. */
+      kind === "call_out" ? handymanFacts(gate.admin, id) : Promise.resolve(null),
+    ]);
+    const minutes = facts ? minutesOnSite(view.sheet?.arrivedAt, view.sheet?.completedAt) : null;
+    const handyman = facts ? { ...facts, minutesOnSite: minutes, suggestedHours: suggestedTeamHours(minutes, facts.teams) } : null;
     return NextResponse.json(
-      { ...view, canEdit: rights.edit, canReview: gate.visits.approve || jobSheetSupervisors(config).includes(gate.userId) },
+      { ...view, fsmQuotation, handyman, canEdit: rights.edit, canReview: gate.visits.approve || jobSheetSupervisors(config).includes(gate.userId) },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (error) {
@@ -76,7 +87,8 @@ export async function POST(req: NextRequest, ctx: Params) {
       return NextResponse.json({ error: "Only a supervisor reviews job sheets." }, { status: 403 });
     }
     if (action.action === "return") return NextResponse.json(await returnFieldJobSheet(gate.admin, kind, id, action.comment, actor));
-    if (action.action === "close") return NextResponse.json(await closeFieldJobSheet(gate.admin, kind, id, action.comment, actor, config, action.send, browserPdfFrom(body)));
+    if (action.action === "mark_report_sent") return NextResponse.json(await markFieldReportSent(gate.admin, kind, id, { channel: action.channel, note: action.note }, actor));
+    if (action.action === "close") return NextResponse.json(await closeFieldJobSheet(gate.admin, kind, id, action.comment, actor, config, action.send, browserPdfFrom(body), action.fsmQuotationNo ?? null, action.hoursUsed ?? null));
     return NextResponse.json(await sendFieldServiceReport(gate.admin, kind, id, actor, config, action.channel, browserPdfFrom(body)));
   } catch (error) {
     return contractErrorResponse(error, "Could not update the job sheet");

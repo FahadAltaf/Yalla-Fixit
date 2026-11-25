@@ -19,6 +19,8 @@ export interface AmcConfigUser {
   name: string;
   email: string | null;
   role: string | null;
+  /** What their role lets them be named for (23 Nov 2026). */
+  can?: { amc: boolean; enquiries: boolean; siteVisits: boolean; approve: boolean; payments: boolean; visits: boolean; contracts: boolean; mobile: boolean };
 }
 
 export interface AmcConfigResponse {

@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CheckCircle2, Circle, Clock, FileUp, Link as LinkIcon, Mail, MessageCircle, Send, ShieldCheck, XCircle } from "lucide-react";
+import { CheckCircle2, Circle, Clock, FileUp, Link as LinkIcon, Mail, MessageCircle, Send, ShieldCheck, XCircle, TriangleAlert } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { toast } from "sonner";
 
 import { SectionCard } from "@/components/dashboard/shared/kaizen";
@@ -285,11 +286,13 @@ export function RecordClientAnswerDialog({
         category: "Client decision evidence",
         title: `${CLIENT_ANSWER_LABELS[answer]} by ${clientName.trim()}`,
       });
-      await request("/api/amc-submissions/client-decision", {
+      const result = await request<{ contractWarning?: string | null }>("/api/amc-submissions/client-decision", {
         method: "POST",
         body: JSON.stringify({ id: submission.id, answer, clientName: clientName.trim(), note: note.trim() || null, evidenceDocumentId: document.id }),
       });
       toast.success(`Recorded: ${CLIENT_ANSWER_LABELS[answer]}. The client's link is closed.`);
+      /* DEV-505: a contract record that could not be made is said, not hidden. */
+      if (result?.contractWarning) toast.error(result.contractWarning, { duration: 12_000 });
       setBusy(false);
       onOpenChange(false);
       onRecorded();
@@ -349,9 +352,11 @@ export function RecordClientAnswerDialog({
             <p className="text-muted-foreground text-xs">The email, a screenshot of the WhatsApp chat, or a signed page.</p>
           </div>
           {answer === "approved" ? (
-            <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/40 dark:text-amber-200">
-              This is final: the proposal is locked as approved, the client&apos;s link closes and the contract is created from it.
-            </p>
+            <Alert variant="warning">
+              <TriangleAlert />
+              <AlertTitle>This is final</AlertTitle>
+              <AlertDescription>The proposal is locked as approved, the client&apos;s link closes and the contract is created from it.</AlertDescription>
+            </Alert>
           ) : null}
           {missing.length ? <p className="text-muted-foreground text-xs">To record it, add {missing.join(", ")}.</p> : null}
         </div>

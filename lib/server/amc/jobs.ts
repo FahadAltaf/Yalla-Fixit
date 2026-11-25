@@ -13,6 +13,7 @@ import { runCallOutSweep } from "@/lib/server/amc/call-outs";
 import { runRenewalSweep } from "@/lib/server/amc/renewals";
 import { runExpiryReminderSweep } from "@/lib/server/amc/reminders";
 import { escalateDueAmcTodos } from "@/lib/server/amc/todos";
+import { renewalParts, scheduledJobs, visitParts, type DailyJobPart } from "@/lib/amc/daily-jobs";
 
 /**
  * The AMC scheduled jobs (timed BRD rules: escalations, reminders, idle
@@ -32,6 +33,8 @@ export interface AmcJobContext {
   config: AmcConfig;
   now: Date;
   trigger: "scheduled" | "manual";
+  /** DEV-485: the parts switched on for a scheduled run; null for Run now (everything). */
+  parts: readonly DailyJobPart[] | null;
 }
 
 export interface AmcJob {
@@ -84,7 +87,7 @@ export const AMC_JOBS: AmcJob[] = [
   {
     key: "visits",
     label: "PPM confirmation to-dos, access alerts and the client reminder the day before",
-    run: async ({ admin, config, now }) => ({ ...(await runVisitSweep(admin, config, now)) }),
+    run: async ({ admin, config, now, parts }) => ({ ...(await runVisitSweep(admin, config, now, visitParts(parts))) }),
   },
   {
     key: "job_sheets",
@@ -99,12 +102,14 @@ export const AMC_JOBS: AmcJob[] = [
   {
     key: "renewals",
     label: "Expiry notices (60 and 30 days), renewal reminders and to-dos, idle escalation, renewed and lapsed outcomes, scheduled terminations",
-    run: async ({ admin, config, now }) => ({ ...(await runRenewalSweep(admin, config, now)) }),
+    run: async ({ admin, config, now, parts }) => ({ ...(await runRenewalSweep(admin, config, now, renewalParts(parts))) }),
   },
   {
     key: "expiry_reminders",
     label: "Contract expiry reminders (only when automatic reminders are on)",
-    run: async ({ admin }) => ({ ...(await runExpiryReminderSweep(admin, { trigger: "automatic", actor: null })) }),
+    /* A client email: held while client emails are off (DEV-485). */
+    run: async ({ admin, config }) =>
+      config.jobs.clientEmails ? { ...(await runExpiryReminderSweep(admin, { trigger: "automatic", actor: null })) } : { held: "Client emails from daily jobs are off." },
   },
 ];
 
@@ -133,9 +138,12 @@ export async function runAmcJobs(
     jobs.config = { ok: false, error: error instanceof Error ? error.message : "Could not read configuration" };
   }
   if (config) {
-    for (const job of AMC_JOBS.filter((j) => !opts.only || opts.only.includes(j.key))) {
+    /* DEV-485: the scheduler runs only the parts switched on in AMC configuration -> Daily jobs. */
+    const parts = opts.trigger === "scheduled" ? config.jobs.scheduled : null;
+    const allowed = parts ? new Set(scheduledJobs(parts)) : null;
+    for (const job of AMC_JOBS.filter((j) => (!opts.only || opts.only.includes(j.key)) && (!allowed || allowed.has(j.key)))) {
       try {
-        jobs[job.key] = { ok: true, result: await job.run({ admin, config, now, trigger: opts.trigger }) };
+        jobs[job.key] = { ok: true, result: await job.run({ admin, config, now, trigger: opts.trigger, parts }) };
       } catch (error) {
         jobs[job.key] = { ok: false, error: error instanceof Error ? error.message.slice(0, 500) : "Failed" };
       }

@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Camera, ClipboardList, Siren } from "lucide-react";
 
+import { rowLink } from "@/components/dashboard/shared/kaizen";
 import { ErrorState, ListSkeleton } from "@/components/dashboard/shared/kaizen-states";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -90,6 +92,7 @@ function AssetHistoryBody({ propertyId, assetId }: { propertyId: string; assetId
 }
 
 function ChecksSection({ checks }: { checks: AssetHistory["checks"] }) {
+  const router = useRouter();
   return (
     <Section icon={<ClipboardList />} title="Checklist results" count={checks.length}>
       {checks.length === 0 ? (
@@ -107,12 +110,16 @@ function ChecksSection({ checks }: { checks: AssetHistory["checks"] }) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {checks.map((c) => (
-                <TableRow key={c.id} className="h-12">
+              {checks.map((c) => {
+                /* The whole row opens the visit on its contract's schedule (23 Nov 2026). */
+                const href = c.contractId && c.visitNo !== null ? `/extensions/amc-contracts/${c.contractId}?tab=schedule${c.visitId ? `&visit=${c.visitId}` : ""}` : null;
+                const link = href ? rowLink(href, router.push) : null;
+                return (
+                <TableRow key={c.id} {...(link ?? {})} className={link ? `h-12 ${link.className}` : "h-12"}>
                   <TableCell className="pl-4 tabular-nums">{formatContractDate(c.date)}</TableCell>
                   <TableCell className="tabular-nums">
                     {c.contractId && c.visitNo !== null ? (
-                      <Link href={`/extensions/amc-contracts/${c.contractId}?tab=schedule${c.visitId ? `&visit=${c.visitId}` : ""}`} className="font-medium hover:underline">
+                      <Link href={href ?? "#"} className="font-medium hover:underline">
                         Visit {c.visitNo}
                       </Link>
                     ) : c.visitNo !== null ? (
@@ -129,7 +136,8 @@ function ChecksSection({ checks }: { checks: AssetHistory["checks"] }) {
                   </TableCell>
                   <TableCell className="text-muted-foreground max-w-[220px] pr-4 text-sm whitespace-normal">{c.note || "—"}</TableCell>
                 </TableRow>
-              ))}
+                );
+              })}
             </TableBody>
           </Table>
         </div>
@@ -178,16 +186,20 @@ function CallOutsSection({ callOuts, trade }: { callOuts: AssetHistory["callOuts
       ) : (
         <ul className="divide-y rounded-md border">
           {callOuts.map((c) => (
-            <li key={c.id} className="flex flex-wrap items-start justify-between gap-2 px-4 py-3 text-sm">
+            <li key={c.id}>
+              {/* The whole row opens the call out (23 Nov 2026). */}
+              <Link
+                href={`/extensions/amc-contracts/call-outs?open=${c.id}`}
+                className="hover:bg-muted/50 focus-visible:ring-ring flex cursor-pointer flex-wrap items-start justify-between gap-2 px-4 py-3 text-sm transition-colors focus-visible:ring-2 focus-visible:outline-none focus-visible:-outline-offset-2"
+              >
               <div className="min-w-0">
-                <Link href={`/extensions/amc-contracts/call-outs?open=${c.id}`} className="font-medium hover:underline">
-                  {c.number}
-                </Link>
+                <span className="font-medium">{c.number}</span>
                 <span className="text-muted-foreground"> · {formatContractDate(c.date)}</span>
                 <TruncatedText>{c.issue}</TruncatedText>
                 {c.resolution ? <TruncatedText className="text-muted-foreground text-xs">Resolution: {c.resolution}</TruncatedText> : null}
               </div>
               <CallOutStatusBadge status={c.status as CallOutStatus} />
+              </Link>
             </li>
           ))}
         </ul>

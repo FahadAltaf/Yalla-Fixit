@@ -52,6 +52,13 @@ export const amcSettingsService = {
       { method: "GET" },
     ),
 
+  /** The AMC approvers (all levels), by email, saved alone (AMC configuration → Named people). */
+  saveApprovers: async (approvers: string[]) =>
+    executeRESTBackend<{ approvers: string[] }>("/api/amc-settings/approvers", {
+      method: "PUT",
+      body: { approvers },
+    }),
+
   saveSettings: async (
     overrides: AmcSettingsOverrides,
   ): Promise<AmcSettingsResponse> =>

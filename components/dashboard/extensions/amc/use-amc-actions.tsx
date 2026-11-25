@@ -23,6 +23,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { amcSettingsService, amcSubmissionsService } from "@/modules/amc-submissions";
 
 import { buildAmcPdfFromSubmission, savedSettingsFor } from "./amc-document-utils";
+import { contractVisible } from "@/lib/amc/workflow";
 import { AmcPreviewDialog, previewTitle, submissionPreviewData } from "./amc-preview-dialog";
 import { AMC_DECISION_MADE } from "./amc-approval-notice";
 import { AmcLinkDialog } from "./amc-link-dialog";
@@ -152,9 +153,15 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
       */
       const sender =
         submission.is_own === false ? (submission.owner_name || "The owner") : null;
+      /* A level before the last moves it on, not to the client (24 Nov 2026). */
+      const ladder = submission.approval_deciders?.progress ?? null;
+      const moreLevels = ladder?.nextLevelName ?? null;
+      const name = `${submission.customer.customerName || "This proposal"}${submission.customer.proposalNumber ? ` (${submission.customer.proposalNumber})` : ""}`;
       const done = await confirm({
-        title: "Approve this proposal?",
-        description: `${submission.customer.customerName || "This proposal"}${submission.customer.proposalNumber ? ` (${submission.customer.proposalNumber})` : ""} will be approved and can then be sent to the client${sender ? ` by ${sender}` : ""}. It can't be edited after this.`,
+        title: moreLevels ? `Approve at ${submission.approval_deciders?.levelName ?? "this level"}?` : "Approve this proposal?",
+        description: moreLevels
+          ? `${name} is approved at ${submission.approval_deciders?.levelName ?? "this level"} and then goes to ${moreLevels}, who approve it before it can be sent to the client.`
+          : `${name} will be approved and can then be sent to the client${sender ? ` by ${sender}` : ""}. It can't be edited after this.`,
         confirmText: "Approve",
         action: run,
       });
@@ -356,6 +363,7 @@ export function useAmcActions({ onChanged }: { onChanged: () => void | Promise<v
             setPreview((current) => (current ? { ...current, documentType } : current))
           }
           data={submissionPreviewData(preview.submission, preview.settings)}
+          contractAvailable={contractVisible(preview.submission.status)}
           downloading={downloadingId === preview.submission.id}
           onDownload={(documentType, format) =>
             void download(preview.submission, documentType, format)

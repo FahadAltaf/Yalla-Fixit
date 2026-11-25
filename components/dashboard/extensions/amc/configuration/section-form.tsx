@@ -200,7 +200,7 @@ function FieldInput({
       ) : null}
 
       {field.kind === "multi" ? (
-        <div className="flex flex-wrap gap-2" role="group" aria-labelledby={id}>
+        <div className={field.layout === "list" ? "grid gap-2" : "flex flex-wrap gap-2"} role="group" aria-labelledby={id}>
           {field.options.map((o) => {
             const list = (Array.isArray(value) ? value : []) as Array<string | number>;
             const v = field.numeric ? Number(o.value) : o.value;
@@ -226,8 +226,11 @@ function FieldInput({
         <MultipleSelector
           value={((value as string[]) ?? []).map((uid) => ({ value: uid, label: users.find((u) => u.id === uid)?.name ?? "Unknown user" }))}
           onChange={(picked) => onChange(picked.map((o) => o.value))}
-          options={users.map((u) => ({ value: u.id, label: u.role ? `${u.name} (${u.role})` : u.name }))}
-          placeholder="Name the approvers"
+          /* Only people whose role allows this list (23 Nov 2026); anyone already named stays. */
+          options={users
+            .filter((u) => !field.need || u.can?.[field.need] !== false || ((value as string[]) ?? []).includes(u.id))
+            .map((u) => ({ value: u.id, label: u.role ? `${u.name} (${u.role})` : u.name }))}
+          placeholder="Search and pick people"
           hidePlaceholderWhenSelected
           disabled={disabled}
           commandProps={{ className: "h-auto" }}

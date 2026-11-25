@@ -1,13 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
+import { CONTRACT_TYPES } from "@/lib/amc/contract-type";
 import { z } from "zod";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
 import { hasResourceAction, isAdminUser } from "@/lib/role-permissions";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
+import { proposalRights, proposalTeamActs, proposalTeamSees } from "@/lib/amc/proposal-team";
+import { proposalViewerRoles } from "@/lib/server/amc/proposal-roles";
 import { canApproveAmc } from "@/components/dashboard/extensions/amc/amc-settings";
 import { readAmcSettings } from "@/lib/server/amc/settings";
-import { priceSubmission } from "@/lib/server/amc/pricing";
+import { priceSubmission, stampRateOverrides } from "@/lib/server/amc/pricing";
 import { canDecideProposal } from "@/lib/amc/workflow";
 import {
   amcServiceRowsInputSchema,
@@ -25,11 +28,15 @@ import {
   PAYMENT_PLANS,
   customPlanSchema,
   legacyTermsForPlan,
+  paymentPlanLabel,
   planFromLegacyTerms,
+  type CustomPlan,
   type PaymentPlan,
 } from "@/lib/amc/proposal-rules";
+import { approvalChecklist, type ChecklistLine } from "@/lib/amc/approval-checklist";
+import { readAmcConfig } from "@/lib/server/amc/config";
 import { rateCardInForce } from "@/lib/server/amc/rate-card";
-import { stepDeciders, viewerDecidesStep } from "@/lib/server/amc/approval-ladder";
+import { stepDeciders, viewerDecidesStep, viewerDecidesSteps } from "@/lib/server/amc/approval-ladder";
 import { ActionType, ResourceType } from "@/types/types";
 import type {
   AmcDocumentType,
@@ -75,6 +82,8 @@ const submissionPayloadSchema = z.object({
     coordinationContacts: z.array(coordinationContactSchema).min(1).max(10),
     startDate: z.string(),
     endDate: z.string(),
+    /* DEV-500: optional so a proposal saved before it still validates. */
+    contractType: z.enum(CONTRACT_TYPES).optional(),
     paymentTerms: z.enum(["monthly", "quarterly", "annual"]),
     proposalNumber: z.string(),
   }),
@@ -230,13 +239,15 @@ type AmcSubmissionRow = {
 
 function mapRow(
   row: AmcSubmissionRow,
-  owner?: { viewerId: string; names: Map<string, string> },
+  owner?: { viewerId: string; names: Map<string, string>; teamActs?: boolean },
 ): AmcSubmission {
   return {
     ...(owner
       ? {
           owner_name: owner.names.get(row.owner_id) ?? null,
           is_own: row.owner_id === owner.viewerId,
+          /* DEV-368: the owner, or the team by role, works on it (edit, send, revise, take over). */
+          can_act: row.owner_id === owner.viewerId || Boolean(owner.teamActs),
         }
       : {}),
     id: row.id,
@@ -350,15 +361,23 @@ export async function GET(req: NextRequest) {
       hasResourceAction(gate.accessUser, ResourceType.AMC, ActionType.APPROVE),
     );
     const isOwn = row.owner_id === profile.id;
-    /* DEV-368: approvers and AMC Operations (View) see the team's proposals. */
-    const seesTeam = canApprove || hasResourceAction(gate.accessUser, ResourceType.AMC_OPERATIONS, ActionType.VIEW);
-    /* Phase 5: the approvers named for the open level decide it, so they see it too. */
+    /*
+      DEV-368 (BRD 5.4, 20 Nov 2026 review): visible to the team by role,
+      drafts included, so a colleague can pick a proposal up.
+    */
+    const roles = proposalViewerRoles(gate.accessUser, canApprove);
+    const rights = proposalRights(roles, isOwn);
+    /*
+      Phase 5: the approvers named for the open level decide it, so they see it too.
+      Asked of everyone, not only those who could not see it otherwise (24 Nov 2026):
+      an AMC approver saw Approve on a level that names someone else, and the server
+      then refused it. The level decides; the role only when the level names nobody.
+    */
     const decidesStep =
       row.status === "awaiting_approval"
         ? await viewerDecidesStep(admin, row, profile.id, canApprove).catch(() => null)
         : null;
-    // Someone else's draft stays private, even to an approver.
-    if (!isOwn && (!(seesTeam || decidesStep) || row.status === "draft")) {
+    if (!rights.see && !decidesStep) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
@@ -369,12 +388,29 @@ export async function GET(req: NextRequest) {
       property are then fixed in the wizard).
     */
     const hasContract = row.status === "signed" || row.status === "proposal_approved" || row.status === "contract_sent";
-    const [ownerRead, contractRead, visitRead, deciders] = await Promise.all([
+    /* What the approver checks (23 Nov 2026): while it can still go for approval or waits for it. */
+    const checklistWanted = row.status === "draft" || row.status === "sent_back" || row.status === "awaiting_approval";
+    const [ownerRead, contractRead, visitRead, deciders, checklistConfig] = await Promise.all([
       isOwn ? null : admin.from("user_profile").select("id, full_name, email").eq("id", row.owner_id).maybeSingle(),
       hasContract ? admin.from("amc_contracts").select("id, contract_number").eq("submission_id", row.id).maybeSingle<{ id: string; contract_number: string | null }>() : null,
       row.enquiry_id ? null : admin.from("amc_assessments").select("id").eq("submission_id", row.id).limit(1).maybeSingle(),
       row.status === "awaiting_approval" ? stepDeciders(admin, row, settings.approval?.approvers ?? []).catch(() => null) : null,
+      checklistWanted ? readAmcConfig(admin).catch(() => null) : null,
     ]);
+    const plan = (row.payment_plan as PaymentPlan | null) ?? planFromLegacyTerms(row.customer?.paymentTerms);
+    const approvalChecklistRead = checklistConfig
+      ? approvalChecklist(checklistConfig, {
+          discountPercent: Number(row.discount_percent ?? 0),
+          finalPrice: Number(row.final_price ?? 0),
+          plan,
+          planLabel: plan === "custom" ? paymentPlanLabel(plan, (row.payment_plan_custom as CustomPlan | null) ?? null) : null,
+          services: ((row.services ?? []) as unknown as ChecklistLine[]),
+          labelOf: (line) =>
+            (line as ChecklistLine & { customName?: string }).customName?.trim() ||
+            settings.services?.find((s) => s.id === line.serviceId)?.label ||
+            line.serviceId,
+        })
+      : null;
 
     const names = new Map<string, string>();
     const owner = ownerRead?.data;
@@ -391,9 +427,10 @@ export async function GET(req: NextRequest) {
     const fromSiteVisit = Boolean(visitRead?.data);
 
     return NextResponse.json({
-      ...mapRow(row, { viewerId: profile.id, names }),
+      ...mapRow(row, { viewerId: profile.id, names, teamActs: proposalTeamActs(roles) }),
       from_site_visit: fromSiteVisit,
       approval_deciders: deciders,
+      approval_checklist: approvalChecklistRead,
       contract_id: contractId,
       contract_number: contractNumber,
       /* One rule for the API and the buttons (lib/amc/workflow.ts),
@@ -455,23 +492,19 @@ export async function GET(req: NextRequest) {
     else's once it has left draft. Null means "only mine", applied as a
     plain equality rather than an `or`.
   */
-  /* DEV-368 (BRD 5.4): approvers and AMC Operations (View) see the team's proposals; others their own. */
-  const seesTeam = canApprove || hasResourceAction(gate.accessUser, ResourceType.AMC_OPERATIONS, ActionType.VIEW);
+  /* DEV-368 (BRD 5.4, 20 Nov 2026 review): the team by role sees every proposal, drafts included; others their own. */
+  const roles = proposalViewerRoles(gate.accessUser, canApprove);
+  const seesTeam = proposalTeamSees(roles);
   // An approver's "Submitted by others": the proposals they decide on.
   const reviewing = canApprove && othersOnly;
-  const visibilityClauses =
-    seesTeam && !mineOnly && !reviewing ? [`owner_id.eq.${profile.id}`, "status.neq.draft"] : null;
+  const teamAll = seesTeam && !mineOnly && !reviewing;
   /*
-    Which rows, before the search: anyone's past draft plus mine (the or
-    above), only mine, or -- for an approver's "Submitted by others" --
-    everyone else's that has left draft.
+    Which rows, before the search: everyone's (the team), only mine, or --
+    for an approver's "Submitted by others" -- everyone else's that has
+    left draft.
   */
   const scoped = <Q extends { eq: (c: string, v: string) => Q; neq: (c: string, v: string) => Q }>(query: Q): Q =>
-    reviewing
-      ? query.neq("owner_id", profile.id).neq("status", "draft")
-      : visibilityClauses
-        ? query
-        : query.eq("owner_id", profile.id);
+    reviewing ? query.neq("owner_id", profile.id).neq("status", "draft") : teamAll ? query : query.eq("owner_id", profile.id);
 
   /*
     The search box: the customer, the proposal number, the address -- and,
@@ -501,18 +534,8 @@ export async function GET(req: NextRequest) {
     ];
   }
 
-  /*
-    The two groups as ONE `or` filter, (visible) AND (matches the search).
-    Written out as "each search clause AND visible" so the query carries a
-    single documented logic tree rather than two `or` parameters whose
-    combination is easy to get subtly wrong in a way that leaks drafts.
-  */
-  const orFilter =
-    visibilityClauses && searchClauses
-      ? searchClauses
-          .map((clause) => `and(${clause},or(${visibilityClauses.join(",")}))`)
-          .join(",")
-      : (visibilityClauses ?? searchClauses)?.join(",") ?? null;
+  /* The search, on top of who is visible (scoped). */
+  const orFilter = searchClauses?.join(",") ?? null;
 
   /*
     Newest proposal first, by when it was RAISED.
@@ -565,9 +588,17 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  const submissions = rows.map((row) =>
-    mapRow(row, { viewerId: profile.id, names }),
-  );
+  /* Who decides each waiting proposal is its open level, not the role (24 Nov 2026). */
+  const decides = await viewerDecidesSteps(
+    admin,
+    rows.filter((row) => row.status === "awaiting_approval"),
+    profile.id,
+    canApprove,
+  ).catch(() => new Map<string, boolean>());
+  const submissions = rows.map((row) => ({
+    ...mapRow(row, { viewerId: profile.id, names, teamActs: proposalTeamActs(roles) }),
+    ...(decides.has(row.id) ? { viewer_can_approve: decides.get(row.id) } : {}),
+  }));
   return NextResponse.json({
     submissions,
     totalCount: count ?? 0,
@@ -600,7 +631,8 @@ export async function POST(req: NextRequest) {
      With a rate card in force, the base prices are the card's (BRD 5.3). */
   const card = await pricingCard(admin);
   const priced = priceSubmission({
-    services: payload.services,
+    /* DEV-501: who typed a rate above the card, set here. */
+    services: stampRateOverrides(payload.services, [], profile.full_name ?? profile.email ?? null),
     discountPercent: payload.discount_percent,
     unitType: payload.property.unitType,
     propertyType: payload.property.propertyType ?? null,
@@ -681,7 +713,6 @@ export async function PUT(req: NextRequest) {
     .from("amc_submissions")
     .select("*")
     .eq("id", id)
-    .eq("owner_id", profile.id)
     .maybeSingle();
 
   if (fetchError) {
@@ -692,6 +723,14 @@ export async function PUT(req: NextRequest) {
   }
 
   const existingRow = existing as AmcSubmissionRow;
+  /* DEV-368: the owner, or the team by role, edits it (it used to be the owner only). */
+  {
+    const settings = await readAmcSettings(admin);
+    const canApprove = canApproveAmc(settings, profile.email, hasResourceAction(gate.accessUser, ResourceType.AMC, ActionType.APPROVE));
+    const rights = proposalRights(proposalViewerRoles(gate.accessUser, canApprove), existingRow.owner_id === profile.id);
+    if (!rights.see) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    if (!rights.act) return NextResponse.json({ error: "Editing someone else's proposal needs AMC Proposals (Edit)." }, { status: 403 });
+  }
 
   /*
     FR3.4 — "Once it is sent for review it is locked, until it is approved
@@ -741,9 +780,11 @@ export async function PUT(req: NextRequest) {
        version is locked and keeps its own (DEV-364, 367). */
     const card = await pricingCard(admin);
     const priced = priceSubmission({
-      services: (updates.services ?? existingRow.services ?? []) as Parameters<
-        typeof priceSubmission
-      >[0]["services"],
+      services: stampRateOverrides(
+        (updates.services ?? existingRow.services ?? []) as Parameters<typeof priceSubmission>[0]["services"],
+        (existingRow.services ?? []) as Parameters<typeof priceSubmission>[0]["services"],
+        profile.full_name ?? profile.email ?? null,
+      ),
       discountPercent: updates.discount_percent ?? Number(existingRow.discount_percent ?? 0),
       unitType: updates.property?.unitType ?? existingProperty?.unitType ?? "",
       propertyType: updates.property?.propertyType ?? existingProperty?.propertyType ?? null,
@@ -793,7 +834,6 @@ export async function PUT(req: NextRequest) {
         .from("amc_submissions")
         .update(row)
         .eq("id", id)
-        .eq("owner_id", profile.id)
         /* Re-asserted: an autosave that lands just after an approval must not
            rewrite the approved proposal. */
         .in("status", EDITABLE_STATUSES)

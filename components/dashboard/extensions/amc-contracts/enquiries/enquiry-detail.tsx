@@ -6,19 +6,25 @@ import {
   ArrowLeft,
   ArrowRight,
   Boxes,
+  BellRing,
   Building2,
+  CalendarClock,
   CalendarPlus,
   ChevronDown,
   ClipboardCheck,
   FileSignature,
+  Hourglass,
   Inbox,
   Link2,
   MapPin,
+  Megaphone,
   MessageSquarePlus,
+  MessageSquareText,
   SquarePen,
   SearchX,
   Shuffle,
   TriangleAlert,
+  UserRound,
   X,
 } from "lucide-react";
 import { format } from "date-fns";
@@ -70,10 +76,13 @@ import {
   CLOSED_STAGES,
   ENQUIRY_STAGE,
   FOLLOW_UP_CHANNEL_LABELS,
+  proposalStartGate,
   type FollowUpChannel,
   type SiteVisitAttendance,
 } from "@/lib/amc/enquiries";
 import { enquiriesService } from "@/modules/amc-contracts/enquiries-service";
+import { amcStatusTone } from "@/components/dashboard/extensions/amc/amc-status";
+import { AMC_STATUS_LABELS, type AmcSubmissionStatus } from "@/components/dashboard/extensions/amc/amc-types";
 import { proposalRulesService } from "@/modules/amc-submissions";
 
 import { AddressDialog, useAddressFormAccess } from "../address-dialog";
@@ -104,6 +113,7 @@ import {
   propertyRows,
 } from "./enquiry-ui";
 import { LinkPropertyDialog } from "./link-property-dialog";
+import { useLeadTimeConfirm } from "../lead-time-confirm";
 import { formatPhone, phoneHref, toE164Phone } from "@/lib/phone/format-phone";
 
 /* Three tabs, as on a quotation: what it is, the work done for it (site visits), and what happened to it. */
@@ -132,6 +142,7 @@ export function EnquiryDetail({ id }: { id: string }) {
   const [refreshing, setRefreshing] = useState(false);
   const [fetchedAt, setFetchedAt] = useState<number | null>(null);
   const { confirm, dialog: confirmDialog } = useConfirm();
+  const { guard, dialog: leadTimeDialog } = useLeadTimeConfirm();
   const { data, error, loading, reload } = useAmcData(
     () =>
       enquiriesService
@@ -213,13 +224,27 @@ export function EnquiryDetail({ id }: { id: string }) {
       ? nextStage
       : undefined;
   const needsVisit = Boolean(e?.siteVisitRequired) && !completedVisit;
-  /* Not offered while the site visit it needs is still to be done (13 Nov 2026): the notice below books it instead. */
-  const canStartProposal = Boolean(e) && canEdit && !closed && !e?.proposal && !needsVisit;
+  /*
+    DEV-362 (20 Nov 2026 review): the AMC configuration decides. "Block"
+    holds Create proposal back until the site visit is completed; "flag"
+    offers it with a warning, and the proposal is flagged (the server
+    applies the same rule).
+  */
+  const gate = proposalStartGate({ siteVisitNeeded: Boolean(e?.siteVisitRequired), hasCompletedSiteVisit: completedVisit, rule: m?.siteVisitRule });
+  const visitBlocks = gate === "block";
+  const visitFlags = gate === "flag";
+  const canStartProposal = Boolean(e) && canEdit && !closed && !e?.proposal && !visitBlocks;
 
   /* DEV-365: the proposal, prefilled from the enquiry, its property and its site visit. */
   /* Asked first (11 Nov 2026): it acts at once, so it is confirmed like every other step. */
   const startProposal = () =>
-    void confirm({ title: "Create a proposal from this enquiry?", description: "Starts a draft proposal prefilled from the enquiry, its property and its site visit, then opens it to enter the prices. Nothing is sent to the client.", confirmText: "Create proposal" }).then((ok) => {
+    void confirm({
+      title: "Create a proposal from this enquiry?",
+      description: visitFlags
+        ? "No completed site visit yet: this category needs one, so the proposal will be flagged for its approvers. It starts as a draft prefilled from the enquiry and its property, then opens to enter the prices. Nothing is sent to the client."
+        : "Starts a draft proposal prefilled from the enquiry, its property and its site visit, then opens it to enter the prices. Nothing is sent to the client.",
+      confirmText: "Create proposal",
+    }).then((ok) => {
       if (ok) void startProposalNow();
     });
   const startProposalNow = async () => {
@@ -379,7 +404,7 @@ export function EnquiryDetail({ id }: { id: string }) {
         <div className="flex flex-col gap-4">
           {/* What is holding the enquiry up, as a quotation shows what is holding it up. */}
           {e.stage === ENQUIRY_STAGE.lost ? (
-            <Alert variant="destructive">
+            <Alert variant="danger">
               <X />
               <AlertTitle>
                 Lost{e.lostReason ? `: ${e.lostReason}` : ""}
@@ -390,16 +415,18 @@ export function EnquiryDetail({ id }: { id: string }) {
             </Alert>
           ) : null}
           {needsVisit && !closed ? (
-            <Alert>
+            <Alert variant="warning">
               <TriangleAlert />
               <AlertTitle>
-                A completed site visit is needed before a proposal
+                {visitFlags
+                  ? "No completed site visit: a proposal made now is flagged"
+                  : "A completed site visit is needed before a proposal"}
               </AlertTitle>
               <AlertDescription className="flex flex-wrap items-center gap-3">
                 <span>
-                  {m.siteVisitRule === "block"
-                    ? "AMC configuration requires one for this category."
-                    : "AMC configuration flags a proposal without one for this category."}
+                  {visitFlags
+                    ? "AMC configuration flags a proposal without one for this category. You can still create it; its approvers see the flag."
+                    : "AMC configuration requires one for this category."}
                   {siteVisits.length > 0
                     ? " The visit booked is not completed yet."
                     : ""}
@@ -778,65 +805,54 @@ export function EnquiryDetail({ id }: { id: string }) {
                   description="What they asked for, where they came from, who owns it and when they are next contacted."
                   bodyClassName="px-5 pb-5"
                 >
-                  <div className="grid items-stretch gap-6 lg:grid-cols-2">
-                    {/* The request in a box that runs the column's height, as the map does above, so it never ends in a hole. */}
-                    <div className="flex min-w-0 flex-col space-y-3">
-                      <SubHeading>What they need</SubHeading>
-                      <p className="bg-muted/30 flex-1 rounded-lg border p-4 text-sm leading-relaxed whitespace-pre-wrap">
-                        {e.need}
-                      </p>
+                  {/*
+                    23 Nov 2026: the request as a short quote, as tall as its words (the
+                    old box ran the column's height and was mostly empty), then the
+                    facts as tiles, each with its icon.
+                  */}
+                  <div className="grid gap-4">
+                    {/* What they need: a tile like the facts below, full width, as tall as its words. */}
+                    <div className="flex min-w-0 items-start gap-3 rounded-lg border px-4 py-3">
+                      <span className="bg-muted text-muted-foreground flex size-8 shrink-0 items-center justify-center rounded-md [&_svg]:size-4">
+                        <MessageSquareText />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-muted-foreground text-xs">What they need</p>
+                        <p className="mt-0.5 text-sm leading-relaxed font-medium break-words whitespace-pre-wrap">{e.need}</p>
+                      </div>
                     </div>
-                    <div className="min-w-0 space-y-3">
-                      <SubHeading>Owner and follow-up</SubHeading>
-                      <DetailList
-                        rows={[
-                          {
-                            label: "Source",
-                            value: e.referrer
-                              ? `${e.source} (referred by ${e.referrer})`
-                              : e.source,
-                          },
-                          {
-                            label: "Enquired on",
-                            value: formatDateTime(e.enquiredAt),
-                          },
-                          {
-                            label: "Owner",
-                            value: e.owner?.name ?? "Unassigned",
-                          },
-                          {
-                            label: "Next follow-up",
-                            value: e.nextFollowUpAt ? (
-                              formatDateTime(e.nextFollowUpAt)
-                            ) : (
-                              <span className="text-muted-foreground font-normal">
-                                Not planned
-                              </span>
-                            ),
-                          },
-                          {
-                            label: "In this stage since",
-                            value: formatDateTime(e.stageChangedAt),
-                          },
-                          ...(e.proposal
-                            ? [
-                                {
-                                  label: "Proposal",
-                                  value: (
-                                    <Link
-                                      href={`/extensions/amc/${e.proposal.id}`}
-                                      className={LINK}
-                                    >
-                                      {e.proposal.proposalNumber} (
-                                      {e.proposal.status.replace(/_/g, " ")})
-                                    </Link>
-                                  ),
-                                },
-                              ]
-                            : []),
-                        ]}
+                    <dl className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                      <EnquiryFact icon={<Megaphone />} label="Source" value={e.source} hint={e.referrer ? `Referred by ${e.referrer}` : null} />
+                      <EnquiryFact icon={<CalendarClock />} label="Enquired on" value={formatDateTime(e.enquiredAt)} />
+                      <EnquiryFact icon={<UserRound />} label="Owner" value={e.owner?.name ?? <span className="text-muted-foreground font-normal">Unassigned</span>} />
+                      <EnquiryFact
+                        icon={<BellRing />}
+                        label="Next follow-up"
+                        value={e.nextFollowUpAt ? formatDateTime(e.nextFollowUpAt) : <span className="text-muted-foreground font-normal">Not planned</span>}
+                        badge={e.nextFollowUpAt && !["Won", "Lost"].includes(String(e.stage)) ? <OverdueBadge at={e.nextFollowUpAt} /> : null}
                       />
-                    </div>
+                      <EnquiryFact icon={<Hourglass />} label="In this stage since" value={formatDateTime(e.stageChangedAt)} />
+                      <EnquiryFact
+                        icon={<FileSignature />}
+                        label="Proposal"
+                        value={
+                          e.proposal ? (
+                            <Link href={`/extensions/amc/${e.proposal.id}`} className={LINK}>
+                              {e.proposal.proposalNumber}
+                            </Link>
+                          ) : (
+                            <span className="text-muted-foreground font-normal">None yet</span>
+                          )
+                        }
+                        badge={
+                          e.proposal ? (
+                            <Badge variant="secondary" className={`border-0 font-medium ${amcStatusTone(e.proposal.status as AmcSubmissionStatus)}`}>
+                              {AMC_STATUS_LABELS[e.proposal.status as AmcSubmissionStatus] ?? e.proposal.status.replace(/_/g, " ")}
+                            </Badge>
+                          ) : null
+                        }
+                      />
+                    </dl>
                   </div>
                 </SectionCard>
               </>,
@@ -887,14 +903,8 @@ export function EnquiryDetail({ id }: { id: string }) {
                       <DataRow
                         key={v.id}
                         icon={<ClipboardCheck />}
-                        title={
-                          <Link
-                            href={`/extensions/amc-contracts/assessments/${v.id}`}
-                            className="hover:underline"
-                          >
-                            {v.assessmentNumber}
-                          </Link>
-                        }
+                        href={`/extensions/amc-contracts/assessments/${v.id}`}
+                        title={v.assessmentNumber}
                         subtitle={
                           [
                             v.scheduledAt ? formatDateTime(v.scheduledAt) : null,
@@ -1138,10 +1148,11 @@ export function EnquiryDetail({ id }: { id: string }) {
             meta={m}
             enquiry={e}
             onSave={async (input) => {
-              await enquiriesService.scheduleSiteVisit(e.id, input);
+              await guard((insideLeadTime) => enquiriesService.scheduleSiteVisit(e.id, { ...input, insideLeadTime }));
               after("Site visit booked; the inspector has been told");
             }}
           />
+          {leadTimeDialog}
         </>
       ) : null}
     </div>
@@ -1187,6 +1198,34 @@ function BackToEnquiries() {
 
 /* A link inside a detail row, as the job and quotation pages draw them. */
 const LINK = "hover:text-brand underline underline-offset-2";
+
+/** "Overdue" once the follow-up time has passed (the time read once, when the card first shows). */
+function OverdueBadge({ at }: { at: string }) {
+  const [now] = useState(() => Date.now());
+  if (!(Date.parse(at) < now)) return null;
+  return (
+    <Badge variant="secondary" className="bg-warning/10 text-warning border-0 font-medium">
+      Overdue
+    </Badge>
+  );
+}
+
+/** One fact of the enquiry as a tile: its icon, label, value and, when it matters, a badge or a line under it. */
+function EnquiryFact({ icon, label, value, badge, hint }: { icon: React.ReactNode; label: string; value: React.ReactNode; badge?: React.ReactNode; hint?: string | null }) {
+  return (
+    <div className="flex min-w-0 items-start gap-3 rounded-lg border px-4 py-3">
+      <span className="bg-muted text-muted-foreground flex size-8 shrink-0 items-center justify-center rounded-md [&_svg]:size-4">{icon}</span>
+      <div className="min-w-0 flex-1">
+        <dt className="text-muted-foreground text-xs">{label}</dt>
+        <dd className="mt-0.5 flex flex-wrap items-center gap-2 text-sm font-medium">
+          <span className="min-w-0 break-words">{value}</span>
+          {badge}
+        </dd>
+        {hint ? <p className="text-muted-foreground mt-0.5 truncate text-xs" title={hint}>{hint}</p> : null}
+      </div>
+    </div>
+  );
+}
 
 /** "14:30", in the same 24-hour clock as formatDateTime. */
 const timeOf = (value: string) => format(new Date(value), "HH:mm");

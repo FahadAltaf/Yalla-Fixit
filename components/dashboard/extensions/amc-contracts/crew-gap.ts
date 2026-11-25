@@ -15,8 +15,8 @@ export function crewGapMessages(s: Pick<VisitSuggestion, "suggested" | "skilledB
   const busy = s.suggested.uncovered.filter((t) => (s.skilledByTrade?.[t] ?? 0) > 0);
   return [
     ...(none.length
-      ? [`No technician has ${none.map(label).join(", ")} confirmed on their AMC profile (trainee or expired certificate does not count). Add the skill under Workforce → People → AMC skills.`]
+      ? [`Nobody has ${none.map(label).join(", ")} on their AMC profile, so there is no suggestion. Any technician below can still be picked (no skill restriction for AMC work).`]
       : []),
-    ...busy.map((t) => `All ${s.skilledByTrade[t]} technician${s.skilledByTrade[t] === 1 ? "" : "s"} with ${label(t)} are booked, on leave or lack the site's access at that time. Try another time or day.`),
+    ...busy.map((t) => `The ${s.skilledByTrade[t]} technician${s.skilledByTrade[t] === 1 ? "" : "s"} with ${label(t)} ${s.skilledByTrade[t] === 1 ? "is" : "are"} booked or away at that time, so there is no suggestion. Pick another technician, or one marked Already booked.`),
   ];
 }

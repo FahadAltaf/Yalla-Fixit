@@ -29,6 +29,10 @@ import {
   type CallOutFact,
   type ContractFact,
   type VisitFact,
+  coordinatorPerformance,
+  lostAmcs,
+  newVsRenewed,
+  type CommercialContractFact,
 } from "@/lib/amc/reports";
 import { loadContractRows } from "@/lib/server/amc/business";
 
@@ -280,7 +284,7 @@ export async function commercialReport(admin: Admin, who: Who, period: Period, c
   if (!who.canApprove) enq = enq.eq("owner_id", who.userId);
   let props = admin
     .from("amc_submissions")
-    .select("status, created_at, final_price, discount_percent, property")
+    .select("status, created_at, final_price, discount_percent, property, owner_id")
     .gte("created_at", dayStart(period.from))
     .lte("created_at", dayEnd(period.to))
     .limit(5000);
@@ -293,7 +297,15 @@ export async function commercialReport(admin: Admin, who: Who, period: Period, c
     forContracts(admin, "amc_cheques", "status, amount", s.ids),
     forContracts(admin, "amc_additional_works", "status, total, created_at", s.ids, (q) => q.gte("created_at", dayStart(period.from)).lte("created_at", dayEnd(period.to))),
   ]);
-  const ownerIds = [...new Set(((enquiries ?? []) as Row[]).map((e) => str(e.owner_id)).filter((v): v is string => Boolean(v)))];
+  /* DEV-502: renewal outcomes, renewal links and owners of the contracts in view. */
+  const commercialFacts = await commercialContractFacts(admin, s.ids);
+  const ownerIds = [
+    ...new Set(
+      [...((enquiries ?? []) as Row[]).map((e) => str(e.owner_id)), ...((proposals ?? []) as Row[]).map((p) => str(p.owner_id)), ...commercialFacts.map((c) => c.ownerId)].filter(
+        (v): v is string => Boolean(v),
+      ),
+    ),
+  ];
   const names = new Map<string, string>();
   if (ownerIds.length) {
     const { data } = await admin.from("user_profile").select("id, full_name, email").in("id", ownerIds);
@@ -341,7 +353,51 @@ export async function commercialReport(admin: Admin, who: Who, period: Period, c
     cheques: chequesByStatus(cheques.map((c) => ({ status: String(c.status), amount: Number(c.amount ?? 0) }))),
     additionalWork: workRevenue(works.map((w) => ({ status: String(w.status), total: Number(w.total ?? 0), createdAt: String(w.created_at) }))),
     renewals: renewalOutcomes(s.contracts, period.from, period.to),
+    /* DEV-502 */
+    lost: lostAmcs(commercialFacts, period.from, period.to),
+    newVsRenewed: newVsRenewed(commercialFacts, period.from, period.to),
+    coordinators: coordinatorPerformance(
+      {
+        enquiries: ((enquiries ?? []) as Row[]).map((e) => ({ ownerId: str(e.owner_id), stage: String(e.stage) })),
+        proposals: ((proposals ?? []) as Row[]).map((p) => ({ ownerId: str(p.owner_id), status: String(p.status), finalPrice: Number(p.final_price ?? 0) })),
+        contracts: commercialFacts,
+      },
+      (id) => names.get(id) ?? "—",
+      period.from,
+      period.to,
+    ),
   };
+}
+
+/** The contracts' renewal outcome, renewal link and owner (DEV-502); empty before the renewal-outcome migration. */
+async function commercialContractFacts(admin: Admin, ids: string[]): Promise<CommercialContractFact[]> {
+  const out: CommercialContractFact[] = [];
+  for (let i = 0; i < ids.length; i += 200) {
+    const { data, error } = await admin
+      .from("amc_contracts")
+      .select(
+        "id, contract_number, proposal_number, customer_name, property_label, grand_total, signed_at, renewed_from_contract_id, renewal_outcome, renewal_outcome_reason, renewal_outcome_at, submission:amc_submissions!amc_contracts_submission_id_fkey(owner_id)",
+      )
+      .in("id", ids.slice(i, i + 200));
+    if (error) return [];
+    for (const c of (data ?? []) as Row[]) {
+      const sub = (Array.isArray(c.submission) ? c.submission[0] : c.submission) as Row | null;
+      out.push({
+        id: String(c.id),
+        number: str(c.contract_number) ?? String(c.proposal_number ?? ""),
+        customerName: String(c.customer_name ?? ""),
+        propertyLabel: String(c.property_label ?? ""),
+        grandTotal: Number(c.grand_total ?? 0),
+        signedAt: str(c.signed_at),
+        renewedFromContractId: str(c.renewed_from_contract_id),
+        renewalOutcome: str(c.renewal_outcome),
+        renewalOutcomeReason: str(c.renewal_outcome_reason),
+        renewalOutcomeAt: str(c.renewal_outcome_at),
+        ownerId: str(sub?.owner_id),
+      });
+    }
+  }
+  return out;
 }
 
 /* ------------------------------------------------------------------ */

@@ -21,18 +21,19 @@ import {
 } from "@/lib/amc/job-sheets";
 import { templateText } from "@/lib/amc/message-templates";
 import { PHOTO_EXTENSION, detectImageType, AMC_PHOTO_MAX_BYTES } from "@/lib/amc/photos";
-import { addDays, firstWorkingDay, PLANNABLE_STATUSES, type VisitStatus } from "@/lib/amc/ppm";
+import { addDays, contractYearCounts, firstWorkingDay, PLANNABLE_STATUSES, type VisitStatus } from "@/lib/amc/ppm";
 import { clientEmailHtml, escapeEmailHtml } from "@/lib/email-brand";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { noCategoryColumn } from "@/lib/server/amc/assessment-photos";
 import { ContractError, isMissingTable, recordUsage } from "@/lib/server/amc/contracts";
+import { alertCrew } from "@/lib/server/amc/crew-alerts";
 import { notifyUsers } from "@/lib/server/amc/notifications";
 import { recordSend } from "@/lib/server/amc/proposal-share";
 import { buildServiceReportModel, serviceReportTitle, type ServiceReportFacts } from "@/lib/amc/service-report";
 import { AMC_DOCUMENTS_BUCKET, renderAmcDocumentHtml, renderPdf } from "@/lib/server/amc/signed-archive";
 import { closeAmcTodos, openAmcTodo } from "@/lib/server/amc/todos";
 import { sendEmail } from "@/lib/server/send-email";
-import { initialOutcome, sendDelivered, type SendChannel } from "@/lib/amc/send-channels";
+import { initialOutcome, reachedClient, type SendChannel } from "@/lib/amc/send-channels";
 
 /**
  * Visit execution and closure on the server (Phase 10: DEV-402, 403, 404,
@@ -80,7 +81,7 @@ const PHOTOS_PER_VISIT = 40;
 const VISIT_COLUMNS =
   "id, contract_id, visit_no, status, window_start, window_end, target_date, scheduled_start, scheduled_end, technician_ids, closed_at, report_document_id, report_sent_at, report_due_at, remainder_of_visit_id, " +
   "lines:amc_visit_lines!amc_visit_lines_visit_id_fkey(id, entitlement_id, service_id, service_label, occurrence, status, outcome_group, outcome_reason, retry_of_line_id, home_window_start, home_window_end), " +
-  "contract:amc_contracts!amc_visits_contract_id_fkey(id, status, contract_number, proposal_number, customer_name, customer_id, property_label, property_id, customer, property, ppm_confirmed_at, ppm_window_days, submission:amc_submissions!amc_contracts_submission_id_fkey(id, owner_id))";
+  "contract:amc_contracts!amc_visits_contract_id_fkey(id, status, contract_number, proposal_number, customer_name, customer_id, property_label, property_id, customer, property, ppm_confirmed_at, ppm_window_days, start_date, submission:amc_submissions!amc_contracts_submission_id_fkey(id, owner_id))";
 
 const SHEET_COLUMNS =
   "id, visit_id, contract_id, status, arrived_at, completed_at, technician_ids, faults, consumables, additional_work, pending_works, quality_concern, quality_note, client_signature_name, client_signed_at, notes, review_required, review_reasons, submitted_at, submitted_by, reviewed_at, reviewed_by, review_comment, return_count, source";
@@ -451,7 +452,7 @@ export async function saveJobSheet(admin: Admin, visitId: string, input: JobShee
 
   /* The visit follows: in progress once someone arrived, submitted with the sheet. */
   const visitChanges: Row = { updated_at: now };
-  if (submit) Object.assign(visitChanges, { status: "submitted", report_due_at: reportDueAt(String(input.completedAt)) });
+  if (submit) Object.assign(visitChanges, { status: "submitted", report_due_at: reportDueAt(String(input.completedAt), config.sla.serviceReportHours) });
   else if (input.arrivedAt && PLANNABLE_STATUSES.includes(visit.status as VisitStatus)) visitChanges.status = "in_progress";
   await admin.from("amc_visits").update(visitChanges).eq("id", visitId);
 
@@ -589,6 +590,19 @@ export async function returnJobSheet(admin: Admin, visitId: string, comment: str
   if (error) throw fail(error);
   await admin.from("amc_visits").update({ status: "in_progress", updated_at: now }).eq("id", visitId);
   await closeAmcTodos(admin, { entityType: "visit", entityId: visitId, kind: "job_closure_review" }, { status: "done", reason: "Returned" }).catch(() => 0);
+  /* On the technician's phone too (as Snagging's sent-back visit). */
+  const submitter = str(sheet.submitted_by);
+  if (submitter) {
+    await alertCrew(admin, {
+      kind: "ppm",
+      id: visitId,
+      type: "visit_sent_back",
+      actorId: actor.id,
+      userIds: [submitter],
+      title: `Job sheet returned: AMC visit ${String(visit.visit_no)}`,
+      body: comment,
+    });
+  }
   await notifyUsers(admin, {
     event: "job_sheet_returned",
     userIds: [ownerId, str(sheet.submitted_by)].filter((id): id is string => Boolean(id)),
@@ -678,14 +692,15 @@ export async function closeJobSheet(admin: Admin, visitId: string, comment: stri
   let remainderVisitId: string | null = null;
   if (remaining.length) remainderVisitId = await planRemainder(admin, visit, contract, remaining.map((r) => r.line), actor, config);
 
-  /* The service report when work was delivered (Email 3, within 48 hours). */
-  let report: Awaited<ReturnType<typeof sendServiceReport>> | null = null;
-  if (status !== "not_completed") {
-    report = await sendServiceReport(admin, visitId, actor, config, send, browserPdf).catch((e) => {
-      console.error("[amc:job-sheets] service report failed:", e instanceof Error ? e.message : e);
-      return null;
-    });
-  }
+  /*
+    The service report on every close (Email 3, within the configured hours).
+    DEV-404 (20 Nov 2026 review): a visit not completed gets one too, with
+    the outcome and its reason, so the client hears what happened.
+  */
+  const report: Awaited<ReturnType<typeof sendServiceReport>> | null = await sendServiceReport(admin, visitId, actor, config, send, browserPdf).catch((e) => {
+    console.error("[amc:job-sheets] service report failed:", e instanceof Error ? e.message : e);
+    return null;
+  });
   await recordAmcAudit(admin, {
     entityType: "contract",
     entityId: String(visit.contract_id),
@@ -778,12 +793,17 @@ async function reportFacts(admin: Admin, visitId: string) {
   const [{ data: checklist }, { data: photos }, { data: all }, { data: ents }, { data: owner }] = await Promise.all([
     admin.from("amc_visit_checklist_items").select("label, result, note, sort_order").eq("job_sheet_id", String(sheet.id)).order("sort_order"),
     admin.from("amc_visit_photos").select("kind, caption, storage_path").eq("job_sheet_id", String(sheet.id)).order("created_at"),
-    admin.from("amc_visits").select("status").eq("contract_id", String(visit.contract_id)).neq("status", "cancelled"),
+    admin.from("amc_visits").select("id, status, target_date").eq("contract_id", String(visit.contract_id)).neq("status", "cancelled"),
     admin.from("amc_contract_entitlements").select("service_id, call_out_class, entitlement_type, included_quantity, used_quantity").eq("contract_id", String(visit.contract_id)),
     ownerId ? admin.from("user_profile").select("full_name, email").eq("id", ownerId).maybeSingle<Row>() : Promise.resolve({ data: null }),
   ]);
   const visits = (all ?? []) as Row[];
-  const done = visits.filter((v) => v.status === "completed" || v.status === "completed_with_additional_work" || v.status === "partially_completed").length;
+  /* This contract year only, and the visit reported counts as done (23 Nov 2026). */
+  const year = contractYearCounts(
+    visits.map((v) => ({ id: String(v.id), status: String(v.status), targetDate: str(v.target_date) })),
+    visitId,
+    str(contract.start_date),
+  );
   /* Email 3: "Free non emergency visits used: {Used} of {Allowed}" -- the non-emergency call-out allowance. */
   const nonEmergency = ((ents ?? []) as Row[]).filter((e) => e.call_out_class === "non_emergency" || e.service_id === "non-emergency");
   return {
@@ -796,8 +816,8 @@ async function reportFacts(admin: Admin, visitId: string) {
     checklist: (checklist ?? []) as Row[],
     photos: (photos ?? []) as Row[],
     total: visits.length,
-    completed: done,
-    remaining: Math.max(0, visits.length - done - visits.filter((v) => v.status === "not_completed").length),
+    completed: year.completed,
+    remaining: year.remaining,
     used: nonEmergency.reduce((s, e) => s + Number(e.used_quantity ?? 0), 0),
     allowed: nonEmergency.reduce((s, e) => s + Number(e.included_quantity ?? 0), 0),
   };
@@ -837,7 +857,8 @@ function reportDocumentFacts(f: Awaited<ReturnType<typeof reportFacts>>, photoUr
       .map((p) => ({ url: photoUrls.get(String(p.storage_path)) ?? "", label: String(p.kind) === "fault" ? "Fault" : String(p.kind).replace(/^\w/, (c) => c.toUpperCase()), caption: str(p.caption) }))
       .filter((p) => p.url)
       .slice(0, 12),
-    closing: `Visits this contract year: ${f.completed} done, ${f.remaining} remaining.`,
+    /* DEV-404: completed and remaining visits, and the allowance use, as the description asks. */
+    closing: `Visits this contract year: ${f.completed} done, ${f.remaining} remaining.${f.allowed > 0 ? ` Free non-emergency call outs used: ${f.used} of ${f.allowed}.` : ""}`,
   };
 }
 
@@ -948,7 +969,8 @@ export async function sendServiceReport(admin: Admin, visitId: string, actor: Ac
       console.error("[amc:job-sheets] Email 3 failed:", e instanceof Error ? e.message.slice(0, 200) : e);
     }
   }
-  if (sendDelivered(outcome)) await admin.from("amc_visits").update({ report_sent_at: new Date().toISOString() }).eq("id", visitId);
+  /* DEV-404: only an email that went stops the clock; WhatsApp or a link is marked sent by the coordinator. */
+  if (reachedClient(outcome)) await admin.from("amc_visits").update({ report_sent_at: new Date().toISOString() }).eq("id", visitId);
   const submissionId = str(one(f.contract.submission)?.id);
   if (submissionId) {
     await recordSend(admin, {
@@ -987,11 +1009,111 @@ export function withoutReportLink(text: string): string {
   return `${/[.!?]$/.test(out) ? out : `${out}.`} The report is attached.`;
 }
 
+/**
+ * DEV-404: the coordinator sent the report themselves (WhatsApp, by hand)
+ * and says so; that stops the clock and is logged with who said it.
+ */
+export async function markServiceReportSent(admin: Admin, visitId: string, input: { channel: "whatsapp" | "link" | "other"; note: string | null }, actor: Actor) {
+  const { data: v, error } = await admin.from("amc_visits").select("id, contract_id, visit_no, report_document_id, report_sent_at").eq("id", visitId).maybeSingle<Row>();
+  if (error) throw fail(error);
+  if (!v) throw new ContractError("Visit not found.", 404);
+  if (!str(v.report_document_id)) throw new ContractError("There is no service report yet: send it first.", 409);
+  if (str(v.report_sent_at)) throw new ContractError("The service report is already marked sent.", 409);
+  const now = new Date().toISOString();
+  const { data: claimed } = await admin.from("amc_visits").update({ report_sent_at: now }).eq("id", visitId).is("report_sent_at", null).select("id");
+  if (!claimed?.length) throw new ContractError("The service report is already marked sent.", 409);
+  await recordAmcAudit(admin, {
+    entityType: "contract",
+    entityId: String(v.contract_id),
+    eventType: "service_report_marked_sent",
+    actorId: actor.id,
+    actorLabel: actor.label,
+    justification: input.note,
+    payload: { visitId, visitNo: v.visit_no, channel: input.channel },
+  });
+  return { ok: true as const, reportSentAt: now };
+}
+
 /* ------------------------------------------------------------------ */
 /* The review queue                                                    */
 /* ------------------------------------------------------------------ */
 
+/**
+ * The supervisor's queue (BRD v0.4 5.12; DEV-497, 20 Nov 2026): the job
+ * sheets of planned visits, call outs and additional work, all submitted
+ * and waiting, on one screen. Each row carries its kind, its own number,
+ * the client and property from the contract, and where it opens.
+ */
 export async function reviewQueue(admin: Admin, now = new Date()) {
+  const { data, error } = await admin
+    .from("amc_visit_job_sheets")
+    .select("id, visit_id, call_out_id, additional_work_id, contract_id, submitted_at, review_required, review_reasons, return_count")
+    .eq("status", "submitted")
+    .order("submitted_at")
+    .limit(200);
+  if (error) {
+    /* Before migration 20261118100000 there are no call out or work columns: the planned visits only. */
+    if (error.code === "42703" || error.code === "PGRST204" || /call_out_id|additional_work_id/.test(error.message ?? "")) return legacyReviewQueue(admin, now);
+    if (notMigrated(error)) return { migrated: false, items: [] };
+    throw fail(error);
+  }
+  const sheets = (data ?? []) as Row[];
+  const ids = (key: string) => [...new Set(sheets.map((s) => str(s[key])).filter((v): v is string => Boolean(v)))];
+  const [visits, callOuts, works] = await Promise.all([
+    ids("visit_id").length ? admin.from("amc_visits").select("id, visit_no, contract_id, report_due_at, report_sent_at").in("id", ids("visit_id")) : Promise.resolve({ data: [] as Row[] }),
+    ids("call_out_id").length ? admin.from("amc_call_outs").select("id, call_out_no, contract_id, report_due_at, report_sent_at").in("id", ids("call_out_id")) : Promise.resolve({ data: [] as Row[] }),
+    ids("additional_work_id").length ? admin.from("amc_additional_works").select("id, work_no, contract_id, report_due_at, report_sent_at").in("id", ids("additional_work_id")) : Promise.resolve({ data: [] as Row[] }),
+  ]);
+  const byId = (rows: Row[] | null | undefined) => new Map(((rows ?? []) as Row[]).map((r) => [String(r.id), r]));
+  const visitOf = byId(visits.data as Row[]);
+  const callOutOf = byId(callOuts.data as Row[]);
+  const workOf = byId(works.data as Row[]);
+  const contractIds = [
+    ...new Set(
+      sheets
+        .map((s) => str(s.contract_id) ?? str(visitOf.get(String(s.visit_id))?.contract_id) ?? str(callOutOf.get(String(s.call_out_id))?.contract_id) ?? str(workOf.get(String(s.additional_work_id))?.contract_id))
+        .filter((v): v is string => Boolean(v)),
+    ),
+  ];
+  const { data: contractRows } = contractIds.length
+    ? await admin.from("amc_contracts").select("id, contract_number, proposal_number, customer_name, customer, property_label").in("id", contractIds)
+    : { data: [] as Row[] };
+  const contractOf = byId(contractRows as Row[]);
+  return {
+    migrated: true,
+    items: sheets
+      .map((s) => {
+        const kind = str(s.call_out_id) ? ("call_out" as const) : str(s.additional_work_id) ? ("additional_work" as const) : ("ppm" as const);
+        const record = kind === "call_out" ? callOutOf.get(String(s.call_out_id)) : kind === "additional_work" ? workOf.get(String(s.additional_work_id)) : visitOf.get(String(s.visit_id));
+        if (!record) return null;
+        const contractId = str(s.contract_id) ?? str(record.contract_id) ?? "";
+        const c = contractOf.get(contractId) ?? {};
+        const customer = (c.customer ?? {}) as Row;
+        const id = String(record.id);
+        return {
+          kind,
+          /* The record the sheet belongs to (a visit, a call out, an additional work); kept as visitId for the screens written for visits. */
+          visitId: id,
+          ref: kind === "call_out" ? String(record.call_out_no ?? "") : kind === "additional_work" ? String(record.work_no ?? "") : `Visit ${Number(record.visit_no ?? 0)}`,
+          href: kind === "additional_work" ? `/extensions/amc-contracts/additional-works/${id}?tab=job_sheet` : `/extensions/amc-contracts/visits/${id}?tab=job_sheet`,
+          contractId,
+          contractNumber: String(c.contract_number ?? c.proposal_number ?? ""),
+          customerName: str(customer.customerName) ?? String(c.customer_name ?? ""),
+          propertyLabel: String(c.property_label ?? ""),
+          visitNo: kind === "ppm" ? Number(record.visit_no ?? 0) : 0,
+          submittedAt: String(s.submitted_at),
+          reviewRequired: Boolean(s.review_required),
+          reviewReasons: strings(s.review_reasons) as ReviewReason[],
+          returnCount: Number(s.return_count ?? 0),
+          reportState: reportState(str(record.report_due_at), str(record.report_sent_at), now),
+        };
+      })
+      .filter((i): i is NonNullable<typeof i> => i !== null),
+  };
+}
+
+/* Before migration 20261118100000: the planned visits' sheets only, as before. */
+async function legacyReviewQueue(admin: Admin, now: Date) {
   const { data, error } = await admin
     .from("amc_visit_job_sheets")
     .select(`id, visit_id, contract_id, submitted_at, review_required, review_reasons, return_count, visit:amc_visits!amc_visit_job_sheets_visit_id_fkey(visit_no, report_due_at, report_sent_at, contract:amc_contracts!amc_visits_contract_id_fkey(contract_number, customer_name, property_label))`)
@@ -1007,8 +1129,12 @@ export async function reviewQueue(admin: Admin, now = new Date()) {
     items: ((data ?? []) as unknown as Row[]).map((r) => {
       const v = one(r.visit) ?? {};
       const c = one(v.contract) ?? {};
+      const id = String(r.visit_id);
       return {
-        visitId: String(r.visit_id),
+        kind: "ppm" as const,
+        visitId: id,
+        ref: `Visit ${Number(v.visit_no ?? 0)}`,
+        href: `/extensions/amc-contracts/visits/${id}?tab=job_sheet`,
         contractId: String(r.contract_id),
         contractNumber: String(c.contract_number ?? ""),
         customerName: String(c.customer_name ?? ""),

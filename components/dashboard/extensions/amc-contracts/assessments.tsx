@@ -57,8 +57,9 @@ import { amcContractsService, type AssessmentRecord, type CustomerRecord } from 
 import { fieldVisitsService } from "@/modules/amc-contracts/field-visits-service";
 
 import { AssessmentPhotos } from "./assessment-photos";
-import { ApproverSelect } from "./approver-field";
+import { SiteVisitApproversNote } from "./approver-field";
 import { SendBackDialog, SiteVisitChangesCard, SiteVisitPropertyLists } from "./site-visit-changes";
+import { SiteVisitChecklistCard } from "./approver-checklist";
 import { CustomerSearch, UNIT_TYPE_LABELS } from "./customer-pickers";
 import { formatContractDate, formatDateTime } from "./contract-status";
 import { AddressDialog, useAddressFormAccess } from "./address-dialog";
@@ -473,7 +474,7 @@ export function AssessmentDetail({ id }: { id: string }) {
   const [inspectorReady, setInspectorReady] = useState(false);
   /* The approver's Send back dialog (16 Nov 2026). */
   const [sendingBack, setSendingBack] = useState(false);
-  const [section, setSection] = useState<"visit" | "checklist" | "services" | "findings" | null>(null);
+  const [section, setSection] = useState<"visit" | "services" | "findings" | null>(null);
 
   const [draft, setDraft] = useState<Draft | null>(null);
   const [pending, setPending] = useState<"save" | "proposal" | "attendance" | null>(null);
@@ -519,9 +520,6 @@ export function AssessmentDetail({ id }: { id: string }) {
   const a = data?.assessment ?? null;
   const ready = Boolean(a && draft && summary) && !error;
   const editable = Boolean(data?.canEdit);
-  /* Completed but not approved: only the approver can change, in Edit the visit (16 Nov 2026). */
-  const canChangeApprover = Boolean(data?.canChangeApprover);
-  const completedVisit = data?.assessment.status === "completed";
   const busy = pending !== null;
 
   /* A draft as the server takes it; throws on failure. */
@@ -557,16 +555,8 @@ export function AssessmentDetail({ id }: { id: string }) {
     read them, over anything the inspector had since saved on the phone.
   */
   const saveVisit = async (next: Draft) => {
-    if (completedVisit) {
-      await amcContractsService.updateAssessment(id, { approverId: next.approverId });
-      setDraft(next);
-      toast.success("Approver changed");
-      reload();
-      return;
-    }
     await amcContractsService.updateAssessment(id, {
       ...(next.assessorId !== (data?.assessment.assessorId ?? null) && next.assessorId ? { assessorId: next.assessorId } : {}),
-      ...(next.approverId !== (data?.assessment.approverId ?? null) ? { approverId: next.approverId } : {}),
       scheduledAt: next.scheduledAt,
       accessNotes: next.accessNotes,
       exclusions: next.exclusions,
@@ -653,7 +643,13 @@ export function AssessmentDetail({ id }: { id: string }) {
   */
   /* The checklist items flagged as needing attention, with their notes (the Report tab). */
   const attentionItems = draft ? draft.items.filter((i) => i.result === "attention") : [];
-  const categories = draft ? [...new Map(draft.items.map((i) => [checkGroup(i), i.categoryLabel])).entries()] : [];
+  /*
+    The checklist as the inspector recorded it on the phone (24 Nov 2026): only
+    items answered or noted. Items a visit was once created with and nobody
+    answered are not shown; the office sets nothing here.
+  */
+  const recorded = draft ? draft.items.filter((i) => i.result || i.notes?.trim()) : [];
+  const recordedGroups = [...new Map(recorded.map((i) => [checkGroup(i), i.categoryLabel])).entries()];
   const services = catalogue.data?.catalogue ?? [];
   const panel = (value: (typeof TABS)[number], children: React.ReactNode) =>
     isOpened(value) ? (
@@ -718,7 +714,8 @@ export function AssessmentDetail({ id }: { id: string }) {
                       </Link>
                     </Button>
                   ) : null}
-                  {(editable || canChangeApprover) && draft ? (
+                  {/* Gone once the inspector submits the visit from the mobile app (23 Nov 2026): it is final then. */}
+                  {editable && draft ? (
                     <>
                       {/*
                         Attendance, the checklist, counts, findings and photos come from
@@ -765,7 +762,7 @@ export function AssessmentDetail({ id }: { id: string }) {
       ) : (
         <div className="flex flex-col gap-4">
           {a.status === "draft" && a.sentBackReason ? (
-            <Alert>
+            <Alert variant="warning">
               <Undo2 />
               <AlertTitle>Sent back by {a.approverName ?? "the approver"}</AlertTitle>
               <AlertDescription>
@@ -785,8 +782,10 @@ export function AssessmentDetail({ id }: { id: string }) {
               </AlertDescription>
             </Alert>
           ) : null}
+          {/* What the approver checks (23 Nov 2026): what approving changes, and what the visit recorded. */}
+          {awaitingApproval && data?.checklist ? <SiteVisitChecklistCard checklist={data.checklist} canApprove={canApprove} /> : null}
           {a.status === "completed" && !a.proposal && (!a.approverId || a.approvedAt) ? (
-            <Alert>
+            <Alert variant="success">
               <CheckCircle2 />
               <AlertTitle>{a.approvedAt ? "The site visit is approved" : "The site visit is complete"}</AlertTitle>
               {/* Create AMC proposal is in the header; the banner only says what it does. */}
@@ -954,7 +953,7 @@ export function AssessmentDetail({ id }: { id: string }) {
                     Redesigned (16 Nov 2026): the four facts someone opens a visit
                     for as tiles, then the notes.
                     Read only here; Edit the visit in the header changes the time,
-                    inspector, approver and notes.
+                    inspector and notes. The approvers come from AMC configuration.
                   */}
                   <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                     <VisitFact
@@ -967,7 +966,7 @@ export function AssessmentDetail({ id }: { id: string }) {
                     <VisitFact icon={<UserRound />} label="Inspector" value={draft.assessorName} empty="Not assigned" sub="Records the visit on the mobile app" />
                     <VisitFact
                       icon={<ShieldCheck />}
-                      label="Approver"
+                      label="Approvers"
                       value={a.approverName}
                       empty="Not set"
                       sub={
@@ -976,8 +975,10 @@ export function AssessmentDetail({ id }: { id: string }) {
                           : awaitingApproval
                             ? "Waiting for their approval"
                             : a.approverId
-                              ? "Approves it once completed"
-                              : "Set one in Edit the visit"
+                              ? "Any one of them approves it once completed"
+                              : a.status === "completed"
+                                ? "Completed before approvals were needed"
+                                : "Set in AMC configuration"
                       }
                       tone={a.approvedAt ? "good" : awaitingApproval ? "warn" : undefined}
                     />
@@ -1112,29 +1113,28 @@ export function AssessmentDetail({ id }: { id: string }) {
 
                 <SectionCard
                   title="Checklist"
-                  description="Built and answered by the inspector on site."
+                  description="Recorded by the inspector on site in the mobile app. Read only here."
                   icon={<CheckCircle2 />}
                   bodyClassName="px-5 pb-5"
                   action={
-                    draft.items.length ? (
+                    recorded.length ? (
                       <div className="flex flex-wrap items-center gap-1.5">
                         <Badge variant="secondary" className={cn("border-0 font-medium tabular-nums", RESULT_TONES.ok)}>{summary.ok} OK</Badge>
                         <Badge variant="secondary" className={cn("border-0 font-medium tabular-nums", RESULT_TONES.attention)}>{summary.attention} attention</Badge>
                         {summary.notApplicable ? <Badge variant="secondary" className={cn("border-0 font-medium tabular-nums", RESULT_TONES.not_applicable)}>{summary.notApplicable} n/a</Badge> : null}
-                        {summary.unanswered ? <Badge variant="outline" className="font-normal tabular-nums">{summary.unanswered} unanswered</Badge> : null}
                       </div>
                     ) : undefined
                   }
                 >
-                  {draft.items.length === 0 ? (
+                  {recorded.length === 0 ? (
                     <div className="rounded-lg border border-dashed">
-                      <EmptyState icon={<CheckCircle2 className="size-5" />} title="No checklist yet" description="The inspector builds the checklist on site in the mobile app; it shows here as their phone syncs." />
+                      <EmptyState icon={<CheckCircle2 className="size-5" />} title="Nothing recorded yet" description="The inspector builds and answers the checklist on site in the mobile app; it shows here as their phone syncs." />
                     </div>
                   ) : (
                     /* Groups side by side on a wide screen, each one list. */
                     <div className="grid items-start gap-4 lg:grid-cols-2">
-                      {categories.map(([key, label]) => {
-                        const rows = draft.items.filter((i) => checkGroup(i) === key);
+                      {recordedGroups.map(([key, label]) => {
+                        const rows = recorded.filter((i) => checkGroup(i) === key);
                         return (
                           <div key={key} className="min-w-0 space-y-2">
                             <div className="flex items-center justify-between gap-2">
@@ -1198,23 +1198,19 @@ export function AssessmentDetail({ id }: { id: string }) {
             onOpenChange={(open) => !open && setSection(null)}
             title="Edit the visit"
             description={
-              completedVisit
-                ? "The inspector has completed the visit, so only its approver can change until it is approved."
-                : inProgress
+              inProgress
                   ? "The visit is in progress, so its date, time and inspector stay as they are. How to get in and what is left out can still change."
                   : "When it is, who goes, how to get in and what is left out. The rest is recorded by the inspector on the mobile app."
             }
             initial={draft}
             onSave={saveVisit}
-            canSave={(d) =>
-              completedVisit ? Boolean(d.approverId) && d.approverId !== (data?.assessment.approverId ?? null) : inProgress || !movesOrReassigns(d) || inspectorReady
-            }
-            saveHint={completedVisit ? "Choose a different approver to save." : "Find available inspectors first: the inspector has to be free at the new time."}
+            canSave={(d) => inProgress || !movesOrReassigns(d) || inspectorReady}
+            saveHint="Find available inspectors first: the inspector has to be free at the new time."
           >
             {(d, set) => (
               <div className="grid gap-4">
-                {inProgress || completedVisit ? (
-                  /* Attended or completed on the phone: shown, not changed (the server refuses it too). */
+                {inProgress ? (
+                  /* Attended on the phone: shown, not changed (the server refuses it too). */
                   <div className="bg-muted/30 grid gap-3 rounded-lg border px-4 py-3 sm:grid-cols-2">
                     <div className="grid gap-1">
                       <span className="text-muted-foreground text-xs">Visit date and time</span>
@@ -1226,7 +1222,7 @@ export function AssessmentDetail({ id }: { id: string }) {
                     </div>
                     <p className="text-muted-foreground flex items-center gap-1.5 text-xs sm:col-span-2">
                       <Lock className="size-3.5 shrink-0" aria-hidden />
-                      {completedVisit ? "Locked: the inspector has completed the visit on the mobile app." : "Locked: the inspector has recorded the visit as attended."}
+                      Locked: the inspector has recorded the visit as attended.
                     </p>
                   </div>
                 ) : (
@@ -1248,79 +1244,14 @@ export function AssessmentDetail({ id }: { id: string }) {
                     </div>
                   </>
                 )}
-                <div className="grid min-w-0 content-start gap-2">
-                  <Label>Approver</Label>
-                  <ApproverSelect value={d.approverId} onChange={(pid) => set({ ...d, approverId: pid })} />
-                  <p className="text-muted-foreground text-xs">Approves the visit once the inspector completes it; the scope and assets recorded on site go onto the property then.</p>
-                </div>
-                <Area label="Access notes" editable={!completedVisit} value={d.accessNotes ?? ""} onChange={(v) => set({ ...d, accessNotes: v })} rows={3} />
-                <Area label="Exclusions" editable={!completedVisit} value={d.exclusions ?? ""} onChange={(v) => set({ ...d, exclusions: v })} rows={3} />
+                <SiteVisitApproversNote />
+                <Area label="Access notes" editable value={d.accessNotes ?? ""} onChange={(v) => set({ ...d, accessNotes: v })} rows={3} />
+                <Area label="Exclusions" editable value={d.exclusions ?? ""} onChange={(v) => set({ ...d, exclusions: v })} rows={3} />
               </div>
             )}
           </SectionDialog>
 
-          <SectionDialog
-            open={section === "checklist"}
-            onOpenChange={(open) => !open && setSection(null)}
-            title="Answer the checklist"
-            description="Tap an answer for each item; tap it again to clear it. Add a note where it helps."
-            initial={draft}
-            onSave={saveSection}
-            wide
-          >
-            {(d, set) => (
-              <div className="space-y-5">
-                {categories.map(([key, label]) => (
-                  <div key={key} className="space-y-2">
-                    <SubHeading>{label}</SubHeading>
-                    <ul className="divide-y rounded-lg border">
-                      {d.items
-                        .filter((i) => checkGroup(i) === key)
-                        .map((i) => {
-                          const patch = (next: Partial<Draft["items"][number]>) =>
-                            set({
-                              ...d,
-                              items: d.items.map((x) => (x.itemKey === i.itemKey ? { ...x, ...next } : x)),
-                            });
-                          return (
-                            <li key={i.itemKey} className="grid gap-2 p-3 sm:grid-cols-[minmax(0,1fr)_auto]">
-                              <div className="text-sm">{i.label}</div>
-                              <div className="flex flex-wrap gap-1">
-                                {(Object.keys(RESULT_LABELS) as AssessmentResult[]).map((r) => (
-                                  <Button
-                                    key={r}
-                                    size="sm"
-                                    variant={i.result === r ? "default" : "outline"}
-                                    className="h-7 px-2 text-xs"
-                                    aria-pressed={i.result === r}
-                                    onClick={() =>
-                                      patch({
-                                        result: i.result === r ? null : r,
-                                      })
-                                    }
-                                  >
-                                    {RESULT_LABELS[r]}
-                                  </Button>
-                                ))}
-                              </div>
-                              <Input
-                                className="h-8 sm:col-span-2"
-                                placeholder="Notes"
-                                value={i.notes ?? ""}
-                                maxLength={1000}
-                                onChange={(e) => patch({ notes: e.target.value })}
-                                aria-label={`Notes for ${i.label}`}
-                              />
-                            </li>
-                          );
-                        })}
-                    </ul>
-                  </div>
-                ))}
-              </div>
-            )}
-          </SectionDialog>
-
+          {/* No checklist dialog (24 Nov 2026): the inspector answers it on the phone; the office only reads it. */}
           <SectionDialog
             open={section === "services"}
             onOpenChange={(open) => !open && setSection(null)}

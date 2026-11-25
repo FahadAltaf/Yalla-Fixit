@@ -983,7 +983,7 @@ export function tradeForService(id: string): string {
   return "other";
 }
 
-function useCatalogue(): CatalogueService[] {
+export function useCatalogue(): CatalogueService[] {
   const [services, setServices] = useState<CatalogueService[]>([]);
   useEffect(() => {
     let gone = false;
@@ -1190,7 +1190,7 @@ export function ScopePanel({ propertyId, canEdit }: { propertyId: string; canEdi
   );
 }
 
-const scopeInput = (i: ScopeItemRecord): ScopeItemInput => ({
+export const scopeInput = (i: ScopeItemRecord): ScopeItemInput => ({
   serviceId: i.serviceId,
   trade: i.trade,
   assetId: i.assetId,
@@ -1203,36 +1203,53 @@ const scopeInput = (i: ScopeItemRecord): ScopeItemInput => ({
   notes: i.notes,
 });
 
-function ScopeDialog({
+export function ScopeDialog({
   open,
   onOpenChange,
   initial,
   catalogue,
   assets,
   onSave,
+  defaults,
+  lockService = false,
+  title,
+  description,
+  lead,
 }: {
+  /** Opened from a proposal's line (24 Nov 2026): its own heading, and the line's equipment above the scope fields. */
+  title?: string;
+  description?: string;
+  lead?: React.ReactNode;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   initial: ScopeItemRecord | null;
   catalogue: CatalogueService[];
   assets: AssetRecord[];
   onSave: (input: ScopeItemInput) => Promise<void>;
+  /** A new item's starting values (the proposal's line: its service, units and visits a year). */
+  defaults?: Partial<ScopeItemInput>;
+  /** Opened for one service (a proposal's line): the service is not changed here. */
+  lockService?: boolean;
 }) {
-  const [v, setV] = useState<ScopeItemInput>(initial ? scopeInput(initial) : { serviceId: "", trade: "ac", quantity: 1, preferredMonths: [], preferredDays: [] });
+  const [v, setV] = useState<ScopeItemInput>(
+    initial ? scopeInput(initial) : { serviceId: "", trade: "ac", quantity: 1, preferredMonths: [], preferredDays: [], ...defaults },
+  );
   const [busy, setBusy] = useState(false);
   const save = () => runSave(setBusy, () => onSave({ ...v, exclusions: nul(v.exclusions), notes: nul(v.notes) }), () => onOpenChange(false));
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
       <ActionDialogContent busy={busy} className="max-h-[88vh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>{initial ? "Edit scope item" : "Add to scope"}</DialogTitle>
-          <DialogDescription>Saves a service this property needs. Preferred months and days set the target dates in the PPM schedule.</DialogDescription>
+          <DialogTitle>{title ?? (initial ? "Edit scope item" : "Add to scope")}</DialogTitle>
+          <DialogDescription>{description ?? "Saves a service this property needs. Preferred months and days set the target dates in the PPM schedule."}</DialogDescription>
         </DialogHeader>
         <div className="grid gap-4 py-2 sm:grid-cols-2">
+          {lead ? <div className="grid gap-1.5 sm:col-span-2">{lead}</div> : null}
           <div className="grid gap-1.5 sm:col-span-2">
             <Label>Service</Label>
             <Select
               value={v.serviceId}
+              disabled={lockService}
               onValueChange={(serviceId) => {
                 const s = catalogue.find((x) => x.id === serviceId);
                 setV((x) => ({ ...x, serviceId, trade: tradeForService(serviceId), frequencyPerYear: x.frequencyPerYear ?? s?.frequencyPerYear ?? null }));

@@ -10,9 +10,13 @@ import { ActionType, ResourceType } from "@/types/types";
  * granted by hand. Names start with "AMC" so they cannot collide with
  * existing roles. Afterwards every role stays editable in Roles / Permissions.
  *
+ * DEV-418 (20 Nov 2026 review): each template grants the pages it needs as
+ * well as the rights -- every AMC page asks for its OWN permission
+ * (lib/server/amc/page-access.ts), so a role with only the module rights
+ * was refused on Reports and the other pages. And technicians have a role:
+ * they work in the YFI mobile app (BRD v0.4 3, 5.12), not the FSM app.
+ *
  * Not here on purpose:
- *   * Technician: technicians work in the Zoho FSM app and see their own
- *     jobs there (BRD 6.7); they need no AMC portal access.
  *   * Administrator: the existing admin role, which inherits everything.
  * Approval levels are named people in AMC configuration (like Snagging's
  * named reviewer and approval manager), not a role.
@@ -28,6 +32,9 @@ export interface AmcRoleTemplate {
 const { VIEW, CREATE, EDIT, EXPORT, APPROVE } = ActionType;
 const R = ResourceType;
 
+/* Opening a page (View on its own permission). */
+const pages = (...resources: ResourceType[]) => resources.map((resource) => ({ resource, actions: [VIEW] }));
+
 export const AMC_ROLE_TEMPLATES: AmcRoleTemplate[] = [
   {
     key: "management",
@@ -42,6 +49,8 @@ export const AMC_ROLE_TEMPLATES: AmcRoleTemplate[] = [
       { resource: R.AMC_PAYMENTS, actions: [VIEW, APPROVE] },
       { resource: R.AMC_VISITS, actions: [VIEW] },
       { resource: R.AMC_ALLOWANCES, actions: [VIEW, APPROVE] },
+      { resource: R.AMC_PROPOSALS, actions: [VIEW, EDIT] },
+      ...pages(R.AMC_CONTRACTS, R.AMC_CLIENTS, R.AMC_SITE_VISITS, R.AMC_CALL_OUTS, R.AMC_ADDITIONAL_WORKS, R.AMC_RENEWALS, R.AMC_REPORTS, R.AMC_TECHNICIANS, R.AMC_FSM_MAPPING, R.AMC_OPERATIONS_SETTINGS),
     ],
   },
   {
@@ -57,6 +66,10 @@ export const AMC_ROLE_TEMPLATES: AmcRoleTemplate[] = [
       { resource: R.AMC_PAYMENTS, actions: [VIEW] },
       { resource: R.AMC_VISITS, actions: [VIEW, CREATE, EDIT, APPROVE] },
       { resource: R.AMC_ALLOWANCES, actions: [VIEW, APPROVE] },
+      { resource: R.AMC_PROPOSALS, actions: [VIEW, CREATE, EDIT] },
+      { resource: R.AMC_CALL_OUTS, actions: [VIEW, CREATE, EDIT] },
+      { resource: R.AMC_ADDITIONAL_WORKS, actions: [VIEW, CREATE, EDIT] },
+      ...pages(R.AMC_CONTRACTS, R.AMC_CLIENTS, R.AMC_SITE_VISITS, R.AMC_RENEWALS, R.AMC_REPORTS, R.AMC_TECHNICIANS, R.AMC_FSM_MAPPING, R.AMC_OPERATIONS_SETTINGS),
     ],
   },
   {
@@ -69,6 +82,7 @@ export const AMC_ROLE_TEMPLATES: AmcRoleTemplate[] = [
       { resource: R.AMC_RATE_CARD, actions: [VIEW, EDIT] },
       { resource: R.AMC_CONFIG, actions: [VIEW] },
       { resource: R.AMC_PAYMENTS, actions: [VIEW, CREATE, EDIT, APPROVE] },
+      ...pages(R.AMC_PROPOSALS, R.AMC_CONTRACTS, R.AMC_CLIENTS, R.AMC_ADDITIONAL_WORKS, R.AMC_RENEWALS, R.AMC_REPORTS, R.AMC_FSM_MAPPING),
     ],
   },
   {
@@ -79,6 +93,8 @@ export const AMC_ROLE_TEMPLATES: AmcRoleTemplate[] = [
       { resource: R.AMC, actions: [VIEW] },
       { resource: R.AMC_ENQUIRIES, actions: [VIEW, CREATE, EDIT] },
       { resource: R.AMC_RATE_CARD, actions: [VIEW] },
+      { resource: R.AMC_PROPOSALS, actions: [VIEW, CREATE, EDIT] },
+      ...pages(R.AMC_SITE_VISITS, R.AMC_CLIENTS),
     ],
   },
   {
@@ -93,6 +109,10 @@ export const AMC_ROLE_TEMPLATES: AmcRoleTemplate[] = [
       { resource: R.AMC_PAYMENTS, actions: [VIEW, CREATE] },
       { resource: R.AMC_VISITS, actions: [VIEW, CREATE, EDIT] },
       { resource: R.AMC_ALLOWANCES, actions: [VIEW] },
+      { resource: R.AMC_PROPOSALS, actions: [VIEW, CREATE, EDIT] },
+      { resource: R.AMC_CALL_OUTS, actions: [VIEW, CREATE, EDIT] },
+      { resource: R.AMC_ADDITIONAL_WORKS, actions: [VIEW, CREATE, EDIT] },
+      ...pages(R.AMC_CONTRACTS, R.AMC_CLIENTS, R.AMC_SITE_VISITS, R.AMC_RENEWALS, R.AMC_REPORTS, R.AMC_TECHNICIANS),
     ],
   },
   {
@@ -104,7 +124,17 @@ export const AMC_ROLE_TEMPLATES: AmcRoleTemplate[] = [
       { resource: R.AMC_OPERATIONS, actions: [VIEW] },
       { resource: R.AMC_VISITS, actions: [VIEW, EDIT, APPROVE] },
       { resource: R.AMC_ALLOWANCES, actions: [VIEW, APPROVE] },
+      { resource: R.AMC_CALL_OUTS, actions: [VIEW, EDIT] },
+      { resource: R.AMC_ADDITIONAL_WORKS, actions: [VIEW, EDIT] },
+      ...pages(R.AMC_CONTRACTS, R.AMC_CLIENTS, R.AMC_SITE_VISITS, R.AMC_REPORTS, R.AMC_TECHNICIANS),
     ],
+  },
+  {
+    key: "technician",
+    name: "AMC Technician",
+    description:
+      "Technicians do AMC jobs in the YFI mobile app (BRD v0.4 3, 5.12): their own visits, call outs and additional work, the job sheet, photos and site visits. No portal pages.",
+    grants: [{ resource: R.MOBILE_APP, actions: [VIEW] }],
   },
 ];
 

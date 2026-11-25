@@ -5,12 +5,11 @@ import Link from "next/link";
 import { addDays, differenceInCalendarMonths, format } from "date-fns";
 import {
   Building2,
+  TriangleAlert,
   CalendarRange,
   CheckCircle2,
   ChevronDown,
   Circle,
-  Download,
-  FileType,
   EyeIcon,
   FileText,
   GitBranch,
@@ -26,6 +25,7 @@ import {
   MessageCircle,
   Send,
   Undo2,
+  UserCheck,
   Users,
   XCircle,
 } from "lucide-react";
@@ -37,7 +37,6 @@ import {
   DropdownMenuContent,
   DropdownMenuGroup,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -54,6 +53,8 @@ import { SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-s
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { amcRequest } from "@/lib/amc/http-cache";
 import {
   Select,
   SelectContent,
@@ -72,6 +73,7 @@ import {
   formatDisplayDate,
   formatPaymentLabel,
 } from "./amc-pricing";
+import { ApprovalChecklistCard } from "./approval-checklist-card";
 import { IdentityCell } from "@/components/ui/entity-avatar";
 import { termFeePhrase } from "./amc-date-utils";
 import { formatPhoneForDocument } from "./amc-phone";
@@ -88,6 +90,7 @@ import {
   ReviseProposalDialog,
   canReviseProposal,
 } from "./proposal-versions-panel";
+import { ChangeOwnerDialog, takeOverProposal } from "./proposal-owner-dialog";
 import {
   ApprovalsAndSendsPanel,
   RecordClientAnswerDialog,
@@ -234,6 +237,18 @@ function buildTimelineFromEvents(
           tone: "bad",
         });
         break;
+      /* DEV-505: the contract record could not be made on the client's approval. */
+      case "contract_creation_failed":
+        steps.push({
+          label: "Contract record not created",
+          at: event.at,
+          note: [CONTRACT_FAILURE_TEXT[String(payload.reason)] ?? String(payload.reason ?? ""), typeof payload.detail === "string" ? payload.detail : null].filter(Boolean).join(": ") || null,
+          tone: "bad",
+        });
+        break;
+      case "contract_created_from_approval":
+        steps.push({ label: `Contract record created${by(event)}`, at: event.at, tone: "good" });
+        break;
       case "contract_signed":
         steps.push({
           label: `Contract signed${event.actor ? ` by ${event.actor}` : ""}`,
@@ -253,6 +268,13 @@ function buildTimelineFromEvents(
   }
   return steps.sort((a, b) => a.at.localeCompare(b.at));
 }
+
+/* Why a contract record was not made (lib/server/amc/contract-lifecycle.ts CONTRACT_CREATION_FAILURES). */
+const CONTRACT_FAILURE_TEXT: Record<string, string> = {
+  "no services": "The approved version has no services",
+  "not migrated": "The database is missing the contract update",
+  error: "The database refused it",
+};
 
 /* The history, from the dates the submission carries, oldest first. */
 function buildTimeline(s: AmcSubmission): Step[] {
@@ -440,8 +462,6 @@ export function SubmissionDetails({
   deciding = false,
   onApprove,
   onSendBack,
-  onDownload,
-  downloading = false,
   onSend,
   sending = false,
   onReject,
@@ -455,13 +475,6 @@ export function SubmissionDetails({
   deciding?: boolean;
   onApprove?: (submission: AmcSubmission) => void;
   onSendBack?: (submission: AmcSubmission) => void;
-  /* PDF or Word, like every other document screen. */
-  onDownload?: (
-    submission: AmcSubmission,
-    documentType: AmcDocumentType,
-    format: "pdf" | "docx",
-  ) => void;
-  downloading?: boolean;
   /* Email or link, through the same confirmation as the list. */
   onSend?: (
     submission: AmcSubmission,
@@ -524,9 +537,11 @@ export function SubmissionDetails({
   const { totals } = data;
   const title = submission.customer.customerName || "Unnamed client";
   const awaiting = submission.status === "awaiting_approval";
-  const canEdit = isAmcSubmissionEditable(submission.status) && submission.is_own !== false;
-  /* FR5.1 from the proposal's own page, as the wizard's last step does it: the owner's draft, or one sent back. */
-  const submittable = submission.is_own !== false && (submission.status === "draft" || submission.status === "sent_back");
+  /* DEV-368 (20 Nov 2026 review): the owner, or the team by role, works on it. */
+  const canAct = (submission.can_act ?? submission.is_own !== false);
+  const canEdit = isAmcSubmissionEditable(submission.status) && canAct;
+  /* FR5.1 from the proposal's own page, as the wizard's last step does it: a draft, or one sent back. */
+  const submittable = canAct && (submission.status === "draft" || submission.status === "sent_back");
   const router = useRouter();
   const { confirm, dialog: confirmDialog } = useConfirm();
   const submitForApproval = () => {
@@ -562,20 +577,27 @@ export function SubmissionDetails({
   /* Approver rights, less the creator's own proposal when self-approval
      is switched off (lib/amc/workflow.ts). */
   const canDecide = canDecideProposal({ canApprove, isOwner: submission.is_own !== false });
-  /*
-    Sending is the owner's, as it is on the server.
-
-    An approver decides whether a proposal may go out; they do not send
-    it. Offering the button to somebody the server will refuse reads as a
-    fault rather than a rule -- and the document carries the owner's
-    account manager and contacts, so it goes out in their name.
-  */
-  const sendable =
-    onSend && submission.is_own !== false ? sendableDocument(submission) : null;
+  /* Sent by its owner or the team by role (DEV-368), as on the server. */
+  const sendable = onSend && canAct ? sendableDocument(submission) : null;
+  /* DEV-505: approved by the client, and the contract record is missing (null = looked and not found). */
+  const contractMissing = ["proposal_approved", "contract_sent", "signed"].includes(submission.status) && submission.contract_id === null;
+  const [creatingContract, setCreatingContract] = useState(false);
+  const createContract = async () => {
+    setCreatingContract(true);
+    try {
+      await amcRequest("/api/amc-submissions/contract", { method: "POST", body: JSON.stringify({ id: submission.id }) });
+      toast.success("Contract record created");
+      onChanged?.();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Could not create the contract record.");
+    } finally {
+      setCreatingContract(false);
+    }
+  };
   const resend = sendable ? lastSentAt(submission, sendable) : null;
   const baseStage = STAGE[submission.status] ?? { next: "", tone: "neutral" as const };
-  // Only the owner sends to the client: on somebody else's proposal, name who does.
-  const sender = submission.is_own === false ? submission.owner_name || "the owner" : null;
+  // Someone who cannot send it is told who does.
+  const sender = !canAct ? submission.owner_name || "the owner" : null;
   const stage =
     sender && submission.status === "approved"
       ? { ...baseStage, next: `Approved. ${sender} sends it to the client` }
@@ -646,9 +668,30 @@ export function SubmissionDetails({
   /* The header's own dialogs, opened from its "More" menu. */
   const [reviseOpen, setReviseOpen] = useState(false);
   const [answerOpen, setAnswerOpen] = useState(false);
+  const [ownerOpen, setOwnerOpen] = useState(false);
   const isOwn = submission.is_own !== false;
   const revisable = canReviseProposal(submission);
-  const answerable = isOwn && canRecordClientAnswer(submission);
+  const answerable = canAct && canRecordClientAnswer(submission);
+  /* DEV-368: take it over, or give it to someone else. */
+  const ownerActions =
+    canAct
+      ? {
+          takeOver: isOwn
+            ? null
+            : () =>
+                void confirm({
+                  title: "Take over this proposal?",
+                  description: `You become its owner instead of ${submission.owner_name || "its current owner"}: you edit, send and revise it, and get its notices. The change is kept on its history.`,
+                  confirmText: "Take over",
+                  action: async () => {
+                    await takeOverProposal(submission.id);
+                    toast.success("You own this proposal now");
+                    onChanged?.();
+                  },
+                }),
+          change: () => setOwnerOpen(true),
+        }
+      : null;
   const canDecideNow = canDecide && awaiting;
   /* Who decides the open level, named, so nobody waits on a button they will never get. */
   const deciders = submission.approval_deciders;
@@ -659,11 +702,42 @@ export function SubmissionDetails({
         ? listNames(deciders.names)
         : "nobody yet: add an approver in AMC Settings or AMC Configuration"
     : null;
+  /*
+    Who decides, said plainly (23 Nov 2026). When the level's only named
+    approver wrote the proposal, it goes to the AMC approvers instead, and
+    the page says why rather than naming them as that level's approvers.
+  */
+  const levelName = deciders?.levelName || "this level";
+  const insteadBy =
+    deciders?.names === null
+      ? "anyone whose role has the AMC approve permission decides it instead"
+      : deciders?.names?.length
+        ? `${listNames(deciders.names)} decide${deciders.names.length === 1 ? "s" : ""} it instead`
+        : "nobody else can decide it yet: add an approver in AMC Settings or AMC Configuration";
+  const decidedBy = !decidersText
+    ? ""
+    : deciders?.skippedOwner
+      ? isOwn
+        ? `You are the ${levelName} approver, but you wrote this proposal, so ${insteadBy}.`
+        : `The ${levelName} approver is ${deciders.skippedOwner}, who wrote this proposal and cannot approve it, so ${insteadBy}.`
+      : `${deciders?.levelName ? `${deciders.levelName} is decided by ` : "It is decided by "}${decidersText}.`;
   const waitingBody = !decidersText
     ? "It is locked while it waits. Nothing goes to the client until it is approved."
     : isOwn
-      ? `You submitted it, so you cannot approve it yourself. ${deciders?.levelName ? `${deciders.levelName} is decided by ` : "It is decided by "}${decidersText}. Nothing goes to the client until it is approved.`
-      : `${deciders?.levelName ? `${deciders.levelName} is decided by ` : "It is decided by "}${decidersText}. It is locked while it waits.`;
+      ? `${decidedBy} Nothing goes to the client until it is approved.`
+      : `${decidedBy} It is locked while it waits.`;
+  /*
+    Where the ladder stands (24 Nov 2026): after level 1 approves, the
+    proposal waits for the next level, which the same person may also decide.
+    Saying "level 2 of 2, AMC department head approved" shows it moved on.
+  */
+  const progress = deciders?.progress ?? null;
+  const atLevel = progress && progress.of > 1 ? `Level ${progress.position} of ${progress.of}: ${deciders?.levelName ?? "approval"}` : null;
+  const approvedBefore = progress?.approved.length
+    ? progress.approved.map((a) => `${a.levelName} approved${a.by ? ` by ${a.by}` : ""}${a.at ? ` on ${format(new Date(a.at), "d MMM yyyy")}` : ""}`).join("; ") + "."
+    : "";
+  const thenNext = progress?.nextLevelName ? ` After this level it goes to ${progress.nextLevelName}.` : "";
+  const belowFloorNote = submission.below_floor ? " One or more lines are priced below the floor rate: see What to check before approving." : "";
 
   /* The one thing on this proposal that needs somebody's attention. */
   const attention =
@@ -677,19 +751,31 @@ export function SubmissionDetails({
             ? submission.client_rejected_reason.slice(REVISION_PREFIX.length)
             : submission.client_rejected_reason,
         }
-        : submission.below_floor && (submission.status === "draft" || submission.status === "sent_back" || awaiting)
-          ? {
-            tone: "warn" as const,
-            title: "Priced below the floor rate",
-            body: `After the discount, one or more lines are under the rate card's floor. The approver sees this when deciding.${awaiting && !canDecide && decidersText ? ` ${waitingBody}` : ""}`,
-          }
         : awaiting
           ? {
             tone: "warn" as const,
-            title: canDecide ? "Waiting for your decision" : "Waiting for the approver",
-            body: canDecide
-              ? "Read it through, preview the documents, then approve it or send it back with a note."
-              : waitingBody,
+            title: canDecide
+              ? atLevel
+                ? `Waiting for your decision · ${atLevel}`
+                : "Waiting for your decision"
+              : atLevel
+                ? `Waiting for approval · ${atLevel}`
+                : "Waiting for the approver",
+            body: [
+              approvedBefore,
+              canDecide
+                ? `Read it through, preview the documents, then approve it or send it back with a note.${thenNext}`
+                : `${waitingBody}${thenNext}`,
+              belowFloorNote.trim(),
+            ]
+              .filter(Boolean)
+              .join(" "),
+          }
+        : submission.below_floor && (submission.status === "draft" || submission.status === "sent_back")
+          ? {
+            tone: "warn" as const,
+            title: "Priced below the floor rate",
+            body: "After the discount, one or more lines are under the rate card's floor. The approver sees this when deciding.",
           }
           : null;
 
@@ -740,9 +826,8 @@ export function SubmissionDetails({
               Preview
             </Button>
 
+            {/* Downloads live in Preview (23 Nov 2026): More holds the other actions only. */}
             <MoreActions
-              downloading={downloading}
-              onDownload={onDownload ? (type, format) => onDownload(submission, type, format) : undefined}
               revise={
                 revisable
                   ? {
@@ -753,9 +838,11 @@ export function SubmissionDetails({
                   : null
               }
               recordAnswer={answerable ? () => setAnswerOpen(true) : null}
+              owner={ownerActions}
               reject={null}
               rejectDisabled={deciding}
             />
+            <ChangeOwnerDialog open={ownerOpen} onOpenChange={setOwnerOpen} proposalId={submission.id} onChanged={onChanged} />
 
             <SignedContractAction submission={submission} />
 
@@ -785,6 +872,10 @@ export function SubmissionDetails({
                   Approve
                 </SubmitButton>
               </>
+            ) : contractMissing && canAct ? (
+              <SubmitButton pending={creatingContract} pendingLabel="Creating…" icon={<FileText className="size-4" />} onClick={() => void createContract()}>
+                Create contract record
+              </SubmitButton>
             ) : sendable && onSend ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -898,11 +989,27 @@ export function SubmissionDetails({
         <StatCard
           label="Stage"
           value={AMC_STATUS_LABELS[submission.status] ?? submission.status}
-          headline={stage.next}
+          headline={submission.status === "awaiting_approval" && submission.approval_deciders?.progress && submission.approval_deciders.progress.of > 1 ? `Level ${submission.approval_deciders.progress.position} of ${submission.approval_deciders.progress.of}: ${submission.approval_deciders.levelName}` : stage.next}
           caption={`Updated ${timeAgo(submission.updated_at)}`}
           tone={stage.tone}
         />
       </StatCardGrid>
+
+      {/* What the approver checks against the rules (23 Nov 2026); before submitting, what will need approval. */}
+      {submission.approval_checklist?.length ? (
+        <ApprovalChecklistCard checks={submission.approval_checklist} waiting={submission.status === "awaiting_approval"} />
+      ) : null}
+
+      {contractMissing ? (
+        <Alert variant="danger">
+          <TriangleAlert className="text-danger" />
+          <AlertTitle>The contract record was not created</AlertTitle>
+          <AlertDescription>
+            The client approved this proposal, but its contract was not made, so the contract cannot be sent or signed yet. The reason is in the History tab.
+            {canAct ? " Choose Create contract record to try again." : ` Ask ${submission.owner_name || "the owner"} to create it.`}
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       {/*
         The record, in tabs, the same shape as a job page. The header above
@@ -1115,71 +1222,34 @@ export function SubmissionDetails({
 }
 
 /**
- * The header's "More" menu: the documents as files, and the actions that
- * are not this proposal's next step.
+ * The header's "More" menu: the actions that are not this proposal's next
+ * step. The documents are downloaded from Preview (23 Nov 2026).
  */
 function MoreActions({
-  downloading,
-  onDownload,
   revise,
   recordAnswer,
+  owner = null,
   reject,
   rejectDisabled,
 }: {
-  downloading: boolean;
-  onDownload?: (documentType: AmcDocumentType, format: "pdf" | "docx") => void;
   revise: { label: string; onSelect: () => void } | null;
   recordAnswer: (() => void) | null;
+  /** DEV-368: take it over, or change its owner. */
+  owner?: { takeOver: (() => void) | null; change: () => void } | null;
   reject: (() => void) | null;
   rejectDisabled: boolean;
 }) {
-  if (!onDownload && !revise && !recordAnswer && !reject) return null;
-  const hasActions = Boolean(revise || recordAnswer || reject);
-  /* Named for what it holds: "Download" when the downloads are all there is, "More" once there are other actions too. */
-  const downloadsOnly = Boolean(onDownload) && !hasActions;
+  if (!revise && !recordAnswer && !reject && !owner) return null;
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="outline" aria-busy={downloading}>
-          {downloading ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : downloadsOnly ? (
-            <Download className="size-4" />
-          ) : (
-            <MoreHorizontal className="size-4" />
-          )}
-          {downloadsOnly ? "Download" : "More"}
+        <Button variant="outline">
+          <MoreHorizontal className="size-4" />
+          More
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
-        {onDownload
-          ? (["proposal", "contract"] as const).map((documentType, index) => (
-            <DropdownMenuGroup key={documentType}>
-              {index > 0 ? <DropdownMenuSeparator /> : null}
-              <DropdownMenuLabel className="text-muted-foreground text-xs font-normal">
-                Download {documentType}
-              </DropdownMenuLabel>
-              <DropdownMenuItem
-                disabled={downloading}
-                onClick={() => onDownload(documentType, "pdf")}
-              >
-                <FileText className="size-4" />
-                PDF
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                disabled={downloading}
-                onClick={() => onDownload(documentType, "docx")}
-              >
-                <FileType className="size-4" />
-                Word (.docx)
-              </DropdownMenuItem>
-            </DropdownMenuGroup>
-          ))
-          : null}
-        {hasActions ? (
-          <>
-            {onDownload ? <DropdownMenuSeparator /> : null}
-            <DropdownMenuGroup>
+        <DropdownMenuGroup>
               {/* BRD 5.4: a shared proposal is changed through a new version. */}
               {revise ? (
                 <DropdownMenuItem onClick={revise.onSelect}>
@@ -1194,6 +1264,19 @@ function MoreActions({
                   Record the client&apos;s answer
                 </DropdownMenuItem>
               ) : null}
+              {/* DEV-368: the team by role picks a proposal up. */}
+              {owner?.takeOver ? (
+                <DropdownMenuItem onClick={owner.takeOver}>
+                  <UserCheck className="size-4" />
+                  Take over
+                </DropdownMenuItem>
+              ) : null}
+              {owner ? (
+                <DropdownMenuItem onClick={owner.change}>
+                  <Users className="size-4" />
+                  Change owner…
+                </DropdownMenuItem>
+              ) : null}
               {reject ? (
                 <DropdownMenuItem
                   variant="destructive"
@@ -1204,9 +1287,7 @@ function MoreActions({
                   Reject…
                 </DropdownMenuItem>
               ) : null}
-            </DropdownMenuGroup>
-          </>
-        ) : null}
+        </DropdownMenuGroup>
       </DropdownMenuContent>
     </DropdownMenu>
   );

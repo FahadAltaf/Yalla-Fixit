@@ -11,10 +11,11 @@ import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } fr
 import DateTimeSelect from "@/components/ui/date-time-select";
 import { amcContractsService } from "@/modules/amc-contracts/amc-contracts-service";
 
-import { ApproverSelect } from "./approver-field";
+import { SiteVisitApproversNote } from "./approver-field";
 import { AssessorPicker } from "./assessor-picker";
 import { Field, fromLocalInput, localInputIn } from "./enquiries/enquiry-ui";
 import { PropertyPickerField, type PickedProperty } from "./property-picker-field";
+import { useLeadTimeConfirm } from "./lead-time-confirm";
 
 /**
  * Book a site visit from a client or property page: the same form as Book
@@ -62,6 +63,7 @@ function BookSiteVisitForm({
   setWorking: (working: boolean) => void;
   onClose: () => void;
 }) {
+  const { guard, dialog: leadTimeDialog } = useLeadTimeConfirm();
   const router = useRouter();
   const [propertyId, setPropertyId] = useState<string | null>(fixedPropertyId);
   /* A visit needs a complete address (unit, project, type, bedrooms, built-up area). */
@@ -69,8 +71,6 @@ function BookSiteVisitForm({
   const [when, setWhen] = useState(() => localInputIn(2, 10));
   const [people, setPeople] = useState<Array<{ id: string; name: string; email: string | null }>>([]);
   const [assessorId, setAssessorId] = useState<string | null>(null);
-  const [approverId, setApproverId] = useState<string | null>(null);
-  const [me, setMe] = useState<string | null>(null);
   /* Booked only once the chosen inspector has been found free at that time (Find available inspectors). */
   const [inspectorReady, setInspectorReady] = useState(false);
   const scheduledAt = fromLocalInput(when);
@@ -82,7 +82,6 @@ function BookSiteVisitForm({
         if (stale) return;
         setPeople(people);
         setAssessorId((cur) => cur ?? (people.some((p) => p.id === me) ? me : null));
-        setMe(me);
       },
       (e: unknown) => !stale && toast.error(e instanceof Error ? e.message : "Could not load the inspectors."),
     );
@@ -92,10 +91,12 @@ function BookSiteVisitForm({
   }, []);
 
   const book = async () => {
-    if (!propertyId || !scheduledAt || !assessorId || !approverId) return;
+    if (!propertyId || !scheduledAt || !assessorId) return;
     setWorking(true);
     try {
-      const { assessmentId, assessmentNumber } = await amcContractsService.bookSiteVisit({ customerId: client.id, propertyId, scheduledAt, assessorId, approverId });
+      const { assessmentId, assessmentNumber } = await guard((insideLeadTime) =>
+        amcContractsService.bookSiteVisit({ customerId: client.id, propertyId, scheduledAt, assessorId, insideLeadTime }),
+      );
       toast.success(`Site visit ${assessmentNumber} booked`);
       onClose();
       router.push(`/extensions/amc-contracts/assessments/${assessmentId}`);
@@ -108,6 +109,7 @@ function BookSiteVisitForm({
 
   return (
     <>
+      {leadTimeDialog}
       <DialogHeader>
         <DialogTitle>Book a site visit</DialogTitle>
         <DialogDescription>
@@ -133,17 +135,14 @@ function BookSiteVisitForm({
         <Field label="Inspector">
           <AssessorPicker people={people} value={assessorId} onChange={(id) => setAssessorId(id)} scheduledAt={scheduledAt} onReadyChange={setInspectorReady} />
         </Field>
-        <Field label="Approver" hint="Approves the visit once the inspector completes it on the app; the scope and assets recorded on site go onto the property then.">
-          {/* Keyed on the signed-in user, so it picks them first once they are known. */}
-          <ApproverSelect key={me ?? "loading"} value={approverId} onChange={setApproverId} me={me} />
-        </Field>
+        <SiteVisitApproversNote />
       </div>
       <DialogFooter>
         <Button variant="outline" onClick={onClose} disabled={working}>
           Cancel
         </Button>
         <SubmitButton
-          disabled={!propertyId || !propertyComplete || !scheduledAt || !assessorId || !inspectorReady || !approverId}
+          disabled={!propertyId || !propertyComplete || !scheduledAt || !assessorId || !inspectorReady}
           pending={working}
           pendingLabel="Booking…"
           icon={<CalendarPlus className="size-4" />}

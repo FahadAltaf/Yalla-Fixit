@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { cn } from "@/lib/utils";
 import { ArrowLeft, Building2, ChevronRight, ClipboardCheck, Layers, SquarePen, Plus, Receipt, ScrollText, TriangleAlert, UserRound, UserX } from "lucide-react";
 import { toast } from "sonner";
 import type { ColumnDef } from "@tanstack/react-table";
@@ -19,7 +20,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Money } from "@/components/ui/money";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { DataRow, PillTabs, SectionCard, StatCard, StatCardGrid, SubHeading, TabCount } from "@/components/dashboard/shared/kaizen";
+import { DataRow, PillTabs, rowLink, SectionCard, StatCard, StatCardGrid, SubHeading, TabCount } from "@/components/dashboard/shared/kaizen";
 import { GoogleLocationMap, hasGoogleMapsKey } from "@/components/dashboard/snagging/google-location-map";
 import { LocationMap } from "@/components/dashboard/snagging/location-map";
 import { ActionDialogContent, ErrorState, SectionSkeleton, StatGridSkeleton, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
@@ -228,15 +229,17 @@ function ContractsTable({ contracts, showProperty = true }: { contracts: Contrac
 }
 
 function AssessmentsList({ assessments }: { assessments: AssessmentItem[] }) {
+  const router = useRouter();
   if (assessments.length === 0) return <EmptyState icon={<ClipboardCheck className="size-5" />} title="No site visits yet" description="Start one from the button at the top of the page." />;
   return (
     <ul className="divide-y">
-      {assessments.map((a) => (
-        <li key={a.id} className="flex flex-wrap items-start justify-between gap-2 px-5 py-3 text-sm">
+      {assessments.map((a) => {
+        /* The whole row opens the site visit (23 Nov 2026); the proposal link in it still opens the proposal. */
+        const link = rowLink(`/extensions/amc-contracts/assessments/${a.id}`, router.push);
+        return (
+        <li key={a.id} {...link} className={cn("flex flex-wrap items-start justify-between gap-2 px-5 py-3 text-sm", link.className)}>
           <div className="min-w-0">
-            <Link href={`/extensions/amc-contracts/assessments/${a.id}`} className="font-medium hover:underline">
-              {a.assessmentNumber}
-            </Link>
+            <span className="font-medium">{a.assessmentNumber}</span>
             <span className="text-muted-foreground">
               {" "}
               · {a.assessedOn ? formatContractDate(a.assessedOn) : "not dated"}
@@ -258,7 +261,8 @@ function AssessmentsList({ assessments }: { assessments: AssessmentItem[] }) {
             {a.status}
           </Badge>
         </li>
-      ))}
+        );
+      })}
     </ul>
   );
 }
@@ -268,16 +272,17 @@ function QuotesList({ quotes }: { quotes: QuoteItem[] }) {
   return (
     <ul className="divide-y">
       {quotes.map((q) => (
-        <li key={q.id} className="px-5 py-3 text-sm">
-          <Link href={`/extensions/amc-contracts/${q.contractId}`} className="font-medium hover:underline">
-            {q.quoteNumber}
-          </Link>{" "}
+        <li key={q.id}>
+          {/* The whole row opens the contract the quote is on (23 Nov 2026). */}
+          <Link href={`/extensions/amc-contracts/${q.contractId}`} className="hover:bg-muted/50 focus-visible:ring-ring block cursor-pointer px-5 py-3 text-sm transition-colors focus-visible:ring-2 focus-visible:outline-none focus-visible:-outline-offset-2">
+          <span className="font-medium">{q.quoteNumber}</span>{" "}
           · {q.serviceLabel} · {ELIGIBILITY_LABELS[q.eligibility]}
           <div className="text-muted-foreground text-xs">
             {q.status === "estimate_linked" ? `Estimate ${q.fsmEstimateNumber}` : q.status === "draft" ? "Draft" : "Cancelled"}
             {q.finalPrice !== null ? ` · AED ${q.finalPrice.toLocaleString("en-AE", { minimumFractionDigits: 2 })}` : ""}
             {q.discountAmount > 0 ? ` (saves AED ${q.discountAmount.toLocaleString("en-AE", { minimumFractionDigits: 2 })})` : ""}
           </div>
+          </Link>
         </li>
       ))}
     </ul>
@@ -724,7 +729,7 @@ export function PropertyDetail({ id }: { id: string }) {
         <div className="flex flex-col gap-4">
           {/* What anyone going there must know first, as a quotation shows what is holding it up. */}
           {property.accessConstraints ? (
-            <Alert>
+            <Alert variant="warning">
               <TriangleAlert />
               <AlertTitle>Access constraints</AlertTitle>
               <AlertDescription>{property.accessConstraints}</AlertDescription>

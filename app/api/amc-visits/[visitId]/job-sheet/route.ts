@@ -11,6 +11,7 @@ import {
   jobSheetView,
   returnJobSheet,
   saveJobSheet,
+  markServiceReportSent,
   sendServiceReport,
   visitOwner,
 } from "@/lib/server/amc/job-sheets";
@@ -78,6 +79,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ visitId: s
     }
     if (action.action === "return") return NextResponse.json(await returnJobSheet(gate.admin, visitId, action.comment, actor));
     if (action.action === "close") return NextResponse.json(await closeJobSheet(gate.admin, visitId, action.comment, actor, config, action.send, browserPdfFrom(body)));
+    if (action.action === "mark_report_sent") return NextResponse.json(await markServiceReportSent(gate.admin, visitId, { channel: action.channel, note: action.note }, actor));
     /* close and resend_report may carry pdfBase64: the report as the portal built it (18 Nov 2026). */
     return NextResponse.json(await sendServiceReport(gate.admin, visitId, actor, config, action.channel, browserPdfFrom(body)));
   } catch (error) {

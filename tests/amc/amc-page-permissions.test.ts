@@ -49,7 +49,6 @@ test("every AMC page asks about its own permission on the server", () => {
     ["app/(dashboard)/extensions/amc-contracts/reports/page.tsx", "AMC_REPORTS"],
     ["app/(dashboard)/extensions/amc-contracts/board/page.tsx", "AMC_VISITS"],
     ["app/(dashboard)/extensions/amc-contracts/visits/page.tsx", "AMC_VISITS"],
-    ["app/(dashboard)/extensions/amc-contracts/visits/[id]/page.tsx", "AMC_VISITS"],
     ["app/(dashboard)/extensions/amc-contracts/additional-works/[id]/page.tsx", "AMC_ADDITIONAL_WORKS"],
     ["app/(dashboard)/extensions/amc-contracts/payments/page.tsx", "AMC_PAYMENTS"],
   ];
@@ -57,4 +56,10 @@ test("every AMC page asks about its own permission on the server", () => {
     const src = readFileSync(path.join(process.cwd(), file), "utf8");
     assert.match(src, new RegExp(`canSeeAmcPage\\(ResourceType\\.${resource}\\)`), file);
   }
+});
+
+/* One visit (23 Nov 2026): the same people as the Visits list and a contract's Schedule tab; its routes decide which visit. */
+test("a visit page opens for Visits, Site visits or Contracts, and its routes decide which visit", () => {
+  const src = readFileSync(path.join(process.cwd(), "app/(dashboard)/extensions/amc-contracts/visits/[id]/page.tsx"), "utf8");
+  assert.match(src, /canSeeAnyAmcPage\(\[ResourceType\.AMC_VISITS, ResourceType\.AMC_SITE_VISITS, ResourceType\.AMC_CONTRACTS\]\)/);
 });

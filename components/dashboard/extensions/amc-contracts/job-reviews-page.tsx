@@ -34,7 +34,10 @@ const FILTER_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: "routine", label: "Routine" },
 ];
 
-const visitHref = (r: Pick<JobReviewItem, "contractId" | "visitId">) => `/extensions/amc-contracts/${r.contractId}?tab=schedule&visit=${r.visitId}`;
+/* Its place in the contract: the schedule for a planned visit, Call outs & work for the rest (DEV-497). */
+const contractHref = (r: Pick<JobReviewItem, "contractId" | "visitId" | "kind">) =>
+  r.kind === "ppm" ? `/extensions/amc-contracts/${r.contractId}?tab=schedule&visit=${r.visitId}` : `/extensions/amc-contracts/${r.contractId}?tab=call-outs`;
+const KIND_LABEL: Record<JobReviewItem["kind"], string> = { ppm: "Planned visit", call_out: "Call out", additional_work: "Additional work" };
 
 function submittedLabel(iso: string): string {
   const d = new Date(iso);
@@ -57,7 +60,8 @@ export function JobReviewsPage() {
   const [pageSize, setPageSize] = useState(25);
   const router = useRouter();
   /* The review is the visit page's Job sheet tab. */
-  const showReview = useCallback((visitId: string) => router.push(`${visitPageHref(visitId)}?tab=job_sheet`), [router]);
+  /* Each sheet opens on its own page (DEV-497): a visit or call out on the visit page, additional work on its page. */
+  const showReview = useCallback((row: JobReviewItem) => router.push(row.href ?? `${visitPageHref(row.visitId)}?tab=job_sheet`), [router]);
 
   const term = search.trim().toLowerCase();
   const all = useMemo(() => data?.items ?? [], [data]);
@@ -66,7 +70,7 @@ export function JobReviewsPage() {
       all.filter(
         (r) =>
           (filter === "any" || (filter === "review" ? r.reviewReasons.length > 0 : r.reviewReasons.length === 0)) &&
-          (!term || [r.contractNumber, r.customerName, r.propertyLabel, `visit ${r.visitNo}`].some((v) => v.toLowerCase().includes(term))),
+          (!term || [r.contractNumber, r.customerName, r.propertyLabel, r.ref ?? `visit ${r.visitNo}`, KIND_LABEL[r.kind ?? "ppm"]].some((v) => v.toLowerCase().includes(term))),
       ),
     [all, filter, term],
   );
@@ -79,7 +83,11 @@ export function JobReviewsPage() {
         id: "visit",
         header: "Visit",
         cell: ({ row }) => (
-          <IdentityCell title={`Visit ${row.original.visitNo}`} subtitle={row.original.contractNumber || "Contract"} icon={ClipboardCheck} />
+          <IdentityCell
+            title={row.original.ref ?? `Visit ${row.original.visitNo}`}
+            subtitle={[KIND_LABEL[row.original.kind ?? "ppm"], row.original.contractNumber || "Contract"].join(" · ")}
+            icon={ClipboardCheck}
+          />
         ),
       },
       {
@@ -136,11 +144,11 @@ export function JobReviewsPage() {
         header: () => <span className="sr-only">Actions</span>,
         cell: ({ row }) => (
           <span className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
-            <Button size="sm" variant="outline" onClick={() => showReview(row.original.visitId)}>
+            <Button size="sm" variant="outline" onClick={() => showReview(row.original)}>
               Review
             </Button>
             <Button size="icon" variant="ghost" className="size-8" asChild>
-              <Link href={visitHref(row.original)} aria-label={`Open the contract for visit ${row.original.visitNo}`} title="Open in the contract">
+              <Link href={contractHref(row.original)} aria-label={`Open the contract for ${row.original.ref ?? `visit ${row.original.visitNo}`}`} title="Open in the contract">
                 <ExternalLink className="size-4" />
               </Link>
             </Button>
@@ -163,11 +171,11 @@ export function JobReviewsPage() {
         eyebrow="Operations"
         title="Job reviews"
         info={<ModuleGuide module="jobReviews" />}
-        description="Submitted job sheets waiting for a supervisor, oldest first. Return one with what needs fixing, or close the visit to send the client the service report within 48 hours."
+        description="Submitted job sheets of planned visits, call outs and additional work, waiting for a supervisor, oldest first. Return one with what needs fixing, or close it to send the client the service report."
       />
 
       {data && !data.migrated ? (
-        <Alert className="border-warning/30 bg-warning/5 items-start p-4">
+        <Alert variant="warning">
           <Database className="text-warning" />
           <AlertTitle>Job reviews need a database update</AlertTitle>
           <AlertDescription>
@@ -193,7 +201,7 @@ export function JobReviewsPage() {
             setPage(0);
           }}
           onGlobalFilterChange={setSearch}
-          handleRowClick={(row) => showReview(row.visitId)}
+          handleRowClick={(row) => showReview(row)}
           toolbar={
             <JobReviewsToolbar
               search={search}
@@ -222,7 +230,7 @@ export function JobReviewsPage() {
               description={
                 all.length && filtered
                   ? "No submitted job sheet matches this search and filter."
-                  : "When a crew submits a visit's job sheet, it waits here for a supervisor to return it or close the visit."
+                  : "When a crew submits a job sheet (a planned visit, a call out or an additional work), it waits here for a supervisor to return it or close it."
               }
               action={all.length && filtered ? { label: "Clear filters", variant: "outline", onClick: clearFilters } : undefined}
             />

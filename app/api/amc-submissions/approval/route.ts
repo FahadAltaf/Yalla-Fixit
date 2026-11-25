@@ -1,4 +1,8 @@
+import { aboveCardProblem } from "@/lib/amc/pricing";
 import { NextRequest, NextResponse } from "next/server";
+
+import { proposalRights } from "@/lib/amc/proposal-team";
+import { proposalViewerRoles } from "@/lib/server/amc/proposal-roles";
 import { z } from "zod";
 
 import { hasResourceAction } from "@/lib/role-permissions";
@@ -131,9 +135,13 @@ export async function POST(req: NextRequest) {
   /* FR3.4, FR5.2, FR5.3: who may move it, and from where. */
   const legacyAction = body.action === "reject" ? "send_back" : body.action;
   if (body.action === "submit") {
-    const check = checkInternalTransition({ action: "submit", from: existing.status, isOwner, canApprove });
+    /* DEV-368: the owner or the team by role submits it for approval. */
+    const teamSubmits = proposalRights(proposalViewerRoles(accessUser, canApprove), isOwner).act;
+    const check = checkInternalTransition({ action: "submit", from: existing.status, isOwner: teamSubmits, canApprove });
     if (!check.ok) return NextResponse.json({ error: check.error }, { status: check.status });
-    const problem = submittableProblem(existing.services ?? []) ?? (await submissionRateProblem(admin, existing.id));
+    /* DEV-501: a rate above the rate card needs its reason. */
+    const problem =
+      submittableProblem(existing.services ?? []) ?? aboveCardProblem(existing.services ?? []) ?? (await submissionRateProblem(admin, existing.id));
     if (problem) return NextResponse.json({ error: problem }, { status: 400 });
     const submitConfig = await readAmcConfig(admin);
     /* BRD 5.7: the contract term, against the configured minimum, before it goes for approval. */
@@ -199,7 +207,9 @@ export async function POST(req: NextRequest) {
     /* FR2.12 on the server: the form checks this too, but a request can
        skip the form. */
     /* And, when the rate card priced it, every ticked line has a rate at an allowed frequency (BRD 5.3). */
-    const problem = submittableProblem(existing.services ?? []) ?? (await submissionRateProblem(admin, existing.id));
+    /* DEV-501: a rate above the rate card needs its reason. */
+    const problem =
+      submittableProblem(existing.services ?? []) ?? aboveCardProblem(existing.services ?? []) ?? (await submissionRateProblem(admin, existing.id));
     if (problem) {
       return NextResponse.json({ error: problem }, { status: 400 });
     }

@@ -22,6 +22,7 @@ function included(s: ClientReport["scope"][number]): string {
 
 /** The report's blocks, from its facts. */
 export function buildClientReportModel(r: ClientReport): AmcDocumentModel {
+  const noMoney = r.financials === false;
   const blocks: Block[] = [];
   const section = (number: string, text: string) => blocks.push({ kind: "heading", number, text });
   const empty = (text: string) => blocks.push({ kind: "paragraph", runs: [t(text, { tone: "muted" })] });
@@ -111,22 +112,31 @@ export function buildClientReportModel(r: ClientReport): AmcDocumentModel {
   if (r.callOuts.length) {
     blocks.push({
       kind: "table",
-      widths: [14, 16, 38, 16, 16],
-      header: [headerCell("CALL OUT"), headerCell("PRIORITY"), headerCell("ISSUE"), headerCell("ATTENDED"), headerCell("COVERAGE")],
+      /* DEV-503: without prices, no coverage column ("chargeable" is about money). */
+      widths: noMoney ? [16, 18, 46, 20] : [14, 16, 38, 16, 16],
+      header: [headerCell("CALL OUT"), headerCell("PRIORITY"), headerCell("ISSUE"), headerCell("ATTENDED"), ...(noMoney ? [] : [headerCell("COVERAGE")])],
       rows: zebra(
         r.callOuts.map((c) => [
           cell(c.number),
           cell(c.priority === "emergency" ? "Emergency" : "Non-emergency"),
           cell(c.issue),
           cell(day(c.attendedAt)),
-          cell([[t(c.covered ? "Covered by AMC" : "Chargeable", { bold: true, tone: c.covered ? "default" : "brand" })]]),
+          ...(noMoney ? [] : [cell([[t(c.covered ? "Covered by AMC" : "Chargeable", { bold: true, tone: c.covered ? "default" : "brand" })]])]),
         ]),
       ),
     });
   } else empty("No call outs so far.");
 
   section("5", "Additional work");
-  if (r.additionalWork.length) {
+  if (r.additionalWork.length && noMoney) {
+    /* DEV-503: the work found and where it stands, without its cost. */
+    blocks.push({
+      kind: "table",
+      widths: [18, 60, 22],
+      header: [headerCell("NO."), headerCell("FINDING"), headerCell("STATUS")],
+      rows: zebra(r.additionalWork.map((w) => [cell(w.number), cell(w.finding), cell(words(w.status))])),
+    });
+  } else if (r.additionalWork.length) {
     blocks.push({
       kind: "table",
       widths: [16, 48, 16, 20],

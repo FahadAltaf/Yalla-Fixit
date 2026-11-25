@@ -18,6 +18,8 @@ import type { BoardVisit } from "@/modules/amc-contracts/visits-service";
 import {
   AccessBadge,
   ConfirmationBadge,
+  ConfirmationUrgencyBadge,
+  visitDayOf,
   DAY_END,
   DAY_SPAN,
   DAY_START,
@@ -404,6 +406,7 @@ function PlacedBlock({
           <ServiceBadges services={visit.services} max={4} />
           <div className="flex flex-wrap items-center gap-1.5">
             <ConfirmationBadge value={visit.clientConfirmation} />
+            <ConfirmationUrgencyBadge value={visit.clientConfirmation} day={visitDayOf(visit)} status={visit.status} />
             <AccessBadge value={visit.accessStatus} />
             <RescheduledMark original={visit.originalTargetDate} />
           </div>

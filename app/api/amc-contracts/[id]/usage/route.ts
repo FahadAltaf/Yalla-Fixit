@@ -7,6 +7,7 @@ import {
   requireManagedContract,
 } from "@/lib/server/amc/contract-access";
 import { recordUsage } from "@/lib/server/amc/contracts";
+import { canCorrectUsage } from "@/lib/amc/access";
 import { loadUsagePage } from "@/lib/server/amc/contract-operations";
 import { pageParams } from "@/lib/server/snagging/search";
 
@@ -68,6 +69,16 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   try {
     const contract = await requireManagedContract(gate, id);
     if (!contract.ok) return contract.response;
+    /* DEV-499: usage typed in by hand, with no FSM reference behind it, is a correction of the balance:
+       the correction right (an approver, AMC Operations Approve, AMC Allowances Approve) and a reason. */
+    if (!parsed.data.externalReference?.trim()) {
+      if (!canCorrectUsage(gate.actor, contract.ownerId)) {
+        return NextResponse.json({ error: "Usage without an FSM reference is a manual correction: it needs the correction right (an AMC approver)." }, { status: 403 });
+      }
+      if ((parsed.data.notes ?? "").trim().length < 3) {
+        return NextResponse.json({ error: "Say why this usage is recorded by hand (Notes)." }, { status: 400 });
+      }
+    }
     const entry = await recordUsage(gate.admin, id, parsed.data, {
       id: gate.userId,
       label: gate.label,

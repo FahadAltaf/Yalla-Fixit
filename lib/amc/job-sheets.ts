@@ -128,7 +128,7 @@ export function remainingTrades<T extends { outcome: LineOutcome; consumed: bool
 /* The 48-hour report clock (DEV-404)                                  */
 /* ------------------------------------------------------------------ */
 
-/** Contract clause 1.2: the report goes to the client within 48 hours of the visit. */
+/** Contract clause 1.2: the report goes to the client within 48 hours of the visit (AMC configuration: SLA, service report hours). */
 export function reportDueAt(visitCompletedAt: string, hours = 48): string {
   return new Date(Date.parse(visitCompletedAt) + hours * 3_600_000).toISOString();
 }
@@ -196,11 +196,29 @@ export const jobSheetSchema = z
   .strict();
 export type JobSheetInput = z.infer<typeof jobSheetSchema>;
 
+/** The browser-built report PDF, base64, at most ~12 MB (as browserPdfFrom accepts). */
+const reportPdf = z.string().max(16_000_000).optional();
+
 export const jobSheetActionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("save"), sheet: jobSheetSchema }).strict(),
   z.object({ action: z.literal("submit"), sheet: jobSheetSchema }).strict(),
-  z.object({ action: z.literal("close"), comment: optionalText(1000), send: sendChannelSchema.optional() }).strict(),
+  /*
+    close and resend_report carry the service report as the portal built it
+    (pdfBase64, 18 Nov 2026; read by browserPdfFrom, which checks it is a
+    PDF). Strict objects refused it: "Unrecognized key: pdfBase64" on Close
+    visit (23 Nov 2026).
+  */
+  /* fsmQuotationNo: a call out's or additional work's FSM quotation number (DEV-508); a PPM visit has none. */
+  z.object({ action: z.literal("close"), comment: optionalText(1000), send: sendChannelSchema.optional(), pdfBase64: reportPdf, fsmQuotationNo: z.string().trim().min(1).max(40).optional(), hoursUsed: z.number().int().min(1).max(500).optional() }).strict(),
   z.object({ action: z.literal("return"), comment: text(1000).min(3, "Say what needs fixing") }).strict(),
-  z.object({ action: z.literal("resend_report"), channel: sendChannelSchema.optional() }).strict(),
+  z.object({ action: z.literal("resend_report"), channel: sendChannelSchema.optional(), pdfBase64: reportPdf }).strict(),
+  /* DEV-404: the coordinator sent it themselves (WhatsApp, by hand); that stops the clock. */
+  z
+    .object({
+      action: z.literal("mark_report_sent"),
+      channel: z.enum(["whatsapp", "link", "other"]),
+      note: optionalText(300),
+    })
+    .strict(),
 ]);
 export type JobSheetAction = z.infer<typeof jobSheetActionSchema>;

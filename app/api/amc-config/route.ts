@@ -11,6 +11,7 @@ import {
 } from "@/lib/amc/config";
 import { hasResourceAction } from "@/lib/role-permissions";
 import { AmcConfigError, listAmcConfigHistory, readAmcConfigResolved, writeAmcConfigSection } from "@/lib/server/amc/config";
+import { amcPeople } from "@/lib/server/amc/people";
 import { requireResourceAccess } from "@/lib/server/require-access";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { ActionType, ResourceType } from "@/types/types";
@@ -36,28 +37,16 @@ function editableSections(user: AccessUser): Record<AmcConfigSection, boolean> {
   ) as Record<AmcConfigSection, boolean>;
 }
 
-type UserRow = {
-  id: string;
-  email: string | null;
-  full_name: string | null;
-  is_active: boolean | null;
-  roles: { name?: string | null } | Array<{ name?: string | null }> | null;
-};
-
-/** Active portal users, for naming approvers per level. */
-async function listActiveUsers(admin: Awaited<ReturnType<typeof createAdminServerClient>>) {
-  const { data, error } = await admin
-    .from("user_profile")
-    .select("id, email, full_name, is_active, roles(name)")
-    .order("full_name", { ascending: true })
-    .limit(2000);
-  if (error) return [];
-  return ((data ?? []) as UserRow[])
-    .filter((u) => u.is_active !== false)
-    .map((u) => {
-      const role = Array.isArray(u.roles) ? u.roles[0] : u.roles;
-      return { id: u.id, name: u.full_name?.trim() || u.email || "User", email: u.email, role: role?.name ?? null };
-    });
+/** Every user id already named somewhere in the configuration: kept in the list, so a save never drops them. */
+function namedIds(config: Record<string, unknown>): Set<string> {
+  const ids = new Set<string>();
+  for (const section of Object.values(config)) {
+    if (!section || typeof section !== "object") continue;
+    for (const [key, value] of Object.entries(section as Record<string, unknown>)) {
+      if (/(Ids|UserIds)$/.test(key) && Array.isArray(value)) for (const id of value) if (typeof id === "string") ids.add(id);
+    }
+  }
+  return ids;
 }
 
 export async function GET() {
@@ -65,11 +54,9 @@ export async function GET() {
   if (!gate.ok) return gate.response;
   try {
     const admin = await createAdminServerClient();
-    const [resolved, history, users] = await Promise.all([
-      readAmcConfigResolved(admin),
-      listAmcConfigHistory(admin),
-      listActiveUsers(admin),
-    ]);
+    const [resolved, history] = await Promise.all([readAmcConfigResolved(admin), listAmcConfigHistory(admin)]);
+    /* Admins and people with AMC access, each with what they may be named for (23 Nov 2026). */
+    const users = await amcPeople(admin, namedIds(resolved.config as unknown as Record<string, unknown>));
     return NextResponse.json(
       {
         ...resolved,

@@ -297,7 +297,7 @@ export function AmcSendDialog({
           ) : null}
 
           {sentAt ? (
-            <Alert className="border-warning/30 bg-warning/5">
+            <Alert variant="warning">
               <TriangleAlert className="text-warning size-4" />
               <AlertTitle>
                 A link was already sent on{" "}

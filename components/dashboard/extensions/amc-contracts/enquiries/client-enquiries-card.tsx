@@ -50,11 +50,8 @@ export function ClientEnquiriesCard({ customerId }: { customerId: string }) {
             <DataRow
               key={e.id}
               icon={<Inbox />}
-              title={
-                <Link href={`/extensions/amc-contracts/enquiries/${e.id}`} className="hover:underline">
-                  {e.enquiryNumber} · {e.need}
-                </Link>
-              }
+              href={`/extensions/amc-contracts/enquiries/${e.id}`}
+              title={`${e.enquiryNumber} · ${e.need}`}
               subtitle={[formatContractDate(e.enquiredAt), e.source, e.owner?.name].filter(Boolean).join(" · ")}
               trailing={
                 <div className="flex flex-col items-end gap-1">

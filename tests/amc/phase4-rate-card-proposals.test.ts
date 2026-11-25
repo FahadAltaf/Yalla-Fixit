@@ -98,8 +98,13 @@ test("pricing from the card: rate read from the card, promotions applied, proble
   assert.ok(priced.problems.some((p) => p.includes("electrical-ppm")));
   assert.equal(priced.belowFloor, false, "a promotion alone is not below floor");
 
+  /* Visits a year off the card (23 Nov 2026): kept, and the proposal needs approval. */
   const odd = applyRateCard([row("ac-ppm", true, 1, 3)], card, "villa", "2026-10-07", 0);
-  assert.match(odd.problems[0], /2, 4 times a year/);
+  assert.deepEqual(odd.problems, []);
+  assert.equal(odd.rows[0].frequency, 3);
+  assert.equal(odd.rows[0].frequencyOffCard, true);
+  assert.equal(odd.rows[0].belowFloor, true);
+  assert.equal(odd.belowFloor, true);
 
   const discounted = applyRateCard([row("plumbing-ppm", true)], card, "villa", "2026-10-07", 15);
   assert.equal(discounted.belowFloor, true, "500 less 15% = 425, under the 450 floor");
@@ -182,11 +187,11 @@ test("discount authority, validity, property types, revising", () => {
   assert.equal(rateModelFor("other", "residential"), "apartment");
   assert.equal(canRevise("proposal_sent", true), true);
   assert.equal(canRevise("proposal_rejected", true), true);
-  assert.equal(canRevise("proposal_sent", false), false, "the owner revises");
+  assert.equal(canRevise("proposal_sent", false), false, "only the owner or the team by role revises (DEV-368)");
   assert.equal(canRevise("draft", true), false, "a draft is edited in place");
   assert.equal(canRevise("contract_sent", true), false);
   assert.equal(canRevise("approved", true), true, "approved and not yet sent: reopened as a draft of the same version");
-  assert.equal(canRevise("approved", false), false, "only the owner reopens it");
+  assert.equal(canRevise("approved", false), false, "only the owner or the team by role reopens it");
   assert.equal(isAmcSubmissionEditable("proposal_rejected"), false, "a rejected proposal is revised, not edited");
   assert.equal(reviseSchema.safeParse({ id: "7b1f3c2a-4d5e-4f60-8a71-92b3c4d5e6f7", reason: "discount", summary: "ok" }).success, false, "say what changes");
 });
@@ -255,9 +260,12 @@ test("migration: additive on the live table, history locked, the lock only from 
 test("the card's frequencies bind only services counted in visits (a hotline is once a year)", () => {
   /* ac-ppm allows 2 or 4 a year; a hotline-like service carrying the same list must not refuse its once a year. */
   const asVisits = applyRateCard([row("ac-ppm", true, 1, 1)], card, "villa", "2026-10-07", 0, undefined, () => true);
-  assert.match(asVisits.problems[0] ?? "", /2, 4 times a year/);
+  assert.equal(asVisits.rows[0].frequencyOffCard, true, "1 a year is off a 2 or 4 card: needs approval");
+  assert.equal(asVisits.belowFloor, true);
   const asHotline = applyRateCard([row("ac-ppm", true, 1, 1)], card, "villa", "2026-10-07", 0, undefined, () => false);
   assert.equal(asHotline.problems.length, 0);
+  assert.equal(asHotline.rows[0].frequencyOffCard, false, "a hotline is once a year whatever the card lists");
+  assert.equal(asHotline.belowFloor, false);
 });
 
 /* 11 Nov 2026: every property type from the property form is on the card; a type with no rate of its own uses its family's. */

@@ -104,11 +104,8 @@ export function ContractsSummary({ refreshKey }: { refreshKey: number }) {
               <DataRow
                 key={u.id}
                 className="px-0"
-                title={
-                  <Link href={`${BASE}/${u.contractId}`} className="hover:underline">
-                    {u.customerName || u.proposalNumber}
-                  </Link>
-                }
+                href={`${BASE}/${u.contractId}`}
+                title={u.customerName || u.proposalNumber}
                 subtitle={`${u.serviceLabel} · ${formatContractDate(u.occurredAt.slice(0, 10))}${u.kind === "correction" ? " · correction" : ""}`}
                 trailing={<span className="text-sm tabular-nums">{u.quantity > 0 ? "" : "−"}{formatQuantity(Math.abs(u.quantity))}</span>}
               />

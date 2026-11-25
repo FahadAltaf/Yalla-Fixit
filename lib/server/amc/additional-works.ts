@@ -22,6 +22,10 @@ import type { AmcConfig } from "@/lib/amc/config";
 import type { Trade } from "@/lib/amc/visits";
 import { clientEmailHtml, escapeEmailHtml } from "@/lib/email-brand";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
+import { checkFieldLeadTime } from "@/lib/server/amc/lead-time";
+import { alertCrewChange } from "@/lib/server/amc/crew-alerts";
+import { approveExpiredBooking } from "@/lib/server/amc/expired-booking";
+import { todayInDubai } from "@/lib/amc/contracts";
 import { checkCrewForSlot, fail, notMigrated, one, str, workPhotos } from "@/lib/server/amc/call-outs";
 import { ContractError } from "@/lib/server/amc/contracts";
 import { notifyUsers } from "@/lib/server/amc/notifications";
@@ -31,6 +35,7 @@ import { recordStatusChange } from "@/lib/server/amc/status-history";
 import { sendEmail } from "@/lib/server/send-email";
 import { initialOutcome, type SendChannel } from "@/lib/amc/send-channels";
 import { readCharge, recordChargePayment, syncWorkCharge } from "@/lib/server/amc/visit-charges";
+import { assertFsmQuotation, setFsmQuotation } from "@/lib/server/amc/fsm-quotation";
 
 /**
  * Additional works on the server (Phase 11: DEV-407). Raised from a PPM
@@ -159,14 +164,26 @@ function clientParty(customer: Row, name: string): WorkPartyValue {
   };
 }
 
-export async function createAdditionalWork(admin: Admin, input: AdditionalWorkCreateInput, actor: Actor, config: AmcConfig) {
+export async function createAdditionalWork(admin: Admin, input: AdditionalWorkCreateInput, actor: Actor, config: AmcConfig, canApproveExpired = false) {
   const { data: contract, error: cError } = await admin
     .from("amc_contracts")
-    .select("id, status, customer_name, customer, contract_number, proposal_number")
+    .select("id, status, end_date, customer_name, customer, contract_number, proposal_number")
     .eq("id", input.contractId)
     .maybeSingle<Row>();
   if (cError) throw fail(cError);
   if (!contract) throw new ContractError("Contract not found.", 404);
+  /* DEV-496: on an expired contract only with an AMC approver's reason, logged on the contract. */
+  await approveExpiredBooking(
+    admin,
+    {
+      contract: { id: String(contract.id), status: String(contract.status), endDate: str(contract.end_date), number: str(contract.contract_number) },
+      day: todayInDubai(),
+      what: "Additional work raised",
+      reason: input.expiredReason,
+      canApprove: canApproveExpired,
+    },
+    actor,
+  );
   if (input.source === "visit") {
     const { data: v } = await admin.from("amc_visits").select("contract_id").eq("id", String(input.visitId)).maybeSingle<Row>();
     if (!v || String(v.contract_id) !== input.contractId) throw new ContractError("That visit is not on this contract.", 400);
@@ -509,7 +526,10 @@ export async function performWorkAction(admin: Admin, id: string, action: Additi
       return { ok: true as const };
     case "schedule": {
       const withCrew = Boolean(action.time || action.durationMinutes || action.technicianIds?.length);
+      /* DEV-493: inside the property's access lead time only when the user says to book anyway. */
+      const leadTime = () => checkFieldLeadTime(admin, { kind: "additional_work", id, contractId: String(row.contract_id), day: action.date, acknowledged: action.insideLeadTime }, actor);
       if (!withCrew) {
+        await leadTime();
         if (planning) await plan({ scheduled_for: action.date });
         else await moveTo(admin, row, "scheduled", { scheduled_for: action.date }, actor);
         return { ok: true as const };
@@ -532,6 +552,8 @@ export async function performWorkAction(admin: Admin, id: string, action: Additi
         overrideReason: action.overrideReason ?? null,
         ignoreIds: [id],
       });
+      await leadTime();
+      const beforeSlot = await workSlot(admin, id);
       const slotChanges = {
         scheduled_for: action.date,
         scheduled_start: slot.start,
@@ -542,13 +564,29 @@ export async function performWorkAction(admin: Admin, id: string, action: Additi
       };
       if (planning) await plan(slotChanges);
       else await moveTo(admin, row, "scheduled", slotChanges, actor);
+      const wc = one(row.contract) ?? {};
+      await alertCrewChange(admin, {
+        kind: "additional_work",
+        id,
+        what: `additional work ${String(row.work_no)}`,
+        where: [str(wc.customer_name), str(wc.property_label)].filter(Boolean).join(", ") || String(row.work_no),
+        before: { ids: beforeSlot.technicianIds, start: beforeSlot.scheduledStart },
+        after: { ids: action.technicianIds, start: slot.start },
+        actorId: actor.id,
+      });
       /* A new slot is asked again (17 Nov 2026); the column is missing before 20261117130000. */
       if (slot.start !== str(row.scheduled_start)) {
         await admin.from("amc_additional_works").update({ client_confirmation: null, confirmed_at: null }).eq("id", id).is("started_at", null);
       }
       return { ok: true as const };
     }
+    case "set_fsm_quotation":
+      await setFsmQuotation(admin, "additional_work", id, action.fsmQuotationNo, actor);
+      return { ok: true as const };
     case "complete":
+      /* DEV-508: completed only with its FSM quotation number (Finance invoices from it). */
+      if (action.fsmQuotationNo) await setFsmQuotation(admin, "additional_work", id, action.fsmQuotationNo, actor);
+      await assertFsmQuotation(admin, "additional_work", id);
       if (!(await startedByOffice(admin, id))) throw new ContractError(`${String(row.work_no)} has not been started: start the visit first (crew, time, client and access in place).`, 409);
       await moveTo(admin, row, "completed", { completed_at: action.completedAt ?? now }, actor);
       await followCallOut(admin, str(row.call_out_id), actor);

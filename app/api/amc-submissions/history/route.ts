@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { proposalRights } from "@/lib/amc/proposal-team";
+import { proposalViewerRoles } from "@/lib/server/amc/proposal-roles";
+
 import { canUseAmc } from "@/components/dashboard/extensions/amc/amc-constants";
 import { canApproveAmc } from "@/components/dashboard/extensions/amc/amc-settings";
 import type { AmcHistoryEvent } from "@/components/dashboard/extensions/amc/amc-types";
@@ -66,17 +69,10 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  if (submission.owner_id !== access.profile.id) {
-    const canApprove = canApproveAmc(
-      settings,
-      access.profile.email,
-      hasResourceAction(
-        access.accessUser,
-        ResourceType.AMC,
-        ActionType.APPROVE,
-      ),
-    );
-    if (!canApprove || submission.status === "draft") {
+  /* DEV-368: whoever sees the proposal (its owner or the team by role) sees its history. */
+  {
+    const canApprove = canApproveAmc(settings, access.profile.email, hasResourceAction(access.accessUser, ResourceType.AMC, ActionType.APPROVE));
+    if (!proposalRights(proposalViewerRoles(access.accessUser, canApprove), submission.owner_id === access.profile.id).see) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
   }

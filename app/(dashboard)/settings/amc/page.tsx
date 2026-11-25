@@ -6,7 +6,7 @@ import { AmcAccessGate } from "@/components/dashboard/extensions/amc/amc-access-
 import { AmcSettingsPage } from "@/components/dashboard/extensions/amc/amc-settings-page";
 
 export const metadata: Metadata = {
-  title: "AMC settings | Settings",
+  title: "AMC wording | Settings",
   robots: { index: false, follow: false },
 };
 

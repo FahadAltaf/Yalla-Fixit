@@ -20,7 +20,6 @@ import {
   ShieldAlert,
   Trash2,
   TriangleAlert,
-  UserCheck,
   UserRound,
   Wrench,
 } from "lucide-react";
@@ -51,7 +50,6 @@ import { IdentityCell } from "@/components/ui/entity-avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Hint } from "@/components/ui/hint";
-import { Checkbox } from "@/components/ui/checkbox";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -241,122 +239,11 @@ const CLAUSE_FIELDS = [
 /* One copy of the wording: the hints come from the field list above. */
 for (const field of CLAUSE_FIELDS) CLAUSE_HINTS[field.key] = field.hint;
 
-type AmcUser = { email: string; name: string; isAdmin: boolean };
-
-const sameEmail = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
-
-/*
-  FR5.3: who approves or sends back a submitted proposal, and so its
-  contract. Offered: admins and everyone whose role has AMC access; access
-  itself is given in role settings, not here.
-*/
-function ApproversPicker({
-  users,
-  approvers,
-  onChange,
-}: {
-  users: AmcUser[];
-  approvers: string[];
-  onChange: (approvers: string[]) => void;
-}) {
-  const [query, setQuery] = useState("");
-  const term = query.trim().toLowerCase();
-  /*
-    Someone saved as an approver who cannot open AMC (their role has no AMC
-    access, or they left) is listed too (16 Nov 2026): counted but hidden,
-    they made "3 approvers" show two ticks. Shown here, marked, to untick.
-  */
-  const missing: AmcUser[] = approvers
-    .filter((email) => !users.some((user) => sameEmail(user.email, email)))
-    .map((email) => ({ email, name: email, isAdmin: false }));
-  const everyone = [...users, ...missing];
-  const shown = everyone.filter(
-    (user) => !term || user.name.toLowerCase().includes(term) || user.email.toLowerCase().includes(term),
-  );
-  const canApprove = approvers.filter((email) => users.some((user) => sameEmail(user.email, email))).length;
-
-  return (
-    <SectionCard
-      icon={<UserCheck />}
-      title="Approvers"
-      description="Who approves a proposal at any approval level that names nobody in AMC Configuration → Approvals. A level that names its approvers there is decided by them alone. Nobody ever approves a proposal they own. If nobody is ticked here, anyone whose role has the AMC approve permission can."
-      bodyClassName="px-5 pb-5"
-    >
-      <div className="relative mb-3">
-        <Search
-          className="text-muted-foreground pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2"
-          aria-hidden
-        />
-        <Input
-          type="search"
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          placeholder="Search by name or email"
-          aria-label="Search users"
-          className="ps-9"
-        />
-      </div>
-
-      {everyone.length === 0 ? (
-        <p className="text-muted-foreground text-sm">
-          Nobody has AMC access yet. Give a role the AMC Proposals permission in role settings first.
-        </p>
-      ) : (
-        <ul className="max-h-[32rem] divide-y overflow-y-auto rounded-lg border">
-          {shown.length === 0 ? (
-            <li className="text-muted-foreground px-4 py-6 text-center text-sm">Nobody matches that.</li>
-          ) : (
-            shown.map((user) => {
-              const selected = approvers.some((email) => sameEmail(email, user.email));
-              const noAccess = missing.includes(user);
-              return (
-                <li key={user.email}>
-                  <label className="hover:bg-muted/40 flex cursor-pointer items-center gap-3 px-4 py-3">
-                    <Checkbox
-                      checked={selected}
-                      onCheckedChange={(checked) =>
-                        onChange(
-                          checked === true
-                            ? [...approvers.filter((email) => !sameEmail(email, user.email)), user.email]
-                            : approvers.filter((email) => !sameEmail(email, user.email)),
-                        )
-                      }
-                    />
-                    <span className="min-w-0 flex-1">
-                      <TruncatedText className="text-sm font-medium">{user.name}</TruncatedText>
-                      {user.name !== user.email ? (
-                        <TruncatedText className="text-muted-foreground text-xs">{user.email}</TruncatedText>
-                      ) : null}
-                    </span>
-                    {noAccess ? (
-                      <Badge variant="secondary" className="bg-warning/10 text-warning shrink-0 border-0 font-normal" title="Their role has no AMC access, so they cannot approve. Untick them, or give their role AMC access.">
-                        No AMC access
-                      </Badge>
-                    ) : user.isAdmin ? (
-                      <Badge variant="outline" className="shrink-0 font-normal">
-                        Admin
-                      </Badge>
-                    ) : null}
-                  </label>
-                </li>
-              );
-            })
-          )}
-        </ul>
-      )}
-
-      <p className="text-muted-foreground mt-3 text-xs">
-        {approvers.length > 0
-          ? `${canApprove} approver${canApprove === 1 ? "" : "s"}${missing.length ? ` (${missing.length} more without AMC access)` : ""}. They approve any level that names nobody in Configuration, and see the approval queue.`
-          : "No approvers chosen, so anyone whose role has the AMC approve permission can approve a level that names nobody in Configuration."}
-      </p>
-    </SectionCard>
-  );
-}
+/* The approvers moved to AMC configuration → Named people (23 Nov 2026); the list itself is still kept here, in settings.approval. */
 
 /* The single-line standard values, after the contact numbers and emails. */
 const PROVIDER_TEXT_FIELDS: {
-  key: "poBox" | "email" | "address" | "contractType" | "standardResponseTime" | "emergencyResponseTime" | "proposalValidity";
+  key: "poBox" | "email" | "address" | "standardResponseTime" | "emergencyResponseTime" | "proposalValidity";
   label: string;
   hint?: string;
   type?: "email";
@@ -364,14 +251,13 @@ const PROVIDER_TEXT_FIELDS: {
 }[] = [
     { key: "poBox", label: "P.O. Box" },
     { key: "email", label: "Company email", type: "email" },
-    { key: "contractType", label: "Contract type", hint: "Printed in the contract's customer details." },
     { key: "address", label: "Company address", wide: true },
     { key: "standardResponseTime", label: "Standard response time", hint: "Printed in the proposal's commercial offer." },
     { key: "emergencyResponseTime", label: "Emergency response time", hint: "Printed in the proposal's commercial offer." },
     { key: "proposalValidity", label: "Proposal validity", hint: "Kept for reference only. Each proposal now gets its own valid-until date when it is shared (AMC configuration → Proposals → validity days), shown in Email 1 and on the client page; the client link stops accepting answers after it." },
   ];
 
-type View = "values" | "clauses" | "scopes" | "approvers" | "history";
+type View = "values" | "clauses" | "scopes" | "history";
 
 function isCustomised(value: string, fallback: string) {
   return value !== fallback;
@@ -421,13 +307,12 @@ export function AmcSettingsPage() {
   const [history, setHistory] = useState<AmcSettingsHistoryItem[]>([]);
   // Every change there is, for the tab count and the version numbers (AMC-097).
   const [historyTotal, setHistoryTotal] = useState(0);
-  const [amcUsers, setAmcUsers] = useState<AmcUser[]>([]);
   // The view is kept in the address (?view=clauses), so a reload stays on it.
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [view, setViewState] = useState<View>(() => {
     const viewParam = searchParams.get("view");
-    return (["values", "clauses", "scopes", "approvers", "history"] as const).includes(viewParam as View)
+    return (["values", "clauses", "scopes", "history"] as const).includes(viewParam as View)
       ? (viewParam as View)
       : "values";
   });
@@ -449,7 +334,6 @@ export function AmcSettingsPage() {
       setSaved(response.settings);
       setHistory(response.history ?? []);
       setHistoryTotal(response.historyTotal ?? response.history?.length ?? 0);
-      setAmcUsers(response.amcUsers ?? []);
     } catch (error) {
       console.error(error);
       setLoadFailed(true);
@@ -713,9 +597,9 @@ export function AmcSettingsPage() {
   const heading = (
     <PageHeading
       eyebrow="Settings"
-      title="AMC settings"
+      title="AMC wording"
       info={<ModuleGuide module="amcSettings" />}
-      description="Standard wording for proposals and contracts. Changes apply to new proposals only."
+      description="What every proposal and contract is printed with: your company and contact details, the account managers, the contract clauses and what each service covers. Changes apply to new proposals only."
       actions={
         isAdmin && settings ? (
           <div className="flex items-center gap-3">
@@ -805,7 +689,6 @@ export function AmcSettingsPage() {
             count: settings.clauseList.filter(EDITABLE_CLAUSE).length,
           },
           { value: "scopes", label: "Scope of work", count: settings.services.length },
-          { value: "approvers", label: "Approvers", count: settings.approval.approvers.length },
           { value: "history", label: "Change history", count: historyTotal },
         ]}
       />
@@ -816,7 +699,7 @@ export function AmcSettingsPage() {
         <SectionCard
           icon={<Phone />}
           title="Standard values"
-          description="Contact details, company details and the commitments printed in every proposal and contract."
+          description="Your company and contact details, the response times printed in proposals, and the account managers a proposal can name. The contract type is chosen on each proposal."
           bodyClassName="px-5 pb-5"
         >
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -1066,13 +949,6 @@ export function AmcSettingsPage() {
         />
       ) : null}
 
-      {view === "approvers" ? (
-        <ApproversPicker
-          users={amcUsers}
-          approvers={settings.approval.approvers}
-          onChange={(approvers) => patch({ approval: { approvers } })}
-        />
-      ) : null}
 
       {view === "history" ? <SettingsHistory firstPage={history} total={historyTotal} /> : null}
     </div>

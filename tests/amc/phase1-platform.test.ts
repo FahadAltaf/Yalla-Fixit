@@ -62,7 +62,9 @@ test("config: the plan's defaults (BRD values and assumptions)", () => {
 test("config: thresholds and value bands are management's; the rest needs Edit (BRD 6.7)", () => {
   assert.equal(AMC_CONFIG_SECTION_LEVEL.approvals, "management");
   assert.equal(AMC_CONFIG_SECTION_LEVEL.payments, "management");
-  for (const s of AMC_CONFIG_SECTIONS.filter((s) => s !== "approvals" && s !== "payments")) {
+  /* DEV-485: more daily jobs, or client emails from them, are a business decision. */
+  assert.equal(AMC_CONFIG_SECTION_LEVEL.jobs, "management");
+  for (const s of AMC_CONFIG_SECTIONS.filter((s) => s !== "approvals" && s !== "payments" && s !== "jobs")) {
     assert.equal(AMC_CONFIG_SECTION_LEVEL[s], "admin", s);
   }
 });
@@ -135,7 +137,22 @@ test("role templates: every grant is a real resource/action pair; names cannot c
     }
   }
   const keys = AMC_ROLE_TEMPLATES.map((t) => t.key);
-  assert.deepEqual(keys, ["management", "department_head", "finance", "sales", "coordinator", "supervisor"]);
+  assert.deepEqual(keys, ["management", "department_head", "finance", "sales", "coordinator", "supervisor", "technician"]);
+});
+
+/* DEV-418 (20 Nov 2026 review): templates grant the pages too, Reports included, and technicians have a role. */
+test("role templates: each grants the pages it needs, and technicians get the YFI app", () => {
+  const has = (key: string, r: ResourceType, a: ActionType) =>
+    templateRows(AMC_ROLE_TEMPLATES.find((t) => t.key === key)!).some((row) => row.resource === r && row.action === a);
+  for (const key of ["management", "department_head", "finance", "coordinator", "supervisor"]) {
+    assert.equal(has(key, ResourceType.AMC_REPORTS, ActionType.VIEW), true, `${key} opens Reports`);
+    assert.equal(has(key, ResourceType.AMC_CONTRACTS, ActionType.VIEW), true, `${key} opens Contracts`);
+  }
+  assert.equal(has("sales", ResourceType.AMC_PROPOSALS, ActionType.EDIT), true, "sales works on proposals");
+  assert.equal(has("coordinator", ResourceType.AMC_PROPOSALS, ActionType.EDIT), true, "a coordinator takes over a colleague's proposal (DEV-368)");
+  assert.equal(has("coordinator", ResourceType.AMC_CALL_OUTS, ActionType.CREATE), true);
+  assert.equal(has("technician", ResourceType.MOBILE_APP, ActionType.VIEW), true);
+  assert.equal(templateRows(AMC_ROLE_TEMPLATES.find((t) => t.key === "technician")!).length, 1, "no portal pages for technicians");
 });
 
 test("role templates: only management and the department head approve proposals; Finance overrides payments; supervisors close visits", () => {

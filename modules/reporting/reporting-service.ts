@@ -61,3 +61,5 @@ export const notificationsService = {
 };
 
 export const NOTIFICATIONS_CHANGED = "notifications:changed";
+/* A new notification arrived live (23 Nov 2026); the inbox reloads on it. NOTIFICATIONS_CHANGED is sent too. */
+export const NOTIFICATION_ARRIVED = "notifications:arrived";

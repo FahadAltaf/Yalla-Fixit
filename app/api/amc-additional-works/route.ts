@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
     const rights = fieldWorkRights(gate, "additional_works", scope.ownerId);
     if (!scope.found || !rights.view) return NextResponse.json({ error: "Contract not found." }, { status: 404 });
     if (!rights.create) return NextResponse.json({ error: "You cannot raise additional work on this contract." }, { status: 403 });
-    return NextResponse.json(await createAdditionalWork(gate.admin, parsed.data, { id: gate.userId, label: gate.label }, await readAmcConfig(gate.admin)), { status: 201 });
+    return NextResponse.json(await createAdditionalWork(gate.admin, parsed.data, { id: gate.userId, label: gate.label }, await readAmcConfig(gate.admin), gate.canApprove), { status: 201 });
   } catch (error) {
     return contractErrorResponse(error, "Could not raise the additional work");
   }

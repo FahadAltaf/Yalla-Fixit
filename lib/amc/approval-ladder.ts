@@ -65,7 +65,7 @@ export function evaluateTriggers(config: Pick<AmcConfig, "approvals" | "payments
   if (isNonStandardPlan(payments, input.finalPrice, input.plan)) {
     triggers.push({ key: "plan", level: approvals.nonStandardPlanLevel as 1 | 2 | 3, detail: `${PAYMENT_PLAN_LABELS[input.plan]} at this value` });
   }
-  if (input.belowFloor) triggers.push({ key: "below_floor", level: approvals.belowFloorLevel as 1 | 2 | 3, detail: "A discounted line is under its floor rate" });
+  if (input.belowFloor) triggers.push({ key: "below_floor", level: approvals.belowFloorLevel as 1 | 2 | 3, detail: "A line is under its floor rate, or off the rate card (its rate or its visits a year)" });
   const requiredLevel = triggers.reduce<number>((max, t) => Math.max(max, t.level), 0) as 0 | 1 | 2 | 3;
   return { triggers, requiredLevel };
 }
@@ -95,25 +95,25 @@ export function ladderLevels(requiredLevel: number): number[] {
 }
 
 /**
- * The people named for a level, less the proposal's owner.
+ * The people who decide a level: everyone it names, the owner included
+ * now that an approver may approve their own proposal (24 Nov 2026).
  *
- * A level whose only named approver submitted the proposal would otherwise
- * wait for ever (16 Nov 2026): nobody approves their own. It then counts as
- * naming nobody, and falls to the AMC approvers.
+ * Without self-approval the owner is left out, and a level naming only its
+ * owner counts as naming nobody, so it falls to the AMC approvers (16 Nov
+ * 2026) rather than waiting for ever.
  */
-export function namedDeciders(approverIds: readonly string[], ownerId: string): string[] {
-  return approverIds.filter((id) => id !== ownerId);
+export function namedDeciders(approverIds: readonly string[], ownerId: string, selfApproval = amcSelfApprovalOn()): string[] {
+  return selfApproval ? [...approverIds] : approverIds.filter((id) => id !== ownerId);
 }
 
 /**
  * Who decides a level: the people named for it in configuration, or, when
- * nobody (other than the owner) is named, the AMC approvers (AMC Settings
- * list, or AMC Approve when that list is empty). Never the proposal's owner.
+ * it names nobody, the AMC approvers (AMC Settings list, or AMC Approve when
+ * that list is empty). The owner too, as one of those (24 Nov 2026).
  */
-export function canDecideStep(input: { userId: string; ownerId: string; approverIds: readonly string[]; isAmcApprover: boolean }): boolean {
-  /* The owner decides only with the local testing switch on, and only as an approver (lib/amc/workflow.ts). */
-  if (input.userId === input.ownerId) return amcSelfApprovalOn() && (input.isAmcApprover || input.approverIds.includes(input.userId));
-  const named = namedDeciders(input.approverIds, input.ownerId);
+export function canDecideStep(input: { userId: string; ownerId: string; approverIds: readonly string[]; isAmcApprover: boolean }, selfApproval = amcSelfApprovalOn()): boolean {
+  if (input.userId === input.ownerId && !selfApproval) return false;
+  const named = namedDeciders(input.approverIds, input.ownerId, selfApproval);
   return named.length > 0 ? named.includes(input.userId) : input.isAmcApprover;
 }
 

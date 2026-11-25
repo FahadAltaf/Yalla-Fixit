@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CalendarPlus, CheckCircle2, MessageSquarePlus, Save, XCircle } from "lucide-react";
+import { CalendarPlus, CheckCircle2, MessageSquarePlus, Save, XCircle, TriangleAlert } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { toast } from "sonner";
 
 import { ActionDialogContent, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
@@ -27,7 +28,7 @@ import { AddressDialog, useAddressFormAccess } from "../address-dialog";
 import { LinkedCard, printedAddress } from "../linked-card";
 import { EnquiryPropertySelect } from "./enquiry-property-select";
 import { PropertyPickerField } from "../property-picker-field";
-import { ApproverSelect } from "../approver-field";
+import { SiteVisitApproversNote } from "../approver-field";
 import { AssessorPicker } from "../assessor-picker";
 import { Field, PersonSelect, SimpleSelect, fromLocalInput, localInputIn, toLocalInput } from "./enquiry-ui";
 import { AmcPhoneInput } from "@/components/dashboard/extensions/amc/components/amc-phone-input";
@@ -252,7 +253,7 @@ function EnquiryForm({ meta, enquiry, onSaved, work, onCancel }: EnquiryFormProp
               <Textarea id="enq-need" rows={3} value={draft.need} onChange={(e) => set({ need: e.target.value })} maxLength={2000} placeholder="In short: services, units, timing, anything agreed" />
             </Field>
             <Field label="Owner">
-              <PersonSelect label="Owner" people={meta.people} value={draft.ownerId ?? null} onChange={(id) => set({ ownerId: id })} allowNone />
+              <PersonSelect label="Owner" people={meta.people.filter((p) => p.can?.enquiries !== false || p.id === draft.ownerId)} value={draft.ownerId ?? null} onChange={(id) => set({ ownerId: id })} allowNone />
             </Field>
             <Field label="Next follow-up" htmlFor="enq-next">
               <DateTimeSelect id="enq-next" value={toLocalInput(draft.nextFollowUpAt)} onChange={(value) => set({ nextFollowUpAt: fromLocalInput(value) })} />
@@ -437,7 +438,11 @@ function StageForm({ meta, enquiry, hasCompletedSiteVisit, initialStage, onSave,
         {blocked ? (
           <p className="text-danger text-sm">{blocked}</p>
         ) : preview && preview.ok && preview.warning ? (
-          <p className="border-warning/30 bg-warning/5 rounded-md border px-3 py-2 text-sm">{preview.warning} You can continue; it is recorded.</p>
+          <Alert variant="warning">
+            <TriangleAlert />
+            <AlertTitle>Check before you continue</AlertTitle>
+            <AlertDescription>{preview.warning} You can continue; it is recorded.</AlertDescription>
+          </Alert>
         ) : null}
       </div>
       <DialogFooter>
@@ -570,7 +575,7 @@ function FollowUpForm({ meta, enquiry, onSave, work, onCancel }: FollowUpProps &
 type SiteVisitProps = {
   meta: EnquiryMeta;
   enquiry: EnquiryRecord;
-  onSave: (input: { propertyId: string; scheduledAt: string; assessorId: string; approverId: string }) => Promise<void>;
+  onSave: (input: { propertyId: string; scheduledAt: string; assessorId: string }) => Promise<void>;
 };
 
 export function SiteVisitDialog({ open, onOpenChange, ...props }: SiteVisitProps & { open: boolean; onOpenChange: (open: boolean) => void }) {
@@ -587,7 +592,6 @@ function SiteVisitForm({ meta, enquiry, onSave, work, onCancel }: SiteVisitProps
   const [propertyComplete, setPropertyComplete] = useState(false);
   const [when, setWhen] = useState(() => localInputIn(2, 10));
   const [assessorId, setAssessorId] = useState<string | null>(enquiry.owner?.id ?? meta.me);
-  const [approverId, setApproverId] = useState<string | null>(null);
   /* Booked only once the chosen inspector has been found free at that time (Find available inspectors). */
   const [inspectorReady, setInspectorReady] = useState(false);
   const scheduledAt = fromLocalInput(when);
@@ -621,20 +625,18 @@ function SiteVisitForm({ meta, enquiry, onSave, work, onCancel }: SiteVisitProps
         <Field label="Inspector">
           <AssessorPicker people={meta.people} value={assessorId} onChange={(id) => setAssessorId(id)} scheduledAt={scheduledAt} onReadyChange={setInspectorReady} />
         </Field>
-        <Field label="Approver" hint="Approves the visit once the inspector completes it on the app; the scope and assets recorded on site go onto the property then.">
-          <ApproverSelect value={approverId} onChange={setApproverId} me={meta.me} />
-        </Field>
+        <SiteVisitApproversNote />
       </div>
       <DialogFooter>
         <Button variant="outline" onClick={onCancel} disabled={work.working}>
           Cancel
         </Button>
         <SubmitButton
-          disabled={!propertyId || !propertyComplete || !scheduledAt || !assessorId || !inspectorReady || !approverId}
+          disabled={!propertyId || !propertyComplete || !scheduledAt || !assessorId || !inspectorReady}
           pending={work.working}
           pendingLabel="Booking…"
           icon={<CalendarPlus className="size-4" />}
-          onClick={() => void work.run(() => onSave({ propertyId: propertyId!, scheduledAt: scheduledAt!, assessorId: assessorId!, approverId: approverId! }), "Could not book the site visit.")}
+          onClick={() => void work.run(() => onSave({ propertyId: propertyId!, scheduledAt: scheduledAt!, assessorId: assessorId! }), "Could not book the site visit.")}
         >
           Book site visit
         </SubmitButton>

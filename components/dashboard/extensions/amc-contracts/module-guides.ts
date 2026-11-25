@@ -120,7 +120,7 @@ export const MODULE_GUIDES: Record<ModuleKey, Guide> = {
     rules: [
       "Services not offered for the property's unit type are left out of the proposal, with a warning.",
       "The visit's creator, its assessor or an AMC approver can edit, complete or delete a draft.",
-      "The checklist items themselves are kept in Operations settings; past visits keep their wording.",
+      "The checklist items themselves are kept in Settings → AMC configuration → Operations; past visits keep their wording.",
     ],
     settings: [
       { section: "proposals", key: "siteVisitRequiredCategories" },
@@ -147,7 +147,7 @@ export const MODULE_GUIDES: Record<ModuleKey, Guide> = {
       "The owner is told 3 days before the proposal's validity runs out.",
     ],
     rules: [
-      "Nobody approves their own proposal. Only the owner can submit and send.",
+      "An approver may approve their own proposal. Only the owner can submit and send.",
       "A revised version (V+1) skips approval if it needs no more than the last version was approved for.",
       "Placeholder text (XXX) blocks sending. The client cannot answer after the valid-until date.",
     ],
@@ -462,10 +462,10 @@ export const MODULE_GUIDES: Record<ModuleKey, Guide> = {
     summary: "Figures counted from contract data only. Draft or rejected proposals and quotes are never counted as revenue.",
     who: "Management, finance and AMC leads. Approvers and operations see every contract; others see their own.",
     steps: [
-      { title: "Dashboard", detail: "Today: pipeline, contracts, approvals, delivery, workforce, money in and renewals due." },
-      { title: "Operations and Commercial", detail: "Pick a period (this month by default, up to two years): schedule adherence, call outs and SLA, utilisation, allowance use; enquiries, conversion, discounts, signed value, collections and ageing." },
-      { title: "Portfolio tabs", detail: "Expiry, Renewal pipeline, Account managers and Services, filtered by account manager, client and property." },
-      { title: "Export", detail: "Every table exports the rows on screen, with the filters applied." },
+      { title: "At a glance", detail: "Today: open enquiries, approvals waiting, active contracts, renewals due in 30, 60 and 90 days, overdue visits, open call outs, utilisation and overdue payments (DEV-414)." },
+      { title: "Operations", detail: "For the period you pick: schedule adherence, visits due, overdue and not done by reason, call outs and SLA, contracts at risk, utilisation, allowance use and access failures (DEV-411)." },
+      { title: "Commercial", detail: "For the same period: proposals and conversion, signed value, new, renewed and lost AMCs, collections and ageing, cheques, discounts by level, additional work and coordinators (DEV-412, DEV-502)." },
+      { title: "Export", detail: "One export for the page: every figure on it, as measure and value." },
     ],
     rules: [
       "Proposal values are before VAT; signed contract values and additional work include VAT.",
@@ -510,12 +510,11 @@ export const MODULE_GUIDES: Record<ModuleKey, Guide> = {
 
   opsSettings: {
     title: "Operations settings",
-    summary: "Which notifications and reminders go out, the AMC discount on additional services, and the site visit checklist.",
+    summary: "Which notifications and reminders go out and the AMC discount on additional services.",
     who: "Viewed by everyone with access; changed by AMC approvers.",
     steps: [
       { title: "Notifications and reminders", detail: "Workflow emails (on), allowance emails (off), and contract expiry reminders with the days before the end date and who receives them." },
       { title: "Additional-service discount", detail: "On or off, the discount and which services or categories qualify." },
-      { title: "Site visit checklist", detail: "The items each new site visit starts with, by category and order." },
     ],
     rules: [
       "Contract expiry reminders only go out once Send automatically is on (off until the business decides). Run reminders now never sends the same reminder twice.",
@@ -529,6 +528,7 @@ export const MODULE_GUIDES: Record<ModuleKey, Guide> = {
     summary: "The business rules AMC runs on, changeable without a software release: approvals, payments, pipeline, schedule, service levels, renewals, message texts, roles and jobs.",
     who: "Management sets approval and payment thresholds; AMC Configuration Edit changes the rest.",
     steps: [
+      { title: "Named people", detail: "Everyone the business names: the AMC approvers, the approvers per level, escalation contacts, Finance, supervisors and signatories. Name them there, in place." },
       { title: "Pick a view", detail: "Approvals and payments, Pipeline and contracts, Scheduling and SLA, Emails and messages, Change history." },
       { title: "Change a section", detail: "Edit the values, then Save. Discard undoes unsaved edits; Reset to defaults goes back to the standard values." },
       { title: "It applies from the next action", detail: "Records already made keep what they were made with; the next proposal, visit or reminder uses the new value." },
@@ -541,14 +541,13 @@ export const MODULE_GUIDES: Record<ModuleKey, Guide> = {
   },
 
   amcSettings: {
-    title: "AMC settings",
-    summary: "The wording and lists every proposal and contract is printed from: company details, contract clauses, the service catalogue and the approvers.",
+    title: "AMC wording",
+    summary: "What every proposal and contract is printed with: company and contact details, the account managers, the contract clauses and what each service covers.",
     who: "Administrators.",
     steps: [
       { title: "Standard values", detail: "Contact numbers, emails, address, response times printed in the proposal, and the account managers proposals pick from." },
       { title: "Contract clauses", detail: "The editable clauses; unedited ones keep the standard wording." },
       { title: "Scope of work", detail: "The service catalogue: add, rename, reorder, which property types each is offered on, and the scope text it prints." },
-      { title: "Approvers", detail: "Who approves proposals when a level in AMC configuration has nobody named." },
     ],
     rules: [
       "Changes apply to new proposals only. Reset goes back to the standard wording.",

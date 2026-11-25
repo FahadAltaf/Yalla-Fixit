@@ -34,6 +34,8 @@ export interface CoverageQuery {
   partsExpected: boolean;
   partsValueAed?: number | null;
   excluded: boolean;
+  /** DEV-495: a handyman job against the free hours, with this many teams. */
+  handymanTeams?: number | null;
 }
 
 export type CoverageResponse = CoveragePreview & {
@@ -77,6 +79,8 @@ export interface CallOutWorkSummary {
 
 export interface CallOutDetailResponse {
   callOut: CallOutRecord;
+  /** DEV-495: a handyman job against the free hours: its teams and the team-hours recorded at closing. */
+  handyman?: { teams: number; fromCrew: boolean; hoursUsed: number | null; hoursChargeable: number | null } | null;
   allowance: CallOutAllowance | null;
   photos: WorkPhoto[];
   additionalWorks: CallOutWorkSummary[];

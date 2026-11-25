@@ -26,6 +26,7 @@ import {
   AMENDMENT_KINDS,
   AMENDMENT_LABELS,
   AMENDMENT_STATUS_LABELS,
+  amendmentChecklist,
   amendmentProblem,
   amendmentRequestSchema,
   terminationEffective,
@@ -43,6 +44,9 @@ import {
 
 import { Fact, Field, useActionForm } from "./call-out-shared";
 import { formatContractDate, formatDateTime } from "./contract-status";
+import { ChecklistRows } from "./approver-checklist";
+import { todayInDubai } from "@/lib/amc/contracts";
+import { amcSelfApprovalOn } from "@/lib/amc/workflow";
 import { CustomerSearch, PropertySelect } from "./customer-pickers";
 import { useDialog } from "./profile/use-dialog";
 import { Tint } from "./renewal-shared";
@@ -85,6 +89,8 @@ export function ContractAmendmentsPanel({
   contractNumber,
   propertyLabel,
   onChanged,
+  requestKind = null,
+  onRequestShown,
 }: {
   contractId: string;
   contractStatus: string;
@@ -92,6 +98,9 @@ export function ContractAmendmentsPanel({
   propertyLabel: string;
   /** The contract itself may have moved (status, property, client). */
   onChanged: () => void;
+  /** DEV-417: End contract on the header asks for this amendment; its request opens on it. */
+  requestKind?: AmendmentKind | null;
+  onRequestShown?: () => void;
 }) {
   const router = useRouter();
   const { data, error, loading, reload } = useAmcData(() => renewalsService.amendments(contractId), `amendments:${contractId}`);
@@ -102,6 +111,15 @@ export function ContractAmendmentsPanel({
 
   const amendments = data?.amendments ?? [];
   const canRequest = Boolean(data?.canRequest && data.migrated);
+  const [askedKind, setAskedKind] = useState<AmendmentKind | null>(null);
+  useEffect(() => {
+    if (!requestKind || !canRequest) return;
+    setAskedKind(requestKind);
+    requesting.show(true);
+    onRequestShown?.();
+    // The header's ask, once the panel can take it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestKind, canRequest]);
 
   const afterChange = () => {
     reload();
@@ -178,7 +196,7 @@ export function ContractAmendmentsPanel({
       }
     >
       {data && !data.migrated ? (
-        <Alert className="border-warning/30 bg-warning/5 items-start p-4">
+        <Alert variant="warning">
           <Database className="text-warning" />
           <AlertTitle>Amendments are not set up on this database yet</AlertTitle>
           <AlertDescription>They need migration 20261012140000. Ask an admin to apply it.</AlertDescription>
@@ -201,6 +219,7 @@ export function ContractAmendmentsPanel({
               key={a.id}
               amendment={a}
               propertyLabel={propertyLabel}
+              contractStatus={contractStatus}
               userId={data?.userId ?? ""}
               canApprove={Boolean(data?.canApprove)}
               canOperate={Boolean(data?.canRequest)}
@@ -216,7 +235,11 @@ export function ContractAmendmentsPanel({
       <RequestAmendmentDialog
         key={`request-${requesting.key}`}
         open={requesting.open}
-        onOpenChange={requesting.onOpenChange}
+        onOpenChange={(open) => {
+          if (!open) setAskedKind(null);
+          requesting.onOpenChange(open);
+        }}
+        initialKind={askedKind}
         contractId={contractId}
         contractStatus={contractStatus}
         contractNumber={contractNumber}
@@ -243,6 +266,7 @@ export function ContractAmendmentsPanel({
 function AmendmentItem({
   amendment: a,
   propertyLabel,
+  contractStatus,
   userId,
   canApprove,
   canOperate,
@@ -253,6 +277,7 @@ function AmendmentItem({
 }: {
   amendment: AmendmentRecord;
   propertyLabel: string;
+  contractStatus: string;
   userId: string;
   canApprove: boolean;
   canOperate: boolean;
@@ -262,7 +287,8 @@ function AmendmentItem({
   onWithdraw: () => void;
 }) {
   const own = Boolean(a.requestedBy) && a.requestedBy === userId;
-  const canDecide = a.status === "requested" && canApprove && !own;
+  /* Their own request too with the local testing switch (24 Nov 2026), as proposals; never on live. */
+  const canDecide = a.status === "requested" && canApprove && (!own || amcSelfApprovalOn());
   const canApply = a.status === "approved" && (canOperate || canApprove);
   const canWithdraw = (a.status === "requested" || a.status === "approved") && (own || canApprove);
 
@@ -312,8 +338,21 @@ function AmendmentItem({
 
       <AmendmentDetails amendment={a} propertyLabel={propertyLabel} />
 
-      {a.status === "requested" && own ? (
-        <p className="text-muted-foreground text-xs">Someone else must approve your request.</p>
+      {/* What the approver checks (23 Nov 2026), while it waits for a decision. */}
+      {a.status === "requested" ? (
+        <ChecklistRows
+          title={canDecide ? "What to check before approving" : "What the approver checks"}
+          rows={amendmentChecklist(a, { contractStatus, viewerId: userId, today: todayInDubai(), propertyLabel })}
+        />
+      ) : null}
+
+      {a.status === "requested" ? (
+        <p className="text-muted-foreground text-xs">
+          {a.deciders?.length
+            ? `Waiting for ${a.deciders.join(", ")} to approve or reject it.`
+            : "Nobody can approve it yet: name an approver in AMC Settings or AMC Configuration."}
+          {own ? (amcSelfApprovalOn() ? (canDecide ? " You asked for it, and as an approver you may decide it yourself." : "") : " You asked for it, so someone else decides.") : ""}
+        </p>
       ) : null}
 
       <div className="text-muted-foreground grid gap-0.5 border-t pt-2 text-xs">
@@ -392,14 +431,14 @@ function AmendmentDetails({ amendment: a, propertyLabel }: { amendment: Amendmen
           label: "Refund",
           value: d.validReason ? (
             <span className="inline-flex items-center gap-1">
-              <Money value={num(d.refundIfValid)} /> <span className="text-muted-foreground font-normal">(valid reason)</span>
+              <Money value={num(d.refundIfValid)} /> <span className="text-muted-foreground font-normal">(reason accepted)</span>
             </span>
           ) : (
-            "None (reason not accepted as valid)"
+            "None (reason not accepted)"
           ),
         });
       } else if (num(d.refundIfValid) !== null) {
-        facts.push({ label: "Refund if the reason is valid", value: <Money value={num(d.refundIfValid)} /> });
+        facts.push({ label: "Refund if the reason is accepted", value: <Money value={num(d.refundIfValid)} /> });
       }
       break;
     }
@@ -437,7 +476,7 @@ function applyDescription(a: AmendmentRecord, propertyLabel: string): string {
       return `The contract's client becomes ${str(to.customerName) ?? "the new party"}${str(to.role) ? ` (${str(to.role)})` : ""}.`;
     }
     case "early_termination": {
-      const refund = d.validReason === true ? `with a pro-rata refund (worked out again when applied, about AED ${num(d.refundIfValid) ?? 0})` : "with no refund";
+      const refund = d.validReason === true ? `with a refund for the unused part of the contract (worked out again when applied, about AED ${num(d.refundIfValid) ?? 0})` : "with no refund";
       return `Termination takes effect on ${on}, ${refund}. If that date has come the contract is terminated now and its remaining visits are cancelled; otherwise the daily job does it on the date.`;
     }
     case "cancellation":
@@ -500,8 +539,8 @@ function ApproveAmendmentDialog({
           {termination ? (
             <div className="grid gap-2">
               <label className="flex items-start gap-3 rounded-lg border p-3 text-sm">
-                <Checkbox checked={validReason} onCheckedChange={(v) => setValidReason(v === true)} className="mt-0.5" aria-label="The reason is valid" />
-                <span>The reason is valid (pro-rata refund)</span>
+                <Checkbox checked={validReason} onCheckedChange={(v) => setValidReason(v === true)} className="mt-0.5" aria-label="The reason is accepted" />
+                <span>The reason is accepted (refund for the unused part)</span>
               </label>
               <p className="text-muted-foreground text-xs">
                 {validReason ? (
@@ -579,6 +618,7 @@ function bodyFor(kind: AmendmentKind, f: RequestForm): AmendmentRequestBody {
 function RequestAmendmentDialog({
   open,
   onOpenChange,
+  initialKind = null,
   contractId,
   contractStatus,
   contractNumber,
@@ -586,6 +626,8 @@ function RequestAmendmentDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** The kind asked for from End contract (DEV-417), when it is allowed now. */
+  initialKind?: AmendmentKind | null;
   contractId: string;
   contractStatus: string;
   contractNumber: string;
@@ -593,7 +635,7 @@ function RequestAmendmentDialog({
 }) {
   const base = useId();
   const firstAllowed = AMENDMENT_KINDS.find((k) => !amendmentProblem(k, contractStatus)) ?? null;
-  const [kind, setKind] = useState<AmendmentKind | null>(firstAllowed);
+  const [kind, setKind] = useState<AmendmentKind | null>(initialKind && !amendmentProblem(initialKind, contractStatus) ? initialKind : firstAllowed);
   const [form, setForm] = useState<RequestForm>(() => ({
     reason: "",
     effectiveOn: today(),
@@ -720,7 +762,7 @@ function RequestAmendmentDialog({
                 <p className="bg-muted/40 rounded-md px-3 py-2 text-sm">
                   Takes effect on{" "}
                   <span className="font-medium tabular-nums">{formatContractDate(terminationEffective(form.noticeOn, form.terminationOn || null))}</span>.
-                  The approver decides whether the reason is valid, which decides the pro-rata refund.
+                  The approver decides whether the reason is accepted. If it is, the client is refunded for the unused part of the contract.
                 </p>
               ) : null}
             </div>

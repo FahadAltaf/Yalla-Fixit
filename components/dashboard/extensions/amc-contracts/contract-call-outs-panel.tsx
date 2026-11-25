@@ -152,7 +152,7 @@ export function ContractCallOutsPanel({ contractId, contractOpen }: { contractId
 
   if (!migrated) {
     return (
-      <Alert className="border-warning/30 bg-warning/5 items-start p-4">
+      <Alert variant="warning">
         <Database className="text-warning" />
         <AlertTitle>Call outs are not set up on this database yet</AlertTitle>
         <AlertDescription>The call-out and allowance tables are not on this database yet (migration 20261012120000). Ask an admin to apply it.</AlertDescription>

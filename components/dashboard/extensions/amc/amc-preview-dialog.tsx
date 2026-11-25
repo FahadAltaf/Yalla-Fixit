@@ -45,6 +45,7 @@ export function AmcPreviewDialog({
   data,
   onDownload,
   downloading = false,
+  contractAvailable = true,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -55,8 +56,11 @@ export function AmcPreviewDialog({
   data: Record<AmcDocumentType, AmcComputedData>;
   onDownload?: (documentType: AmcDocumentType, format: "pdf" | "docx") => void;
   downloading?: boolean;
+  /** False until the client approves the proposal: the proposal only, no contract tab. */
+  contractAvailable?: boolean;
 }) {
-  const label = documentType === "proposal" ? "proposal" : "contract";
+  const shown: AmcDocumentType = contractAvailable ? documentType : "proposal";
+  const label = shown === "proposal" ? "proposal" : "contract";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -75,18 +79,22 @@ export function AmcPreviewDialog({
           <div className="min-w-0">
             <DialogTitle className="text-lg">{title}</DialogTitle>
             <DialogDescription>
-              Exactly what the client receives. Switch between the proposal and the contract.
+              {contractAvailable
+                ? "Exactly what the client receives. Switch between the proposal and the contract."
+                : "Exactly what the client receives. The contract shows once the client approves the proposal."}
             </DialogDescription>
           </div>
           <div className="flex shrink-0 flex-wrap items-center gap-3">
-            <PillTabs<AmcDocumentType>
-              value={documentType}
-              onChange={onDocumentTypeChange}
-              tabs={[
-                { value: "proposal", label: "Proposal" },
-                { value: "contract", label: "Contract" },
-              ]}
-            />
+            {contractAvailable ? (
+              <PillTabs<AmcDocumentType>
+                value={documentType}
+                onChange={onDocumentTypeChange}
+                tabs={[
+                  { value: "proposal", label: "Proposal" },
+                  { value: "contract", label: "Contract" },
+                ]}
+              />
+            ) : null}
             {onDownload ? (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
@@ -101,11 +109,11 @@ export function AmcPreviewDialog({
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  <DropdownMenuItem onClick={() => onDownload(documentType, "pdf")}>
+                  <DropdownMenuItem onClick={() => onDownload(shown, "pdf")}>
                     <FileText className="size-4" />
                     PDF
                   </DropdownMenuItem>
-                  <DropdownMenuItem onClick={() => onDownload(documentType, "docx")}>
+                  <DropdownMenuItem onClick={() => onDownload(shown, "docx")}>
                     <FileType className="size-4" />
                     Word (.docx)
                   </DropdownMenuItem>
@@ -124,7 +132,7 @@ export function AmcPreviewDialog({
         <div className="bg-muted/50 min-h-0 flex-1 overflow-auto">
           <div className="flex items-start justify-center p-6">
             <div className="overflow-hidden rounded bg-white shadow-lg ring-1 ring-black/5">
-              <AmcDocumentSheet data={data[documentType]} />
+              <AmcDocumentSheet data={data[shown]} />
             </div>
           </div>
         </div>

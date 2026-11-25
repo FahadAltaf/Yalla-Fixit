@@ -366,7 +366,7 @@ export function ContractPaymentsPanel({
   }
   if (!data.migrated) {
     return (
-      <Alert className="border-warning/30 bg-warning/5 items-start p-4">
+      <Alert variant="warning">
         <Database className="text-warning" />
         <AlertTitle>Payments need a database update</AlertTitle>
         <AlertDescription>
@@ -450,28 +450,29 @@ export function ContractPaymentsPanel({
       </StatCardGrid>
 
       {gate.pending && first ? (
-        <div className="border-warning/30 bg-warning/5 flex flex-wrap items-center justify-between gap-4 rounded-xl border px-5 py-4">
-          <div className="min-w-0">
-            <p className="text-warning text-sm font-medium">Waiting for the first instalment</p>
-            <p className="text-muted-foreground mt-0.5 text-sm">
+        <Alert variant="warning">
+          <Wallet />
+          <AlertTitle>Waiting for the first instalment</AlertTitle>
+          <AlertDescription>
+            <p>
               <Money value={first.outstanding || first.total} />, due {formatContractDate(first.dueDate)}. No visits are released until it is received.
             </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {permissions.canApprove ? (
-              <Button variant="outline" onClick={() => dialogs.open(contractId, { kind: "override_gate" })}>
-                <Play className="size-4" />
-                Start before payment
-              </Button>
-            ) : null}
-            {permissions.canRecord && first.outstanding > 0 ? (
-              <Button onClick={() => dialogs.open(contractId, { kind: "record_payment", instalment: first })}>
-                <Banknote className="size-4" />
-                Record payment
-              </Button>
-            ) : null}
-          </div>
-        </div>
+            <div className="flex flex-wrap items-center gap-2">
+              {permissions.canApprove ? (
+                <Button variant="outline" onClick={() => dialogs.open(contractId, { kind: "override_gate" })}>
+                  <Play className="size-4" />
+                  Start before payment
+                </Button>
+              ) : null}
+              {permissions.canRecord && first.outstanding > 0 ? (
+                <Button onClick={() => dialogs.open(contractId, { kind: "record_payment", instalment: first })}>
+                  <Banknote className="size-4" />
+                  Record payment
+                </Button>
+              ) : null}
+            </div>
+          </AlertDescription>
+        </Alert>
       ) : null}
 
       {gate.override ? (

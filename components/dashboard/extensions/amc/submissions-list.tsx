@@ -46,7 +46,7 @@ import { useDebounce } from "@/hooks/use-debounce";
 import { amcSubmissionsService } from "@/modules/amc-submissions";
 
 import { grandTotalOf } from "./amc-pricing";
-import { canDecideProposal } from "@/lib/amc/workflow";
+import { canDecideProposal, contractVisible } from "@/lib/amc/workflow";
 
 import { AMC_APPROVALS_CHANGED } from "./amc-approval-notice";
 import { amcStatusTone } from "./amc-status";
@@ -302,16 +302,19 @@ export function SubmissionsList() {
         const sending = actions.sendingId === submission.id;
         const customer = submission.customer.customerName || "Unnamed client";
         const isOwn = submission.is_own !== false;
-        const canEdit = isAmcSubmissionEditable(submission.status) && isOwn;
-        // FR5.4 / FR5.6 — what may go to the client, and only from its owner.
+        /* DEV-368: the owner or the team by role works on it. */
+        const canAct = (submission.can_act ?? submission.is_own !== false);
+        const canEdit = isAmcSubmissionEditable(submission.status) && canAct;
+        // FR5.4 / FR5.6 — what may go to the client: its owner, or the team by role.
         const canSendProposal =
-          isOwn && (submission.status === "approved" || submission.status === "proposal_sent");
+          canAct && (submission.status === "approved" || submission.status === "proposal_sent");
         const canSendContract =
-          isOwn &&
+          canAct &&
           (submission.status === "proposal_approved" || submission.status === "contract_sent");
+        /* The open level decides, when the server says (24 Nov 2026); else the role. */
         const canDecide =
           submission.status === "awaiting_approval" &&
-          canDecideProposal({ canApprove, isOwner: isOwn });
+          (submission.viewer_can_approve ?? canDecideProposal({ canApprove, isOwner: isOwn }));
         return (
           /* The row opens the proposal; the menu is its own thing, so a
              click in here never counts as a click on the row. */
@@ -369,10 +372,12 @@ export function SubmissionsList() {
                   <FileText className="size-4" />
                   View proposal
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => actions.view(submission, "contract")}>
-                  <EyeIcon className="size-4" />
-                  View contract
-                </DropdownMenuItem>
+                {contractVisible(submission.status) ? (
+                  <DropdownMenuItem onClick={() => actions.view(submission, "contract")}>
+                    <EyeIcon className="size-4" />
+                    View contract
+                  </DropdownMenuItem>
+                ) : null}
               </DropdownMenuGroup>
 
               {/* Sending is the owner's, as it is on the server: an

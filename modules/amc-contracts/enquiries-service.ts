@@ -19,7 +19,8 @@ export interface EnquiryMeta {
   managementEscalationDays: number;
   siteVisitRule: "flag" | "block";
   siteVisitRequiredCategories: string[];
-  people: Array<{ id: string; name: string; email: string | null }>;
+  /* can: what their role allows (23 Nov 2026): an owner needs enquiries, an inspector site visits. */
+  people: Array<{ id: string; name: string; email: string | null; can?: { enquiries: boolean; siteVisits: boolean } }>;
   me: string;
   canCreate: boolean;
   canEdit: boolean;

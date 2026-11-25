@@ -1,6 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { approversForLevel, type AmcConfig } from "@/lib/amc/config";
+import { escalationPeople, type AmcConfig } from "@/lib/amc/config";
 import { todayInDubai } from "@/lib/amc/contracts";
 import {
   FINAL_OUTCOMES,
@@ -41,10 +41,9 @@ const one = (v: unknown): Row | null => (Array.isArray(v) ? ((v[0] as Row | unde
 const NOT_MIGRATED = "Renewal outcomes are not set up on this database yet (migration 20261012140000).";
 const missingColumn = (e: { code?: string } | null | undefined) => e?.code === "42703" || e?.code === "PGRST204";
 
-/** Management for renewals: the level 2 approvers, else level 1. */
+/** Management for renewals: the escalation contacts (DEV-488), else the level 2 approvers, else level 1. */
 export function renewalManagement(config: AmcConfig): string[] {
-  const l2 = approversForLevel(config, 2);
-  return l2.length ? l2 : approversForLevel(config, 1);
+  return escalationPeople(config);
 }
 
 /* ------------------------------------------------------------------ */
@@ -200,7 +199,13 @@ export async function recordRenewalOutcome(admin: Admin, contractId: string, inp
 /* The daily sweep (job "renewals")                                    */
 /* ------------------------------------------------------------------ */
 
-export async function runRenewalSweep(admin: Admin, config: AmcConfig, now = new Date()) {
+export async function runRenewalSweep(
+  admin: Admin,
+  config: AmcConfig,
+  now = new Date(),
+  /* DEV-485: the 60/30-day expiry notices, and the rest (to-dos, escalation, outcomes, terminations); both for Run now. */
+  parts: { notices: boolean; followUp: boolean } = { notices: true, followUp: true },
+) {
   const today = todayInDubai(now);
   const result = { notices: 0, reminders: 0, escalations: 0, renewed: 0, lapsed: 0, terminated: 0, skipped: null as string | null };
   const { data, error } = await admin
@@ -245,7 +250,7 @@ export async function runRenewalSweep(admin: Admin, config: AmcConfig, now = new
 
     /* A scheduled termination whose date has come. */
     const effective = str(c.termination_effective_on);
-    if (effective && effective <= today && ["active", "on_hold"].includes(String(c.status))) {
+    if (parts.followUp && effective && effective <= today && ["active", "on_hold"].includes(String(c.status))) {
       try {
         await setContractStatus(admin, id, String(c.status), "terminated", { status_reason: `Terminated on notice of ${String(c.termination_notice_on ?? "")}` }, system, "Early termination took effect");
         await cancelVisitsFrom(admin, id, effective, "Contract terminated");
@@ -258,7 +263,7 @@ export async function runRenewalSweep(admin: Admin, config: AmcConfig, now = new
 
     /* Renewed: the outcome follows the new contract. */
     const successor = successors.get(id);
-    if (successor && !outcome) {
+    if (parts.followUp && successor && !outcome) {
       const [{ data: oldEnts }, { data: newEnts }] = await Promise.all([
         admin.from("amc_contract_entitlements").select("service_id, units, frequency").eq("contract_id", id),
         admin.from("amc_contract_entitlements").select("service_id, units, frequency").eq("contract_id", successor),
@@ -278,6 +283,7 @@ export async function runRenewalSweep(admin: Admin, config: AmcConfig, now = new
 
     /* Lapsed: ended, nothing renewed it, nobody negotiating, no live renewal proposal. */
     if (stage === "overdue") {
+      if (!parts.followUp) continue;
       const proposal = proposals.get(id);
       if (outcome !== "under_negotiation" && (!proposal || proposal === "proposal_rejected")) {
         await setOutcome(admin, id, "lapsed", "Ended without a renewal", system, "system");
@@ -288,7 +294,7 @@ export async function runRenewalSweep(admin: Admin, config: AmcConfig, now = new
 
     /* Expiring in 60 and 30 days (BRD 6.2). */
     const notice = expiryNotice(today, endDate);
-    if (notice) {
+    if (notice && parts.notices) {
       const sent = await notifyUsers(admin, {
         event: "contract_expiring",
         userIds: [ownerId, ...(config.renewals.notifyManagement ? management : [])].filter((v): v is string => Boolean(v)),
@@ -304,6 +310,7 @@ export async function runRenewalSweep(admin: Admin, config: AmcConfig, now = new
     }
 
     /* The reminder and the to-do at the lead time (DEV-415, to-do 7). */
+    if (!parts.followUp) continue;
     if (stage === "due" && !c.renewal_reminded_at) {
       const { data: claimed } = await admin.from("amc_contracts").update({ renewal_reminded_at: now.toISOString() }).eq("id", id).is("renewal_reminded_at", null).select("id");
       if (!claimed?.length) continue;

@@ -69,6 +69,32 @@ RESOURCE_ACTIONS[ResourceType.AMC_CONFIG] = [ActionType.VIEW, ActionType.EDIT, A
 RESOURCE_ACTIONS[ResourceType.AMC_PAYMENTS] = [ActionType.VIEW, ActionType.CREATE, ActionType.EDIT, ActionType.APPROVE];
 RESOURCE_ACTIONS[ResourceType.AMC_VISITS] = [ActionType.VIEW, ActionType.CREATE, ActionType.EDIT, ActionType.APPROVE];
 RESOURCE_ACTIONS[ResourceType.AMC_ALLOWANCES] = [ActionType.VIEW, ActionType.APPROVE];
+/*
+  DEV-418 / DEV-368 (20 Nov 2026 review): pages whose work is granted by role,
+  not only opened. Proposals: Edit works on the team's proposals (send,
+  revise, take over). Call outs and additional work: Create and Edit, as their
+  routes ask (lib/server/amc/field-work-access.ts). They offered only View,
+  so the Permissions screen could not grant them.
+*/
+RESOURCE_ACTIONS[ResourceType.AMC_PROPOSALS] = [ActionType.VIEW, ActionType.CREATE, ActionType.EDIT];
+RESOURCE_ACTIONS[ResourceType.AMC_CALL_OUTS] = [ActionType.VIEW, ActionType.CREATE, ActionType.EDIT];
+RESOURCE_ACTIONS[ResourceType.AMC_ADDITIONAL_WORKS] = [ActionType.VIEW, ActionType.CREATE, ActionType.EDIT];
+/*
+  DEV-418 (20 Nov 2026 review): AMC pages with no menu entry of their own,
+  which the Permissions screen therefore never offered -- so nobody but an
+  admin could open Reports, Renewals and the rest, whatever their role.
+  View opens the page (lib/server/amc/page-access.ts).
+*/
+for (const page of [
+  ResourceType.AMC_SITE_VISITS,
+  ResourceType.AMC_TECHNICIANS,
+  ResourceType.AMC_REPORTS,
+  ResourceType.AMC_FSM_MAPPING,
+  ResourceType.AMC_OPERATIONS_SETTINGS,
+  ResourceType.AMC_RENEWALS,
+]) {
+  RESOURCE_ACTIONS[page] ??= [ActionType.VIEW];
+}
 // Scheduling is a full CRUD module plus an Approve permission (#2): the holder
 // can approve/reject a submitted day and receives the submission email.
 RESOURCE_ACTIONS[ResourceType.SCHEDULING] = [...CRUD_MODULE_ACTIONS, ActionType.APPROVE];
@@ -167,18 +193,8 @@ const resourceDisplayNameMap: Partial<Record<ResourceType, string>> =
   the permission to sign in to the inspector app on a phone.
 */
 const EXTRA_RESOURCE_NAMES: Partial<Record<ResourceType, string>> = {
-  /* The module itself: View opens AMC; Approve makes an approver of proposals. Its pages sit under it. */
-  [ResourceType.AMC]: "AMC (module; Approve = proposal approver)",
-  [ResourceType.AMC_OPERATIONS]: "AMC Operations",
-  [ResourceType.AMC_ENQUIRIES]: "AMC Enquiries",
-  [ResourceType.AMC_RATE_CARD]: "AMC Rate Card",
-  [ResourceType.AMC_CONFIG]: "AMC Configuration (Approve = thresholds and bands)",
-  [ResourceType.AMC_PAYMENTS]: "AMC Payments (Approve = payment gate override)",
-  [ResourceType.AMC_VISITS]: "AMC Visits (Approve = supervisor closure)",
-  [ResourceType.AMC_ALLOWANCES]: "AMC Allowances (Approve = override and reversal)",
   [ResourceType.SNAGGING]: "Snagging (whole module)",
   [ResourceType.EXTENSIONS]: "Extensions (whole module)",
-  [ResourceType.MOBILE_APP]: "Mobile application",
   [ResourceType.FINANCE]: "Finance (whole module)",
   [ResourceType.FINANCE_QUEUE]: "Ready to invoice: Finance view",
   [ResourceType.FINANCE_EXCLUSIONS]: "Ready to invoice: Operations view",
@@ -207,6 +223,30 @@ const OVERRIDE_RESOURCE_NAMES: Partial<Record<ResourceType, string>> = {
   [ResourceType.COMPLIANCE_IDENTITY]: "Compliance identity numbers (full Emirates ID and passport)",
   [ResourceType.WORKFORCE_SETTINGS]: "Workforce settings (roles, service types, tags, leave types, designations, nationalities)",
   /*
+    AMC (23 Nov 2026): each row named as the AMC menu names its page, without
+    the explanations in brackets; what Approve does on a row is said in its
+    permission list instead (RESOURCE_ACTION_NAMES).
+  */
+  [ResourceType.AMC]: "AMC",
+  [ResourceType.AMC_ENQUIRIES]: "Enquiries",
+  [ResourceType.AMC_PROPOSALS]: "Proposals",
+  [ResourceType.AMC_CONTRACTS]: "Contracts",
+  [ResourceType.AMC_RENEWALS]: "Renewals",
+  [ResourceType.AMC_CLIENTS]: "Clients",
+  [ResourceType.AMC_VISITS]: "Visits, PPM month and Job reviews",
+  [ResourceType.AMC_SITE_VISITS]: "Site visits",
+  [ResourceType.AMC_CALL_OUTS]: "Call outs",
+  [ResourceType.AMC_ADDITIONAL_WORKS]: "Additional work",
+  [ResourceType.AMC_PAYMENTS]: "Payments",
+  [ResourceType.AMC_REPORTS]: "Reports",
+  [ResourceType.AMC_RATE_CARD]: "Rate card",
+  [ResourceType.AMC_FSM_MAPPING]: "FSM mapping",
+  [ResourceType.AMC_OPERATIONS_SETTINGS]: "Operations settings",
+  [ResourceType.AMC_CONFIG]: "Configuration",
+  [ResourceType.AMC_OPERATIONS]: "Every contract",
+  [ResourceType.AMC_ALLOWANCES]: "Allowances",
+  [ResourceType.MOBILE_APP]: "Mobile application",
+  /*
     The queue key also opens Invoicing metrics, whose menu entry gave this
     row its name; the row is the Finance side of Ready to invoice (3 Nov).
   */
@@ -231,7 +271,9 @@ const REPORT_PAGE_RESOURCES = [
   ResourceType.REPORTS_COMPLIANCE,
   ResourceType.COMPLIANCE_SELF,
 ];
-export const HIDDEN_RESOURCES: ResourceType[] = REPORTS_ENABLED ? [] : REPORT_PAGE_RESOURCES;
+/* AMC pages not shown anywhere in AMC (23 Nov 2026): Technicians (skills are edited in Workforce → People). Grants already held stay. */
+const HIDDEN_AMC_RESOURCES = [ResourceType.AMC_TECHNICIANS];
+export const HIDDEN_RESOURCES: ResourceType[] = [...(REPORTS_ENABLED ? [] : REPORT_PAGE_RESOURCES), ...HIDDEN_AMC_RESOURCES];
 
 export const getResourceDisplayName = (resource: ResourceType): string => {
   return (
@@ -255,6 +297,18 @@ const RESOURCE_ACTION_NAMES: Partial<Record<ResourceType, Partial<Record<ActionT
   [ResourceType.FINANCE_EXCLUSIONS]: {
     [ActionType.CREATE]: "Create (progress, ready, queries)",
     [ActionType.APPROVE]: "Approve (verify older items)",
+  },
+  /* AMC (23 Nov 2026): what Approve and the rest do, said where the permission is picked. */
+  [ResourceType.AMC]: { [ActionType.APPROVE]: "Approve proposals" },
+  [ResourceType.AMC_CONFIG]: { [ActionType.APPROVE]: "Approve thresholds and payment bands" },
+  [ResourceType.AMC_PAYMENTS]: { [ActionType.APPROVE]: "Override the payment gate, write off" },
+  [ResourceType.AMC_VISITS]: { [ActionType.APPROVE]: "Close visits as supervisor" },
+  [ResourceType.AMC_ALLOWANCES]: { [ActionType.APPROVE]: "Override and reverse allowances" },
+  [ResourceType.AMC_OPERATIONS]: {
+    [ActionType.VIEW]: "View every contract",
+    [ActionType.CREATE]: "Activate contracts",
+    [ActionType.EDIT]: "Work on every contract",
+    [ActionType.APPROVE]: "Correct usage",
   },
 };
 
@@ -289,7 +343,6 @@ export const RESOURCE_PARENT: Partial<Record<ResourceType, ResourceType>> = {
   [ResourceType.SNAGGING_ANALYTICS]: ResourceType.SNAGGING,
   [ResourceType.SNAGGING_CATALOGUE]: ResourceType.SNAGGING,
   [ResourceType.SNAGGING_CHECKLIST]: ResourceType.SNAGGING,
-  [ResourceType.MOBILE_APP]: ResourceType.SNAGGING,
   [ResourceType.EXTENSIONS_BULK_DOWNLOAD]: ResourceType.EXTENSIONS,
   [ResourceType.EXTENSIONS_QUOTATION_TEMPLATES]: ResourceType.EXTENSIONS,
   /* AMC: its pages, and the rights that decide what can be done on them. */
@@ -338,6 +391,27 @@ export function hasChildren(resource: ResourceType): boolean {
   return Object.values(RESOURCE_PARENT).includes(resource);
 }
 
+/* The AMC rows as the AMC menu lists its pages (23 Nov 2026), then the rights used inside them. */
+const AMC_ORDER: ResourceType[] = [
+  ResourceType.AMC_ENQUIRIES,
+  ResourceType.AMC_PROPOSALS,
+  ResourceType.AMC_CONTRACTS,
+  ResourceType.AMC_RENEWALS,
+  ResourceType.AMC_CLIENTS,
+  ResourceType.AMC_VISITS,
+  ResourceType.AMC_SITE_VISITS,
+  ResourceType.AMC_CALL_OUTS,
+  ResourceType.AMC_ADDITIONAL_WORKS,
+  ResourceType.AMC_PAYMENTS,
+  ResourceType.AMC_REPORTS,
+  ResourceType.AMC_RATE_CARD,
+  ResourceType.AMC_FSM_MAPPING,
+  ResourceType.AMC_OPERATIONS_SETTINGS,
+  ResourceType.AMC_CONFIG,
+  ResourceType.AMC_OPERATIONS,
+  ResourceType.AMC_ALLOWANCES,
+];
+
 /** A module first, then its pages, then the next module. */
 export function orderResources(resources: ResourceType[]): ResourceType[] {
   const children = new Map<ResourceType, ResourceType[]>();
@@ -345,6 +419,11 @@ export function orderResources(resources: ResourceType[]): ResourceType[] {
     const parent = RESOURCE_PARENT[resource];
     if (!parent) continue;
     children.set(parent, [...(children.get(parent) ?? []), resource]);
+  }
+  const amc = children.get(ResourceType.AMC);
+  if (amc) {
+    const rank = (r: ResourceType) => (AMC_ORDER.includes(r) ? AMC_ORDER.indexOf(r) : AMC_ORDER.length);
+    children.set(ResourceType.AMC, [...amc].sort((a, b) => rank(a) - rank(b)));
   }
   const out: ResourceType[] = [];
   for (const resource of resources) {

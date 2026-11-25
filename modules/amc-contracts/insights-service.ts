@@ -57,13 +57,17 @@ export const insightsService = {
   clientReportHref(contractId: string) {
     return reportUrl(contractId);
   },
-  clientReport(contractId: string) {
-    return request<{ report: ClientReport }>(`${reportUrl(contractId)}?format=json`);
+  /** financials false (DEV-503): the version without financial figures. */
+  clientReport(contractId: string, financials = true) {
+    return request<{ report: ClientReport }>(`${reportUrl(contractId)}?format=json${financials ? "" : "&financials=0"}`);
   },
   /** Without `to`, the server sends to the client's email on file. */
   /** Without `to`, the server sends to the client's email on file. pdfBase64: the branded PDF built in the browser. */
-  sendClientReport(contractId: string, to?: string | null, pdfBase64?: string | null, channel: SendChannel = "email") {
-    return request<ClientReportSendResult>(reportUrl(contractId), { method: "POST", body: JSON.stringify({ ...(to ? { to } : {}), ...(pdfBase64 ? { pdfBase64 } : {}), channel }) });
+  sendClientReport(contractId: string, to?: string | null, pdfBase64?: string | null, channel: SendChannel = "email", financials = true) {
+    return request<ClientReportSendResult>(reportUrl(contractId), {
+      method: "POST",
+      body: JSON.stringify({ ...(to ? { to } : {}), ...(pdfBase64 ? { pdfBase64 } : {}), channel, ...(financials ? {} : { financials: false }) }),
+    });
   },
 };
 

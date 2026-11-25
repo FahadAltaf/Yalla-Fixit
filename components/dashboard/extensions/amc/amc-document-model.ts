@@ -1,3 +1,4 @@
+import { contractTypeLabel } from "@/lib/amc/contract-type";
 import { formatCurrencyAED } from "@/utils/format-currency";
 
 import { buildAmcBrochure, type AmcBrochure } from "./amc-brochure";
@@ -252,7 +253,8 @@ function contractBlocks(
       [cell(labelled("P.O. Box:", settings.provider.poBox)), cell(labelled("Customer ID:", formData.customerId))],
       [
         cell(labelled("Contact No:", settings.provider.contactNo)),
-        cell(labelled("Contract Type:", settings.provider.contractType)),
+        /* The proposal's own contract type (DEV-500, 23 Nov 2026); a proposal from before it keeps the old company-wide text. */
+        cell(labelled("Contract Type:", contractTypeLabel(formData.contractType) ?? settings.provider.contractType)),
       ],
       [cell(labelled("Email:", settings.provider.email)), cell(labelled("Contact No:", formatPhoneForDocument(formData.customerPhone)))],
       [

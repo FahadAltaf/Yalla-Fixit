@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type UIEvent } from "react";
-import { ChevronDown, Loader2, Plus, SearchIcon, UserPlus } from "lucide-react";
+import { ChevronDown, Loader2, Plus, RefreshCw, SearchIcon, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
@@ -47,6 +47,10 @@ export function useClientList(search: string, enabled = true) {
     source: "fsm",
   });
   const [error, setError] = useState<string | null>(null);
+  /* Zoho FSM did not answer: the portal's clients are listed, with this notice (23 Nov 2026). */
+  const [notice, setNotice] = useState<string | null>(null);
+  /* Bumped by Try again: the same search is asked again. */
+  const [attempt, setAttempt] = useState(0);
   const [loadingMore, setLoadingMore] = useState(false);
   const ticket = useRef(0);
 
@@ -66,6 +70,7 @@ export function useClientList(search: string, enabled = true) {
             source: page.source,
           });
           setError(null);
+          setNotice(page.notice ?? null);
         },
         (e) => {
           if (mine !== ticket.current) return;
@@ -76,10 +81,11 @@ export function useClientList(search: string, enabled = true) {
             more: false,
             pages: 0,
           }));
+          setNotice(null);
           setError(e instanceof Error ? e.message : "Could not load clients.");
         },
       );
-  }, [debounced, enabled]);
+  }, [debounced, enabled, attempt]);
 
   const loading = list.search !== debounced;
 
@@ -125,6 +131,11 @@ export function useClientList(search: string, enabled = true) {
     search: list.search,
     loading,
     error,
+    notice,
+    retry: () => {
+      setList((current) => ({ ...current, search: null }));
+      setAttempt((a) => a + 1);
+    },
     hasMore: !loading && list.more,
     loadingMore,
     loadMore,
@@ -300,6 +311,16 @@ export function ClientPicker({
         }}
       >
         <div className="max-h-64 overflow-y-auto py-1" onScroll={onScroll}>
+          {/* Zoho FSM did not answer: these are the portal's clients, and FSM can be asked again. */}
+          {list.notice && !list.loading ? (
+            <div className="text-warning flex items-start justify-between gap-2 border-b px-3 py-2 text-xs">
+              <span>{list.notice}</span>
+              <Button type="button" size="sm" variant="ghost" className="h-7 shrink-0 px-2" onClick={list.retry}>
+                <RefreshCw className="size-3.5" />
+                Try again
+              </Button>
+            </div>
+          ) : null}
           {list.loading ? (
             <div className="space-y-1 px-3 py-2" aria-label="Loading clients">
               {Array.from({ length: 4 }, (_, i) => (
@@ -310,7 +331,15 @@ export function ClientPicker({
               ))}
             </div>
           ) : list.error && list.rows.length === 0 ? (
-            <p className="text-destructive px-3 py-2 text-sm">{list.error}</p>
+            <div className="space-y-2 px-3 py-2">
+              <p className="text-destructive text-sm">
+                {/timed out|connection failed/i.test(list.error) ? "Zoho FSM did not answer in time. It is usually a short outage on Zoho's side." : list.error}
+              </p>
+              <Button type="button" size="sm" variant="outline" onClick={list.retry}>
+                <RefreshCw className="size-3.5" />
+                Try again
+              </Button>
+            </div>
           ) : list.rows.length === 0 ? (
             <p className="text-muted-foreground px-3 py-2 text-sm">
               {fromFsm

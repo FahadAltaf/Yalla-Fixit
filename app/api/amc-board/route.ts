@@ -38,7 +38,7 @@ export async function POST(req: NextRequest) {
   if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Invalid request" }, { status: 400 });
   const canChange = (ownerId: string | null) => gate.visits.create || gate.visits.edit || canOperateContract(gate.actor, ownerId);
   try {
-    const result = await performBoardAction(gate.admin, parsed.data, { id: gate.userId, label: gate.label }, await readAmcConfig(gate.admin), canChange);
+    const result = await performBoardAction(gate.admin, parsed.data, { id: gate.userId, label: gate.label }, await readAmcConfig(gate.admin), canChange, gate.canApprove);
     return NextResponse.json(result);
   } catch (error) {
     return contractErrorResponse(error, "Could not change the board");

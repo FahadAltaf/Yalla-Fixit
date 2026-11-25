@@ -51,6 +51,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import type { AmcFormData, AmcPriceListRow } from "../amc-types";
+import { CONTRACT_TYPES, CONTRACT_TYPE_LABELS } from "@/lib/amc/contract-type";
 import {
   servicesForProperty,
   type AmcServiceDefinition,
@@ -61,6 +62,7 @@ import {
   applyPackage,
   nearestAllowedFrequency,
   packagesFor,
+  modelChain,
   type ModelChain,
   rateItemFor,
   type RatePackage,
@@ -312,10 +314,10 @@ function PackageField({
             (isFree(l.serviceId) ||
               (row!.units === l.units &&
                 row!.frequency ===
-                  nearestAllowedFrequency(
-                    allowedFor(l.serviceId),
-                    l.frequency,
-                  )))
+                nearestAllowedFrequency(
+                  allowedFor(l.serviceId),
+                  l.frequency,
+                )))
           );
         }) && ticked.every((r) => lines.has(r.serviceId))
       );
@@ -325,10 +327,10 @@ function PackageField({
   /* Lines the card cannot price here: the proposal would not submit with them. */
   const unpriced = shown
     ? shown.lines
-        .filter(
-          (l) => !isFree(l.serviceId) && !rateItemFor(card, l.serviceId, model),
-        )
-        .map((l) => label(l.serviceId))
+      .filter(
+        (l) => !isFree(l.serviceId) && !rateItemFor(card, l.serviceId, model),
+      )
+      .map((l) => label(l.serviceId))
     : [];
 
   const choose = (id: string) => {
@@ -448,6 +450,21 @@ export function ServicesPricingStep({
   const unitType = form.watch("unitType");
   const model = useMemo(() => [propertyType, unitType] as const, [propertyType, unitType]);
   const packages = card ? packagesFor(card.card, model) : [];
+  /*
+    Why a package or a promotion is not offered here (23 Nov 2026): each is
+    set on the rate card for some property types only, and step 2 used to
+    show nothing at all, which read as if packages were gone.
+  */
+  const [today] = useState(() => new Date(Date.now() + 4 * 3_600_000).toISOString().slice(0, 10));
+  const chain = modelChain(model);
+  const fits = (models: readonly string[]) => models.length === 0 || chain.some((m) => models.includes(m));
+  const otherPackages = card ? card.card.packages.filter((p) => p.active && !fits(p.models)) : [];
+  const promotionsNow = card ? card.card.promotions.filter((p) => p.active && p.startDate <= today && p.endDate >= today) : [];
+  const promotionsHere = promotionsNow.filter((p) => fits(p.models));
+  const promotionsElsewhere = promotionsNow.filter((p) => !fits(p.models));
+  const modelsLabel = (models: readonly string[]) => models.map((m) => unitTypeLabel(m)).join(", ");
+  const hereLabel = propertyType || unitType ? unitTypeLabel(String(propertyType ?? unitType)) : "this property";
+  const dmy = (iso: string) => iso.split("-").reverse().join("/");
   /* The visits a year the card allows per service on this model (BRD 5.3). */
   const allowedFrequencies = (serviceId: string) =>
     card
@@ -484,9 +501,9 @@ export function ServicesPricingStep({
   const handymanClause =
     showFixedRates && settings
       ? contractClauseNumber(
-          computeAmcData(form.getValues(), "contract", settings),
-          "handymanRates",
-        )
+        computeAmcData(form.getValues(), "contract", settings),
+        "handymanRates",
+      )
       : null;
 
   const setFixedRates = (next: string[]) =>
@@ -516,7 +533,7 @@ export function ServicesPricingStep({
   return (
     <div className="space-y-8">
       <section className="space-y-4">
-        <div>
+        {/* <div>
           <h3 className="flex items-center gap-2 text-base font-semibold">
             <ListChecks className="text-brand size-4" />
             Contract services
@@ -526,14 +543,14 @@ export function ServicesPricingStep({
               ? "Tick each service this AMC covers and set its units and visits per year. Rates are filled in from the rate card and can be changed for this proposal; a rate under the card's floor, or for a service the card does not price, needs approval. The price is rate × units × frequency."
               : "Tick each service this AMC covers, then set its units, visits per year and base price. The price is base price × units × frequency, and it updates as you type."}
           </p>
-        </div>
+        </div> */}
         {rules === undefined ? (
           <ServicesLoading />
         ) : (
           <>
             {rules === null ? (
-              <Alert>
-                <AlertTriangle className="size-4" />
+              <Alert variant="warning">
+                <AlertTriangle />
                 <AlertTitle className="text-xs font-medium">
                   The rate card could not be loaded
                 </AlertTitle>
@@ -544,12 +561,23 @@ export function ServicesPricingStep({
               </Alert>
             ) : null}
             {card ? (
-              <div className="rounded-md border bg-muted/30 px-3 py-2 text-xs">
-                <span className="text-muted-foreground">
-                  Rate card V{card.versionNo}, in force since{" "}
-                  {card.effectiveFrom.split("-").reverse().join("/")}.
-                  Promotions in date are applied.
-                </span>
+              <div className="text-muted-foreground space-y-1 rounded-md border bg-muted/30 px-3 py-2 text-xs">
+                <p>
+                  Rate card V{card.versionNo}, in force since {dmy(card.effectiveFrom)}.
+                </p>
+                <p>
+                  {promotionsHere.length
+                    ? `Promotion applied: ${promotionsHere.map((p) => `${p.name}, ${p.percentOff}% off until ${dmy(p.endDate)}`).join("; ")}.`
+                    : promotionsElsewhere.length
+                      ? `No promotion applies to ${hereLabel} today: ${promotionsElsewhere.map((p) => `${p.name} is for ${modelsLabel(p.models)}`).join("; ")}.`
+                      : "No promotion is running today."}
+                </p>
+                {!packages.length && otherPackages.length ? (
+                  <p>
+                    No package is offered on {hereLabel}: {otherPackages.map((p) => `${p.name} is for ${modelsLabel(p.models)}`).join("; ")}. Add {hereLabel} to a
+                    package on the rate card to offer it here.
+                  </p>
+                ) : null}
               </div>
             ) : null}
             {card && packages.length ? (
@@ -568,8 +596,8 @@ export function ServicesPricingStep({
               {/* Read from the catalogue, since the library offers some services
               on offices or villas alone. */}
               {hiddenServices.length > 0 && (
-                <Alert>
-                  <AlertTriangle className="size-4" />
+                <Alert variant="warning">
+                  <AlertTriangle />
                   <AlertTitle className="text-xs font-medium">
                     Some services are not offered on {unitTypeLabel(propertyType ?? unitType)}
                   </AlertTitle>
@@ -644,6 +672,38 @@ export function ServicesPricingStep({
             />
           ))}
         </div>
+      </section>
+
+      {/* DEV-500 (BRD 5.4): the contract type, printed in the contract heading. */}
+      <section className="space-y-4">
+        <div>
+          <h3 className="text-base font-semibold">Contract type</h3>
+          <p className="text-sm text-muted-foreground">How much the contract covers. It prints in the heading of the proposal and the contract.</p>
+        </div>
+        <FormField
+          control={form.control}
+          name="contractType"
+          render={({ field }) => (
+            <FormItem className="max-w-sm">
+              <FormLabel>Type</FormLabel>
+              <Select value={field.value ?? ""} onValueChange={field.onChange}>
+                <FormControl>
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Choose the contract type" />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent>
+                  {CONTRACT_TYPES.map((type) => (
+                    <SelectItem key={type} value={type}>
+                      {CONTRACT_TYPE_LABELS[type]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
       </section>
 
       {/* FR4.5 / §8.3 — a section that is switched off is left out of the
@@ -1072,12 +1132,12 @@ function PaymentPlanSection({
   const allowed = rules
     ? allowedPaymentPlans(rules.payments, finalPrice)
     : ([
-        "single",
-        "fifty_fifty",
-        "quarterly",
-        "monthly",
-        "custom",
-      ] as PaymentPlan[]);
+      "single",
+      "fifty_fifty",
+      "quarterly",
+      "monthly",
+      "custom",
+    ] as PaymentPlan[]);
   const options = allowed.includes(plan) ? allowed : [plan, ...allowed];
   const nonStandard = rules
     ? isNonStandardPlan(rules.payments, finalPrice, plan)

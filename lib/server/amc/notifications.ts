@@ -407,9 +407,14 @@ export interface NotifyUsersInput {
  * emails. Best effort: never throws.
  */
 export async function notifyUsers(admin: Admin, input: NotifyUsersInput): Promise<number> {
-  const userIds = [...new Set(input.userIds.filter(Boolean))];
-  if (userIds.length === 0) return 0;
+  const named = [...new Set(input.userIds.filter(Boolean))];
+  if (named.length === 0) return 0;
   try {
+    /* Only active portal users (22 Nov 2026): someone switched off is never notified. If profiles cannot be read, everyone named is. */
+    const { data: people, error: peopleError } = await admin.from("user_profile").select("id, is_active").in("id", named);
+    const off = new Set(peopleError ? [] : ((people ?? []) as Array<{ id: string; is_active: boolean | null }>).filter((p) => p.is_active === false).map((p) => p.id));
+    const userIds = named.filter((id) => !off.has(id));
+    if (userIds.length === 0) return 0;
     const rows = userIds.map((userId) => ({
       event: input.event,
       recipient_user_id: userId,

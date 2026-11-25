@@ -6,6 +6,7 @@ import { todayInDubai } from "@/lib/amc/contracts";
 import { templateText } from "@/lib/amc/message-templates";
 import { PLANNABLE_STATUSES, classifyMove, windowAfterMove, type VisitStatus } from "@/lib/amc/ppm";
 import {
+  confirmationUrgency,
   accessAlertDue,
   accessFromPasses,
   assignmentProblems,
@@ -33,6 +34,11 @@ import {
 import { clientEmailHtml, escapeEmailHtml } from "@/lib/email-brand";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { ContractError, isMissingTable } from "@/lib/server/amc/contracts";
+import { checkLeadTime } from "@/lib/server/amc/lead-time";
+import { alertCrewChange } from "@/lib/server/amc/crew-alerts";
+import { canOf } from "@/lib/server/amc/people";
+import { approveExpiredBooking } from "@/lib/server/amc/expired-booking";
+import { contractExpiredOn } from "@/lib/amc/expired-booking";
 import { notifyUsers } from "@/lib/server/amc/notifications";
 import { recordSend } from "@/lib/server/amc/proposal-share";
 import { closeAmcTodos, openAmcTodo } from "@/lib/server/amc/todos";
@@ -212,7 +218,7 @@ const VISIT_COLUMNS =
   "scheduled_start, scheduled_end, technician_ids, lead_technician_id, headcount, assignment_note, client_confirmation, confirmed_at, confirmation_channel, confirmation_note, " +
   "access_status, access_document_id, access_valid_until, access_note, confirmation_due_notified_at, no_answer_notified_at, access_alert_sent_at, client_reminder_sent_at, " +
   "lines:amc_visit_lines!amc_visit_lines_visit_id_fkey(id, entitlement_id, service_id, service_label, status), " +
-  "contract:amc_contracts!amc_visits_contract_id_fkey(id, status, contract_number, proposal_number, customer_name, property_label, property_id, customer, property, ppm_confirmed_at, ppm_window_days, attempt_count, attempt_interval_days, attempt_channels, attempt_escalation_user_id, submission:amc_submissions!amc_contracts_submission_id_fkey(id, owner_id))";
+  "contract:amc_contracts!amc_visits_contract_id_fkey(id, status, end_date, contract_number, proposal_number, customer_name, property_label, property_id, customer, property, ppm_confirmed_at, ppm_window_days, attempt_count, attempt_interval_days, attempt_channels, attempt_escalation_user_id, submission:amc_submissions!amc_contracts_submission_id_fkey(id, owner_id))";
 
 interface VisitContext {
   visit: Row;
@@ -660,7 +666,7 @@ export async function availableInspectors(
       .gte("scheduled_at", new Date(start - SITE_VISIT_MINUTES * 60_000).toISOString())
       .lt("scheduled_at", new Date(end).toISOString()),
     admin.from("technician_reference").select("fsm_resource_id, display_name, email, user_profile_id, hidden_from_lists").eq("is_active", true).order("display_name"),
-    admin.from("user_profile").select("id, full_name, email, is_active, hidden_from_lists").order("full_name").limit(2000),
+    admin.from("user_profile").select("id, full_name, email, is_active, hidden_from_lists, roles(name, role_access(resource, action, enabled))").order("full_name").limit(2000),
   ]);
   if (techsRead.error) throw fail(techsRead.error);
   if (usersRead.error) throw fail(usersRead.error);
@@ -705,6 +711,11 @@ export async function availableInspectors(
     }
     /* A login that is switched off can't be given the visit. */
     if (linked && users.has(linked) && !activeUser(linked)) continue;
+    /* 23 Nov 2026: a technician with a login needs the mobile app (or site visits) to do it; one without gets the Inspector role when picked. */
+    if (linked && users.has(linked)) {
+      const can = canOf(users.get(linked) as never);
+      if (!can.mobile && !can.siteVisits) continue;
+    }
     const userId = activeUser(linked) ? linked : null;
     if (busyTech.has(fsmId) || (userId && busyUser.has(userId))) {
       busy += 1;
@@ -716,6 +727,9 @@ export async function availableInspectors(
   for (const u of users.values()) {
     const id = String(u.id);
     if (u.is_active === false || u.hidden_from_lists === true || technicianUsers.has(id)) continue;
+    /* 23 Nov 2026: office staff need AMC Site visits (or Visits), or the mobile app, to inspect. */
+    const can = canOf(u as never);
+    if (!can.siteVisits && !can.mobile) continue;
     if (busyUser.has(id)) {
       busy += 1;
       continue;
@@ -763,9 +777,9 @@ export interface VisitSuggestion {
   durationMinutes: number;
   headcount: number;
   trades: Trade[];
-  /** Competent and free, best first. */
+  /** Every technician who can be picked, best first: skilled and free first, booked ones marked (DEV-490). */
   candidates: TechnicianFit[];
-  /** Competent for a trade but blocked (on leave, booked, no access), so the coordinator sees why. */
+  /** Those who cannot be picked (on leave, not active, no access permission), so the coordinator sees why. */
   blocked: TechnicianFit[];
   suggested: { technicianIds: string[]; uncovered: Trade[] };
   /** Active technicians confirmed for each trade, free or not: 0 means nobody has it on their AMC profile. */
@@ -780,8 +794,8 @@ export async function suggestForVisit(admin: Admin, visitId: string, date: strin
   const slot = { start: slotIso(date, startTime), end: new Date(Date.parse(slotIso(date, startTime)) + duration * 60_000).toISOString() };
   const [techs, blocks] = await Promise.all([technicianFacts(admin), busyOn(admin, date, null)]);
   const fits = techs.map((t) => fitFor(t, ctx.need, busyFor(blocks, t.fsmId, slot, [visitId])));
-  /* Only technicians confirmed for one of the trades are listed at all (BRD: never a merely similar one). */
-  const relevant = fits.filter((f) => f.covers.length > 0 || f.blockers.some((b) => b.startsWith("Certificate")));
+  /* Every technician is listed (DEV-490, BRD v0.4 5.11: no restriction by skill for AMC work). */
+  const relevant = fits;
   return {
     date,
     startTime,
@@ -1010,11 +1024,22 @@ export async function visitStartedAt(admin: Admin, visitId: string): Promise<{ s
   return { startedAt: str(data?.started_at), ready: true };
 }
 
-export async function performBoardAction(admin: Admin, action: BoardAction, actor: Actor, config: AmcConfig, canChange: (contractOwnerId: string | null) => boolean) {
+export async function performBoardAction(
+  admin: Admin,
+  action: BoardAction,
+  actor: Actor,
+  config: AmcConfig,
+  canChange: (contractOwnerId: string | null) => boolean,
+  /* DEV-496: an AMC approver may book on an expired contract, with a reason. */
+  canApproveExpired = false,
+) {
   const now = new Date().toISOString();
-  const guard = async (ctx: VisitContext) => {
+  /* booking: the day a place or move puts it on (an expired contract then needs the approval). */
+  const guard = async (ctx: VisitContext, booking: { day: string; reason?: string | null } | null = null) => {
     if (!canChange(ctx.ownerId)) throw new ContractError("You cannot change this contract's visits.", 403);
-    if (!["active", "on_hold"].includes(String(ctx.contract.status))) throw new ContractError("Visits are placed while the contract is active.", 409);
+    const contractFacts = { id: String(ctx.contract.id ?? ctx.visit.contract_id), status: String(ctx.contract.status), endDate: str(ctx.contract.end_date), number: str(ctx.contract.contract_number) };
+    const expired = booking ? contractExpiredOn(contractFacts, booking.day) : false;
+    if (!expired && !["active", "on_hold"].includes(String(ctx.contract.status))) throw new ContractError("Visits are placed while the contract is active.", 409);
     if (!PLANNABLE_STATUSES.includes(ctx.visit.status as VisitStatus)) {
       throw new ContractError(`Visit ${String(ctx.visit.visit_no)} is ${String(ctx.visit.status).replace(/_/g, " ")}.`, 409);
     }
@@ -1022,16 +1047,39 @@ export async function performBoardAction(admin: Admin, action: BoardAction, acto
     if ((await visitStartedAt(admin, String(ctx.visit.id))).startedAt) {
       throw new ContractError(`Visit ${String(ctx.visit.visit_no)} has been started, so it can no longer be moved or changed here.`, 409);
     }
+    if (expired && booking) {
+      await approveExpiredBooking(
+        admin,
+        { contract: contractFacts, day: booking.day, what: `PPM visit ${String(ctx.visit.visit_no)} booked for ${booking.day}`, reason: booking.reason, canApprove: canApproveExpired },
+        actor,
+      );
+    }
   };
+
+  /* The crew's phone alerts (as Snagging): who joined, who left, the new time. */
+  const tellCrew = (ctx: VisitContext, after: { ids: string[]; start: string | null }) =>
+    alertCrewChange(admin, {
+      kind: "ppm",
+      id: String(ctx.visit.id),
+      what: `AMC visit ${String(ctx.visit.visit_no)}`,
+      where: [str(ctx.contract.customer_name), str(ctx.contract.property_label)].filter(Boolean).join(", ") || String(ctx.contract.contract_number ?? "AMC"),
+      before: { ids: strings(ctx.visit.technician_ids), start: str(ctx.visit.scheduled_start) },
+      after,
+      actorId: actor.id,
+    });
+
+  /* DEV-493: access in hand (approved for that day, or marked not needed) needs no notice. */
+  const accessReady = (ctx: VisitContext, date: string) =>
+    ["approved", "not_required"].includes(String(effectiveAccess(str(ctx.visit.access_status) as AccessStatus | null, str(ctx.visit.access_valid_until), date)));
 
   switch (action.action) {
     case "place": {
       const ctx = await loadVisitContext(admin, action.visitId, action.date, config);
-      await guard(ctx);
+      await guard(ctx, { day: action.date, reason: action.expiredReason });
       const duration = action.durationMinutes ?? ctx.durationMinutes;
       const slot = { start: slotIso(action.date, action.startTime), end: new Date(Date.parse(slotIso(action.date, action.startTime)) + duration * 60_000).toISOString() };
       const fits = await crewFits(admin, ctx, action.technicianIds, slot, action.date);
-      const problems = assignmentProblems(fits, ctx.need.trades);
+      const problems = assignmentProblems(fits);
       if (problems.length) throw new ContractError(`Cannot assign: ${problems.join("; ")}.`, 409);
       /* BRD 5.11: accept the suggestion or override it with a reason. */
       const suggestion = await suggestForVisit(admin, action.visitId, action.date, action.startTime, config, duration);
@@ -1041,6 +1089,7 @@ export async function performBoardAction(admin: Admin, action: BoardAction, acto
       if (!same && suggestion.suggested.technicianIds.length && !action.overrideReason) {
         throw new ContractError("You chose a different crew from the one suggested: say why.", 400);
       }
+      const insideLeadTime = await checkLeadTime(admin, str(ctx.contract.property_id), action.date, { acknowledged: action.insideLeadTime, accessReady: accessReady(ctx, action.date) });
       const dated = dateChange(ctx, action.date, action.reason, config);
       const { error } = await admin
         .from("amc_visits")
@@ -1065,23 +1114,38 @@ export async function performBoardAction(admin: Admin, action: BoardAction, acto
         eventType: "visit_placed",
         actorId: actor.id,
         actorLabel: actor.label,
-        payload: { visitNo: ctx.visit.visit_no, date: action.date, startTime: action.startTime, technicians: action.technicianIds, override: same ? null : action.overrideReason },
+        payload: { visitNo: ctx.visit.visit_no, date: action.date, startTime: action.startTime, technicians: action.technicianIds, override: same ? null : action.overrideReason, insideLeadTime },
       });
+      await tellCrew(ctx, { ids: action.technicianIds, start: slot.start });
       return { ok: true as const, changed: 1 };
     }
     case "move": {
       let changed = 0;
       for (const visitId of action.visitIds) {
         const ctx = await loadVisitContext(admin, visitId, action.date, config);
-        await guard(ctx);
+        await guard(ctx, { day: action.date, reason: action.expiredReason });
         const placed = str(ctx.visit.scheduled_start);
         const duration = placed ? (Date.parse(String(ctx.visit.scheduled_end)) - Date.parse(placed)) / 60_000 : ctx.durationMinutes;
         const time = action.startTime ?? (placed ? dubaiTime(placed) : null);
         const slot = time ? { start: slotIso(action.date, time), end: new Date(Date.parse(slotIso(action.date, time)) + duration * 60_000).toISOString() } : null;
         const crew = strings(ctx.visit.technician_ids);
         if (slot && crew.length) {
-          const problems = assignmentProblems(await crewFits(admin, ctx, crew, slot, action.date), ctx.need.trades);
+          const problems = assignmentProblems(await crewFits(admin, ctx, crew, slot, action.date));
           if (problems.length) throw new ContractError(`Visit ${String(ctx.visit.visit_no)} cannot move there: ${problems.join("; ")}.`, 409);
+        }
+        /* A new time on the same day asks nothing again: only a new day is checked. */
+        const currentDay = placed ? dubaiDate(placed) : String(ctx.visit.target_date);
+        const insideLeadTime =
+          action.date === currentDay ? null : await checkLeadTime(admin, str(ctx.contract.property_id), action.date, { acknowledged: action.insideLeadTime, accessReady: accessReady(ctx, action.date) });
+        if (insideLeadTime) {
+          await recordAmcAudit(admin, {
+            entityType: "contract",
+            entityId: String(ctx.visit.contract_id),
+            eventType: "visit_booked_inside_lead_time",
+            actorId: actor.id,
+            actorLabel: actor.label,
+            payload: { visitNo: ctx.visit.visit_no, date: action.date, ...insideLeadTime },
+          });
         }
         const dated = dateChange(ctx, action.date, action.reason, config);
         const { error } = await admin
@@ -1090,6 +1154,7 @@ export async function performBoardAction(admin: Admin, action: BoardAction, acto
           .eq("id", visitId);
         if (error) throw fail(error);
         if (dated.type) await recordVisitChange(admin, { contractId: String(ctx.visit.contract_id), visitId, type: dated.type, from: String(ctx.visit.target_date), to: action.date, reason: action.reason }, actor);
+        if (slot && placed) await tellCrew(ctx, { ids: crew, start: slot.start });
         changed += 1;
       }
       return { ok: true as const, changed };
@@ -1103,7 +1168,7 @@ export async function performBoardAction(admin: Admin, action: BoardAction, acto
         if (!placed) throw new ContractError(`Visit ${String(ctx.visit.visit_no)} is not on the board yet: place it first.`, 409);
         const date = dubaiDate(placed);
         const slot = { start: placed, end: String(ctx.visit.scheduled_end) };
-        const problems = assignmentProblems(await crewFits(admin, ctx, action.technicianIds, slot, date), ctx.need.trades);
+        const problems = assignmentProblems(await crewFits(admin, ctx, action.technicianIds, slot, date));
         if (problems.length) throw new ContractError(`Visit ${String(ctx.visit.visit_no)}: ${problems.join("; ")}.`, 409);
         const { error } = await admin
           .from("amc_visits")
@@ -1116,6 +1181,7 @@ export async function performBoardAction(admin: Admin, action: BoardAction, acto
           })
           .eq("id", visitId);
         if (error) throw fail(error);
+        await tellCrew(ctx, { ids: action.technicianIds, start: placed });
         changed += 1;
       }
       return { ok: true as const, changed };
@@ -1128,6 +1194,7 @@ export async function performBoardAction(admin: Admin, action: BoardAction, acto
         .update({ scheduled_start: null, scheduled_end: null, technician_ids: [], lead_technician_id: null, headcount: null, updated_at: now })
         .eq("id", action.visitId);
       if (error) throw fail(error);
+      await tellCrew(ctx, { ids: [], start: null });
       return { ok: true as const, changed: 1 };
     }
   }
@@ -1318,6 +1385,27 @@ export async function performVisitAction(
 
   switch (action.action) {
     case "request_confirmation": {
+      /*
+        The contract's attempt rule applies here, to the requests (23 Nov
+        2026, the user): its channels, how many, and the days between them.
+      */
+      const rule = ruleOf(ctx.contract, config);
+      const requestChannels = rule.attemptChannels.filter((c) => c === "whatsapp" || c === "email");
+      if (requestChannels.length && !requestChannels.includes(action.channel)) {
+        throw new ContractError(`This contract's requests go by ${requestChannels.join(", ")}: change its schedule rules to use ${action.channel}.`, 400);
+      }
+      const { data: earlier } = await admin.from("amc_visit_attempts").select("outcome, attempted_at").eq("visit_id", visitId);
+      const before = attemptState(
+        ((earlier ?? []) as Row[]).map((a) => ({ outcome: a.outcome as AttemptOutcome, attemptedAt: String(a.attempted_at) })),
+        rule,
+        now,
+      );
+      if (before.exhausted) {
+        throw new ContractError(`All ${rule.attemptCount} requests this contract allows have been sent with no answer. Call the client and log how it went.`, 409);
+      }
+      if (before.nextAllowedAt) {
+        throw new ContractError(`The contract asks for ${rule.attemptIntervalDays} day(s) between attempts: the next one from ${fmtDate(before.nextAllowedAt.slice(0, 10))}.`, 409);
+      }
       const msg = visitMessage(ctx, "messageAppointmentConfirmation", config);
       let outcome: "prepared" | "sent" | "failed" | "no_recipient" = "prepared";
       if (action.channel === "email") {
@@ -1350,21 +1438,13 @@ export async function performVisitAction(
       return { ok: true, outcome, message: msg.text, whatsapp: action.channel === "whatsapp" && msg.phone ? whatsappUrl(msg.phone, msg.text) : null };
     }
     case "attempt": {
-      if (action.outcome === "no_answer" || action.outcome === "message_sent") {
-        /* The contract's channels (Schedule rules), as its count and interval are (17 Nov 2026). */
-        const channels = ruleOf(ctx.contract, config).attemptChannels;
-        if (channels.length && !channels.includes(action.channel)) {
-          throw new ContractError(`This contract's attempts are by ${channels.join(", ")}: change its schedule rules to use ${action.channel}.`, 400);
-        }
-        const { data: earlier } = await admin.from("amc_visit_attempts").select("outcome, attempted_at").eq("visit_id", visitId);
-        const before = attemptState(
-          ((earlier ?? []) as Row[]).map((a) => ({ outcome: a.outcome as AttemptOutcome, attemptedAt: String(a.attempted_at) })),
-          ruleOf(ctx.contract, config),
-          now,
-        );
-        if (before.nextAllowedAt) {
-          throw new ContractError(`The contract asks for ${ruleOf(ctx.contract, config).attemptIntervalDays} day(s) between attempts: the next one from ${fmtDate(before.nextAllowedAt.slice(0, 10))}.`, 409);
-        }
+      /*
+        Logged by hand (23 Nov 2026, the user): a record of a call or message,
+        any channel, any time; the contract's count and spacing are for Ask
+        to confirm. "Request sent" is what Ask to confirm records.
+      */
+      if (action.outcome === "message_sent") {
+        throw new ContractError("A request is sent with Ask to confirm. Log a call or message and how it went.", 400);
       }
       await logAttempt(action.channel, action.outcome, action.note);
       const changes: Row = { updated_at: nowIso };
@@ -1484,18 +1564,78 @@ export async function performVisitAction(
 /* ------------------------------------------------------------------ */
 
 /**
+ * The confirmation asked again, once a day, until the client confirms
+ * (DEV-491, 20 Nov 2026): from the day after the first to-do, the owner
+ * gets a notification each day and the to-do's title and tag say how
+ * pressing it is (calm, soon, urgent by the days left). Confirming closes
+ * the to-do and stops it. True when today's reminder was sent.
+ */
+export async function repeatPpmConfirmationReminder(admin: Admin, v: Row, c: Row, owner: string, today: string): Promise<boolean> {
+  const firstAsked = str(v.confirmation_due_notified_at);
+  if (!firstAsked || dubaiDate(firstAsked) >= today) return false;
+  if (v.client_confirmation === "confirmed" || v.status === "confirmed") return false;
+  const visitId = String(v.id);
+  const day = str(v.scheduled_start) ? dubaiDate(String(v.scheduled_start)) : String(v.target_date);
+  const urgency = confirmationUrgency(day, today, str(v.client_confirmation));
+  if (!urgency) return false;
+  const label = `${String(c.contract_number ?? "")} visit ${String(v.visit_no)}`;
+  const prefix = urgency.level === "urgent" ? "Urgent: " : urgency.level === "soon" ? "Soon: " : "";
+  const sent = await notifyUsers(admin, {
+    event: "ppm_confirmation_due",
+    userIds: [owner],
+    title: `${prefix}PPM visit still not confirmed: ${label}`,
+    body: `${String(c.customer_name ?? "")}, ${String(c.property_label ?? "")}: ${urgency.label.toLowerCase()} (${fmtDate(day)}). Confirm the date and time with the client.`,
+    link: `/extensions/amc-contracts/visits/${visitId}?tab=client`,
+    entityType: "visit",
+    entityId: visitId,
+    contractId: String(v.contract_id),
+    dedupeKey: `ppm_confirmation_due:${visitId}:${today}`,
+  });
+  if (!sent) return false;
+  /* The open to-do carries the urgency in its title and tag. */
+  const { data: link } = await admin.from("amc_todos").select("todo_id, closed_at").eq("dedupe_key", `ppm_confirmation:${visitId}`).maybeSingle<Row>();
+  if (link?.todo_id && !link.closed_at) {
+    await admin
+      .from("todos")
+      .update({ title: `${prefix}Confirm PPM visit: ${label}`.slice(0, 120), tags: ["PPM confirmation", urgency.label] })
+      .eq("id", String(link.todo_id))
+      .in("status", ["todo", "in_progress", "blocked"]);
+  }
+  return true;
+}
+
+/**
  * Daily: the confirmation to-do and notification N days before a window
  * opens (and the access status a visit starts with); an access alert when
  * a visit is near without a usable pass (to-do 4); and the client's
  * reminder the day before a placed visit. Each is claimed with its stamp
- * first, so overlapping runs act once. (The technician's reminder on the
- * day goes through the FSM app: Phase 15.)
+ * first, so overlapping runs act once. The crew's reminder on the day goes
+ * to the YFI app (DEV-398, remindCrewsOnTheDay below). Until the client
+ * confirms, the confirmation is asked again each day (DEV-491).
  */
-export async function runVisitSweep(admin: Admin, config: AmcConfig, now = new Date()) {
-  const result = { confirmationsDue: 0, accessAlerts: 0, clientReminders: 0, skipped: null as string | null };
+export async function runVisitSweep(
+  admin: Admin,
+  config: AmcConfig,
+  now = new Date(),
+  /* DEV-485: which parts run (all for Run now); the client's reminder also needs client emails on. */
+  parts: { confirmations: boolean; accessAlerts: boolean; crewReminders: boolean; clientReminders: boolean } = { confirmations: true, accessAlerts: true, crewReminders: true, clientReminders: true },
+) {
+  const result = {
+    confirmationsDue: 0,
+    confirmationReminders: 0,
+    accessAlerts: 0,
+    clientReminders: 0,
+    clientRemindersHeld: 0,
+    crewReminders: 0,
+    crewRemindersSkipped: null as string | null,
+    skipped: null as string | null,
+  };
   const today = todayInDubai(now);
   const lead = config.scheduling.confirmationLeadDays;
-  const horizon = new Date(Date.parse(`${today}T00:00:00Z`) + (Math.max(lead, config.scheduling.accessAlertDaysBefore) + 1) * 86_400_000).toISOString().slice(0, 10);
+  /* DEV-493: the access alert comes as early as a property's lead time needs, so look that far ahead too. */
+  const { data: longest } = await admin.from("amc_property_access_rules").select("lead_time_days").eq("active", true).order("lead_time_days", { ascending: false }).limit(1);
+  const longestLead = Number(((longest ?? []) as Row[])[0]?.lead_time_days ?? 0) || 0;
+  const horizon = new Date(Date.parse(`${today}T00:00:00Z`) + (Math.max(lead, config.scheduling.accessAlertDaysBefore, longestLead) + 1) * 86_400_000).toISOString().slice(0, 10);
   const { data, error } = await admin
     .from("amc_visits")
     .select(VISIT_COLUMNS)
@@ -1507,6 +1647,13 @@ export async function runVisitSweep(admin: Admin, config: AmcConfig, now = new D
     if (notMigrated(error)) return { ...result, skipped: "not migrated" };
     throw new Error(error.message);
   }
+  /* Each property's longest lead time (DEV-493): its access alert distance, never less than the global one. */
+  const propertyIds = [...new Set(((data ?? []) as unknown as Row[]).map((v) => str(one(v.contract)?.property_id)).filter((p): p is string => Boolean(p)))];
+  const { data: leadRows } = propertyIds.length
+    ? await admin.from("amc_property_access_rules").select("property_id, lead_time_days").eq("active", true).in("property_id", propertyIds)
+    : { data: [] as Row[] };
+  const leadOf = new Map<string, number>();
+  for (const r of (leadRows ?? []) as Row[]) leadOf.set(String(r.property_id), Math.max(leadOf.get(String(r.property_id)) ?? 0, Number(r.lead_time_days ?? 0) || 0));
   for (const v of (data ?? []) as unknown as Row[]) {
     const c = one(v.contract);
     if (!c || c.status !== "active" || !c.ppm_confirmed_at) continue;
@@ -1517,7 +1664,9 @@ export async function runVisitSweep(admin: Admin, config: AmcConfig, now = new D
     const label = `${String(c.contract_number ?? "")} visit ${String(v.visit_no)}`;
 
     /* Confirmation due (BRD 5.11: a set number of days before the window, 7 in the meeting). */
-    if (!v.confirmation_due_notified_at && confirmationDue(String(v.window_start), today, lead)) {
+    if (!parts.confirmations) {
+      /* Not part of this run (DEV-485). */
+    } else if (!v.confirmation_due_notified_at && confirmationDue(String(v.window_start), today, lead)) {
       const { data: claimed } = await admin.from("amc_visits").update({ confirmation_due_notified_at: now.toISOString() }).eq("id", visitId).is("confirmation_due_notified_at", null).select("id");
       if (claimed?.length) {
         let accessStatus = str(v.access_status);
@@ -1583,6 +1732,8 @@ export async function runVisitSweep(admin: Admin, config: AmcConfig, now = new D
         }
         result.confirmationsDue += 1;
       }
+    } else if (parts.confirmations && owner && (await repeatPpmConfirmationReminder(admin, v, c, owner, today))) {
+      result.confirmationReminders += 1;
     }
 
     /* Access near and not usable (BRD 5.11 / to-do 4). */
@@ -1591,7 +1742,8 @@ export async function runVisitSweep(admin: Admin, config: AmcConfig, now = new D
     if (access === "expired" && v.access_status === "approved") {
       await admin.from("amc_visits").update({ access_status: "expired" }).eq("id", visitId);
     }
-    if (!v.access_alert_sent_at && accessAlertDue(access, date, today, config.scheduling.accessAlertDaysBefore)) {
+    const alertDays = Math.max(config.scheduling.accessAlertDaysBefore, leadOf.get(String(c.property_id ?? "")) ?? 0);
+    if (parts.accessAlerts && !v.access_alert_sent_at && accessAlertDue(access, date, today, alertDays)) {
       const { data: claimed } = await admin.from("amc_visits").update({ access_alert_sent_at: now.toISOString() }).eq("id", visitId).is("access_alert_sent_at", null).select("id");
       if (claimed?.length && owner) {
         await openAmcTodo(
@@ -1627,7 +1779,12 @@ export async function runVisitSweep(admin: Admin, config: AmcConfig, now = new D
     /* The client's reminder the day before a placed visit. */
     const placed = str(v.scheduled_start);
     const tomorrow = new Date(Date.parse(`${today}T00:00:00Z`) + 86_400_000).toISOString().slice(0, 10);
-    if (placed && dubaiDate(placed) === tomorrow && !v.client_reminder_sent_at) {
+    if (placed && dubaiDate(placed) === tomorrow && !v.client_reminder_sent_at && parts.clientReminders && !config.jobs.clientEmails) {
+      /* DEV-485: client emails are off; nothing is stamped, so it goes once they are on (if still before the visit). */
+      result.clientRemindersHeld += 1;
+      continue;
+    }
+    if (parts.clientReminders && placed && dubaiDate(placed) === tomorrow && !v.client_reminder_sent_at) {
       const { data: claimed } = await admin.from("amc_visits").update({ client_reminder_sent_at: now.toISOString() }).eq("id", visitId).is("client_reminder_sent_at", null).select("id");
       if (!claimed?.length) continue;
       const ctx = await loadVisitContext(admin, visitId, null, config);
@@ -1658,5 +1815,80 @@ export async function runVisitSweep(admin: Admin, config: AmcConfig, now = new D
       result.clientReminders += 1;
     }
   }
+  /* DEV-398: the crew's reminder on the day, in the YFI app (BRD v0.4 5.11). */
+  const crew = parts.crewReminders
+    ? await remindCrewsOnTheDay(admin, now).catch((e) => {
+        console.error("[amc:visits] crew reminders failed:", e instanceof Error ? e.message : e);
+        return { sent: 0, skipped: "failed" as string | null };
+      })
+    : { sent: 0, skipped: "not part of this run" as string | null };
+  result.crewReminders = crew.sent;
+  result.crewRemindersSkipped = crew.skipped;
   return result;
+}
+
+
+/**
+ * The crew's reminder on the day of a placed PPM visit (DEV-398, BRD v0.4
+ * 5.11: "the technician on the day"). Technicians use the YFI mobile app,
+ * so it is an alert there: a snagging_notifications row (type
+ * amc_visit_today, pointing at the AMC visit), which the database webhook
+ * pushes to their phone. Only technicians linked to a portal login get it.
+ * The visit is claimed for the day first (technician_reminded_on), so an
+ * overlapping run reminds once. Needs migration 20261120100000; skipped
+ * before it.
+ */
+export async function remindCrewsOnTheDay(admin: Admin, now = new Date()): Promise<{ sent: number; skipped: string | null }> {
+  const today = todayInDubai(now);
+  const dayStart = new Date(`${today}T00:00:00${DUBAI}`).toISOString();
+  const dayEnd = new Date(Date.parse(`${today}T00:00:00${DUBAI}`) + 86_400_000).toISOString();
+  const { data, error } = await admin
+    .from("amc_visits")
+    .select("id, visit_no, scheduled_start, technician_ids, technician_reminded_on, contract:amc_contracts!amc_visits_contract_id_fkey(contract_number, proposal_number, customer_name, property_label, status)")
+    .in("status", [...PLANNABLE_STATUSES])
+    .gte("scheduled_start", dayStart)
+    .lt("scheduled_start", dayEnd)
+    .limit(500);
+  if (error) {
+    if (notMigrated(error) || error.code === "42703" || error.code === "PGRST204" || /technician_reminded_on/.test(error.message ?? "")) {
+      return { sent: 0, skipped: "needs the database update 20261120100000" };
+    }
+    throw new Error(error.message);
+  }
+  let sent = 0;
+  for (const v of (data ?? []) as unknown as Row[]) {
+    const c = one(v.contract);
+    if (!c || c.status !== "active") continue;
+    const fsmIds = Array.isArray(v.technician_ids) ? (v.technician_ids as unknown[]).map(String).filter(Boolean) : [];
+    if (!fsmIds.length || str(v.technician_reminded_on) === today) continue;
+    /* Claimed for today first: overlapping runs remind once. */
+    const { data: claimed } = await admin
+      .from("amc_visits")
+      .update({ technician_reminded_on: today })
+      .eq("id", String(v.id))
+      .or(`technician_reminded_on.is.null,technician_reminded_on.neq.${today}`)
+      .select("id");
+    if (!claimed?.length) continue;
+    const { data: links } = await admin.from("technician_reference").select("user_profile_id").in("fsm_resource_id", fsmIds).not("user_profile_id", "is", null);
+    const userIds = [...new Set(((links ?? []) as Row[]).map((l) => str(l.user_profile_id)).filter((u): u is string => Boolean(u)))];
+    if (!userIds.length) continue;
+    const ref = String(c.contract_number ?? c.proposal_number ?? "AMC");
+    const at = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Dubai" }).format(new Date(String(v.scheduled_start)));
+    const { error: insertError } = await admin.from("snagging_notifications").insert(
+      userIds.map((userId) => ({
+        user_id: userId,
+        type: "amc_visit_today",
+        amc_kind: "ppm",
+        amc_id: String(v.id),
+        title: `AMC visit today at ${at}`,
+        body: `${String(c.customer_name ?? "")}, ${String(c.property_label ?? "")}: ${ref} visit ${String(v.visit_no)}. Open it in the app for the details.`,
+      })),
+    );
+    if (insertError) {
+      console.error("[amc:visits] crew reminder not written:", insertError.message);
+      continue;
+    }
+    sent += userIds.length;
+  }
+  return { sent, skipped: null };
 }

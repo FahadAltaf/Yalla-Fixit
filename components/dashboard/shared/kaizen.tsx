@@ -573,12 +573,35 @@ export function SubHeading({
  * tile rather than a circle, and the trailing slot right-aligned so
  * numbers in a column line up.
  */
+/**
+ * Makes a list row open its page from anywhere on it (23 Nov 2026), with a
+ * pointer, a hover tint and Enter from the keyboard. For rows that hold a
+ * second link (which stops the click from reaching the row) and so cannot be
+ * one <a>. A ctrl/cmd click opens a new tab, as a link does.
+ */
+export function rowLink(href: string, push: (href: string) => void) {
+  const open = (newTab: boolean) => (newTab ? window.open(href, "_blank", "noopener") : push(href));
+  return {
+    role: "link" as const,
+    tabIndex: 0,
+    className: "cursor-pointer transition-colors hover:bg-muted/50 focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none focus-visible:-outline-offset-2",
+    onClick: (e: React.MouseEvent) => {
+      if ((e.target as HTMLElement).closest("a, button")) return;
+      open(e.metaKey || e.ctrlKey);
+    },
+    onKeyDown: (e: React.KeyboardEvent) => {
+      if (e.key === "Enter" && e.target === e.currentTarget) open(e.metaKey || e.ctrlKey);
+    },
+  };
+}
+
 export function DataRow({
   icon,
   title,
   subtitle,
   trailing,
   onClick,
+  href,
   active,
   className,
 }: {
@@ -587,6 +610,8 @@ export function DataRow({
   subtitle?: React.ReactNode;
   trailing?: React.ReactNode;
   onClick?: () => void;
+  /** The page the row opens: the whole row is the link (23 Nov 2026), not just its title. */
+  href?: string;
   /** Marks the row as the one currently being shown elsewhere on screen. */
   active?: boolean;
   className?: string;
@@ -630,17 +655,22 @@ export function DataRow({
     className,
   );
 
+  const interactive = cn(
+    shared,
+    "cursor-pointer",
+    active ? "hover:bg-brand-100" : "hover:bg-muted/50",
+    "focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none focus-visible:-outline-offset-2",
+  );
+
+  if (href) {
+    return (
+      <Link href={href} aria-current={active ? "true" : undefined} className={interactive}>
+        {content}
+      </Link>
+    );
+  }
   return onClick ? (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-current={active ? "true" : undefined}
-      className={cn(
-        shared,
-        active ? "hover:bg-brand-100" : "hover:bg-muted/50",
-        "focus-visible:ring-ring focus-visible:ring-2 focus-visible:outline-none focus-visible:-outline-offset-2",
-      )}
-    >
+    <button type="button" onClick={onClick} aria-current={active ? "true" : undefined} className={interactive}>
       {content}
     </button>
   ) : (

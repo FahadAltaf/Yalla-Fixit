@@ -762,17 +762,23 @@ function withAddedClauses(
 /**
  * FR5.3: may this person approve or send back a submitted proposal?
  *
- * When AMC Settings names approvers, only they can. When it names nobody,
- * the role permission (AMC approve) decides, which is how it worked before
- * approvers could be chosen.
+ * The role permission (AMC Approve) decides; someone named in the older
+ * AMC Settings list approves too (DEV-368, 20 Nov 2026).
  */
 export function canApproveAmc(
   settings: Pick<AmcSettings, "approval">,
   email: string | null | undefined,
   hasRolePermission: boolean,
 ): boolean {
+  /*
+    DEV-368 (20 Nov 2026 review): the role decides. The older approver list
+    in AMC Settings no longer overrides it -- it used to, so anyone with the
+    AMC Approve role who was not on the list lost the right. A person on the
+    list still approves (the list adds, never takes away) until the
+    approvers are named in AMC configuration per level (DEV-488).
+  */
+  if (hasRolePermission) return true;
   const approvers = (settings.approval?.approvers ?? []).map((item) => item.trim().toLowerCase());
-  if (approvers.length === 0) return hasRolePermission;
   return Boolean(email) && approvers.includes(email!.trim().toLowerCase());
 }
 

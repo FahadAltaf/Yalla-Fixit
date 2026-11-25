@@ -18,6 +18,7 @@ import {
   quotationTotals,
   slaDeadlines,
   slaState,
+  scheduledInTime,
   type CoverageInput,
 } from "@/lib/amc/call-outs";
 import { fitFor } from "@/lib/amc/visits";
@@ -109,6 +110,19 @@ test("the SLA: emergency attended within 120 minutes, non emergency within 48 ho
   assert.equal(loggedInTime("non_emergency", "2026-11-10T20:00:00Z", "2026-11-10T21:30:00Z", 60), null);
 });
 
+/* DEV-406 (20 Nov 2026 review): a non emergency is measured on being scheduled within 48 hours, not on attendance. */
+test("the SLA: a non emergency is met by being booked in time", () => {
+  const n = slaDeadlines("non_emergency", "2026-11-10T08:00:00.000Z", SLA);
+  const base = { reportedAt: "2026-11-10T08:00:00.000Z", attendedAt: null, ...n, status: "logged" as const };
+  assert.equal(slaState(base, new Date("2026-11-11T08:00:00Z"), 75), "on_track", "not booked yet, half the time gone");
+  assert.equal(slaState(base, new Date("2026-11-12T09:00:00Z"), 75), "missed", "not booked by the deadline");
+  assert.equal(scheduledInTime(n.scheduleDueAt, "2026-11-11T10:00:00.000Z"), true);
+  assert.equal(scheduledInTime(n.scheduleDueAt, "2026-11-12T10:00:00.000Z"), false);
+  assert.equal(slaState({ ...base, status: "scheduled", slaMet: true }, new Date("2026-11-20T00:00:00Z"), 75), "met", "booked in time, attended days later: still met");
+  assert.equal(slaState({ ...base, status: "attended", attendedAt: "2026-11-15T10:00:00.000Z", slaMet: true }, new Date("2026-11-20T00:00:00Z"), 75), "met");
+  assert.equal(slaState({ ...base, status: "scheduled", slaMet: false }, new Date("2026-11-11T00:00:00Z"), 75), "missed", "booked late");
+});
+
 test("statuses: Logged, Scheduled, Attended, Resolved, Pending Works, Quoted, Closed", () => {
   assert.equal(canMoveCallOut("logged", "attended"), true, "an emergency crew goes at once");
   assert.equal(canMoveCallOut("logged", "closed"), false);
@@ -122,12 +136,15 @@ test("statuses: Logged, Scheduled, Attended, Resolved, Pending Works, Quoted, Cl
   assert.equal(needsAdditionalWork({ priority: "emergency", minutesOnSite: 30, partsNeeded: true }, 2), true, "parts");
 });
 
-test("a call out with no trade can still be crewed by any free technician; a named trade still needs competence", () => {
+test("a call out is crewed by any technician: skills and bookings are notes (DEV-490)", () => {
   const tech = { fsmId: "T1", name: "Ravi", active: true, shift: "morning", skills: [], areas: [], hasVehicle: true, isDriver: false, accessPermissions: [] };
   const free = { onLeave: false, overlaps: 0, workloadMinutes: 0 };
   assert.deepEqual(fitFor(tech, { trades: [], date: "2026-11-10", area: null, accessTypes: [] }, free).blockers, []);
-  assert.deepEqual(fitFor(tech, { trades: ["ac"], date: "2026-11-10", area: null, accessTypes: [] }, free).blockers, ["Not confirmed for this trade"]);
-  assert.ok(fitFor(tech, { trades: [], date: "2026-11-10", area: null, accessTypes: [] }, { ...free, overlaps: 1 }).blockers.includes("Already booked at that time"));
+  assert.deepEqual(fitFor(tech, { trades: ["ac"], date: "2026-11-10", area: null, accessTypes: [] }, free).blockers, []);
+  assert.ok(fitFor(tech, { trades: ["ac"], date: "2026-11-10", area: null, accessTypes: [] }, free).notes.includes("No AMC skill for this trade on their profile"));
+  const booked = fitFor(tech, { trades: [], date: "2026-11-10", area: null, accessTypes: [] }, { ...free, overlaps: 1 });
+  assert.deepEqual(booked.blockers, []);
+  assert.equal(booked.booked, true);
 });
 
 test("additional work: nine statuses, approval with evidence, the 20% material fee", () => {

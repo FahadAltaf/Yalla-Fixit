@@ -58,6 +58,59 @@ export const PAYMENT_MODE_LABELS: Record<PaymentMode, string> = {
   cheque: "Cheque",
 };
 
+/**
+ * When an instalment is due, or a cheque is dated (23 Nov 2026, Finance's
+ * filters). The overdue bands match the ageing cards: 1-30 days late is due
+ * 1 to 30 days before today.
+ */
+export const PAYMENT_WHEN = ["overdue_1_30", "overdue_31_60", "overdue_61_90", "overdue_90_plus", "next_7", "this_month", "next_30", "next_90", "past_30"] as const;
+export type PaymentWhen = (typeof PAYMENT_WHEN)[number];
+export const PAYMENT_WHEN_LABELS: Record<PaymentWhen, string> = {
+  overdue_1_30: "1-30 days late",
+  overdue_31_60: "31-60 days late",
+  overdue_61_90: "61-90 days late",
+  overdue_90_plus: "Over 90 days late",
+  next_7: "Next 7 days",
+  this_month: "This month",
+  next_30: "Next 30 days",
+  next_90: "Next 90 days",
+  past_30: "Last 30 days",
+};
+
+const shiftDay = (day: string, days: number) => {
+  const d = new Date(`${day}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+};
+
+/** The date range a filter covers (inclusive, YYYY-MM-DD); `late`: only money still owed. */
+export function paymentWhenRange(when: PaymentWhen, today: string): { from: string | null; to: string | null; late: boolean } {
+  switch (when) {
+    case "overdue_1_30":
+      return { from: shiftDay(today, -30), to: shiftDay(today, -1), late: true };
+    case "overdue_31_60":
+      return { from: shiftDay(today, -60), to: shiftDay(today, -31), late: true };
+    case "overdue_61_90":
+      return { from: shiftDay(today, -90), to: shiftDay(today, -61), late: true };
+    case "overdue_90_plus":
+      return { from: null, to: shiftDay(today, -91), late: true };
+    case "next_7":
+      return { from: today, to: shiftDay(today, 6), late: false };
+    case "this_month": {
+      const first = `${today.slice(0, 7)}-01`;
+      const next = new Date(`${first}T00:00:00Z`);
+      next.setUTCMonth(next.getUTCMonth() + 1);
+      return { from: first, to: shiftDay(next.toISOString().slice(0, 10), -1), late: false };
+    }
+    case "next_30":
+      return { from: today, to: shiftDay(today, 29), late: false };
+    case "next_90":
+      return { from: today, to: shiftDay(today, 89), late: false };
+    case "past_30":
+      return { from: shiftDay(today, -30), to: today, late: false };
+  }
+}
+
 export const CHEQUE_STATUSES = ["held", "deposited", "cleared", "bounced", "replaced", "returned"] as const;
 export type ChequeStatus = (typeof CHEQUE_STATUSES)[number];
 export const CHEQUE_STATUS_LABELS: Record<ChequeStatus, string> = {
