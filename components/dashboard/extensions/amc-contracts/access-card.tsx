@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { FileText, KeyRound, Plus, ShieldCheck, SquarePen, Trash2 } from "lucide-react";
+import { FileText, KeyRound, Link2, Plus, ShieldCheck, SquarePen, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { SectionCard } from "@/components/dashboard/shared/kaizen";
@@ -20,6 +20,7 @@ import type { AccessRuleView, PassView } from "@/lib/server/amc/visits";
 import { clientProfileService, type AccessRuleRecord } from "@/modules/amc-contracts/client-profile-service";
 
 import { CompactEmpty, errorText } from "./call-out-shared";
+import { ClientLinkButton } from "./client-link-button";
 import { formatContractDate, formatDateTime } from "./contract-status";
 import { PassTypeBadges, PassTypeFields, newPassType, passTypeOf, type PassType } from "./pass-fields";
 import { AccessRuleDialog } from "./profile/property-panels";
@@ -54,6 +55,8 @@ export function SiteVisitAccessCard({ assessmentId }: { assessmentId: string }) 
       entityId={assessmentId}
       noun="site visit"
       who="inspector"
+      /* DEV-494 on a site visit (26 Nov 2026): the client uploads the pass on a link. */
+      clientLink={<ClientLinkButton siteVisitId={assessmentId} purpose="access_upload" label="Ask client for pass" icon={<Link2 className="size-4" />} size="sm" />}
       savePass={(input) => amcRequest(siteVisitUrl(assessmentId), { method: "PATCH", body: JSON.stringify(input) })}
       removePass={(documentId) => amcRequest(`${siteVisitUrl(assessmentId)}?documentId=${encodeURIComponent(documentId)}`, { method: "DELETE" })}
     />
@@ -79,6 +82,7 @@ export function AccessCard({
   savePass,
   removePass,
   onChanged,
+  clientLink,
 }: {
   data: AccessCardData | null;
   error: string | null;
@@ -94,6 +98,8 @@ export function AccessCard({
   removePass: (documentId: string) => Promise<unknown>;
   /** After any change (the page's own figures). */
   onChanged?: () => void | Promise<void>;
+  /** A client link button in the header (a site visit's pass upload link). */
+  clientLink?: React.ReactNode;
 }) {
   const { confirm, dialog: confirmDialog } = useConfirm();
   const [open, setOpen] = useState<"new" | PassView | null>(null);
@@ -200,6 +206,7 @@ export function AccessCard({
                 Add rule
               </Button>
             ) : null}
+            {clientLink ?? null}
             <Button size="sm" onClick={startAdd}>
               <Plus className="size-4" />
               Add pass
@@ -232,27 +239,8 @@ export function AccessCard({
             not two tall empty ones; otherwise each part, an empty one as one line.
           */}
           {rules.length === 0 && passes.length === 0 ? (
-            <CompactEmpty
-              icon={<ShieldCheck />}
-              title="Nothing needed for access"
-              description="This property asks for no pass or permit, and no pass is on file."
-              action={
-                canEdit ? (
-                  <div className="flex flex-wrap gap-2">
-                    {propertyId ? (
-                      <Button size="sm" variant="outline" onClick={() => openRule(null)}>
-                        <KeyRound className="size-4" />
-                        Add rule
-                      </Button>
-                    ) : null}
-                    <Button size="sm" variant="outline" onClick={startAdd}>
-                      <Plus className="size-4" />
-                      Add pass
-                    </Button>
-                  </div>
-                ) : null
-              }
-            />
+            /* The buttons are in the card's header only (26 Nov 2026: they showed twice). */
+            <CompactEmpty icon={<ShieldCheck />} title="Nothing needed for access" description="This property asks for no pass or permit, and no pass is on file." />
           ) : (
             <>
               <div className="grid gap-2">

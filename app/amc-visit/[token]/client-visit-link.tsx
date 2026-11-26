@@ -15,6 +15,8 @@ import CompanyLogo from "@/public/site-logo.webp";
 
 type VisitView = {
   purpose: "visit_confirmation" | "access_upload";
+  /** "AMC AMC-C-2026-0001 · Visit 3" or "Site visit ASM-2026-0001". */
+  reference?: string;
   customerName: string;
   propertyLabel: string;
   contractNumber: string;
@@ -152,7 +154,7 @@ export function ClientVisitLink({ token }: { token: string }) {
         <header className="space-y-2 border-b px-6 pt-6 pb-5 sm:px-8">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <p className="text-brand text-xs font-semibold tracking-wider uppercase">
-              AMC {visit.contractNumber} · Visit {visit.visitNo}
+              {visit.reference ?? `AMC ${visit.contractNumber} · Visit ${visit.visitNo}`}
             </p>
             {confirmation && visit.confirmed ? (
               <Badge variant="secondary" className="bg-success/10 text-success border-0 font-medium">
