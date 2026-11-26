@@ -313,5 +313,6 @@ export type ConfigView = (typeof CONFIG_VIEWS)[number]["value"];
  * (or the defaults); the sections are simply not shown. Take a view out of
  * this set to show it again.
  */
-export const HIDDEN_CONFIG_VIEWS: ReadonlySet<ConfigView> = new Set<ConfigView>(["delivery", "roles"]);
+/* 26 Nov 2026 (the user): contracts are added by script for now, so the import tab is hidden; its code stays for later. */
+export const HIDDEN_CONFIG_VIEWS: ReadonlySet<ConfigView> = new Set<ConfigView>(["delivery", "roles", "import"]);
 export const VISIBLE_CONFIG_VIEWS = CONFIG_VIEWS.filter((v) => !HIDDEN_CONFIG_VIEWS.has(v.value));

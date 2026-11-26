@@ -78,7 +78,7 @@ export function importOrder(parsed: TrackerParse): number[] {
   return parsed.contracts.map((_, i) => i).sort((a, b) => parsed.contracts[a].startDate.localeCompare(parsed.contracts[b].startDate) || a - b);
 }
 
-const serviceLabel = (column: string, id: string) => AMC_SERVICES.find((s) => s.id === id)?.name ?? column.replace(/\s+/g, " ").trim();
+const serviceLabel = (column: string, id: string) => AMC_SERVICES.find((s) => s.id === id)?.label ?? column.replace(/\s+/g, " ").trim();
 
 function bedroomsOf(text: string | null): number | null {
   if (!text) return null;
