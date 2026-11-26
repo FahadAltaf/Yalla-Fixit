@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { notifySnaggingJob } from "@/lib/server/snagging/portal-notices";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
@@ -425,6 +426,16 @@ export async function PATCH(
           new_value: change.to,
         },
       })),
+    );
+
+    /* The new reviewer or approval manager hears about it in the portal inbox (26 Nov 2026). */
+    const assignedAt = new Date().toISOString();
+    await Promise.all(
+      reassignments
+        .filter((change) => change.to)
+        .map((change) =>
+          notifySnaggingJob(admin, id, change.event === "reviewer_assigned" ? "assigned_reviewer" : "assigned_approver", assignedAt, profile.id, change.to),
+        ),
     );
 
     return NextResponse.json({ data: { id } });

@@ -1,3 +1,4 @@
+import type { ContractFsmClientState } from "@/lib/server/amc/fsm-on-signing";
 import type { ContractView } from "@/lib/server/amc/contracts";
 import type { SignatoryRecord } from "@/lib/server/amc/contract-lifecycle";
 import type {
@@ -373,6 +374,14 @@ export const amcContractsService = {
   },
   fsm(id: string) {
     return request<{ fsm: ContractFsmActivity }>(`/api/amc-contracts/${id}/fsm`);
+  },
+  /** DEV-504: is the contract's client an FSM customer yet (made on signing). */
+  fsmClient(id: string) {
+    return request<ContractFsmClientState>(`/api/amc-contracts/${id}/fsm/client`);
+  },
+  /** DEV-504: put the contract's client into Zoho FSM now (when signing could not). */
+  createFsmClient(id: string) {
+    return request<{ ok: true; state: "already" | "linked" | "created"; contactId: string; addressId: string | null }>(`/api/amc-contracts/${id}/fsm/client`, { method: "POST" });
   },
   fsmWorkOrder(ref: string, contractId?: string) {
     const query = new URLSearchParams({ ref });

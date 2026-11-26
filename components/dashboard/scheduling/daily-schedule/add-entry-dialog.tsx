@@ -528,7 +528,7 @@ export default function AddEntryDialog({
                 onClick={() => setMode(m.key)}
                 className={cn(
                   "inline-flex items-center gap-2 rounded-full px-3.5 py-1.5 text-sm font-medium whitespace-nowrap transition-colors",
-                  mode === m.key ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+                  mode === m.key ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
                 )}
               >
                 <m.icon className="size-4" />
@@ -568,7 +568,7 @@ export default function AddEntryDialog({
                           aria-selected={searchMode === k}
                           className={cn(
                             "rounded-full px-3 py-1 leading-none font-medium whitespace-nowrap transition-colors",
-                            searchMode === k ? "bg-background text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
+                            searchMode === k ? "bg-card text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground",
                           )}
                         >
                           {l}

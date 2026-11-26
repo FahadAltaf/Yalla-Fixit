@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { AMC_JOBS, isScheduledJobRequest, listAmcJobRuns, runAmcJobs } from "@/lib/server/amc/jobs";
+import { AMC_JOBS, amcRunRecipients, isScheduledJobRequest, listAmcJobRuns, runAmcJobs } from "@/lib/server/amc/jobs";
 import { requireResourceAccess } from "@/lib/server/require-access";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { ActionType, ResourceType } from "@/types/types";
@@ -14,7 +14,8 @@ export const dynamic = "force-dynamic";
  *      as the Snagging escalations and the Todos reminders. No secret
  *      configured means closed.
  * POST from the portal ("Run now"): AMC Configuration Edit.
- * GET  AMC Configuration View: the jobs and the last runs.
+ * GET  AMC Configuration View: the jobs and the last runs;
+ *      ?runId= who that run told (by person, channel and outcome).
  */
 export async function POST(req: NextRequest) {
   if (isScheduledJobRequest(req.headers)) {
@@ -37,10 +38,15 @@ export async function POST(req: NextRequest) {
   }
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   const gate = await requireResourceAccess(ResourceType.AMC_CONFIG, ActionType.VIEW);
   if (!gate.ok) return gate.response;
   const admin = await createAdminServerClient();
+  const runId = req.nextUrl.searchParams.get("runId");
+  if (runId) {
+    if (!/^[0-9a-f-]{36}$/i.test(runId)) return NextResponse.json({ error: "Run not found." }, { status: 404 });
+    return NextResponse.json({ recipients: await amcRunRecipients(admin, runId) }, { headers: { "Cache-Control": "no-store" } });
+  }
   return NextResponse.json(
     { jobs: AMC_JOBS.map((j) => ({ key: j.key, label: j.label })), runs: await listAmcJobRuns(admin) },
     { headers: { "Cache-Control": "no-store" } },

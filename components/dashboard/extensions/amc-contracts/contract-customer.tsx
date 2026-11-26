@@ -70,7 +70,7 @@ export function ContractCustomer({
           note={live ? (live.customer ? differs(contract.customerName, live.customer.name) : "No client record linked") : null}
         >
           {live?.customer ? (
-            <Link href={`/extensions/amc-contracts/customers/${live.customer.id}`} className={LINK}>
+            <Link href={`/clients/${live.customer.id}`} className={LINK}>
               {contract.customerName || live.customer.name}
             </Link>
           ) : (

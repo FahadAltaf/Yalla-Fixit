@@ -86,7 +86,8 @@ export const renewalsService = {
   amendments(contractId: string) {
     return request<AmendmentsResponse>(`${contractUrl(contractId)}/amendments`);
   },
-  requestAmendment(contractId: string, body: AmendmentRequestBody) {
+  /** With decideNow, an AMC approver asks, approves and applies it in one step (DEV-417). */
+  requestAmendment(contractId: string, body: AmendmentRequestBody & { decideNow?: boolean; validReason?: boolean }) {
     return request<{ id: string }>(`${contractUrl(contractId)}/amendments`, { method: "POST", body: JSON.stringify(body) });
   },
   amendmentAction(contractId: string, amendmentId: string, body: AmendmentActionBody) {

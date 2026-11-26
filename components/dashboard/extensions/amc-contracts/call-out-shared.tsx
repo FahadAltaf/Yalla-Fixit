@@ -543,7 +543,7 @@ export function PhotosPanel<K extends string>({
                 ) : (
                   <div className="bg-muted text-muted-foreground flex aspect-[4/3] items-center justify-center text-xs">Unavailable</div>
                 )}
-                <span className={cn("absolute top-2 left-2 rounded-md px-2 py-0.5 text-xs font-medium shadow-sm", PHOTO_KIND_TONE[p.kind] ?? "bg-background/90 text-foreground")}>
+                <span className={cn("absolute top-2 left-2 rounded-md px-2 py-0.5 text-xs font-medium shadow-sm", PHOTO_KIND_TONE[p.kind] ?? "bg-card/90 text-foreground")}>
                   {labelOf(p.kind)}
                 </span>
                 {editable ? (

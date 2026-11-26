@@ -300,6 +300,8 @@ export const CONFIG_VIEWS = [
   { value: "roles", label: "Roles and jobs", sections: [] },
   /* 24 Nov 2026: Operations settings (notifications, discount, site visit checklist), moved here from the AMC menu. */
   { value: "operations", label: "Operations", sections: [] },
+  /* DEV-486 (26 Nov 2026): the department tracker's contracts, imported once. */
+  { value: "import", label: "Import contracts", sections: [] },
   { value: "history", label: "Change history", sections: [] },
 ] as const;
 

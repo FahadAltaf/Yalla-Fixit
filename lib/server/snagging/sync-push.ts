@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { notifySnaggingJob } from "@/lib/server/snagging/portal-notices";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
@@ -1277,6 +1278,8 @@ async function applySubmission(admin: Admin, ctx: Ctx, payload: Record<string, u
   });
 
   ctx.jobById.set(job.id, { ...job, status: "submitted" });
+  /* The reviewer (or the approval manager) hears about it in the portal inbox (26 Nov 2026). */
+  await notifySnaggingJob(admin, job.id, "submitted", submittedAt, ctx.userId);
 }
 
 /**

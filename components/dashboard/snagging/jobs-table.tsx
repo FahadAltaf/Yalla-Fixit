@@ -46,7 +46,7 @@ export default function JobsTable({
 }: {
   /*
     The first page, read on the server before the page was sent (see
-    app/(dashboard)/snagging/jobs/page.tsx). The table shows it at once
+    app/(dashboard)/snagging/jobs/(list)/page.tsx). The table shows it at once
     instead of asking for it after it has loaded; every later page, filter
     and search is asked for as before.
   */

@@ -356,8 +356,8 @@ export async function createContact(
     email: string;
     mobile?: string | null;
     companyId?: string | null;
-    /* Required by this FSM account on every contact (Maher_Id__C); asked for
-       as its own field when a client is added (Sami, Oct 2026). */
+    /* Maher_Id__C, sent when given; optional in the portal since 26 Nov 2026
+       (the user: not required when a client is created). */
     maherId?: string | null;
     address?: FsmAddressInput | null;
   },

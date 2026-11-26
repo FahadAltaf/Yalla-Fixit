@@ -131,7 +131,7 @@ const readySlice = <T,>(data: T): Slice<T> => ({
 
 /**
  * The sections the page read on the server before it was sent (see
- * app/(dashboard)/snagging/[id]/page.tsx). A section given here starts on
+ * app/(dashboard)/snagging/[id]/(detail)/page.tsx). A section given here starts on
  * screen; one left out is fetched as before. A key that is present with a
  * null value -- the de-snag quotation when there is none -- is an answer,
  * not a missing section.

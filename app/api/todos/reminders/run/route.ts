@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { notifyTodo } from "@/lib/server/todos/portal-notices";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { emailService } from "@/lib/email-service";
 import { Todo, User } from "@/types/types";
@@ -119,6 +120,9 @@ export async function POST(req: NextRequest) {
             status: "skipped",
           });
         }
+
+        /* The owner and assignees also see it in the portal inbox, under To-dos (26 Nov 2026). */
+        await notifyTodo(admin, todo, "reminder", [row.owner_id, ...assignees.map((user) => user.id)], { id: null, name: null }, row.reminder_at ?? row.id);
 
         const { error: updateError } = await admin
           .from("todos")

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 import { canOperateContract } from "@/lib/amc/access";
 import { amendmentRequestSchema } from "@/lib/amc/amendments";
-import { amendmentDeciders, listAmendments, requestAmendment, scheduledEnding } from "@/lib/server/amc/amendments";
+import { amendmentDeciders, listAmendments, requestAmendment, requestAndApplyAmendment, scheduledEnding } from "@/lib/server/amc/amendments";
 import { readAmcConfig } from "@/lib/server/amc/config";
 import { contractErrorResponse, requireContractAccess, requireManagedContract } from "@/lib/server/amc/contract-access";
 
@@ -10,8 +10,9 @@ import { contractErrorResponse, requireContractAccess, requireManagedContract } 
  * A contract's amendments (DEV-417).
  *
  *   GET    the requests, newest first, and what the caller may do
- *   POST   ask for one (whoever operates the contract); an AMC approver who
- *          is not the requester decides it
+ *   POST   ask for one (whoever operates the contract); one AMC approver
+ *          decides it. With `decideNow`, an AMC approver asks, approves and
+ *          applies it in one step (DEV-417, 26 Nov 2026: one approver is enough).
  */
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const gate = await requireContractAccess();
@@ -49,12 +50,20 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const gate = await requireContractAccess();
   if (!gate.ok) return gate.response;
   const { id } = await ctx.params;
-  const parsed = amendmentRequestSchema.safeParse(await req.json().catch(() => null));
+  const raw = ((await req.json().catch(() => null)) ?? {}) as Record<string, unknown>;
+  const { decideNow, validReason, ...request } = raw;
+  const parsed = amendmentRequestSchema.safeParse(request);
   if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message ?? "Invalid request" }, { status: 400 });
   try {
     const managed = await requireManagedContract(gate, id, "write");
     if (!managed.ok) return managed.response;
-    return NextResponse.json(await requestAmendment(gate.admin, id, parsed.data, { id: gate.userId, label: gate.label }, await readAmcConfig(gate.admin)), { status: 201 });
+    const actor = { id: gate.userId, label: gate.label };
+    const config = await readAmcConfig(gate.admin);
+    if (decideNow === true) {
+      if (!gate.canApprove) return NextResponse.json({ error: "Only an AMC approver can do this in one step; ask for it instead." }, { status: 403 });
+      return NextResponse.json(await requestAndApplyAmendment(gate.admin, id, parsed.data, actor, config, { validReason: validReason === true }), { status: 201 });
+    }
+    return NextResponse.json(await requestAmendment(gate.admin, id, parsed.data, actor, config), { status: 201 });
   } catch (error) {
     return contractErrorResponse(error, "Could not ask for the amendment");
   }

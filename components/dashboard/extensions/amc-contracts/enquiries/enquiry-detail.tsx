@@ -612,7 +612,7 @@ export function EnquiryDetail({ id }: { id: string }) {
                               label: "Name",
                               value: (
                                 <Link
-                                  href={`/extensions/amc-contracts/customers/${e.customer.id}`}
+                                  href={`/clients/${e.customer.id}`}
                                   className={LINK}
                                 >
                                   {e.customer.name}
@@ -785,7 +785,7 @@ export function EnquiryDetail({ id }: { id: string }) {
                               assets and scope are captured at the site visit,
                               or on the{" "}
                               <Link
-                                href={`/extensions/amc-contracts/customers/${e.customer.id}`}
+                                href={`/clients/${e.customer.id}`}
                                 className="hover:text-foreground underline underline-offset-2"
                               >
                                 client&apos;s page

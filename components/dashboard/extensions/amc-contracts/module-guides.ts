@@ -62,7 +62,7 @@ const L = {
   contracts: { label: "Contracts", href: "/extensions/amc-contracts" },
   renewals: { label: "Renewals", href: "/extensions/amc-contracts/renewals" },
   payments: { label: "Payments", href: "/extensions/amc-contracts/payments" },
-  clients: { label: "Clients", href: "/extensions/amc-contracts/customers" },
+  clients: { label: "Clients", href: "/clients" },
   visits: { label: "Visits", href: "/extensions/amc-contracts/visits" },
   visitBoard: { label: "Visit board", href: "/extensions/amc-contracts/board" },
   jobReviews: { label: "Job reviews", href: "/extensions/amc-contracts/job-reviews" },
@@ -260,16 +260,17 @@ export const MODULE_GUIDES: Record<ModuleKey, Guide> = {
 
   clients: {
     title: "Clients",
-    summary: "The same clients and addresses as Snagging, read from Zoho FSM, with what AMC keeps about each: Customer ID, status, properties, contracts and history.",
-    who: "Everyone working on AMC.",
+    summary: "One list of clients for AMC and Snagging, read from Zoho FSM, with what AMC keeps about each: Customer ID, status, properties, contracts and history.",
+    who: "Everyone with Clients in AMC or Snagging.",
     steps: [
       { title: "Find the client", detail: "The list is newest first from FSM. Prospects saved only in the portal show with Not in FSM yet." },
-      { title: "Open it", detail: "Opening a client gives it a Customer ID. The client page has Overview, Properties, Contracts, Schedule, Service history, Payments, Site visits, Contacts, Documents and the Communication log." },
+      { title: "Open it", detail: "Opening a client gives it a Customer ID. The client page has Overview, Properties, Contracts, Schedule, Service history, Payments, Site visits, Snagging jobs, Contacts, Documents and the Communication log." },
+      { title: "Edit it", detail: "Edit client is the one form for AMC and Snagging: name, phone, email, Maher ID, company and notes, plus AMC's own fields for those who may change them." },
       { title: "Set up the property", detail: "On the property: Details, Assets and scope (which trades and units, preferred months and days) and Access rules. These drive the PPM schedule and who may be sent." },
     ],
     automatic: ["A Prospect becomes a Client when its first payment is received."],
     rules: [
-      "FSM is read-only from here: new clients and edits are saved in the portal.",
+      "New clients and edits to name, phone, email, Maher ID and company are saved in Zoho FSM too; AMC's own fields stay in the portal.",
       "Signed contracts keep the client and property as signed; editing the client changes future documents only.",
       "Addresses are shared with Snagging and edited with the same address form.",
     ],

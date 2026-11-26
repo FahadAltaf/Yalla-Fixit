@@ -1802,7 +1802,7 @@ function AddClientDialog({
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [company, setCompany] = useState("");
-  // Zoho FSM requires a Maher ID on every client (Sami, Oct 2026: its own field).
+  // Maher ID: optional (26 Nov 2026, the user); sent to Zoho FSM when given.
   const [maherId, setMaherId] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -1812,7 +1812,7 @@ function AddClientDialog({
   const valid =
     name.trim().length >= 2 &&
     /[0-9]{6,}/.test(phone.replace(/[^0-9]/g, "")) &&
-    (requireEmail ? emailOk && maherId.trim().length > 0 : email === "" || emailOk);
+    (requireEmail ? emailOk : email === "" || emailOk);
 
   // Persist the client now, so it is genuinely on file (and reusable) the
   // moment it is added, rather than only when the job is finally created.
@@ -1870,7 +1870,7 @@ function AddClientDialog({
             />
           </Field>
           {requireEmail ? (
-            <Field label="Maher ID" required hint="Zoho FSM requires it.">
+            <Field label="Maher ID (optional)">
               <Input
                 value={maherId}
                 onChange={(event) => setMaherId(event.target.value)}
@@ -2985,7 +2985,7 @@ function PlanAreasStep({
                   */}
                   {canPin ? (
                     <div className="bg-muted/40 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-2 py-1.5">
-                      <div className="bg-background inline-flex rounded-md border p-0.5">
+                      <div className="bg-card inline-flex rounded-md border p-0.5">
                         {(["pin", "zone"] as const).map((option) => (
                           <button
                             key={option}

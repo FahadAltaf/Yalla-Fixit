@@ -1,4 +1,5 @@
 import { executeRESTBackend } from "@/lib/rest-server";
+import type { NotificationModule } from "@/lib/notifications/modules";
 import type { ReportingSettings, ReportingSettingsOverrides } from "@/lib/reporting/settings";
 import type { InAppNotification } from "@/lib/server/notifications/inbox";
 import type { ReportingSettingsHistoryEntry } from "@/lib/server/reporting/audit";
@@ -45,12 +46,13 @@ export const reportingService = {
 };
 
 export const notificationsService = {
-  list: (options: { limit: number; offset?: number; unread?: boolean }) =>
-    executeRESTBackend<{ notifications: InAppNotification[]; unread: number }>("/api/notifications", {
+  list: (options: { limit: number; offset?: number; unread?: boolean; module?: NotificationModule | null }) =>
+    executeRESTBackend<{ notifications: InAppNotification[]; unread: number; unreadByModule?: Partial<Record<NotificationModule, number>> }>("/api/notifications", {
       params: {
         limit: options.limit,
         offset: options.offset ?? 0,
         ...(options.unread ? { unread: "1" } : {}),
+        ...(options.module ? { module: options.module } : {}),
       },
     }),
 

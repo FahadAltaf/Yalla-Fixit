@@ -243,6 +243,7 @@ export function ContractAmendmentsPanel({
         contractId={contractId}
         contractStatus={contractStatus}
         contractNumber={contractNumber}
+        canApprove={Boolean(data?.canApprove)}
         onRequested={reload}
       />
       <ApproveAmendmentDialog
@@ -622,6 +623,7 @@ function RequestAmendmentDialog({
   contractId,
   contractStatus,
   contractNumber,
+  canApprove,
   onRequested,
 }: {
   open: boolean;
@@ -631,6 +633,8 @@ function RequestAmendmentDialog({
   contractId: string;
   contractStatus: string;
   contractNumber: string;
+  /** An AMC approver: may approve and apply it in one step (DEV-417, 26 Nov 2026). */
+  canApprove: boolean;
   onRequested: () => void;
 }) {
   const base = useId();
@@ -650,24 +654,31 @@ function RequestAmendmentDialog({
     partyRole: "owner",
     clientId: null,
   }));
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<"ask" | "now" | null>(null);
+  /* Ending early in one step: the approver decides the refund here (accepted reason = refund). */
+  const [validReason, setValidReason] = useState(false);
   const set = <K extends keyof RequestForm>(key: K, value: RequestForm[K]) => setForm((cur) => ({ ...cur, [key]: value }));
 
   const parsed = useMemo(() => (kind ? amendmentRequestSchema.safeParse(bodyFor(kind, form)) : null), [kind, form]);
   const problem = parsed && !parsed.success ? (kind === "property_change" && !form.propertyId ? "Choose the new property" : (parsed.error.issues[0]?.message ?? "Check the details")) : null;
 
-  const submit = async () => {
+  const submit = async (now: boolean) => {
     if (!kind || !parsed?.success) return;
-    setBusy(true);
+    setBusy(now ? "now" : "ask");
     try {
-      await renewalsService.requestAmendment(contractId, bodyFor(kind, form));
-      toast.success("Amendment requested. An approver has been told.");
+      await renewalsService.requestAmendment(contractId, {
+        ...bodyFor(kind, form),
+        ...(now ? { decideNow: true, ...(kind === "early_termination" ? { validReason } : {}) } : {}),
+      });
+      toast.success(now ? `${AMENDMENT_LABELS[kind]} approved and applied.` : "Amendment requested. An approver has been told.");
       onOpenChange(false);
       onRequested();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not ask for the amendment.");
+      /* A one-step try that stopped after the request leaves it waiting: show it. */
+      if (now) onRequested();
     } finally {
-      setBusy(false);
+      setBusy(null);
     }
   };
 
@@ -679,11 +690,14 @@ function RequestAmendmentDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
-      <ActionDialogContent busy={busy} className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
+      <ActionDialogContent busy={busy !== null} className="max-h-[90vh] overflow-y-auto sm:max-w-xl">
         <DialogHeader>
-          <DialogTitle>Request an amendment</DialogTitle>
+          <DialogTitle>{canApprove ? "Amend the contract" : "Request an amendment"}</DialogTitle>
           <DialogDescription>
-            AMC {contractNumber || "contract"}. An AMC approver who is not you decides it; the contract changes only when it is applied.
+            AMC {contractNumber || "contract"}.{" "}
+            {canApprove
+              ? "As an AMC approver you can approve and apply it now, in one step, or send it for approval."
+              : "One AMC approver decides it; the contract changes only when it is applied."}
           </DialogDescription>
         </DialogHeader>
 
@@ -785,16 +799,37 @@ function RequestAmendmentDialog({
             </Field>
           ) : null}
 
+          {canApprove && kind === "early_termination" ? (
+            <label className="flex items-start gap-3 rounded-lg border p-3 text-sm">
+              <Checkbox checked={validReason} onCheckedChange={(v) => setValidReason(v === true)} className="mt-0.5" aria-label="The reason is accepted" />
+              <span>
+                The reason is accepted (refund for the unused part)
+                <span className="text-muted-foreground block text-xs">Used when you approve and apply it now; an approver decides it otherwise.</span>
+              </span>
+            </label>
+          ) : null}
+
           {problem && form.reason.trim() ? <p className="text-muted-foreground text-xs">{problem}</p> : null}
         </div>
 
         <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={busy !== null}>
             Cancel
           </Button>
-          <SubmitButton onClick={() => void submit()} pending={busy} pendingLabel="Sending…" disabled={!parsed?.success} icon={<FilePen className="size-4" />}>
-            Request approval
-          </SubmitButton>
+          {canApprove ? (
+            <>
+              <SubmitButton variant="outline" onClick={() => void submit(false)} pending={busy === "ask"} pendingLabel="Sending…" disabled={!parsed?.success || busy !== null} icon={<FilePen className="size-4" />}>
+                Send for approval
+              </SubmitButton>
+              <SubmitButton onClick={() => void submit(true)} pending={busy === "now"} pendingLabel="Applying…" disabled={!parsed?.success || busy !== null} icon={<Check className="size-4" />}>
+                Approve and apply now
+              </SubmitButton>
+            </>
+          ) : (
+            <SubmitButton onClick={() => void submit(false)} pending={busy === "ask"} pendingLabel="Sending…" disabled={!parsed?.success} icon={<FilePen className="size-4" />}>
+              Request approval
+            </SubmitButton>
+          )}
         </DialogFooter>
       </ActionDialogContent>
     </Dialog>

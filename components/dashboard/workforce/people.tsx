@@ -824,7 +824,7 @@ export default function WorkforcePeople({ technicians, access }: Props) {
               {(showAllSelected ? selectedPeople : selectedPeople.slice(0, 6)).map((p) => (
                 <span
                   key={p.key}
-                  className="bg-background inline-flex items-center gap-1 rounded-full border py-0.5 pr-1 pl-2 text-xs"
+                  className="bg-card inline-flex items-center gap-1 rounded-full border py-0.5 pr-1 pl-2 text-xs"
                 >
                   {p.name}
                   <button

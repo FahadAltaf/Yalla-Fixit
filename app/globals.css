@@ -295,15 +295,32 @@
   --react-international-phone-background-color: var(--popover);
   --react-international-phone-text-color: var(--foreground);
   --react-international-phone-border-color: var(--input);
-  --react-international-phone-country-selector-background-color-hover: var(--accent);
-  --react-international-phone-country-selector-arrow-color: var(--muted-foreground);
-  --react-international-phone-selected-dropdown-item-background-color: var(--accent);
-  --react-international-phone-dropdown-item-dial-code-color: var(--muted-foreground);
-  --react-international-phone-dropdown-preferred-list-divider-color: var(--border);
+  --react-international-phone-country-selector-background-color-hover: var(
+    --accent
+  );
+  --react-international-phone-country-selector-arrow-color: var(
+    --muted-foreground
+  );
+  --react-international-phone-selected-dropdown-item-background-color: var(
+    --accent
+  );
+  --react-international-phone-dropdown-item-dial-code-color: var(
+    --muted-foreground
+  );
+  --react-international-phone-dropdown-preferred-list-divider-color: var(
+    --border
+  );
   --react-international-phone-dropdown-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
-  --react-international-phone-disabled-background-color: rgba(255, 255, 255, 0.06);
+  --react-international-phone-disabled-background-color: rgba(
+    255,
+    255,
+    255,
+    0.06
+  );
   --react-international-phone-disabled-text-color: var(--muted-foreground);
-  --react-international-phone-disabled-country-selector-arrow-color: var(--muted-foreground);
+  --react-international-phone-disabled-country-selector-arrow-color: var(
+    --muted-foreground
+  );
 }
 /* Pins, zone outlines and labels drawn over a photo or a floor plan sit
    on the image, not on the themed surface: a plan is white paper in both

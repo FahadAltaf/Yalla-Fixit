@@ -305,7 +305,7 @@ export default function ScheduleDisplay() {
         ) : (
           <div className="min-w-[1100px]">
             {/* Hour ruler, sticky so it stays readable while rows scroll. */}
-            <div className="bg-background sticky top-0 z-20 flex border-b">
+            <div className="bg-card sticky top-0 z-20 flex border-b">
               <div className="text-muted-foreground w-56 shrink-0 border-r px-4 py-2 text-xs font-medium">
                 Technician
               </div>

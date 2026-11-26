@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { SCHEDULING_REPORT_EVENTS, WORKFORCE_EVENTS, moduleOfEvent, type NotificationModule } from "@/lib/notifications/modules";
 
 import {
   listMyNotifications as listAmcNotifications,
@@ -18,6 +19,8 @@ import {
 export type InAppNotification = {
   id: string;
   event: string;
+  /** The part of the portal it comes from (26 Nov 2026). */
+  module: NotificationModule;
   title: string;
   body: string;
   link: string | null;
@@ -46,6 +49,7 @@ function toNotification(row: Row): InAppNotification {
   return {
     id: row.id,
     event: row.event,
+    module: moduleOfEvent(row.event, "portal"),
     title: row.title,
     body: row.body,
     link: row.link,
@@ -65,11 +69,48 @@ function inbox(admin: SupabaseClient, userId: string, columns: string, head = fa
     .eq("status", "delivered");
 }
 
+/* Narrows the portal store to one module's events (AMC is its own store). */
+function forModule(query: any, module: NotificationModule): any {
+  switch (module) {
+    case "invoicing":
+      return query.like("event", "finance.%");
+    case "snagging":
+      return query.like("event", "snagging.%");
+    case "todos":
+      return query.like("event", "todos.%");
+    case "compliance":
+      return query.like("event", "reports.compliance%");
+    case "workforce":
+      return query.in("event", [...WORKFORCE_EVENTS]);
+    case "scheduling":
+      return query.or(`event.like.scheduling.%,event.in.(${SCHEDULING_REPORT_EVENTS.join(",")})`);
+    case "reports":
+      return query
+        .like("event", "reports.%")
+        .not("event", "like", "reports.compliance%")
+        .not("event", "in", `(${[...WORKFORCE_EVENTS, ...SCHEDULING_REPORT_EVENTS].join(",")})`);
+    default:
+      return query;
+  }
+}
+
+/** How many are unread in each module, for the inbox's module filter. */
+async function unreadByModule(admin: SupabaseClient, userId: string, amcUnread: number): Promise<Partial<Record<NotificationModule, number>>> {
+  const { data } = await inbox(admin, userId, "event").is("read_at", null).limit(5000);
+  const counts: Partial<Record<NotificationModule, number>> = {};
+  for (const r of (data ?? []) as unknown as Array<{ event: string }>) {
+    const m = moduleOfEvent(r.event, "portal");
+    counts[m] = (counts[m] ?? 0) + 1;
+  }
+  if (amcUnread) counts.amc = (counts.amc ?? 0) + amcUnread;
+  return counts;
+}
+
 export async function listMyNotifications(
   admin: SupabaseClient,
   userId: string,
-  options: { limit: number; offset: number; unreadOnly: boolean },
-): Promise<{ notifications: InAppNotification[]; unread: number }> {
+  options: { limit: number; offset: number; unreadOnly: boolean; module?: NotificationModule | null },
+): Promise<{ notifications: InAppNotification[]; unread: number; unreadByModule: Partial<Record<NotificationModule, number>> }> {
   /*
     Two stores feed one inbox: portal_notifications (Finance, Reports) and
     AMC's own amc_notifications (approvals, client decisions, signatures,
@@ -78,28 +119,34 @@ export async function listMyNotifications(
     the merge, so paging stays correct across both.
   */
   const upTo = options.offset + options.limit;
+  const only = options.module ?? null;
+  /* One module: only its store (AMC's own, or the portal's narrowed to that module's events). */
+  const wantPortal = only !== "amc";
+  const wantAmc = only === null || only === "amc";
   let list = inbox(admin, userId, COLUMNS)
     .order("created_at", { ascending: false })
     .order("id", { ascending: false })
     .range(0, upTo - 1);
   if (options.unreadOnly) list = list.is("read_at", null);
+  if (only && only !== "amc") list = forModule(list, only);
 
   const [page, unread, amc] = await Promise.all([
-    list,
+    wantPortal ? list : Promise.resolve({ data: [], error: null }),
     inbox(admin, userId, "id", true).is("read_at", null),
-    listAmcNotifications(admin as never, userId, upTo, { offset: 0, unreadOnly: options.unreadOnly }),
+    listAmcNotifications(admin as never, userId, wantAmc ? upTo : 1, { offset: 0, unreadOnly: options.unreadOnly }),
   ]);
   if (page.error) throw new Error(page.error.message);
   if (unread.error) throw new Error(unread.error.message);
   const merged = [
     ...((page.data ?? []) as unknown as Row[]).map(toNotification),
-    ...amc.notifications.map(
-      (n): InAppNotification => ({ ...n, requiresAction: false, resolvedAt: null }),
-    ),
+    ...(wantAmc
+      ? amc.notifications.map((n): InAppNotification => ({ ...n, module: "amc", requiresAction: false, resolvedAt: null }))
+      : []),
   ].sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : a.id < b.id ? 1 : -1));
   return {
     notifications: merged.slice(options.offset, upTo),
     unread: (unread.count ?? 0) + amc.unread,
+    unreadByModule: await unreadByModule(admin, userId, amc.unread),
   };
 }
 

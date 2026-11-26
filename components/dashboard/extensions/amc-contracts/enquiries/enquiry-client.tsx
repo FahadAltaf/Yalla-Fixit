@@ -103,8 +103,8 @@ export function ChosenClientCard({
 
 /**
  * A brand-new client for the enquiry, with the fields Snagging's "Add a
- * client" asks for: name and phone, email, Maher ID (both required when the
- * clients come from Zoho FSM, which needs them) and company. The client is
+ * client" asks for: name and phone, email (required when the clients come
+ * from Zoho FSM, which needs it), an optional Maher ID and company. The client is
  * the enquiry's contact. Nothing is saved here: the client is made, as a
  * prospect in the portal, when the enquiry is logged (Zoho FSM is only read
  * for now).
@@ -182,13 +182,13 @@ function NewClientForm({
   });
   const patch = (next: Partial<NewClient>) =>
     setValue((v) => ({ ...v, ...next }));
-  // As Snagging: name and phone required; email and Maher ID too when FSM keeps the clients.
+  // As Snagging: name and phone required; email too when FSM keeps the clients (Maher ID optional, 26 Nov 2026).
   const emailOk = /.+@.+\..+/.test(value.email.trim());
   const valid =
     value.name.trim().length >= 2 &&
     /[0-9]{6,}/.test(value.phone.replace(/[^0-9]/g, "")) &&
     (requireEmail
-      ? emailOk && value.maherId.trim().length > 0
+      ? emailOk
       : value.email.trim() === "" || emailOk);
   return (
     <>
@@ -197,7 +197,7 @@ function NewClientForm({
         <DialogDescription>
           {intro}
           {requireEmail
-            ? " Zoho FSM needs their email and Maher ID."
+            ? " Zoho FSM needs their email."
             : " Only the name and phone are required."}
           {askClientId ? " A Client ID is given automatically when it is left blank." : ""}
         </DialogDescription>
@@ -245,7 +245,7 @@ function NewClientForm({
           />
         </Field>
         {requireEmail ? (
-          <Field label="Maher ID" htmlFor="new-client-maher">
+          <Field label="Maher ID (optional)" htmlFor="new-client-maher">
             <Input
               id="new-client-maher"
               placeholder="e.g. C0354059"

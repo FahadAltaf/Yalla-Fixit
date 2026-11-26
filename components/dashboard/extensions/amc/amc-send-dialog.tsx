@@ -209,7 +209,7 @@ export function AmcSendDialog({
                   role="tab"
                   aria-selected={deliver === c}
                   onClick={() => setDeliver(c)}
-                  className={`rounded-full px-3 py-1 ${deliver === c ? "bg-background shadow-sm" : "text-muted-foreground"}`}
+                  className={`rounded-full px-3 py-1 ${deliver === c ? "bg-card shadow-sm" : "text-muted-foreground"}`}
                 >
                   {c === "whatsapp" ? "WhatsApp" : c === "email" ? "Email" : "Copy link"}
                 </button>

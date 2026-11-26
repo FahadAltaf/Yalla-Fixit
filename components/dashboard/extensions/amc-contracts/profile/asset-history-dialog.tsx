@@ -163,7 +163,7 @@ function PhotosSection({ photos }: { photos: AssetHistory["photos"] }) {
               ) : (
                 <div className="bg-muted text-muted-foreground flex aspect-[4/3] items-center justify-center text-xs">Unavailable</div>
               )}
-              <Badge variant="secondary" className="bg-background/90 text-foreground absolute bottom-1.5 left-1.5 border-0 font-medium">
+              <Badge variant="secondary" className="bg-card/90 text-foreground absolute bottom-1.5 left-1.5 border-0 font-medium">
                 {PHOTO_LABELS[p.kind] ?? p.kind}
               </Badge>
               <div className="text-muted-foreground px-2 py-1 text-xs">

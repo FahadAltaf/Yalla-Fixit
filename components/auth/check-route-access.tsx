@@ -29,6 +29,9 @@ export const checkRoutePermission = async (
   }
 };
 
+/** Open to every signed-in user, whatever their menu (each page checks its own data). */
+const ALWAYS_OPEN = ["/notifications"];
+
 // Function to check if the current route is accessible based on navigation items
 export const checkRouteAccess = (
   currentPath: string,
@@ -36,6 +39,14 @@ export const checkRouteAccess = (
 ): boolean => {
   // Root path is always accessible if the user is logged in
   if (currentPath === "/") {
+    return true;
+  }
+  /*
+    Pages every signed-in user has that are not in the sidebar (26 Nov 2026):
+    the notifications inbox, opened from the bell. Without this, opening it
+    directly, refreshing it or following a link to it bounced to the home page.
+  */
+  if (ALWAYS_OPEN.some((route) => currentPath === route || currentPath.startsWith(route + "/"))) {
     return true;
   }
 

@@ -985,7 +985,7 @@ export default function EntryDetailDialog({
           {/* Actions pinned to the bottom of the dialog, so Save is reachable
               without scrolling past the technician list. */}
           {(canEdit || (isEditable && !isAmc)) && (
-            <DialogFooter className="bg-background sticky bottom-0 z-10 sm:items-center sm:justify-between">
+            <DialogFooter className="bg-card sticky bottom-0 z-10 sm:items-center sm:justify-between">
               {isEditable ? (
                 <div className="flex flex-wrap items-center gap-2">
                   <Button variant="destructive" onClick={() => setConfirmOpen(true)} disabled={removing || saving}>

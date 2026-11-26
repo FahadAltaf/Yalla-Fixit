@@ -892,10 +892,10 @@ function TimeTiles({ arrivedAt, completedAt }: { arrivedAt: string | null; compl
 }
 
 const PHOTO_KIND_TONE: Record<string, string> = {
-  before: "bg-background/90 text-foreground",
+  before: "bg-card/90 text-foreground",
   after: "bg-success text-white",
   fault: "bg-danger text-white",
-  other: "bg-background/90 text-foreground",
+  other: "bg-card/90 text-foreground",
 };
 
 /**
@@ -925,7 +925,7 @@ function PhotoGroups({ photos }: { photos: JobSheetResponse["photos"] }) {
                   />
                   {/* The category the crew chose on the phone, where there is one. */}
                   <span className={cn("absolute top-2 left-2 rounded-md px-2 py-0.5 text-xs font-medium shadow-sm", PHOTO_KIND_TONE[k])}>{p.category ?? PHOTO_LABELS[k]}</span>
-                  <span className="bg-background/90 text-foreground absolute top-2 right-2 rounded-md p-1 opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
+                  <span className="bg-card/90 text-foreground absolute top-2 right-2 rounded-md p-1 opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
                     <ExternalLink className="size-3.5" />
                   </span>
                 </a>
@@ -1367,7 +1367,7 @@ function PhotosSection({
               ) : (
                 <div className="bg-muted text-muted-foreground flex aspect-[4/3] items-center justify-center text-xs">Unavailable</div>
               )}
-              <Badge variant="secondary" className="bg-background/90 text-foreground absolute bottom-1.5 left-1.5 border-0 font-medium">
+              <Badge variant="secondary" className="bg-card/90 text-foreground absolute bottom-1.5 left-1.5 border-0 font-medium">
                 {p.category ?? (isPhotoKind(p.kind) ? PHOTO_LABELS[p.kind] : p.kind)}
               </Badge>
               {editable ? (

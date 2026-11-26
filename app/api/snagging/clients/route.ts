@@ -81,7 +81,7 @@ export async function POST(req: NextRequest) {
     const email = emptyToNull(body?.client_email ?? body?.email);
     const phone = emptyToNull(body?.client_phone ?? body?.phone);
     const company = emptyToNull(body?.company);
-    // Zoho FSM requires a Maher ID on a contact (Sami, Oct 2026: its own input).
+    // Maher ID: sent to Zoho FSM when given; optional since 26 Nov 2026 (the user).
     const maherId = emptyToNull(body?.maher_id);
     // Required wherever a client is saved, as on the quotation form (SNG-008).
     if (!isUsablePhone(phone)) {
@@ -99,12 +99,6 @@ export async function POST(req: NextRequest) {
       if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
         return NextResponse.json(
           { error: "An email is required: Zoho FSM keeps every client with one." },
-          { status: 400 },
-        );
-      }
-      if (!maherId) {
-        return NextResponse.json(
-          { error: "A Maher ID is required: Zoho FSM keeps every client with one." },
           { status: 400 },
         );
       }

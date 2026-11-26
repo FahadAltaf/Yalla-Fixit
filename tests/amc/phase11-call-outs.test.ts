@@ -208,5 +208,5 @@ test("the two pages have their own permission, grouped under AMC; the sweep runs
   assert.match(access, /override: Boolean\(gate\.actor\.allowanceOverride\)/, "booking chargeable as covered is AMC Allowances (Approve)");
   assert.match(read("lib/server/amc/jobs.ts"), /key: "call_outs"/);
   assert.match(read("app/(dashboard)/extensions/amc-contracts/call-outs/page.tsx"), /canSeeAmcPage\(ResourceType\.AMC_CALL_OUTS\)/);
-  assert.match(read("app/(dashboard)/extensions/amc-contracts/additional-works/page.tsx"), /canSeeAmcPage\(ResourceType\.AMC_ADDITIONAL_WORKS\)/);
+  assert.match(read("app/(dashboard)/extensions/amc-contracts/additional-works/(list)/page.tsx"), /canSeeAmcPage\(ResourceType\.AMC_ADDITIONAL_WORKS\)/);
 });

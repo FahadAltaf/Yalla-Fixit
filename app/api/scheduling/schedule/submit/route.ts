@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { notifyScheduleDay } from "@/lib/server/scheduling/portal-notices";
 import { z } from "zod";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
@@ -96,6 +97,8 @@ export async function POST(req: NextRequest) {
       submitterName: profile.full_name ?? profile.email ?? "A scheduler",
       approverId: approverId ?? null,
     });
+    /* The approver(s) also see it in the portal inbox, under Scheduling (26 Nov 2026). */
+    await notifyScheduleDay(admin, scheduleVersionId, "submitted", { id: profile.id, name: profile.full_name ?? profile.email ?? null });
 
     return NextResponse.json({ data: { version: updated, published: false } });
   } catch (error) {

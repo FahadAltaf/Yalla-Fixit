@@ -223,7 +223,7 @@ export function AdditionalVisitDialog({
                   aria-pressed={chargeMethod === value}
                   className={
                     chargeMethod === value
-                      ? "bg-background text-foreground rounded px-3 py-1 text-xs font-medium shadow-sm"
+                      ? "bg-card text-foreground rounded px-3 py-1 text-xs font-medium shadow-sm"
                       : "text-muted-foreground hover:text-foreground rounded px-3 py-1 text-xs font-medium"
                   }
                 >

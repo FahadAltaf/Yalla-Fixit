@@ -72,7 +72,7 @@ export function ModuleGuide({ module }: { module: ModuleKey }) {
               <div className="flex flex-wrap items-center gap-2 text-sm">
                 {guide.before?.map((link) => <FlowLink key={link.href} {...link} />)}
                 {guide.before?.length ? <ArrowRight className="text-muted-foreground size-4" /> : null}
-                <span className="bg-foreground text-background rounded-md px-2.5 py-1 font-medium">{guide.title}</span>
+                <span className="bg-foreground text-popover rounded-md px-2.5 py-1 font-medium">{guide.title}</span>
                 {guide.after?.length ? <ArrowRight className="text-muted-foreground size-4" /> : null}
                 {guide.after?.map((link) => <FlowLink key={link.href} {...link} />)}
               </div>

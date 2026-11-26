@@ -2002,7 +2002,7 @@ function BoardNotices({
                 key={entry.id}
                 type="button"
                 onClick={() => onOpenEntry(entry)}
-                className="bg-background hover:bg-muted rounded border px-1.5 py-0.5 text-left"
+                className="bg-card hover:bg-muted rounded border px-1.5 py-0.5 text-left"
               >
                 <span className="font-medium">{entryLabel(entry)}</span>{" "}
                 <span className="text-muted-foreground tabular-nums">{formatZonedDateTime(entry.start_at)}</span>
@@ -3014,9 +3014,9 @@ function ShiftSection({
           technician column is frozen at the left, both inside this pane. */}
       <div ref={paneRef} className={cn("max-h-[65vh] overflow-auto print:overflow-visible", collapsed && "hidden")}>
         <div style={{ width: `${trackWidthPct}%`, minWidth: `max(100%, ${Math.round(trackMinPx)}px)` }}>
-          <div className="bg-background sticky top-0 z-40 flex border-b">
+          <div className="bg-card sticky top-0 z-40 flex border-b">
             <div
-              className="bg-background sticky left-0 z-50 flex shrink-0 items-center justify-between gap-1 border-r px-2 py-1.5"
+              className="bg-card sticky left-0 z-50 flex shrink-0 items-center justify-between gap-1 border-r px-2 py-1.5"
               style={{ width: TECH_COL_WIDTH }}
             >
               <span className="text-muted-foreground text-xs font-medium">Technician</span>
@@ -3127,7 +3127,7 @@ function ShiftSection({
               >
                 {rowDragTech && (
                   <div
-                    className="bg-background ring-primary flex -rotate-1 items-center gap-2 rounded-md px-2 py-2 shadow-xl ring-2"
+                    className="bg-card ring-primary flex -rotate-1 items-center gap-2 rounded-md px-2 py-2 shadow-xl ring-2"
                     style={{ minHeight: rowDrag?.rowHeight }}
                   >
                     <GripVertical className="text-primary size-4 shrink-0" />
@@ -3373,7 +3373,7 @@ const TechnicianRow = memo(function TechnicianRow({
     >
       <div
         className={cn(
-          "bg-background sticky left-0 z-30 flex shrink-0 flex-col justify-center gap-1 border-r py-1.5 pr-2",
+          "bg-card sticky left-0 z-30 flex shrink-0 flex-col justify-center gap-1 border-r py-1.5 pr-2",
           canReorder ? "pl-8" : "pl-2",
           reassignTarget && (targetBlocked ? "ring-destructive ring-2 ring-inset" : "ring-primary ring-2 ring-inset"),
         )}

@@ -320,7 +320,7 @@ function SiteVisitRowActions({ visit }: { visit: AssessmentRecord }) {
             Open site visit
           </DropdownMenuItem>
           {visit.customer ? (
-            <DropdownMenuItem onClick={() => router.push(`/extensions/amc-contracts/customers/${visit.customer!.id}`)}>
+            <DropdownMenuItem onClick={() => router.push(`/clients/${visit.customer!.id}`)}>
               <UserRound className="mr-2 size-4" />
               Open client
             </DropdownMenuItem>
@@ -862,7 +862,7 @@ export function AssessmentDetail({ id }: { id: string }) {
                         <DetailList
                           rows={clientRows({
                             name: a.customer ? (
-                              <Link href={`/extensions/amc-contracts/customers/${a.customer.id}`} className="hover:text-brand underline underline-offset-2">
+                              <Link href={`/clients/${a.customer.id}`} className="hover:text-brand underline underline-offset-2">
                                 {a.customer.name}
                               </Link>
                             ) : null,

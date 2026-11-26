@@ -10,6 +10,8 @@ import { ListSkeleton } from "@/components/dashboard/shared/kaizen-states";
 import { Button } from "@/components/ui/button";
 import type { InAppNotification } from "@/lib/server/notifications/inbox";
 import { notificationsService } from "@/modules/reporting/reporting-service";
+import { NotificationIcon } from "./notification-icon";
+import { NOTIFICATION_MODULE_LABELS } from "@/lib/notifications/modules";
 
 /**
  * BRD §6.2: notifications show on the home page until opened, then move to
@@ -66,13 +68,16 @@ export function HomeNotificationsPanel() {
         <ul className="divide-y">
           {items.map((n) => (
             <li key={n.id}>
-              <button type="button" onClick={() => open(n)} className="hover:bg-muted/60 flex w-full gap-3 px-5 py-3 text-left">
-                <span className="bg-primary mt-1.5 size-2 shrink-0 rounded-full" aria-hidden />
+              <button type="button" onClick={() => open(n)} className="hover:bg-muted/60 flex w-full items-start gap-3 px-5 py-3 text-left">
+                <NotificationIcon event={n.event} className="mt-0.5" />
                 <span className="min-w-0 flex-1">
                   <span className="block text-sm font-medium">{n.title}</span>
                   <span className="text-muted-foreground mt-0.5 block truncate text-sm">{n.body}</span>
                 </span>
-                <span className="text-muted-foreground shrink-0 text-xs tabular-nums">{timeAgo(n.createdAt)}</span>
+                <span className="text-muted-foreground flex shrink-0 flex-col items-end gap-0.5 text-xs">
+                  <span className="tabular-nums">{timeAgo(n.createdAt)}</span>
+                  <span>{NOTIFICATION_MODULE_LABELS[n.module] ?? ""}</span>
+                </span>
               </button>
             </li>
           ))}

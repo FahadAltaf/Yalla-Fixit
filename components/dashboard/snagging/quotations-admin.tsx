@@ -69,7 +69,7 @@ export default function QuotationsAdmin({
 }: {
   /*
     The first page, read on the server with the page (see
-    app/(dashboard)/snagging/quotations/page.tsx). The table shows it at
+    app/(dashboard)/snagging/quotations/(list)/page.tsx). The table shows it at
     once; every later page, filter and search is asked for as before.
   */
   initial?: {

@@ -18,6 +18,7 @@ import { amcSettingsService } from "@/modules/amc-submissions";
 import { CONFIG_VIEWS, SECTION_DEFS, VISIBLE_CONFIG_VIEWS, type ConfigView } from "./config-fields";
 import { NamedPeopleCard, namedPeopleMissing } from "./named-people-card";
 import { JobsCard, RolesAndJobs } from "./roles-jobs";
+import { TrackerImportCard } from "./tracker-import-card";
 import { ConfigSectionForm } from "./section-form";
 import { TemplatesEditor } from "./templates-editor";
 import { ModuleGuide } from "@/components/dashboard/extensions/amc-contracts/module-guide";
@@ -211,6 +212,9 @@ export function AmcConfigurationPage() {
       ) : null}
 
       {view === "roles" ? <RolesAndJobs isAdmin={isAdmin} canRunJobs={data.canEdit.proposals && data.migrated} /> : null}
+
+      {/* DEV-486: the tracker's contracts, previewed then imported. */}
+      {view === "import" ? <TrackerImportCard canImport={data.canEdit.proposals && data.migrated} /> : null}
 
       {/* DEV-485: the morning's runs, under what runs. */}
       {view === "jobs" ? <JobsCard canRun={data.canEdit.proposals && data.migrated} /> : null}

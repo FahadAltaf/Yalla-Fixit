@@ -26,15 +26,10 @@ import { ErrorState, POPUP_PAGE_SIZES as PAGE_SIZES } from "./shared";
  *
  * Search, paging, sorting and refresh all go to the server, filtered by
  * the client, so a client with hundreds of jobs opens as fast as one with
- * two. A row opens the job.
+ * two. A row opens the job. Shown in a popup, or on the client's page
+ * (Clients, 26 Nov 2026).
  */
-export function ClientJobsDialog({
-  client,
-  onClose,
-}: {
-  client: SnaggingClientOption | null;
-  onClose: () => void;
-}) {
+export function ClientJobsTable({ clientId }: { clientId: string | null }) {
   const router = useRouter();
   const [rows, setRows] = useState<SnaggingTaskSummary[]>([]);
   const [total, setTotal] = useState(0);
@@ -47,7 +42,6 @@ export function ClientJobsDialog({
   const debouncedSearch = useDebounce(search.trim(), 300);
 
   // A fresh first page, with no search, whenever another client opens.
-  const clientId = client?.id ?? null;
   const [shownFor, setShownFor] = useState<string | null>(null);
   if (clientId !== shownFor) {
     setShownFor(clientId);
@@ -89,6 +83,74 @@ export function ClientJobsDialog({
   // The Jobs list's own columns, so a job reads the same in both places.
   const columns = useMemo(() => getSnaggingJobColumns(), []);
 
+  if (error) {
+    return (
+      <div className="px-6 py-4">
+        <ErrorState title="Could not load this client's jobs" message={error} onRetry={() => void load()} retrying={loading} />
+      </div>
+    );
+  }
+
+  return (
+    <DataTable
+      columns={columns}
+      data={rows}
+      loading={loading}
+      rowCount={total}
+      pageSize={pageSize}
+      currentPage={page}
+      isPagination
+      onPageChange={setPage}
+      onPageSizeChange={(size) => {
+        setPageSize(size);
+        setPage(0);
+      }}
+      onSortingChange={(sortBy, sortOrder) => {
+        setSort({ sortBy, sortOrder });
+        setPage(0);
+      }}
+      onGlobalFilterChange={(value) => {
+        setSearch(value);
+        setPage(0);
+      }}
+      type="snagging-jobs"
+      handleRowClick={(row) => router.push(`/snagging/${row.id}`)}
+      toolbar={
+        <RecordsToolbar
+          fetchRecords={() => void load()}
+          globalFilter={search}
+          onGlobalFilterChange={(value) => {
+            setSearch(value);
+            setPage(0);
+          }}
+          isSearchLoading={loading}
+          pageSize={pageSize}
+          onPageSizeChange={(size) => {
+            setPageSize(size);
+            setPage(0);
+          }}
+          searchPlaceholder="Search..."
+          pageSizes={PAGE_SIZES}
+        />
+      }
+      emptyState={
+        <EmptyState
+          icon={<Briefcase />}
+          title={debouncedSearch ? "Nothing matches that" : "No jobs yet"}
+          description={debouncedSearch ? "Try part of the unit, the building or the job code." : "Jobs raised for this client appear here."}
+        />
+      }
+    />
+  );
+}
+
+export function ClientJobsDialog({
+  client,
+  onClose,
+}: {
+  client: SnaggingClientOption | null;
+  onClose: () => void;
+}) {
   return (
     <Dialog open={client !== null} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
@@ -105,70 +167,7 @@ export function ClientJobsDialog({
         </DialogHeader>
 
         <div className="min-h-0 min-w-0 flex-1 overflow-y-auto border-t">
-          {error ? (
-            <div className="px-6 py-4">
-              <ErrorState
-                title="Could not load this client's jobs"
-                message={error}
-                onRetry={() => void load()}
-                retrying={loading}
-              />
-            </div>
-          ) : (
-            <DataTable
-              columns={columns}
-              data={rows}
-              loading={loading}
-              rowCount={total}
-              pageSize={pageSize}
-              currentPage={page}
-              isPagination
-              onPageChange={setPage}
-              onPageSizeChange={(size) => {
-                setPageSize(size);
-                setPage(0);
-              }}
-              onSortingChange={(sortBy, sortOrder) => {
-                setSort({ sortBy, sortOrder });
-                setPage(0);
-              }}
-              onGlobalFilterChange={(value) => {
-                setSearch(value);
-                setPage(0);
-              }}
-              type="snagging-jobs"
-              handleRowClick={(row) => router.push(`/snagging/${row.id}`)}
-              toolbar={
-                <RecordsToolbar
-                  fetchRecords={() => void load()}
-                  globalFilter={search}
-                  onGlobalFilterChange={(value) => {
-                    setSearch(value);
-                    setPage(0);
-                  }}
-                  isSearchLoading={loading}
-                  pageSize={pageSize}
-                  onPageSizeChange={(size) => {
-                    setPageSize(size);
-                    setPage(0);
-                  }}
-                  searchPlaceholder="Search..."
-                  pageSizes={PAGE_SIZES}
-                />
-              }
-              emptyState={
-                <EmptyState
-                  icon={<Briefcase />}
-                  title={debouncedSearch ? "Nothing matches that" : "No jobs yet"}
-                  description={
-                    debouncedSearch
-                      ? "Try part of the unit, the building or the job code."
-                      : "Jobs raised for this client appear here."
-                  }
-                />
-              }
-            />
-          )}
+          <ClientJobsTable clientId={client?.id ?? null} />
         </div>
       </DialogContent>
     </Dialog>

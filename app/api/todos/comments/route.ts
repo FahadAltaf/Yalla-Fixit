@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse, after } from "next/server";
+import { notifyTodo } from "@/lib/server/todos/portal-notices";
 import { z } from "zod";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { buildTodoMentionEmail } from "@/lib/email-service";
@@ -130,6 +131,8 @@ export async function POST(req: NextRequest) {
     // Emails go out after the response, so posting is not held up by the
     // mail service; a failure is logged, never shown as a failed post.
     after(() => emailMentions(mentioned, todo, profile, parsed.data.body));
+    /* The mentioned also see it in the portal inbox, under To-dos (26 Nov 2026). */
+    after(() => notifyTodo(admin, todo, "mentioned", mentioned.map((u) => u.id), { id: profile.id, name: profile.full_name ?? profile.email ?? null }, comment.id));
 
     return NextResponse.json({ data: { id: parsed.data.todoId, commentId: comment.id, warnings: [] } });
   } catch (error) {
@@ -208,6 +211,7 @@ export async function PATCH(req: NextRequest) {
 
     // Only the newly mentioned hear about an edit (FR-17 point 6).
     after(() => emailMentions(added, todo, profile, parsed.data.body));
+    after(() => notifyTodo(admin, todo, "mentioned", added.map((u) => u.id), { id: profile.id, name: profile.full_name ?? profile.email ?? null }, existing.id));
 
     return NextResponse.json({ data: { id: parsed.data.todoId, commentId: existing.id, warnings: [] } });
   } catch (error) {
