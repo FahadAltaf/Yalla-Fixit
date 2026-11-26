@@ -44,7 +44,7 @@ test("a row becomes a contract: client kept as the tracker shows, services, one 
   assert.equal(c.totalAed, 4500);
   assert.equal(c.handler, "RALPH");
   const svc = Object.fromEntries(c.services.map((s) => [s.column, s]));
-  assert.equal(svc["AC Service"].perYear, 3);
+  assert.equal(svc["AC Service"].perYear, 3, "visits four months apart: three a year");
   assert.equal(svc["Handyman Hrs"].quantity, 12);
   assert.equal(svc["Pest Control"].perYear, 4, "frequency from the tracker's words, with no visit logged");
   assert.equal(svc["Emergency Call-out"].unlimited, true);

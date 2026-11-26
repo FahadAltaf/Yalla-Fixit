@@ -161,6 +161,27 @@ export function perYearFromWords(text: string): number | null {
   return null;
 }
 
+const COMMON_FREQUENCIES = [1, 2, 3, 4, 6, 12, 24, 52];
+
+/**
+ * Visits a year from the dates logged: the typical gap between them (91
+ * days apart is quarterly), snapped to a common frequency. The number of
+ * dates is not the frequency: a quarterly service with two visits logged so
+ * far is still quarterly. Null with fewer than two dates.
+ */
+export function perYearFromDates(dates: string[]): number | null {
+  if (dates.length < 2) return null;
+  const sorted = [...dates].sort();
+  const gaps = sorted.slice(1).map((d, i) => (Date.parse(d) - Date.parse(sorted[i])) / 86_400_000).filter((g) => g > 0).sort((a, b) => a - b);
+  if (!gaps.length) return null;
+  const median = gaps[Math.floor(gaps.length / 2)];
+  const raw = 365 / Math.max(1, median);
+  const nearest = COMMON_FREQUENCIES.reduce((best, f) => (Math.abs(f - raw) < Math.abs(best - raw) ? f : best), COMMON_FREQUENCIES[0]);
+  /* Never fewer than were logged inside any twelve months. */
+  const inAYear = Math.max(...sorted.map((d) => sorted.filter((x) => x >= d && Date.parse(x) - Date.parse(d) < 365 * 86_400_000).length));
+  return nearest >= inAYear ? nearest : (COMMON_FREQUENCIES.find((f) => f >= inAYear) ?? inAYear);
+}
+
 /** The tracker's service columns that count hours or call outs rather than visits. */
 const QUANTITY_COLUMNS = new Set(["Handyman Hrs", "Emergency Call-out", "Non-Emergency Call-out"]);
 const FIXED = ["Proposal No.", "Contract Type", "Start Date", "Expiry Date", "Customer ID", "Customer Name", "Mobile", "Email", "Unit No.", "Building", "Community", "Area", "Property Type", "Bedrooms", "AC Units"];
@@ -247,7 +268,10 @@ export function parseTracker(text: string, today: string): TrackerParse {
       const fromWords = note ? perYearFromWords(note) : null;
       /* A bare number under a visit column is its visits a year (e.g. "12"). */
       const bare = words.length === 1 && /^\d+$/.test(words[0]) ? Number(words[0]) : null;
-      services.push({ column: g.name, perYear: fromWords ?? bare ?? (dates.length || null), quantity: null, unlimited: false, dates, note });
+      const fromDates = perYearFromDates(dates);
+      const perYear = fromWords ?? bare ?? fromDates ?? (dates.length ? 1 : null);
+      if (fromWords === null && bare === null && fromDates === null && dates.length === 1) issues.push(`${g.name}: one visit logged, so its frequency is taken as once a year; correct it on the contract if not.`);
+      services.push({ column: g.name, perYear, quantity: null, unlimited: false, dates, note });
       if (words.some((w) => !perYearFromWords(w) && !/^\d+$/.test(w))) issues.push(`${g.name}: "${words.join("; ")}" was not understood as a frequency.`);
     }
 
@@ -332,7 +356,8 @@ export function parseTracker(text: string, today: string): TrackerParse {
         endDate: addDays(c.startDate, -1),
         status: addDays(c.startDate, -1) < today ? "expired" : "active",
         services: c.services.map((s) => ({ ...s, dates: s.dates.filter((d) => d < c.startDate) })),
-        renewsIndex: c.renewsIndex,
+        /* It renews the contract before it only when that one really ended first. */
+        renewsIndex: c.renewsIndex !== null && contracts[c.renewsIndex].endDate < prevStart ? c.renewsIndex : null,
         issues: [`Made by the import: the tracker's row for ${c.customer.name} lists visits from ${prevStart} to ${addDays(c.startDate, -1)}, before that contract starts. Its value and services are copied from the later contract.`],
       };
       contracts.push(before);
