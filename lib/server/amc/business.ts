@@ -35,14 +35,7 @@ import { snapToCardFrequencies } from "@/lib/amc/rate-card";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { approverName } from "@/lib/server/amc/site-visit-approvers";
 import { hasColumn } from "@/lib/server/snagging/columns";
-import {
-  createClientWithFsm,
-  fsmClientWritesReady,
-  fsmErrorMessage,
-  queuePropertyEditToFsm,
-  queuePropertyToFsm,
-} from "@/lib/server/snagging/fsm-clients";
-import { FsmApiError } from "@/lib/server/zoho/fsm-contacts";
+import { queuePropertyEditToFsm, queuePropertyToFsm } from "@/lib/server/snagging/fsm-clients";
 import { ContractError, isMissingTable, loadContract, toRulesContract } from "@/lib/server/amc/contracts";
 import { fetchAllRowsById } from "@/lib/server/amc/paging";
 import { removeDraftPhotoFiles } from "@/lib/server/amc/assessment-photos";
@@ -483,27 +476,14 @@ export async function createCustomer(admin: Admin, input: CustomerInput, actor: 
   let id: string;
   if (match) {
     id = String(match.id);
-  } else if (row.email && (await fsmClientWritesReady(admin))) {
-    /*
-      Zoho FSM keeps the clients (Sami, 14 Oct 2026): a new one is made there
-      too, as Snagging makes one, and one FSM already has with that email is
-      linked rather than created twice. Off while FSM writes are off
-      (ZOHO_FSM=read or off); FSM also needs the email, so a client without
-      one stays in the portal.
-    */
-    try {
-      const { client } = await createClientWithFsm(
-        admin,
-        { name: row.name, email: row.email, phone: row.phone, company: row.company, maherId: blankToNull(input.maherId) },
-        actor.id,
-      );
-      if (!client.id) throw new ContractError("Zoho FSM did not return the client.", 502);
-      id = client.id;
-    } catch (error) {
-      if (error instanceof FsmApiError || error instanceof FsmConfigError) throw new ContractError(fsmErrorMessage(error), 502);
-      throw error;
-    }
   } else {
+    /*
+      DEV-504 (26 Nov 2026): an AMC prospect stays in the portal until the
+      contract is signed, when it becomes an FSM customer
+      (lib/server/amc/fsm-on-signing.ts). It used to be made in Zoho FSM as
+      soon as the enquiry was saved, so FSM filled with prospects who never
+      signed.
+    */
     /* The Maher ID lives on the Snagging client once its column is in (20261015120000). */
     const maherId = blankToNull(input.maherId);
     const withMaher = maherId && (await hasColumn(admin, "snagging_clients", "maher_id")) ? { maher_id: maherId } : {};

@@ -45,7 +45,7 @@ export const DAILY_JOB_PART_LABELS: Record<DailyJobPart, string> = {
   visit_reminders: "The client's reminder the day before a visit (a client email)",
   job_sheets: "Job sheets not submitted, and service reports at risk of being late",
   call_outs: "Call outs with the SLA at risk or missed",
-  expiry_reminders: "Contract expiry reminders to the client (a client email; also needs Send automatically)",
+  expiry_reminders: "Contract expiry reminders at the days set in Operations (to the owner, approvers and any extra address; held while Client emails is off; also needs Send automatically)",
 };
 
 /** DEV-485 first release: only what Jira names. */

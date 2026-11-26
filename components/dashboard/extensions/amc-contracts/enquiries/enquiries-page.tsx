@@ -372,7 +372,7 @@ function EnquiryRowActions({ enquiry }: { enquiry: EnquiryRecord }) {
             <Inbox className="mr-2 size-4" />
             Open enquiry
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => router.push(`/extensions/amc-contracts/customers/${enquiry.customer.id}`)}>
+          <DropdownMenuItem onClick={() => router.push(`/clients/${enquiry.customer.id}`)}>
             <UserRound className="mr-2 size-4" />
             Open client
           </DropdownMenuItem>

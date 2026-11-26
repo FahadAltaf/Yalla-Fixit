@@ -69,6 +69,7 @@ import { SendClientReportDialog } from "./client-report-dialog";
 import { ClientReportViewer } from "./client-report-viewer";
 import { ContractAmendmentsPanel } from "./contract-amendments-panel";
 import { PendingAmendmentsNotice } from "./pending-amendments-notice";
+import { FsmClientNotice } from "./fsm-client-notice";
 import { ContractCallOutsPanel } from "./contract-call-outs-panel";
 import { ContractCustomer } from "./contract-customer";
 import { ContractDocuments } from "./contract-documents";
@@ -429,10 +430,11 @@ function ContractView({
       : null,
   ].filter((b): b is NonNullable<typeof b> => b !== null);
   /*
-    DEV-417 (20 Nov 2026 review): ending a contract needs two people, so
-    these ask for it -- an early termination for an active contract, a
-    cancellation before it starts -- and a different approver decides it
-    on the Amendments tab. Nobody ends a contract alone.
+    DEV-417: ending a contract goes through the Amendments tab -- an early
+    termination for an active contract, a cancellation before it starts --
+    so its reason, dates and refund are kept. One approver is enough (26 Nov
+    2026): an AMC approver ends it there in one step; anyone else asks and
+    one approver decides.
   */
   const askToEnd = (kind: "early_termination" | "cancellation") => {
     setRequestKind(kind);
@@ -442,13 +444,13 @@ function ContractView({
     permissions.canTerminate ? (
       <DropdownMenuItem key="terminate" variant="destructive" onClick={() => askToEnd("early_termination")}>
         <Power className="size-4" />
-        Request early termination
+        End contract early
       </DropdownMenuItem>
     ) : null,
     permissions.canCallOff ? (
       <DropdownMenuItem key="calloff" variant="destructive" onClick={() => askToEnd("cancellation")}>
         <XCircle className="size-4" />
-        Request cancellation
+        Cancel contract
       </DropdownMenuItem>
     ) : null,
   ].filter(Boolean);
@@ -696,6 +698,8 @@ function ContractView({
 
       {/* An amendment waiting for a decision or to be applied, above the tabs (24 Nov 2026). */}
       <PendingAmendmentsNotice contractId={contract.id} tab={tab} onOpen={() => setTab("amendments")} />
+      {/* DEV-504: a signed contract whose client is not an FSM customer yet. */}
+      <FsmClientNotice contractId={contract.id} status={status} canManage={canOperate} />
 
       <Tabs value={tab} onValueChange={setTab}>
         {/* Wraps onto a second line on a narrow screen rather than

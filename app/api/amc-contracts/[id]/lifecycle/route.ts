@@ -55,9 +55,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       case "snooze_follow_up":
         return NextResponse.json(await snoozeContractFollowUp(gate.admin, id, body, actor));
       case "status":
-        /* DEV-417: terminating or calling off goes through an amendment, decided by a second approver. */
+        /* DEV-417: terminating or calling off goes through an amendment (one approver; in one step when an approver does it). */
         if (body.to === "terminated" || body.to === "cancelled") {
-          return NextResponse.json({ error: "Ending a contract needs two people (DEV-417): request an early termination or a cancellation on the contract's Amendments tab, and a different AMC approver decides it." }, { status: 409 });
+          return NextResponse.json({ error: "A contract ends through its Amendments tab (DEV-417): an AMC approver ends it there in one step; anyone else asks, and one approver decides." }, { status: 409 });
         }
         return NextResponse.json(await changeContractStatus(gate.admin, id, body, actor));
     }

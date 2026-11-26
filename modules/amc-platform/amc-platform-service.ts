@@ -1,7 +1,7 @@
 import type { AmcConfig, AmcConfigSection } from "@/lib/amc/config";
 import type { AmcRoleTemplate } from "@/lib/amc/role-templates";
 import type { AmcConfigHistoryItem } from "@/lib/server/amc/config";
-import type { AmcJobRunSummary } from "@/lib/server/amc/jobs";
+import type { AmcJobRunSummary, AmcRunRecipient } from "@/lib/server/amc/jobs";
 import type { InAppNotification } from "@/lib/server/amc/notifications";
 import { amcRequest } from "@/lib/amc/http-cache";
 
@@ -73,6 +73,10 @@ export const amcPlatformService = {
       "/api/amc-config/role-templates",
       { method: "POST" },
     );
+  },
+  /** Who one run told: by person, channel and outcome (26 Nov 2026). */
+  runRecipients(runId: string) {
+    return request<{ recipients: AmcRunRecipient[] }>(`/api/amc-jobs/run?runId=${encodeURIComponent(runId)}`);
   },
   jobs() {
     return request<{ jobs: Array<{ key: string; label: string }>; runs: AmcJobRun[] }>("/api/amc-jobs/run");

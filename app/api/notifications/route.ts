@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
+import { isNotificationModule } from "@/lib/notifications/modules";
 import { listMyNotifications, markNotificationsRead } from "@/lib/server/notifications/inbox";
 import { requireResourceAccess } from "@/lib/server/require-access";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
@@ -8,7 +9,7 @@ import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 /**
  * The caller's own in-app notifications (BRD §6.2), newest first, and
  * marking them read. ?limit=&offset= page the inbox; ?unread=1 lists only
- * what is still unopened (the home panel).
+ * what is still unopened (the home panel); ?module= one part of the portal.
  *
  * Any signed-in, active user: everyone has an inbox, and the user id comes
  * from the session, so nobody can read or mark another person's.
@@ -26,6 +27,8 @@ export async function GET(req: NextRequest) {
       limit,
       offset,
       unreadOnly: params.get("unread") === "1",
+      /* ?module=snagging: one part of the portal (26 Nov 2026). */
+      module: isNotificationModule(params.get("module")) ? (params.get("module") as Parameters<typeof listMyNotifications>[2]["module"]) : null,
     });
     return NextResponse.json(page, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {

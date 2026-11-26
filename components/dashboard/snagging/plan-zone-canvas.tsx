@@ -268,7 +268,7 @@ export function PlanZoneCanvas({
                 r={index === 0 ? 1.6 : 1.1}
                 className={cn(
                   "stroke-brand",
-                  index === 0 ? "fill-background" : "fill-brand",
+                  index === 0 ? "fill-popover" : "fill-brand",
                 )}
                 vectorEffect="non-scaling-stroke"
                 strokeWidth={1.25}
@@ -373,7 +373,7 @@ export function PlanZoneCanvas({
       })}
 
       {drawing ? (
-        <p className="bg-background/90 text-muted-foreground pointer-events-none absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full border px-3 py-1 text-xs shadow-sm">
+        <p className="bg-card/90 text-muted-foreground pointer-events-none absolute bottom-2 left-1/2 -translate-x-1/2 rounded-full border px-3 py-1 text-xs shadow-sm">
           {draft.length < MIN_ZONE_POINTS
             ? `Click the corners of the room. ${MIN_ZONE_POINTS - draft.length} more to close it.`
             : "Click the first corner, double-click, or press Enter to close. Backspace undoes."}

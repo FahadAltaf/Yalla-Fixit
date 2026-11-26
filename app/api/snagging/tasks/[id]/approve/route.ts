@@ -1,4 +1,5 @@
 import { after, NextRequest, NextResponse } from "next/server";
+import { notifySnaggingJob } from "@/lib/server/snagging/portal-notices";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
@@ -145,6 +146,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       justification: parsed.data.comment?.trim() || null,
       payload: { code: job.code, from_status: job.status, to_status: "approved" },
     });
+    /* The reviewer and whoever created the job hear about it in the portal inbox (26 Nov 2026). */
+    after(() => notifySnaggingJob(admin, id, "approved", new Date().toISOString(), profile.id));
 
     /*
       Everything after the approval itself runs once the manager has their

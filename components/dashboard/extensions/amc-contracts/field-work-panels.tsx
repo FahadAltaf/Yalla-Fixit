@@ -219,7 +219,7 @@ export function FieldStartAction({
                     role="radio"
                     aria-checked={timing === value}
                     onClick={() => setTiming(value)}
-                    className={`rounded-full px-3 py-1 ${timing === value ? "bg-background font-medium shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                    className={`rounded-full px-3 py-1 ${timing === value ? "bg-card font-medium shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
                   >
                     {PAYMENT_TIMING_LABELS[value]}
                   </button>

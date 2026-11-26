@@ -175,6 +175,55 @@ export async function listAmcJobRuns(admin: Admin, limit = 10) {
   return data ?? [];
 }
 
+export interface AmcRunRecipient {
+  name: string;
+  email: string | null;
+  /** in_app: the bell (and the to-do list); email: an email went out. */
+  channel: string;
+  /** delivered, sent, held, failed ... as the notification records it. */
+  status: string;
+  count: number;
+  /** What it was about (the notice titles, a few). */
+  examples: string[];
+}
+
+/**
+ * Who a run told (26 Nov 2026, the user): the AMC notifications created
+ * while it ran, by person, channel and outcome. Read from the notification
+ * records, so it says what really went out, not what the job meant to send.
+ */
+export async function amcRunRecipients(admin: Admin, runId: string): Promise<AmcRunRecipient[]> {
+  const { data: run } = await admin.from("amc_job_runs").select("started_at, finished_at").eq("id", runId).maybeSingle<{ started_at: string; finished_at: string | null }>();
+  if (!run) return [];
+  /* A few seconds of slack after the end: the last notices are written as the run closes. */
+  const to = new Date(Date.parse(run.finished_at ?? new Date().toISOString()) + 5_000).toISOString();
+  const { data, error } = await admin
+    .from("amc_notifications")
+    .select("recipient_user_id, recipient_email, channel, status, title")
+    .gte("created_at", run.started_at)
+    .lte("created_at", to)
+    .limit(2000);
+  if (error || !data?.length) return [];
+  const rows = data as Array<{ recipient_user_id: string | null; recipient_email: string | null; channel: string | null; status: string | null; title: string | null }>;
+  const ids = [...new Set(rows.map((r) => r.recipient_user_id).filter((x): x is string => Boolean(x)))];
+  const { data: people } = ids.length ? await admin.from("user_profile").select("id, full_name, email").in("id", ids) : { data: [] };
+  const person = new Map(((people ?? []) as Array<{ id: string; full_name: string | null; email: string | null }>).map((p) => [p.id, p]));
+  const groups = new Map<string, AmcRunRecipient>();
+  for (const r of rows) {
+    const p = r.recipient_user_id ? person.get(r.recipient_user_id) : undefined;
+    const name = p?.full_name || p?.email || r.recipient_email || "Unknown recipient";
+    const email = p?.email ?? r.recipient_email ?? null;
+    const channel = r.channel || "in_app";
+    const status = r.status || "created";
+    const key = `${name}|${channel}|${status}`;
+    const g = groups.get(key) ?? { name, email, channel, status, count: 0, examples: [] };
+    g.count += 1;
+    if (r.title && g.examples.length < 3) g.examples.push(r.title);
+    groups.set(key, g);
+  }
+  return [...groups.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+}
+
 /**
  * The scheduler's secret, as the Snagging escalation runner checks it:
  * `x-cron-secret` or `Authorization: Bearer`. No secret configured means

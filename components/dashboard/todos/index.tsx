@@ -196,7 +196,7 @@ function TodoCard({
     <div
       ref={setNodeRef}
       style={style}
-      className={`rounded-lg bg-background p-3 shadow-xs ${canDrag ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"} ${deadlineBorderClass(todo)} ${isDragging ? "opacity-70 shadow-md" : ""
+      className={`rounded-lg bg-card p-3 shadow-xs ${canDrag ? "cursor-grab active:cursor-grabbing" : "cursor-pointer"} ${deadlineBorderClass(todo)} ${isDragging ? "opacity-70 shadow-md" : ""
         }`}
       onDoubleClick={() => onEdit(todo)}
       {...listeners}

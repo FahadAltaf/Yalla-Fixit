@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { notifyTodo } from "@/lib/server/todos/portal-notices";
 import { z } from "zod";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { emailService } from "@/lib/email-service";
@@ -490,6 +491,8 @@ export async function POST(req: NextRequest) {
     ]);
 
     const warnings = await sendAssignmentEmails(todo, payload.assigneeIds);
+    /* The assignees also see it in the portal inbox, under To-dos (26 Nov 2026). */
+    await notifyTodo(admin, todo, "assigned", payload.assigneeIds, { id: profile.id, name: profile.full_name ?? profile.email ?? null }, "created");
 
     const [todoWithUpdates] = await loadTodos([created.id]);
     return NextResponse.json({ data: withWarnings(todoWithUpdates, warnings) });
@@ -610,6 +613,8 @@ export async function PUT(req: NextRequest) {
 
     if (newAssigneeIds.length > 0) {
       warnings.push(...(await sendAssignmentEmails(todo, newAssigneeIds)));
+      /* The newly assigned also see it in the portal inbox (26 Nov 2026). */
+      await notifyTodo(admin, todo, "assigned", newAssigneeIds, { id: profile.id, name: profile.full_name ?? profile.email ?? null }, new Date().toISOString());
     }
 
     const [todoWithUpdates] = await loadTodos([payload.id]);

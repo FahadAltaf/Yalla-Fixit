@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { notifyScheduleDay } from "@/lib/server/scheduling/portal-notices";
 import { z } from "zod";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { getAuthenticatedUserAccess } from "@/lib/server/user-access";
@@ -75,6 +76,8 @@ export async function POST(req: NextRequest) {
       schedule_version_id: scheduleVersionId,
       after_value: { comment: reason },
     });
+    /* Whoever submitted the day hears about it in the portal inbox (26 Nov 2026). */
+    await notifyScheduleDay(admin, scheduleVersionId, "rejected", { id: profile.id, name: profile.full_name ?? profile.email ?? null }, reason);
 
     return NextResponse.json({ data: updated });
   } catch (error) {

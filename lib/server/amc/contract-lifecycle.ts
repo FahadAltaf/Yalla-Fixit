@@ -1,4 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { queueClientToFsmOnSigning } from "@/lib/server/amc/fsm-on-signing";
 
 import type { AmcConfig } from "@/lib/amc/config";
 import {
@@ -367,6 +368,8 @@ async function afterSignature(admin: Admin, c: Row, status: ContractStatus, sign
   if (status === "signed") {
     await closeAmcTodos(admin, { entityType: "contract", entityId: String(c.id), kind: "contract_follow_up" }, { status: "done", reason: "Signed" }).catch(() => 0);
     await notifyContractEvent(admin, { event: "contract_signed", contractId: String(c.id), actor: { id: actor.id, label: actor.label }, at: new Date().toISOString() }).catch(() => undefined);
+    /* DEV-504: the client becomes an FSM customer on signing, not at enquiry. */
+    queueClientToFsmOnSigning(admin, String(c.id), { id: actor.id ?? null, label: actor.label ?? null });
   } else {
     const next = nextPendingSignatory(signatories.map(asState));
     const row = next ? signatories.find((s) => s.id === next.id) : null;
@@ -478,6 +481,8 @@ export async function recordSignedScan(
     payload: { documentId: input.documentId, signedDate: input.signedDate, signedByName: input.signedByName.trim() },
   });
   await closeAmcTodos(admin, { entityType: "contract", entityId: contractId, kind: "contract_follow_up" }, { status: "done", reason: "Signed scan" }).catch(() => 0);
+  /* DEV-504: the client becomes an FSM customer on signing, not at enquiry. */
+  queueClientToFsmOnSigning(admin, contractId, actor);
   return { status: "signed" as const };
 }
 

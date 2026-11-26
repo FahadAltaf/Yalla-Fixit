@@ -108,9 +108,9 @@ function BusyOverlay({ show, label }: { show: boolean; label: string }) {
     <div
       role="status"
       aria-live="polite"
-      className="bg-background/60 absolute inset-0 z-10 flex items-center justify-center rounded-lg backdrop-blur-[1px]"
+      className="bg-card/60 absolute inset-0 z-10 flex items-center justify-center rounded-lg backdrop-blur-[1px]"
     >
-      <span className="bg-background text-foreground inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium shadow-sm">
+      <span className="bg-card text-foreground inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-medium shadow-sm">
         <Loader2 className="text-brand size-3.5 animate-spin" />
         {label}
       </span>
@@ -976,7 +976,7 @@ export function FloorPlansAreasPanel({
                 */}
                 {canEdit ? (
                   <div className="bg-muted/40 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-2 py-1.5">
-                    <div className="bg-background inline-flex rounded-md border p-0.5">
+                    <div className="bg-card inline-flex rounded-md border p-0.5">
                       {(["pin", "zone"] as const).map((option) => (
                         <button
                           key={option}

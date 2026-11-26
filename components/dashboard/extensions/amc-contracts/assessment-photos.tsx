@@ -150,10 +150,10 @@ export function AssessmentPhotos({
                   />
                   {/* The category the assessor chose on the phone. */}
                   {p.category ? (
-                    <span className="bg-background/90 text-foreground absolute top-2 left-2 rounded-md px-2 py-0.5 text-xs font-medium shadow-sm">{p.category}</span>
+                    <span className="bg-card/90 text-foreground absolute top-2 left-2 rounded-md px-2 py-0.5 text-xs font-medium shadow-sm">{p.category}</span>
                   ) : null}
                   {canAdd ? null : (
-                    <span className="bg-background/90 text-foreground absolute top-2 right-2 rounded-md p-1 opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
+                    <span className="bg-card/90 text-foreground absolute top-2 right-2 rounded-md p-1 opacity-0 shadow-sm transition-opacity group-hover:opacity-100">
                       <ExternalLink className="size-3.5" />
                     </span>
                   )}

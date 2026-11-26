@@ -1,17 +1,6 @@
-import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 
-import { CustomersPage } from "@/components/dashboard/extensions/amc-contracts/customers-page";
-import { NoPageAccess } from "@/components/dashboard/snagging/no-page-access";
-import { canSeeAmcPage } from "@/lib/server/amc/page-access";
-import { ResourceType } from "@/types/types";
-
-export const metadata: Metadata = {
-  title: "Clients | AMC",
-  robots: { index: false, follow: false },
-};
-
-export default async function Route() {
-  /* The page's own permission decides the page, not just the sidebar entry (as Snagging). */
-  if (!(await canSeeAmcPage(ResourceType.AMC_CLIENTS))) return <NoPageAccess page="Clients" />;
-  return <CustomersPage />;
+/* Clients is one module for AMC and Snagging now (26 Nov 2026): links already sent forward to it. */
+export default function AmcClientsRoute() {
+  redirect("/clients");
 }

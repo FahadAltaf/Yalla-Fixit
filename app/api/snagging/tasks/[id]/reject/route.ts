@@ -1,4 +1,5 @@
 import { after, NextRequest, NextResponse } from "next/server";
+import { notifySnaggingJob } from "@/lib/server/snagging/portal-notices";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
@@ -125,6 +126,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         remediation_due_at: remediationDeadline,
       },
     });
+    /* The reviewer and whoever created the job hear about it in the portal inbox (26 Nov 2026). */
+    after(() => notifySnaggingJob(admin, id, "rejected", new Date().toISOString(), profile.id));
 
     /*
       FR-6.02 — tell the inspector, don't wait for them to notice.

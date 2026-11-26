@@ -29,9 +29,10 @@ export function ClientsToolbar({
   search: string;
   onSearchChange: (value: string) => void;
   loading: boolean;
-  statusOptions: ReadonlyArray<{ value: string; label: string }>;
-  status: string;
-  onStatusChange: (value: string) => void;
+  /** AMC's status filter; left out for someone without AMC's view of clients. */
+  statusOptions?: ReadonlyArray<{ value: string; label: string }>;
+  status?: string;
+  onStatusChange?: (value: string) => void;
   pageSize: number;
   onPageSizeChange: (size: number) => void;
   onRefresh: () => void;
@@ -57,7 +58,9 @@ export function ClientsToolbar({
               {loading ? <LoaderCircleIcon aria-label="Loading..." className="animate-spin" role="status" size={16} /> : <SearchIcon aria-hidden="true" size={16} />}
             </div>
           </div>
-          <StatusSelect options={statusOptions} value={status} onChange={onStatusChange} label="Filter by client status" />
+          {statusOptions && onStatusChange ? (
+            <StatusSelect options={statusOptions} value={status ?? ""} onChange={onStatusChange} label="Filter by client status" />
+          ) : null}
         </div>
 
         <div className="flex gap-3 sm:flex-row sm:items-center sm:gap-4">

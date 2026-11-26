@@ -263,7 +263,7 @@ export function useChartView() {
           size="sm"
           variant="ghost"
           aria-pressed={view === v}
-          className={cn("h-7 gap-1.5 px-2.5 text-xs", view === v ? "bg-background shadow-sm" : "text-muted-foreground")}
+          className={cn("h-7 gap-1.5 px-2.5 text-xs", view === v ? "bg-card shadow-sm" : "text-muted-foreground")}
           onClick={() => setView(v)}
         >
           {v === "chart" ? <BarChart3 className="size-3.5" /> : <Table2 className="size-3.5" />}

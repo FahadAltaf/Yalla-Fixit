@@ -28,9 +28,11 @@ import { recordStatusChange } from "@/lib/server/amc/status-history";
 
 /**
  * Contract amendments on the server (Phase 13: DEV-417). Requested with a
- * reason by whoever operates the contract; approved or rejected by an AMC
- * approver who is not the requester; then applied, which is when the
- * contract changes. Every step is in the status history.
+ * reason by whoever operates the contract; approved or rejected by one AMC
+ * approver (the requester may be that approver since 24 Nov 2026, and an
+ * approver can do all three steps at once: requestAndApplyAmendment); then
+ * applied, which is when the contract changes. Every step is in the status
+ * history.
  */
 
 type Admin = SupabaseClient;
@@ -138,7 +140,7 @@ async function receivedSoFar(admin: Admin, contractId: string): Promise<number> 
   return Math.round(((data ?? []) as Row[]).reduce((s, r) => s + Number(r.received_amount ?? 0), 0) * 100) / 100;
 }
 
-export async function requestAmendment(admin: Admin, contractId: string, input: AmendmentRequest, actor: Actor, config: AmcConfig) {
+export async function requestAmendment(admin: Admin, contractId: string, input: AmendmentRequest, actor: Actor, config: AmcConfig, opts: { notifyDeciders?: boolean } = {}) {
   const { contract } = await loadContract(admin, contractId);
   const problem = amendmentProblem(input.kind, contract.status);
   if (problem) throw new ContractError(problem, 409);
@@ -157,7 +159,7 @@ export async function requestAmendment(admin: Admin, contractId: string, input: 
   const id = String(data.id);
   await recordStatusChange(admin, { entityType: "amendment", entityId: id, from: null, to: "requested", reason: input.reason, actor, details: { contractId, kind: input.kind } });
   const number = contract.lifecycle?.contractNumber ?? contract.proposalNumber;
-  const deciders = await amendmentDeciders(admin, config, actor.id);
+  const deciders = opts.notifyDeciders === false ? { ids: [] as string[] } : await amendmentDeciders(admin, config, actor.id);
   await notifyUsers(admin, {
     event: "amendment_requested",
     userIds: deciders.ids,
@@ -303,7 +305,8 @@ export async function performAmendmentAction(
       const details = { ...((row.details ?? {}) as Row) };
       if (action.action === "approve" && kind === "early_termination") details.validReason = Boolean(action.validReason);
       await move(admin, row, action.action === "approve" ? "approved" : "rejected", { decided_by: actor.id, decided_at: now, decision_comment: action.comment ?? null, details }, actor, action.comment ?? null);
-      if (row.requested_by) {
+      /* Told only when someone else decided it. */
+      if (row.requested_by && row.requested_by !== actor.id) {
         await notifyUsers(admin, {
           event: action.action === "approve" ? "amendment_approved" : "amendment_rejected",
           userIds: [String(row.requested_by)],
@@ -333,6 +336,40 @@ export async function performAmendmentAction(
       return { ok: true as const, ...result };
     }
   }
+}
+
+/**
+ * DEV-417 (26 Nov 2026, the user: "only one approver can do it"): an AMC
+ * approver ends or changes a contract in one step -- asked for, approved and
+ * applied at once, each step in the status history under their name, as
+ * self-approval was allowed on 24 Nov (lib/amc/workflow.ts). Anyone else
+ * still asks, and one approver decides.
+ */
+export async function requestAndApplyAmendment(
+  admin: Admin,
+  contractId: string,
+  input: AmendmentRequest,
+  actor: Actor,
+  config: AmcConfig,
+  decision: { validReason?: boolean },
+) {
+  const { id } = await requestAmendment(admin, contractId, input, actor, config, { notifyDeciders: false });
+  const rights = { canApprove: true, canOperate: true };
+  await performAmendmentAction(
+    admin,
+    contractId,
+    id,
+    {
+      action: "approve",
+      comment: "Approved in one step by the approver who asked for it",
+      ...(input.kind === "early_termination" ? { validReason: Boolean(decision.validReason) } : {}),
+    },
+    actor,
+    rights,
+    config,
+  );
+  const applied = await performAmendmentAction(admin, contractId, id, { action: "apply" }, actor, rights, config);
+  return { id, applied: true as const, ...("submissionId" in applied && applied.submissionId ? { submissionId: applied.submissionId } : {}) };
 }
 
 /* ------------------------------------------------------------------ */

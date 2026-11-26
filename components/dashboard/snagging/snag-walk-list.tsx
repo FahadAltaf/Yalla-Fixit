@@ -1853,7 +1853,7 @@ function EvidenceGroup({
             >
               <EvidenceThumbnail photo={photo} />
               {showRound ? (
-                <span className="bg-foreground/75 text-background absolute top-1 left-1 rounded px-1 py-0.5 text-[10px] leading-none font-medium tabular-nums">
+                <span className="bg-foreground/75 text-popover absolute top-1 left-1 rounded px-1 py-0.5 text-[10px] leading-none font-medium tabular-nums">
                   R{photo.round_number ?? 1}
                 </span>
               ) : null}

@@ -327,6 +327,84 @@ export async function createClientWithFsm(
 }
 
 /**
+ * A client the portal already has, put into Zoho FSM (DEV-504, 26 Nov 2026:
+ * the FSM customer is made when the contract is signed, not at enquiry).
+ * FSM keeps one contact per email, so one it already has is linked rather
+ * than created twice; otherwise the contact is created, which FSM allows only
+ * with an email (the Maher ID is sent when the client has one). Unlike createClientWithFsm, no second portal
+ * client is made: this one gets the FSM id.
+ *
+ * Says what happened rather than throwing for the expected cases (writes off,
+ * details missing, the email belongs to another portal client).
+ */
+export type PutClientInFsmResult =
+  | { state: "already"; contactId: string }
+  | { state: "linked"; contactId: string }
+  | { state: "created"; contactId: string }
+  | { state: "off" | "missing_details" | "taken" | "not_found"; message: string };
+
+export async function putClientInFsm(admin: Admin, clientId: string, actorId: string | null): Promise<PutClientInFsmResult> {
+  if (!(await fsmClientWritesReady(admin))) {
+    return { state: "off", message: "Zoho FSM is not taking changes from the portal (ZOHO_FSM is read-only or off)." };
+  }
+  const { data } = await admin.from("snagging_clients").select(await localColumns(admin)).eq("id", clientId).maybeSingle();
+  const row = data as Row | null;
+  if (!row) return { state: "not_found", message: "The contract's client is not in the portal." };
+  if (row.fsm_contact_id) return { state: "already", contactId: String(row.fsm_contact_id) };
+
+  const name = String(row.name ?? "").trim();
+  const email = String(row.email ?? "").trim();
+  const maherId = String(row.maher_id ?? "").trim();
+  const token = await getFsmAccessToken(admin);
+
+  if (email) {
+    const existing = await findContactByEmail(token, email);
+    if (existing) {
+      const { data: other } = await admin.from("snagging_clients").select("id, name").eq("fsm_contact_id", existing.id).neq("id", clientId).maybeSingle();
+      if (other) {
+        return {
+          state: "taken",
+          message: `Zoho FSM already has ${email} as ${existing.name}, who is another client in the portal (${String((other as Row).name)}). Use that client, or correct the email, then try again.`,
+        };
+      }
+      await admin.from("snagging_clients").update({ fsm_contact_id: existing.id, updated_at: new Date().toISOString() }).eq("id", clientId);
+      await log(admin, { quotationId: null, clientId, action: "contact_link", status: "success", recordId: existing.id, message: `Linked to the FSM contact with the same email (${existing.name})`, actorId });
+      return { state: "linked", contactId: existing.id };
+    }
+  }
+
+  if (!email) {
+    return { state: "missing_details", message: "Zoho FSM needs the client's email to create them. Add it with Edit client, then create them in FSM from the contract." };
+  }
+
+  const company = (row.company as string | null) ?? null;
+  const phone = (row.phone as string | null) ?? null;
+  let contactId: string;
+  let companyId: string | null = null;
+  try {
+    companyId = company ? await ensureCompany(token, company, { phone, email }) : null;
+    contactId = await createContact(token, { name, email, mobile: phone, companyId, maherId: maherId || null });
+  } catch (err) {
+    await log(admin, {
+      quotationId: null,
+      clientId,
+      action: "contact_create",
+      status: "failed",
+      message: `${name} <${email}>: ${err instanceof Error ? err.message : "Zoho FSM refused the contact"}`,
+      detail: err instanceof FsmApiError ? err.detail : undefined,
+      actorId,
+    });
+    throw err;
+  }
+  await admin
+    .from("snagging_clients")
+    .update({ fsm_contact_id: contactId, fsm_company_id: companyId, updated_at: new Date().toISOString() })
+    .eq("id", clientId);
+  await log(admin, { quotationId: null, clientId, action: "contact_create", status: "success", recordId: contactId, message: `Client created in FSM as ${name}`, actorId });
+  return { state: "created", contactId };
+}
+
+/**
  * A client's details corrected: in FSM first (it is the record), then the
  * portal's copy. A contact that has no portal row yet is linked, so the
  * notes, which only the portal keeps, have somewhere to go.

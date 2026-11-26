@@ -12,6 +12,7 @@ import {
   ReceiptText,
   ChartColumn,
   ClipboardCheck,
+  Contact,
   FileSignature,
   LayoutDashboard,
   ListTodo,
@@ -31,6 +32,7 @@ import {
   canViewAmcRateCard,
   canViewAmcVisits,
 } from "@/components/dashboard/extensions/amc/amc-constants";
+import { clientsAccess } from "@/lib/clients/access";
 import { REPORTS_ENABLED } from "@/lib/reports/enabled";
 import { hasResourceAction, hasSharedListAction } from "@/lib/role-permissions";
 
@@ -295,6 +297,21 @@ export const baseSectionsItems: MenuItem[] = [
     resource: ResourceType.SCHEDULING,
   },
   /*
+    Clients, one module for AMC and Snagging (26 Nov 2026, the user: "we
+    have clients in both amc and snagging so ... show outside the amc and
+    snagging, manage both together"). They were always one set of records;
+    either module's Clients permission opens the page, as either module's
+    opens Workforce. Replaces AMC -> Clients and Snagging -> Clients, whose
+    old addresses forward here.
+  */
+  {
+    title: "Clients",
+    url: "/clients",
+    icon: <Contact className="size-4 text-primary" />,
+    isActive: false,
+    canSee: (user: User) => clientsAccess(user).view,
+  },
+  /*
     AMC is a module of its own, laid out like Snagging: one parent, each
     section a sub-item. It used to hang off Extensions (so an AMC user
     without the Extensions permission never saw it) with the rest of its
@@ -330,13 +347,7 @@ export const baseSectionsItems: MenuItem[] = [
         Finance and administrator templates grant them (lib/amc/role-templates.ts).
       */
       { title: "Renewals", url: "/extensions/amc-contracts/renewals", resource: ResourceType.AMC_RENEWALS },
-      {
-        title: "Clients",
-        url: "/extensions/amc-contracts/customers",
-        // A property page belongs to its client.
-        match: ["/extensions/amc-contracts/properties"],
-        resource: ResourceType.AMC_CLIENTS,
-      },
+      /* Clients moved out to its own module, shared with Snagging (26 Nov 2026). */
       /*
         Every AMC visit in one list (planned visits, call outs, additional work,
         site visits), with a Type to tell them apart. Site visits moved in here
@@ -444,11 +455,7 @@ export const baseSectionsItems: MenuItem[] = [
       //   url: "/snagging/review",
       //   resource: ResourceType.SNAGGING,
       // },
-      {
-        title: "Clients",
-        url: "/snagging/clients",
-        resource: ResourceType.SNAGGING_CLIENTS,
-      },
+      /* Clients moved out to its own module, shared with AMC (26 Nov 2026). */
       {
         title: "Analytics",
         url: "/snagging/analytics",

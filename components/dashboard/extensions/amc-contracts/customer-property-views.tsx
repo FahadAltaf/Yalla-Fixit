@@ -35,9 +35,7 @@ import { ELIGIBILITY_LABELS } from "./contract-commercial";
 import { CONTRACT_STATUS_LABELS, contractStatusTone, formatContractDate } from "./contract-status";
 import { AddressDialog, useAddressFormAccess } from "./address-dialog";
 import { BookSiteVisitDialog } from "./book-site-visit-dialog";
-import { CustomerDialog } from "./customers-page";
 import { DetailHeaderCard, DetailHeaderSkeleton, DetailToolbar } from "./detail-header";
-import { customerInput } from "./edit-client-dialog";
 import { ClientPaymentsPanel } from "./payments-page";
 import { PropertyFields, UNIT_TYPE_LABELS, cleanProperty } from "./customer-pickers";
 import { useAmcData } from "./use-amc-data";
@@ -53,12 +51,14 @@ import { useUrlTab } from "./profile/use-url-tab";
 import { ClientEnquiriesCard } from "./enquiries/client-enquiries-card";
 import { formatPhone } from "@/lib/phone/format-phone";
 import { TruncatedText } from "@/components/ui/truncated-text";
+import { ClientDialog } from "@/components/dashboard/clients/client-dialog";
+import { ClientJobsTable } from "@/components/dashboard/snagging/client-jobs-dialog";
+import { CLIENTS_HREF, clientsAccess } from "@/lib/clients/access";
 
 type ContractItem = CustomerOverview["contracts"][number];
 type AssessmentItem = CustomerOverview["assessments"][number];
 type QuoteItem = CustomerOverview["quotes"][number];
 
-const CLIENTS_HREF = "/extensions/amc-contracts/customers";
 const noop = () => undefined;
 const unitTypeLabel = (t: string | null) => (t ? (UNIT_TYPE_LABELS[t as keyof typeof UNIT_TYPE_LABELS] ?? t) : null);
 
@@ -317,7 +317,7 @@ function StartAssessmentButton({
 
 /* ------------------------------------------------------------------ */
 
-const CUSTOMER_TABS = ["overview", "properties", "contracts", "schedule", "service", "payments", "visits", "contacts", "documents", "communication"] as const;
+const CUSTOMER_TABS = ["overview", "properties", "contracts", "schedule", "service", "payments", "visits", "snagging", "contacts", "documents", "communication"] as const;
 
 /**
  * The client profile (BRD 5.9, DEV-379), one page per client like the
@@ -337,7 +337,12 @@ export function CustomerDetail({ id }: { id: string }) {
   /* Payments (Phase 7) only for AMC Payments (View), as /api/amc-payments answers. */
   const { userProfile } = useAuth();
   const canViewPayments = canViewAmcPayments(userProfile);
-  const { tab, setTab, isOpened } = useUrlTab(canViewPayments ? CUSTOMER_TABS : CUSTOMER_TABS.filter((t) => t !== "payments"), "overview");
+  /* Clients is one module (26 Nov 2026): Snagging's jobs for those who have Snagging, and its edit grant. */
+  const access = clientsAccess(userProfile);
+  const { tab, setTab, isOpened } = useUrlTab(
+    CUSTOMER_TABS.filter((t) => (t !== "payments" || canViewPayments) && (t !== "snagging" || access.snagging)),
+    "overview",
+  );
 
   const toolbar = <DetailToolbar backHref={CLIENTS_HREF} backLabel="Clients" fetchedAt={fetchedAt} refreshing={refreshing} onRefresh={data ? refresh : undefined} />;
 
@@ -367,6 +372,8 @@ export function CustomerDetail({ id }: { id: string }) {
 
   const { customer, properties, contracts, assessments, quotes, summary } = data.overview;
   const canEdit = data.canEdit !== false;
+  /* Edit client: AMC's rule for this client, or Snagging's Clients (Edit). */
+  const canEditClient = canEdit || access.editViaSnagging;
   const licenceState = customer.customerType !== "individual" ? documentExpiryState(customer.tradeLicenseExpiry, todayInDubai(), 60) : null;
   const panel = (value: (typeof CUSTOMER_TABS)[number], children: React.ReactNode) =>
     isOpened(value) ? (
@@ -395,10 +402,10 @@ export function CustomerDetail({ id }: { id: string }) {
             <p className="text-muted-foreground text-sm">{[customer.company, formatPhone(customer.phone), customer.email].filter(Boolean).join(" · ") || "No contact details recorded"}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {canEdit ? (
+            {canEditClient ? (
               <Button variant="outline" onClick={() => editing.show(true)}>
                 <SquarePen className="size-4" />
-                Edit
+                Edit client
               </Button>
             ) : null}
             <StartAssessmentButton client={customer} propertyId={null} />
@@ -449,6 +456,7 @@ export function CustomerDetail({ id }: { id: string }) {
             Site visits
             <TabCount value={assessments.length} />
           </TabsTrigger>
+          {access.snagging ? <TabsTrigger value="snagging">Snagging jobs</TabsTrigger> : null}
           <TabsTrigger value="contacts">Contacts</TabsTrigger>
           <TabsTrigger value="documents">Documents</TabsTrigger>
           <TabsTrigger value="communication">Communication log</TabsTrigger>
@@ -525,24 +533,21 @@ export function CustomerDetail({ id }: { id: string }) {
             <AssessmentsList assessments={assessments} />
           </SectionCard>,
         )}
+        {access.snagging
+          ? panel(
+              "snagging",
+              <SectionCard title="Snagging jobs" description="Every snagging job raised for this client. Open a row to go to the job." icon={<ClipboardCheck />} bodyClassName="border-t">
+                <ClientJobsTable clientId={customer.id} />
+              </SectionCard>,
+            )
+          : null}
         {panel("contacts", <ContactsPanel customerId={customer.id} canEdit={canEdit} />)}
         {panel("documents", <DocumentsPanel target={{ customerId: customer.id }} canUpload={canEdit} title="Documents (client, properties and contracts)" />)}
         {panel("communication", <CommunicationPanel customerId={customer.id} />)}
       </Tabs>
 
-      <CustomerDialog
-        key={editing.key}
-        open={editing.open}
-        onOpenChange={editing.onOpenChange}
-        title="Edit client"
-        description="Changes what future documents carry. Signed contracts keep their own copy of these details."
-        initial={customerInput(customer)}
-        onSave={async (input) => {
-          await amcContractsService.updateCustomer(customer.id, input);
-          toast.success("Client saved. Signed contracts are unchanged.");
-          reload();
-        }}
-      />
+      {/* The one Edit client (26 Nov 2026): Zoho FSM and the portal, AMC's fields for those who may. */}
+      {editing.open ? <ClientDialog key={editing.key} open onOpenChange={editing.onOpenChange} clientId={customer.id} onSaved={reload} /> : null}
       {addressForm ? (
         <AddressDialog
           key={`address-${addingProperty.key}`}

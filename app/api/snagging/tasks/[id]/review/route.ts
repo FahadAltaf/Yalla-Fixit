@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { notifySnaggingJob } from "@/lib/server/snagging/portal-notices";
 
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import { hasResourceAction } from "@/lib/role-permissions";
@@ -137,6 +138,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       | undefined;
     if (claimed) {
       await recordAuditBatch(admin, trail({ ...claimed, from: "submitted" }));
+      if (completeToo) await notifySnaggingJob(admin, id, "reviewed", now, profile.id);
       return NextResponse.json({
         data: { id, status: "in_review", ...(completeToo ? { reviewed_at: now } : {}) },
       });
@@ -194,6 +196,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       }),
     );
 
+    /* Review done: the approval manager hears about it in the portal inbox (26 Nov 2026). */
+    if (completeToo) await notifySnaggingJob(admin, id, "reviewed", now, profile.id);
     return NextResponse.json({
       data: { id, status: "in_review", ...(completeToo ? { reviewed_at: now } : {}) },
     });

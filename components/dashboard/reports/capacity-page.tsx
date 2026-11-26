@@ -339,7 +339,7 @@ export function CapacityPage() {
             </div>
             {boardLoading ? (
               <div className="absolute inset-0 flex items-start justify-center pt-16">
-                <span className="bg-background/90 text-muted-foreground flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm shadow-sm">
+                <span className="bg-card/90 text-muted-foreground flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm shadow-sm">
                   <Loader2 className="size-4 animate-spin" />
                   Updating the board…
                 </span>

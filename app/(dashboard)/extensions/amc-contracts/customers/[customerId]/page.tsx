@@ -1,18 +1,20 @@
-import type { Metadata } from "next";
+import { redirect } from "next/navigation";
 
-import { CustomerDetail } from "@/components/dashboard/extensions/amc-contracts/customer-property-views";
-import { NoPageAccess } from "@/components/dashboard/snagging/no-page-access";
-import { canSeeAmcPage } from "@/lib/server/amc/page-access";
-import { ResourceType } from "@/types/types";
+import { clientHref } from "@/lib/clients/access";
 
-export const metadata: Metadata = {
-  title: "Client | AMC",
-  robots: { index: false, follow: false },
-};
-
-export default async function Route({ params }: { params: Promise<{ customerId: string }> }) {
-  /* The page's own permission decides the page, not just the sidebar entry (as Snagging). */
-  if (!(await canSeeAmcPage(ResourceType.AMC_CLIENTS))) return <NoPageAccess page="Clients" />;
-  const { customerId } = await params;
-  return <CustomerDetail id={customerId} />;
+/*
+  Clients is one module for AMC and Snagging now (26 Nov 2026). A client's
+  old AMC address (in notifications and emails already sent) forwards to
+  its page there, on the same tab.
+*/
+export default async function AmcClientRoute({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ customerId: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const [{ customerId }, query] = await Promise.all([params, searchParams]);
+  const tab = typeof query.tab === "string" ? query.tab : null;
+  redirect(clientHref(customerId, tab));
 }

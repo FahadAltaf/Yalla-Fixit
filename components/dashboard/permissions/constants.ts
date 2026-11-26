@@ -95,6 +95,14 @@ for (const page of [
 ]) {
   RESOURCE_ACTIONS[page] ??= [ActionType.VIEW];
 }
+/*
+  Clients (26 Nov 2026): one page for AMC and Snagging, outside both menus.
+  Each module keeps its own Clients permission (either opens the page, and
+  decides what is shown on a client), so they are named here now that
+  neither has a menu entry of its own.
+*/
+RESOURCE_ACTIONS[ResourceType.AMC_CLIENTS] ??= [ActionType.VIEW];
+RESOURCE_ACTIONS[ResourceType.SNAGGING_CLIENTS] ??= [ActionType.VIEW];
 // Scheduling is a full CRUD module plus an Approve permission (#2): the holder
 // can approve/reject a submitted day and receives the submission email.
 RESOURCE_ACTIONS[ResourceType.SCHEDULING] = [...CRUD_MODULE_ACTIONS, ActionType.APPROVE];

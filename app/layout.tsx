@@ -139,7 +139,7 @@ export default async function RootLayout({
         <WebsiteSchema />
       </head>
       <body
-        className={`${geistMono.variable} antialiased`}
+        className={`${geistMono.variable} antialiased bg-black/2 dark:bg-background`}
         suppressHydrationWarning
       >
         <AuthProvider initialAuth={auth}>
