@@ -152,7 +152,7 @@ test("30 Oct: completing the work order is refused until every line is complete;
     "completing the last line and the work order together is fine",
   );
   assert.match(completionRefusal([{ line: null, percent: 60, purpose: "invoice" }], lines) ?? "", /line by line/);
-  assert.equal(completionRefusal([{ line: "L2", percent: 100, purpose: "revenue_only" }], lines), null, "Complete may be revenue only (30 Oct)");
+  assert.notEqual(completionRefusal([{ line: "L2", percent: 100, purpose: "revenue_only" }], lines), null, "BRD v1.5: Complete is never revenue only");
   assert.match(completionRefusal([{ line: "L2", percent: 0, purpose: "invoice" }], lines) ?? "", /above 0/);
   assert.equal(completionRefusal([{ line: "L2", percent: 60, purpose: "revenue_only" }], lines), null);
 });
@@ -170,4 +170,12 @@ test("30 Oct: Cancelled and Closed work orders are over, like Void: nothing to i
   assert.equal(invoiceCap(line, { workOrderStatus: "Closed", postToMaher: null, entry }), 0);
   assert.equal(recognisedValue({ amount: 650, invoicedAmount: 100 }, { workOrderStatus: "Cancelled", entry }), 100, "what was invoiced before stays");
   assert.equal(invoicingStatus("Cancelled", "Non Billable"), "Cancelled", "Cancelled stays Cancelled, not Non-billable");
+});
+
+test("BRD v1.5: revenue only is allowed only below 100%", () => {
+  const lines = [{ id: "L1", name: "Paint", billable: true, completion: "not_started" as const }];
+  assert.match(completionRefusal([{ line: "L1", percent: 100, purpose: "revenue_only" }], lines) ?? "", /revenue only is for work below 100%/);
+  assert.match(completionRefusal([{ line: null, percent: 100, purpose: "revenue_only" }], lines) ?? "", /revenue only is for work below 100%/);
+  assert.equal(completionRefusal([{ line: "L1", percent: 99, purpose: "revenue_only" }], lines), null);
+  assert.equal(completionRefusal([{ line: "L1", percent: 100, purpose: "invoice" }], lines), null);
 });

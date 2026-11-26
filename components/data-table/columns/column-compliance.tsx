@@ -26,6 +26,8 @@ import { durationLabel, useViewerZone, viewerDateTime, viewerTime, zoneLabel } f
  * like the P6 ones: identity first, numbers right-aligned.
  */
 
+const round1 = (n: number) => Math.round(n * 10) / 10;
+
 /** Compliance to one decimal, never rounded up to the threshold in words (TC13). */
 export const compliancePct = (value: number | null | undefined) =>
   value === null || value === undefined ? "—" : `${(Math.floor(value * 10) / 10).toFixed(1)}%`;
@@ -89,7 +91,14 @@ const COMPLIANCE_HELP: Record<string, Help> = {
     lines: ["Missed check-ins a supervisor or coordinator excused with a reason (or an accepted dispute). They no longer count against the technician."],
   },
   compliance: { title: "Compliance", lines: ["Check-ins done ÷ check-ins needed, as a percentage."] },
-  beforeCap: { title: "Penalty before the cap", lines: ["Only when compliance is below the threshold: each missed check-in × the penalty per miss."] },
+  chargeable: {
+    title: "Chargeable misses",
+    lines: [
+      "The threshold allows a number of misses a month: required × (100% − threshold), to the nearest whole miss (200 at 97% allows 6).",
+      "Only when compliance is below the threshold do the misses beyond that allowance count; at or above it, none (BRD v1.5).",
+    ],
+  },
+  beforeCap: { title: "Penalty before the cap", lines: ["Only when compliance is below the threshold: each miss beyond the monthly allowance × the penalty per miss."] },
   payable: { title: "Penalty payable", lines: ["The penalty, but never more than the monthly cap. HR decides whether to apply it; the portal deducts nothing."] },
   owed: {
     title: "Due so far (shift · appointment)",
@@ -269,6 +278,35 @@ export function complianceColumns(rules: ComplianceRules): ColumnDef<ComplianceR
       enableSorting: false,
     },
     {
+      id: "chargeable",
+      header: helpHeader("Chargeable", COMPLIANCE_HELP.chargeable),
+      cell: ({ row }) => {
+        const r = row.original;
+        if (r.chargeableMisses === null || r.allowance === null) return num("—");
+        return (
+          <Explained
+            help={{
+              title: `${r.chargeableMisses} chargeable ${r.chargeableMisses === 1 ? "miss" : "misses"}`,
+              lines: [
+                `Allowance: ${r.required} needed × ${threshold === null ? "—" : round1(100 - threshold)}% = ${r.allowance} ${r.allowance === 1 ? "miss" : "misses"} this month.`,
+                r.belowThreshold
+                  ? `${r.missed} missed − ${r.allowance} allowed = ${r.chargeableMisses}.`
+                  : "At or above the threshold, so no miss counts.",
+              ],
+            }}
+          >
+            {num(
+              <>
+                {r.chargeableMisses}
+                <span className="text-muted-foreground"> / {r.allowance} allowed</span>
+              </>,
+            )}
+          </Explained>
+        );
+      },
+      enableSorting: false,
+    },
+    {
       id: "beforeCap",
       header: helpHeader("Penalty before cap", COMPLIANCE_HELP.beforeCap),
       cell: ({ row }) => {
@@ -280,7 +318,7 @@ export function complianceColumns(rules: ComplianceRules): ColumnDef<ComplianceR
               title: `${aed(r.penaltyBeforeCapAed)} before the cap`,
               lines: [
                 r.belowThreshold
-                  ? `${r.missed} missed check-ins × ${aed(rules.penaltyPerMissAed)} each = ${aed(r.penaltyBeforeCapAed)}`
+                  ? `${r.chargeableMisses ?? 0} chargeable misses (${r.missed} missed − ${r.allowance ?? 0} allowed) × ${aed(rules.penaltyPerMissAed)} each = ${aed(r.penaltyBeforeCapAed)}`
                   : `Compliance ${compliancePct(r.compliancePercent)} is at or above ${threshold}%, so there is no penalty.`,
               ],
             }}
@@ -344,7 +382,7 @@ export function complianceColumns(rules: ComplianceRules): ColumnDef<ComplianceR
   ];
 }
 
-/* BRD B4's HR report: required, performed, missed, waived, compliance %, penalty before cap and payable after it. */
+/* BRD B4's HR report: required, performed, missed, waived, allowance, chargeable misses, compliance %, penalty before cap and payable after it. */
 export const COMPLIANCE_EXPORT_COLUMNS = [
   { key: "technician", label: "Technician" },
   { key: "team", label: "Team" },
@@ -354,6 +392,8 @@ export const COMPLIANCE_EXPORT_COLUMNS = [
   { key: "waived", label: "Waived" },
   { key: "compliance", label: "Compliance %" },
   { key: "below", label: "Below threshold" },
+  { key: "allowance", label: "Allowance (misses)" },
+  { key: "chargeable", label: "Chargeable misses" },
   { key: "beforeCap", label: "Penalty before cap (AED)" },
   { key: "payable", label: "Payable after cap (AED)" },
 ];
@@ -368,6 +408,8 @@ export function complianceExportRow(r: ComplianceRow) {
     waived: r.waived,
     compliance: r.compliancePercent === null ? null : Math.round(r.compliancePercent * 1000) / 1000,
     below: r.belowThreshold === null ? "" : r.belowThreshold ? "Yes" : "No",
+    allowance: r.allowance,
+    chargeable: r.chargeableMisses,
     beforeCap: r.penaltyBeforeCapAed,
     payable: r.penaltyPayableAed,
   };

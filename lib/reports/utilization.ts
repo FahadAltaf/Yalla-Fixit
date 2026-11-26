@@ -7,7 +7,13 @@ import { coveredMinutes, isoWeekday, type DailySource, type TechnicianAvailabili
  * by side:
  *
  *   time utilization        job hours ÷ expected hours
- *   commercial utilization  chargeable job hours ÷ expected hours
+ *   commercial utilization  chargeable job hours ÷ billable hours
+ *
+ * Billable hours (BRD v1.4/v1.5): expected hours × the percentage
+ * management sets per unit type in Reporting Settings (for now 80 % for
+ * mobile units, the maintenance technicians, and 100 % for Data Center,
+ * the stationary units). They are 100 % commercial utilization. Data
+ * Center and mobile units are reported separately.
  *
  * Rules (reporting-calculation-specification.md, with Sami's answers of
  * 28 Oct):
@@ -28,10 +34,12 @@ import { coveredMinutes, isoWeekday, type DailySource, type TechnicianAvailabili
  *    or, with no quotation, the work order itself has a value. A quotation
  *    totalling zero (inspection, internal work) is time only (TC09). Work
  *    with no value anywhere is time only too, and shown apart.
- *  - AMC and in-contract work is not chargeable (decided 29 Oct, D-08 and
- *    D-14; the BRD's B2 said it was), whatever its value: time only, and
- *    shown apart. FSM marks it on the work order: Work Type "AMC PPM", or
- *    an AMC contract reference.
+ *  - AMC PPM visits and in-contract callouts are chargeable, whatever
+ *    their value, until the AMC expires (BRD v1.5, replacing the 29 Oct
+ *    interim that made them time only). FSM marks them on the work order:
+ *    Work Type "AMC PPM", or an AMC contract reference. FSM holds no
+ *    contract dates, so an AMC counts as expired only when the work order
+ *    is linked to a portal AMC contract that ended before the visit.
  *  - Ratios are over sums, never averages of percentages.
  *  - Missing actual times are never zero-length jobs: those appointments
  *    stay out of job hours and count against data completeness.
@@ -40,23 +48,38 @@ import { coveredMinutes, isoWeekday, type DailySource, type TechnicianAvailabili
  * Pure: no database, no clock. Minutes throughout.
  */
 
-export type Chargeability = "chargeable" | "contract" | "zero_value" | "no_value";
+/** "amc": AMC or in-contract work while the AMC runs (chargeable); "contract": its AMC had expired (time only). */
+export type Chargeability = "chargeable" | "amc" | "contract" | "zero_value" | "no_value";
 
 export const CHARGEABILITY_LABELS: Record<Chargeability, string> = {
   chargeable: "Chargeable",
-  contract: "AMC / contract",
+  amc: "AMC / contract",
+  contract: "AMC expired",
   zero_value: "Quotation of zero",
   no_value: "No value in FSM",
 };
+
+/** The kinds whose hours count towards commercial utilization. */
+export const isChargeable = (kind: Chargeability) => kind === "chargeable" || kind === "amc";
+
+/** Stationary units (Data Center technicians) and mobile units (maintenance technicians), reported apart (BRD v1.4). */
+export type UnitType = "mobile" | "data_centre";
+export const UNIT_LABELS: Record<UnitType, string> = { mobile: "Mobile units", data_centre: "Data Center" };
 
 /** 29 Oct: how FSM marks AMC work on a work order (Work Type "AMC PPM", or a contract reference). */
 export function isContractWork(input: { workType?: string | null; amcContractRef?: string | null }): boolean {
   return Boolean(input.amcContractRef?.trim()) || /\bamc\b/i.test(input.workType ?? "");
 }
 
-/** D-08: AMC work never; else a quotation above zero; with no quotation, a work order with a value. */
-export function chargeabilityOf(input: { quotationTotal: number | null; workOrderTotal: number | null; contract?: boolean }): Chargeability {
-  if (input.contract) return "contract";
+/** BRD v1.5: AMC work while the AMC runs; else a quotation above zero; with no quotation, a work order with a value. */
+export function chargeabilityOf(input: {
+  quotationTotal: number | null;
+  workOrderTotal: number | null;
+  contract?: boolean;
+  /** The AMC had ended before the visit (known only from a linked portal AMC contract). */
+  contractExpired?: boolean;
+}): Chargeability {
+  if (input.contract) return input.contractExpired ? "contract" : "amc";
   if (input.quotationTotal !== null) return input.quotationTotal > 0 ? "chargeable" : "zero_value";
   return (input.workOrderTotal ?? 0) > 0 ? "chargeable" : "no_value";
 }
@@ -94,6 +117,8 @@ export type UtilizationTechnician = { fsmId: string; name: string; teamLeaderId:
 
 export type Measures = {
   availableMinutes: number;
+  /** Expected hours × the unit type's billable percentage: 100 % commercial utilization. */
+  billableMinutes: number;
   jobMinutes: number;
   chargeableMinutes: number;
   /** null when nothing was available. One decimal, for display. */
@@ -110,6 +135,9 @@ export type TechnicianUtilization = Measures &
   name: string;
   teamKey: string;
   teamName: string;
+  /** Data Center (stationary) or mobile, and the billable percentage that came with it. */
+  unit: UnitType;
+  billablePercent: number;
   /** No shift set on the technician: the day shift was used. */
   shiftAssumed: boolean;
   /** No off days a week entered: the standard 1 was used (2 Nov; the field keeps its old name). */
@@ -169,10 +197,14 @@ export type AppointmentDetail = UtilizationAppointment & {
   missingActuals: boolean;
 };
 
+export type UnitUtilization = Measures & { technicians: number; billablePercent: number | null };
+
 export type UtilizationResult = {
   technicians: TechnicianUtilization[];
   teams: TeamUtilization[];
   overall: Omit<TeamUtilization, "key" | "name">;
+  /** Data Center and mobile units apart (BRD v1.4). */
+  units: Record<UnitType, UnitUtilization>;
   trend: TrendPoint[];
   appointments: AppointmentDetail[];
   /** Job minutes by chargeability, inside the shift windows. */
@@ -221,13 +253,16 @@ function bucketOf(date: string, granularity: Granularity): { key: string; label:
 /* Expected hours are shares of a week: rounded to the hundredth of a minute so sums read clean. */
 const roundMinutes = (m: number) => Math.round(m * 100) / 100;
 
-const withPercents = <T extends { availableMinutes: number; jobMinutes: number; chargeableMinutes: number }>(m: T) => {
+const withPercents = <T extends { availableMinutes: number; billableMinutes: number; jobMinutes: number; chargeableMinutes: number }>(m: T) => {
   const availableMinutes = roundMinutes(m.availableMinutes);
+  const billableMinutes = roundMinutes(m.billableMinutes);
   return {
     ...m,
     availableMinutes,
+    billableMinutes,
     timePercent: percent(m.jobMinutes, availableMinutes),
-    commercialPercent: percent(m.chargeableMinutes, availableMinutes),
+    /* BRD v1.4: over billable hours, not available hours. */
+    commercialPercent: percent(m.chargeableMinutes, billableMinutes),
   };
 };
 
@@ -306,7 +341,11 @@ export function computeUtilization(input: {
   appointments: UtilizationAppointment[];
   granularity: Granularity;
   timeZone?: string;
+  /** BRD v1.4: each technician's unit type and its billable percentage (default: mobile at 100 %, i.e. billable = expected). */
+  billable?: { unitOf: (fsmId: string) => UnitType; percentOf: (unit: UnitType) => number };
 }): UtilizationResult {
+  const unitOf = (id: string): UnitType => input.billable?.unitOf(id) ?? "mobile";
+  const billablePercentOf = (unit: UnitType) => input.billable?.percentOf(unit) ?? 100;
   const rangeStart = zonedTimeToUtc(input.from, "00:00", input.timeZone).getTime();
   const rangeEnd = zonedTimeToUtc(addDaysToDateString(input.to, 1), "00:00", input.timeZone).getTime();
   const nameOf = (id: string) => input.technicians.get(id)?.name ?? id;
@@ -358,7 +397,7 @@ export function computeUtilization(input: {
           counts.actual += ownMinutes;
         }
         if (ownMinutes > 0) {
-          const jobs = jobsByTech.get(id) ?? { all: [], byKind: { chargeable: [], contract: [], zero_value: [], no_value: [] } };
+          const jobs = jobsByTech.get(id) ?? { all: [], byKind: { chargeable: [], amc: [], contract: [], zero_value: [], no_value: [] } };
           jobs.all.push(interval);
           jobs.byKind[d.chargeability].push(interval);
           jobsByTech.set(id, jobs);
@@ -388,6 +427,7 @@ export function computeUtilization(input: {
     name,
     members: new Set(),
     availableMinutes: 0,
+    billableMinutes: 0,
     jobMinutes: 0,
     chargeableMinutes: 0,
     overtimeMinutes: 0,
@@ -400,13 +440,16 @@ export function computeUtilization(input: {
   const teams = new Map<string, TeamSum>();
   const teamOfLeader = (leader: string | null) => (leader ? { key: leader, name: `${nameOf(leader)}'s team` } : { key: "none", name: "No team" });
 
-  const jobMinutesBy: Record<Chargeability, number> = { chargeable: 0, contract: 0, zero_value: 0, no_value: 0 };
+  const jobMinutesBy: Record<Chargeability, number> = { chargeable: 0, amc: 0, contract: 0, zero_value: 0, no_value: 0 };
   const trend = new Map<string, TrendPoint>();
   const technicians: TechnicianUtilization[] = [];
 
   for (const avail of input.availability) {
     const jobs = jobsByTech.get(avail.fsmId);
     const counts = perTechCounts.get(avail.fsmId);
+    const unit = unitOf(avail.fsmId);
+    const billablePercent = billablePercentOf(unit);
+    const chargeableJobs = jobs ? [...jobs.byKind.chargeable, ...jobs.byKind.amc] : [];
     let jobMinutes = 0;
     let chargeableMinutes = 0;
     let workedAny = 0;
@@ -427,13 +470,16 @@ export function computeUtilization(input: {
       const worked = workedOn.get(day.date) ?? 0;
       const expected = expectation.even.get(day.date) ?? 0;
       expectedTotal += expected;
-      const dayChargeable = jobs ? Math.min(worked, coveredMinutes(b.start, b.end, jobs.byKind.chargeable)) : 0;
-      /* What is left of the time, by kind: AMC, then a quotation of zero, then no value. */
+      /* Chargeable: quoted work and AMC work while the AMC runs (BRD v1.5); quoted first where they overlap. */
+      const dayChargeable = jobs ? Math.min(worked, coveredMinutes(b.start, b.end, chargeableJobs)) : 0;
+      const dayQuoted = jobs ? Math.min(dayChargeable, coveredMinutes(b.start, b.end, jobs.byKind.chargeable)) : 0;
+      /* What is left of the time, by kind: expired AMC, then a quotation of zero, then no value. */
       const contractWorked = jobs ? coveredMinutes(b.start, b.end, jobs.byKind.contract) : 0;
       const dayContract = Math.min(contractWorked, worked - dayChargeable);
       const zeroWorked = jobs ? coveredMinutes(b.start, b.end, jobs.byKind.zero_value) : 0;
       const dayZero = Math.min(zeroWorked, worked - dayChargeable - dayContract);
-      jobMinutesBy.chargeable += dayChargeable;
+      jobMinutesBy.chargeable += dayQuoted;
+      jobMinutesBy.amc += dayChargeable - dayQuoted;
       jobMinutesBy.contract += dayContract;
       jobMinutesBy.zero_value += dayZero;
       jobMinutesBy.no_value += worked - dayChargeable - dayContract - dayZero;
@@ -447,6 +493,7 @@ export function computeUtilization(input: {
         const team = teams.get(t.key) ?? blankTeam(t.key, t.name);
         team.members.add(avail.fsmId);
         team.availableMinutes += expected;
+        team.billableMinutes += (expected * billablePercent) / 100;
         team.jobMinutes += worked;
         team.chargeableMinutes += dayChargeable;
         teams.set(t.key, team);
@@ -459,13 +506,16 @@ export function computeUtilization(input: {
         from: day.date,
         to: day.date,
         availableMinutes: 0,
+        billableMinutes: 0,
         jobMinutes: 0,
         chargeableMinutes: 0,
         timePercent: null,
         commercialPercent: null,
       };
       /* A day expects one working day's share if they worked that day (2 Nov); weeks and months, their weeks' share. */
-      point.availableMinutes += input.granularity === "day" ? (worked > 0 ? (expectation.perDay.get(day.date) ?? 0) : 0) : expected;
+      const pointExpected = input.granularity === "day" ? (worked > 0 ? (expectation.perDay.get(day.date) ?? 0) : 0) : expected;
+      point.availableMinutes += pointExpected;
+      point.billableMinutes += (pointExpected * billablePercent) / 100;
       point.jobMinutes += worked;
       point.chargeableMinutes += dayChargeable;
       if (day.date < point.from) point.from = day.date;
@@ -503,11 +553,13 @@ export function computeUtilization(input: {
     teams.set(team.key, rowTeam);
 
     technicians.push({
-      ...withPercents({ availableMinutes, jobMinutes, chargeableMinutes }),
+      ...withPercents({ availableMinutes, billableMinutes: (availableMinutes * billablePercent) / 100, jobMinutes, chargeableMinutes }),
       fsmId: avail.fsmId,
       name: nameOf(avail.fsmId),
       teamKey: team.key,
       teamName: team.name,
+      unit,
+      billablePercent,
       shiftAssumed: avail.shiftAssumed,
       restDaysAssumed: expectation.offDaysAssumed,
       dailySource: avail.dailySource,
@@ -548,7 +600,12 @@ export function computeUtilization(input: {
   const overallSources = blankSources();
   for (const t of technicians) for (const k of Object.keys(overallSources) as HoursSource[]) overallSources[k] += t.hoursFrom[k];
   const overall = {
-    ...withPercents({ availableMinutes: sum((t) => t.availableMinutes), jobMinutes: sum((t) => t.jobMinutes), chargeableMinutes: sum((t) => t.chargeableMinutes) }),
+    ...withPercents({
+      availableMinutes: sum((t) => t.availableMinutes),
+      billableMinutes: sum((t) => t.billableMinutes),
+      jobMinutes: sum((t) => t.jobMinutes),
+      chargeableMinutes: sum((t) => t.chargeableMinutes),
+    }),
     technicians: technicians.length,
     overtimeMinutes: roundMinutes(sum((t) => t.overtimeMinutes)),
     completed: completedAppointments.length,
@@ -559,8 +616,25 @@ export function computeUtilization(input: {
     hoursFrom: overallSources,
   };
 
+  /* Data Center and mobile units apart (BRD v1.4), each over its own billable hours. */
+  const unitOfRows = (u: UnitType): UnitUtilization => {
+    const rows = technicians.filter((t) => t.unit === u);
+    const add = (pick: (t: TechnicianUtilization) => number) => rows.reduce((s, t) => s + pick(t), 0);
+    return {
+      ...withPercents({
+        availableMinutes: add((t) => t.availableMinutes),
+        billableMinutes: add((t) => t.billableMinutes),
+        jobMinutes: add((t) => t.jobMinutes),
+        chargeableMinutes: add((t) => t.chargeableMinutes),
+      }),
+      technicians: rows.length,
+      billablePercent: rows.length ? billablePercentOf(u) : null,
+    };
+  };
+
   return {
     technicians,
+    units: { mobile: unitOfRows("mobile"), data_centre: unitOfRows("data_centre") },
     teams: [...teams.values()]
       .map(finish)
       .filter((t) => t.technicians > 0)

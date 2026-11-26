@@ -57,6 +57,7 @@ function run(input: {
   holidays?: string[];
   leave?: Array<{ technicianFsmId: string; startAt: string; endAt: string }>;
   granularity?: "day" | "week" | "month";
+  billable?: Parameters<typeof computeUtilization>[0]["billable"];
 }) {
   const techs = input.techs ?? [tech("T1")];
   const availability = computeAvailability({
@@ -75,6 +76,7 @@ function run(input: {
     availability,
     technicians: new Map(techs.map((t) => [t.fsmId, { fsmId: t.fsmId, name: `Tech ${t.fsmId}`, teamLeaderId: "L1" }])),
     appointments: input.appointments,
+    billable: input.billable,
     granularity: input.granularity ?? "month",
     timeZone: TZ,
   });
@@ -129,6 +131,22 @@ test("BRD B2 example: 192 available, 150 job, 132 chargeable = 78 % and 69 %", (
   assert.equal(Math.round(t.commercialPercent!), 69);
   assert.equal(result.overall.timePercent, 78.1, "the team and overall figures are the same sums");
   assert.equal(result.jobMinutesBy.zero_value, 18 * 60);
+
+  /* BRD v1.4 (the same month): against billable hours, 80 % of 192 = 153.6 h, so 132 / 153.6 = 86 % (was 69 %). */
+  const billed = run({
+    from,
+    to,
+    holidays: [holiday],
+    leave: leaveDays.map((d) => ({ technicianFsmId: "T1", startAt: dubai(d, "00:00"), endAt: dubai(addDaysToDateString(d, 1), "00:00") })),
+    appointments,
+    billable: { unitOf: () => "mobile", percentOf: (u) => (u === "mobile" ? 80 : 100) },
+  });
+  const b = billed.technicians[0];
+  assert.equal(b.billableMinutes, 153.6 * 60);
+  assert.equal(Math.round(b.commercialPercent!), 86);
+  assert.equal(b.timePercent, 78.1, "time utilization is unchanged");
+  assert.equal(b.unit, "mobile");
+  assert.equal(b.billablePercent, 80);
 });
 
 test("TC09: a quotation of zero and a 2-hour job counts for time only", () => {
@@ -395,22 +413,60 @@ test("appointments outside the period, and leavers with nothing, are left out", 
 });
 
 test("chargeability kinds are reported apart", () => {
-  const kinds: Chargeability[] = ["chargeable", "contract", "zero_value", "no_value"];
+  const kinds: Chargeability[] = ["chargeable", "amc", "contract", "zero_value", "no_value"];
   const result = run({
     from: "2026-10-05",
     to: "2026-10-05",
     appointments: kinds.map((k, i) => appt(["T1"], "2026-10-05", `${String(9 + i * 2).padStart(2, "0")}:00`, `${String(10 + i * 2).padStart(2, "0")}:00`, { chargeability: k })),
   });
-  assert.deepEqual(result.jobMinutesBy, { chargeable: 60, contract: 60, zero_value: 60, no_value: 60 });
-  assert.equal(result.technicians[0].chargeableMinutes, 60, "AMC work counts for time only");
-  assert.equal(result.technicians[0].jobMinutes, 240);
+  assert.deepEqual(result.jobMinutesBy, { chargeable: 60, amc: 60, contract: 60, zero_value: 60, no_value: 60 });
+  assert.equal(result.technicians[0].chargeableMinutes, 120, "quoted work and AMC work while the AMC runs (BRD v1.5); expired AMC is time only");
+  assert.equal(result.technicians[0].jobMinutes, 300);
 });
 
-test("29 Oct: AMC and in-contract work is never chargeable, whatever its value", () => {
+test("BRD v1.5: AMC and in-contract work is chargeable until the AMC expires, whatever its value", () => {
   assert.equal(isContractWork({ workType: "AMC PPM", amcContractRef: null }), true);
   assert.equal(isContractWork({ workType: null, amcContractRef: "16607-TALAL-26-27" }), true);
   assert.equal(isContractWork({ workType: null, amcContractRef: "  " }), false);
   assert.equal(isContractWork({ workType: "Maintenance", amcContractRef: null }), false);
-  assert.equal(chargeabilityOf({ quotationTotal: 1200, workOrderTotal: 1200, contract: true }), "contract");
+  assert.equal(chargeabilityOf({ quotationTotal: 0, workOrderTotal: null, contract: true }), "amc", "an AMC visit with no value still counts");
+  assert.equal(chargeabilityOf({ quotationTotal: 1200, workOrderTotal: 1200, contract: true, contractExpired: true }), "contract");
   assert.equal(chargeabilityOf({ quotationTotal: 1200, workOrderTotal: 1200, contract: false }), "chargeable");
+});
+
+test("BRD v1.4 TC27: 160 expected hours, 104 chargeable, mobile at 80 %: billable 128, commercial 81.25 %; Data Center apart at 100 %", () => {
+  /* Twenty 8-hour days: Mon to Fri, four weeks, each week with two off days. */
+  const techs = [tech("M1", { offDaysPerWeek: 2 } as Partial<AvailabilityTechnician>), tech("D1", { offDaysPerWeek: 2 } as Partial<AvailabilityTechnician>)];
+  const days: string[] = [];
+  for (let d = "2026-10-05"; d <= "2026-11-01"; d = addDaysToDateString(d, 1)) {
+    const weekday = new Date(`${d}T12:00:00Z`).getUTCDay();
+    if (weekday >= 1 && weekday <= 5) days.push(d);
+  }
+  assert.equal(days.length, 20);
+  const appointments: UtilizationAppointment[] = [];
+  days.forEach((date, i) => {
+    /* M1: 104 chargeable hours (13 days of 8 h); D1 the same. */
+    if (i < 13) {
+      appointments.push(appt(["M1"], date, "08:00", "16:00"));
+      appointments.push(appt(["D1"], date, "08:00", "16:00"));
+    }
+  });
+  const result = run({
+    from: "2026-10-05",
+    to: "2026-11-01",
+    techs,
+    appointments,
+    billable: { unitOf: (id) => (id === "D1" ? "data_centre" : "mobile"), percentOf: (u) => (u === "mobile" ? 80 : 100) },
+  });
+  const m1 = result.technicians.find((t) => t.fsmId === "M1")!;
+  assert.equal(m1.availableMinutes, 160 * 60);
+  assert.equal(m1.billableMinutes, 128 * 60);
+  assert.equal(m1.commercialPercent, 81.3, "81.25 %");
+  const d1 = result.technicians.find((t) => t.fsmId === "D1")!;
+  assert.equal(d1.billableMinutes, 160 * 60);
+  assert.equal(d1.commercialPercent, 65);
+  assert.equal(result.units.mobile.technicians, 1);
+  assert.equal(result.units.mobile.commercialPercent, 81.3);
+  assert.equal(result.units.data_centre.commercialPercent, 65);
+  assert.equal(result.overall.billableMinutes, 288 * 60, "overall: the same sums");
 });

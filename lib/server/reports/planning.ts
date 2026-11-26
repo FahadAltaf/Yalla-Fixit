@@ -1,7 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 
-import { computeAvailability, datesBetween, MAX_RANGE_DAYS, type AvailabilityInput } from "@/lib/reports/available-hours";
+import { computeAvailability, datesBetween, isDataCentre, MAX_RANGE_DAYS, type AvailabilityInput } from "@/lib/reports/available-hours";
 import { computeCapacity, isBooked, type CapacityResult, type CapacityRow } from "@/lib/reports/capacity";
 import type { ReportingSettings } from "@/lib/reporting/settings";
 import {
@@ -10,6 +10,8 @@ import {
   type Chargeability,
   type Granularity,
   type TeamUtilization,
+  type UnitType,
+  type UnitUtilization,
   type TechnicianUtilization,
   type TrendPoint,
 } from "@/lib/reports/utilization";
@@ -68,7 +70,9 @@ export const utilizationFiltersSchema = z.object({
   team: id.optional(),
   /** BRD B5: a client narrows the work to its appointments; available hours stay the technicians' whole days. */
   client: text.optional(),
-  chargeability: z.enum(["chargeable", "contract", "zero_value", "no_value"]).optional(),
+  chargeability: z.enum(["chargeable", "amc", "contract", "zero_value", "no_value"]).optional(),
+  /** BRD v1.4: Data Center (stationary) and mobile units, reported apart. */
+  unit: z.enum(["mobile", "data_centre"]).optional(),
   /** Appointments: only those missing actual times. */
   missing: z.enum(["1", "0"]).optional(),
   q: text.optional(),
@@ -80,6 +84,10 @@ export type UtilizationReport = {
   to: string;
   granularity: Granularity;
   overall: Omit<TeamUtilization, "key" | "name">;
+  /** Data Center and mobile units apart, everyone in the dates (BRD v1.4). */
+  units: Record<UnitType, UnitUtilization>;
+  /** The billable percentages used (Reporting settings, management only). */
+  billablePercent: Record<UnitType, number>;
   trend: TrendPoint[];
   teams: TeamUtilization[];
   /** The open view's rows, paged (technicians or appointments). */
@@ -154,7 +162,14 @@ export async function buildUtilizationReport(
   const forClient = clientWork ? new Set(clientWork.flatMap((a) => a.technicianIds)) : null;
   /* Everyone counted in the dates; the cards follow these, whatever the filters (3 Nov). */
   const everyone = [...roster.values()].filter((t) => t.isActive || t.leavingDate || worked.has(t.fsmId));
+  const unitOf = (t: { serviceType?: string | null } | undefined): UnitType => (isDataCentre(t?.serviceType) ? "data_centre" : "mobile");
+  const billablePercent: Record<UnitType, number> = {
+    mobile: settings.utilization.billablePercentMobile,
+    data_centre: settings.utilization.billablePercentDataCentre,
+  };
+  const billable = { unitOf: (id: string) => unitOf(roster.get(id)), percentOf: (u: UnitType) => billablePercent[u] };
   const inScope = everyone.filter((t) => {
+    if (filters.unit && unitOf(t) !== filters.unit) return false;
     if (filters.technician && t.fsmId !== filters.technician) return false;
     if (filters.team && teamKeyOf(t) !== filters.team) return false;
     if (forClient && !forClient.has(t.fsmId)) return false;
@@ -182,7 +197,7 @@ export async function buildUtilizationReport(
     .map((a) => ({ ...a, technicianIds: a.technicianIds.filter((t) => scopeIds.has(t)) }))
     .filter((a) => a.technicianIds.length > 0);
 
-  const result = computeUtilization({ from, to, availability, technicians: roster, appointments, granularity });
+  const result = computeUtilization({ from, to, availability, technicians: roster, appointments, granularity, billable });
   /* The cards: everyone in the dates (3 Nov). The same calculation, unfiltered, only when a filter is set. */
   const forCards = filtered
     ? computeUtilization({
@@ -194,6 +209,7 @@ export async function buildUtilizationReport(
           .map((a) => ({ ...a, technicianIds: a.technicianIds.filter((t) => everyoneIds.has(t)) }))
           .filter((a) => a.technicianIds.length > 0),
         granularity,
+        billable,
       })
     : result;
   /* BRD B2: travel as hours and as a share of the day (of available hours), per technician and team. */
@@ -241,6 +257,8 @@ export async function buildUtilizationReport(
     to,
     granularity,
     overall: forCards.overall,
+    units: forCards.units,
+    billablePercent,
     trend: result.trend,
     teams: result.teams,
     technicians,

@@ -10,7 +10,7 @@ import { IdentityCell } from "@/components/ui/entity-avatar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import type { CapacityRow } from "@/lib/reports/capacity";
 import type { DailySource } from "@/lib/reports/available-hours";
-import { CHARGEABILITY_LABELS, HOURS_SOURCE_LABELS, type AppointmentDetail, type HoursSource, type TechnicianUtilization } from "@/lib/reports/utilization";
+import { CHARGEABILITY_LABELS, HOURS_SOURCE_LABELS, UNIT_LABELS, type AppointmentDetail, type HoursSource, type TechnicianUtilization } from "@/lib/reports/utilization";
 import type { CapacityBooking } from "@/lib/server/reports/planning";
 import { durationLabel, viewerDateString, viewerDateTime, viewerTime } from "@/lib/reports/viewer-time";
 import { cn } from "@/lib/utils";
@@ -95,11 +95,17 @@ export const COLUMN_HELP: Record<string, Help> = {
     title: "Chargeable hours",
     lines: [
       "Job hours on work with a value: the quotation's total is above zero or, with no quotation, the work order has a value.",
-      "AMC and in-contract work (Work Type AMC PPM, or an AMC contract reference) is never chargeable.",
+      "AMC PPM visits and in-contract callouts (Work Type AMC PPM, or an AMC contract reference) are chargeable until the AMC expires (BRD v1.5).",
       "Quotations and work orders: Zoho FSM.",
     ],
   },
-  commercial: { title: "Commercial utilization", lines: ["Chargeable hours ÷ expected hours."] },
+  commercial: {
+    title: "Commercial utilization",
+    lines: [
+      "Chargeable hours ÷ billable hours (BRD v1.4).",
+      "Billable hours = expected hours × the unit type's percentage, set by management in Reporting settings (now 80% for mobile units, 100% for Data Center). They are 100% commercial utilization.",
+    ],
+  },
   outside: {
     title: "Above expected",
     lines: [
@@ -157,7 +163,7 @@ export const TECHNICIAN_UTILIZATION_COLUMNS: ColumnDef<TechnicianUtilization>[] 
     header: "Technician",
     cell: ({ row }) => (
       <div className="min-w-44">
-        <IdentityCell title={row.original.name} subtitle={row.original.teamName} icon={Users} />
+        <IdentityCell title={row.original.name} subtitle={`${row.original.teamName} · ${UNIT_LABELS[row.original.unit]}`} icon={Users} />
       </div>
     ),
     enableSorting: false,
@@ -255,7 +261,13 @@ export const TECHNICIAN_UTILIZATION_COLUMNS: ColumnDef<TechnicianUtilization>[] 
       const r = row.original;
       return (
         <Explained
-          help={{ title: `Commercial utilization ${pct(r.commercialPercent)}`, lines: [`${hrs(r.chargeableMinutes)} chargeable ÷ ${hrs(r.availableMinutes)} expected = ${pct(r.commercialPercent)}`] }}
+          help={{
+            title: `Commercial utilization ${pct(r.commercialPercent)}`,
+            lines: [
+              `Billable hours: ${hrs(r.availableMinutes)} expected × ${r.billablePercent}% (${UNIT_LABELS[r.unit]}) = ${hrs(r.billableMinutes)}`,
+              `${hrs(r.chargeableMinutes)} chargeable ÷ ${hrs(r.billableMinutes)} billable = ${pct(r.commercialPercent)}`,
+            ],
+          }}
         >
           {num(pct(r.commercialPercent), true)}
         </Explained>
@@ -354,13 +366,15 @@ export const TECHNICIAN_UTILIZATION_COLUMNS: ColumnDef<TechnicianUtilization>[] 
 export const TECHNICIAN_UTILIZATION_EXPORT_COLUMNS = [
   { key: "technician", label: "Technician" },
   { key: "team", label: "Team" },
+  { key: "unit", label: "Unit type" },
   { key: "shiftDays", label: "Shift days" },
   { key: "leave", label: "Leave (h)" },
   { key: "available", label: "Expected (h)" },
   { key: "job", label: "Job hours (h)" },
   { key: "time", label: "Time utilization %" },
   { key: "chargeable", label: "Chargeable (h)" },
-  { key: "commercial", label: "Commercial utilization %" },
+  { key: "billable", label: "Billable (h)" },
+  { key: "commercial", label: "Commercial utilization % (of billable)" },
   { key: "outside", label: "Above expected (h)" },
   { key: "travel", label: "Travel (h)" },
   { key: "travelShare", label: "Travel % of expected" },
@@ -379,12 +393,14 @@ export function technicianUtilizationExportRow(r: TechnicianUtilization) {
   return {
     technician: r.name,
     team: r.teamName,
+    unit: UNIT_LABELS[r.unit],
     shiftDays: r.shiftDays,
     leave: hoursNumber(r.leaveMinutes),
     available: hoursNumber(r.availableMinutes),
     job: hoursNumber(r.jobMinutes),
     time: r.timePercent,
     chargeable: hoursNumber(r.chargeableMinutes),
+    billable: hoursNumber(r.billableMinutes),
     commercial: r.commercialPercent,
     outside: hoursNumber(r.overtimeMinutes),
     travel: hoursNumber(r.travelMinutes ?? 0),
@@ -405,12 +421,13 @@ export function technicianUtilizationExportRow(r: TechnicianUtilization) {
 // Utilization: the appointments underneath
 // ---------------------------------------------------------------------
 
-const CHARGEABILITY_TONE = { chargeable: "muted", contract: "muted", zero_value: "warning", no_value: "muted" } as const;
+const CHARGEABILITY_TONE = { chargeable: "muted", amc: "muted", contract: "warning", zero_value: "warning", no_value: "muted" } as const;
 
 /* Why an appointment is, or is not, chargeable, in words. */
 const CHARGEABILITY_WHY: Record<AppointmentDetail["chargeability"], string> = {
   chargeable: "Its quotation's total is above zero (or, with no quotation, its work order has a value in FSM), so its hours count as chargeable.",
-  contract: "AMC or in-contract work: the work order has Work Type AMC PPM or an AMC contract reference in FSM. Never chargeable, whatever its value: its hours count for time utilization only.",
+  amc: "AMC or in-contract work (Work Type AMC PPM or an AMC contract reference in FSM): chargeable until the AMC expires, whatever its value (BRD v1.5).",
+  contract: "AMC work done after its AMC had expired (the portal AMC contract it is linked to had ended), so its hours count for time utilization only.",
   zero_value: "Its quotation totals zero (an inspection or internal work), so its hours count for time utilization only.",
   no_value: "It has no quotation, and its work order has no value in FSM, so its hours count for time utilization only.",
 };

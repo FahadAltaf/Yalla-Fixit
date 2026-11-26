@@ -12,6 +12,8 @@ export type ReportingSettingsResponse = {
   history: ReportingSettingsHistoryEntry[];
   users: PickableUser[];
   canEdit: boolean;
+  /** Reporting settings Approve: the billable hours percentage (management only, BRD v1.5). */
+  canEditManagement?: boolean;
 };
 
 export type PublicHoliday = { id: string; date: string; name: string };

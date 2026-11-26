@@ -46,6 +46,8 @@ export async function GET() {
       history,
       users,
       canEdit: hasResourceAction(gate.access.accessUser, ResourceType.REPORTING_SETTINGS, ActionType.EDIT),
+      /* BRD v1.5: the billable hours percentage is management's alone. */
+      canEditManagement: hasResourceAction(gate.access.accessUser, ResourceType.REPORTING_SETTINGS, ActionType.APPROVE),
     });
   } catch (error) {
     console.error("Reporting settings GET error:", error);
@@ -101,11 +103,21 @@ export async function PUT(req: NextRequest) {
     }
 
     const before = await readReportingSettingsOverrides(admin);
-    const saved = await writeReportingSettingsOverrides(admin, parsed.data, profile.id);
     const changedKeys = diffSettingsPaths(
       mergeReportingSettings(defaults, before).settings,
       next,
     );
+    /* BRD v1.5: only management (Reporting settings Approve) changes the billable hours percentage. */
+    if (
+      changedKeys.some((key) => key.startsWith("utilization.")) &&
+      !hasResourceAction(gate.access.accessUser, ResourceType.REPORTING_SETTINGS, ActionType.APPROVE)
+    ) {
+      return NextResponse.json(
+        { error: "Only management can change the billable hours percentage (Reporting settings Approve)." },
+        { status: 403 },
+      );
+    }
+    const saved = await writeReportingSettingsOverrides(admin, parsed.data, profile.id);
     if (changedKeys.length > 0) {
       await recordReportingAudit(admin, {
         entityType: "settings",

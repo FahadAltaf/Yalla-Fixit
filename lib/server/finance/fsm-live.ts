@@ -1056,3 +1056,43 @@ export async function fetchTimeOffLive(admin: SupabaseClient): Promise<LiveTimeO
   noteRead("time_off");
   return out;
 }
+
+/*
+  26 Nov (BRD v1.5 Step 10, TC28): the client's email addresses for sending
+  the MAHER invoice. The work order's own Email, then its company's (they
+  can differ). GET only, two calls, kept ten minutes like the rest.
+*/
+export type ClientEmail = { email: string; source: "company" | "work_order" };
+const clientEmailCache = new Map<string, Cached<{ workOrderNumber: string | null; clientName: string | null; emails: ClientEmail[] }>>();
+
+export async function fetchClientEmailsLive(
+  admin: SupabaseClient,
+  workOrderId: string,
+): Promise<{ workOrderNumber: string | null; clientName: string | null; emails: ClientEmail[] }> {
+  const hit = fresh(clientEmailCache.get(workOrderId));
+  if (hit) return hit;
+  const reader = await readerFor(admin, 2);
+  const res = await reader.get(`/Work_Orders/${encodeURIComponent(workOrderId)}?fields=Name,Email,Company,Contact`);
+  if (!res.ok) throw failure(res.status, res.json);
+  const wo = dataOf(res.json)[0];
+  /* 26 Nov: they can belong to different people (a property manager on the work order, the owner company billed), so each says where it came from and none is chosen for Finance. */
+  const emails: ClientEmail[] = [];
+  const add = (v: unknown, source: ClientEmail["source"]) => {
+    const e = typeof v === "string" ? v.trim().toLowerCase() : "";
+    if (e && !emails.some((x) => x.email === e)) emails.push({ email: e, source });
+  };
+  const companyId = lookupId(wo?.Company);
+  if (companyId) {
+    const company = await reader.get(`/Companies/${encodeURIComponent(companyId)}?fields=Email`);
+    if (company.ok) add(dataOf(company.json)[0]?.Email, "company");
+  }
+  add(wo?.Email, "work_order");
+  const value = {
+    workOrderNumber: wo?.Name ? String(wo.Name) : null,
+    clientName: lookupName(wo?.Company) ?? lookupName(wo?.Contact),
+    emails,
+  };
+  clientEmailCache.set(workOrderId, { at: Date.now(), value });
+  if (clientEmailCache.size > 200) clientEmailCache.clear();
+  return value;
+}

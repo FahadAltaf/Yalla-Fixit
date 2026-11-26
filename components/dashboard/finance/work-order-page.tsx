@@ -13,6 +13,7 @@ import {
   Info,
   ListChecks,
   Loader2,
+  Mail,
   MessageSquareReply,
   Paperclip,
   PauseCircle,
@@ -51,6 +52,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { fsmRecordLink } from "@/lib/fsm-links";
+import { isEmail, splitEmails } from "@/lib/finance/invoice-email";
+import type { InvoiceEmailDraft } from "@/lib/server/finance/invoice-email";
 import { INVOICE_STATUS_LABELS, QUEUE_STATUS_LABELS, invoiceTotals, isFsmCompleted, isZeroValueCompleted, withVat } from "@/lib/finance/line-status";
 import {
   COMPLETION_LABELS,
@@ -500,25 +503,22 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
             return;
           }
           /*
-            30 Oct: no question here. Each line keeps the answer it was given
-            (to invoice or revenue only); one shared answer is recorded once for
-            the work order, mixed answers line by line.
+            30 Oct: no question here. BRD v1.5: a line 100% complete is ready
+            to invoice (revenue only is for work below 100%), so completing the
+            work order makes every line ready to invoice.
           */
           if (
             await confirm({
               title: "Mark the work order complete?",
-              description: `Every line is complete.${zeroToComplete.length ? ` ${zeroToComplete.length === 1 ? "The line" : `${zeroToComplete.length} lines`} worth AED 0 ${zeroToComplete.length === 1 ? "is" : "are"} marked complete with it.` : ""} Each keeps what it was marked: to invoice or revenue only. Nothing is invoiced here.`,
+              description: `Every line is complete.${zeroToComplete.length ? ` ${zeroToComplete.length === 1 ? "The line" : `${zeroToComplete.length} lines`} worth AED 0 ${zeroToComplete.length === 1 ? "is" : "are"} marked complete with it.` : ""} Complete work is ready for Finance to invoice (revenue only is for work below 100%). Nothing is invoiced here.`,
               confirmText: "Mark complete",
             })
           ) {
-            const billable = lines.filter((l) => l.billable);
-            const answers = [...new Set(billable.map((l) => l.progress?.purpose ?? "invoice"))];
             /* The AED 0 lines not marked yet go in as complete too, so the server sees every line complete. */
-            const zeroEntries = zeroToComplete.map((l) => ({ line: l.id, percent: 100, purpose: l.progress?.purpose ?? ("invoice" as const) }));
-            const entries =
-              answers.length === 1
-                ? [...zeroEntries, { line: null, percent: 100, purpose: answers[0] }]
-                : billable.map((l) => ({ line: l.id, percent: 100, purpose: l.progress?.purpose ?? ("invoice" as const) }));
+            const entries = [
+              ...zeroToComplete.map((l) => ({ line: l.id, percent: 100, purpose: "invoice" as const })),
+              { line: null, percent: 100, purpose: "invoice" as const },
+            ];
             void run("Work order marked complete", async () => toastFsm((await financeService.recordProgress(id, { entries, note: "Work order marked complete" })).fsm));
           }
         }}
@@ -1021,7 +1021,7 @@ export function FinanceWorkOrderPage({ id }: { id: string }) {
         </TabsContent>
 
         <TabsContent value="invoices" className="mt-4">
-          <InvoicesCard workOrderId={id} invoices={data.invoices} lines={lines} />
+          <InvoicesCard workOrderId={id} invoices={data.invoices} lines={lines} canSend={allowed.invoice} onSent={() => refreshAll()} />
         </TabsContent>
 
         <TabsContent value="queries" className="mt-4">
@@ -1550,14 +1550,18 @@ function ProgressDialog({
   const percentOf = (l: WorkOrderLine) => (valid(perLine[l.id] ?? "") ? Number(perLine[l.id]) : null);
   /* 30 Oct: 100 % is Complete, below it Partially complete; either way the answer is asked. */
   const isComplete = (l: WorkOrderLine) => (percentOf(l) ?? 0) >= 100;
+  /* BRD v1.5: a line at 100% is ready to invoice; revenue only is for work below 100%, so the answer is asked for those only. */
+  const purposeFor = (l: WorkOrderLine): ProgressPurpose | null => (isComplete(l) ? "invoice" : purpose);
   /* A line is recorded when its % or the answer differs from what it has. */
   const changed = lines.filter((l) => {
     const pct = percentOf(l);
-    return pct !== null && (!l.progress || Math.abs(l.progress.percent - pct) > 0.001 || l.progress.purpose !== purpose);
+    return pct !== null && (!l.progress || Math.abs(l.progress.percent - pct) > 0.001 || l.progress.purpose !== (purposeFor(l) ?? l.progress.purpose));
   });
   const completing = changed.filter(isComplete);
   const partial = changed.filter((l) => !isComplete(l));
-  const entries = purpose ? changed.map((l) => ({ line: l.id, percent: percentOf(l)!, purpose })) : [];
+  /* The question shows once a line has a % below 100. */
+  const asking = lines.some((l) => percentOf(l) !== null && !isComplete(l));
+  const entries = partial.length && !purpose ? [] : changed.map((l) => ({ line: l.id, percent: percentOf(l)!, purpose: purposeFor(l)! }));
   const lineProblems = lines.filter((l) => problemOf(l) !== null).length;
   const ok = entries.length > 0 && lineProblems === 0;
   /* What a line's number will do, in words, under its box. */
@@ -1585,7 +1589,7 @@ function ProgressDialog({
       ? null
       : !lines.some((l) => percentOf(l) !== null)
         ? "Enter the total % done for a line to save."
-        : !purpose
+        : asking && !purpose
           ? `Answer "${lines.length > 1 ? "Should these lines be ready to invoice?" : "Should this line be ready to invoice?"}" to save.`
           : "Nothing has changed: enter a total above what is already done.";
   /* The overall % the lines come to, weighted by each line's net value. */
@@ -1721,34 +1725,42 @@ function ProgressDialog({
             <p className="text-muted-foreground text-xs">Leave a line empty to keep what it has.</p>
           </div>
 
-          {/* Finance invoices only what is ready to invoice: asked for every % recorded, Complete included (30 Oct). */}
-          <div className="grid gap-2" role="radiogroup" aria-label="Ready to invoice">
-            <Label>{question}</Label>
-            <div className="grid gap-2">
-              {(["invoice", "revenue_only"] as const).map((p) => (
-                <button
-                  key={p}
-                  type="button"
-                  role="radio"
-                  aria-checked={purpose === p}
-                  onClick={() => setPurpose(p)}
-                  className={cn(
-                    "rounded-lg border px-3 py-2 text-left text-sm transition-colors",
-                    purpose === p ? "border-brand/40 bg-brand-50/40" : "hover:bg-muted/50",
-                  )}
-                >
-                  <span className="font-medium">{p === "invoice" ? "Yes, ready to invoice" : "No, revenue only"}</span>
-                  <span className="text-muted-foreground block text-xs tabular-nums">
-                    {p === "invoice"
-                      ? weighted !== null
-                        ? `Finance may invoice ${aed(readyNow)} before VAT now.`
-                        : "Finance may invoice this much now."
-                      : "Booked as revenue at month end; not invoiced until it is ready to invoice."}
-                  </span>
-                </button>
-              ))}
+          {/* Finance invoices only what is ready to invoice: asked for a % below 100 (BRD v1.5: 100% is always ready to invoice). */}
+          {completing.length ? (
+            <p className="text-muted-foreground text-xs">
+              {completing.length === 1 ? "The line at 100% is" : `The ${completing.length} lines at 100% are`} complete and ready for Finance to invoice: revenue only is
+              for work below 100%.
+            </p>
+          ) : null}
+          {asking ? (
+            <div className="grid gap-2" role="radiogroup" aria-label="Ready to invoice">
+              <Label>{question}</Label>
+              <div className="grid gap-2">
+                {(["invoice", "revenue_only"] as const).map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    role="radio"
+                    aria-checked={purpose === p}
+                    onClick={() => setPurpose(p)}
+                    className={cn(
+                      "rounded-lg border px-3 py-2 text-left text-sm transition-colors",
+                      purpose === p ? "border-brand/40 bg-brand-50/40" : "hover:bg-muted/50",
+                    )}
+                  >
+                    <span className="font-medium">{p === "invoice" ? "Yes, ready to invoice" : "No, revenue only"}</span>
+                    <span className="text-muted-foreground block text-xs tabular-nums">
+                      {p === "invoice"
+                        ? weighted !== null
+                          ? `Finance may invoice ${aed(readyNow)} before VAT now.`
+                          : "Finance may invoice this much now."
+                        : "Booked as revenue at month end; not invoiced until it is ready to invoice."}
+                    </span>
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
+          ) : null}
 
           <div className="grid gap-1.5">
             <Label htmlFor="progress-note">Note</Label>
@@ -1773,8 +1785,8 @@ function ProgressDialog({
 
 /*
   Complete a line (30 Oct): no % to enter (100 %; a part goes through
-  Partial or Change), only whether Finance may invoice it or it is revenue
-  only.
+  Partial or Change). BRD v1.5: nothing is asked either, as a line 100%
+  complete is ready to invoice (revenue only is for work below 100%).
 */
 function CompleteDialog({
   workOrderId,
@@ -1787,16 +1799,15 @@ function CompleteDialog({
   onClose: () => void;
   onRecorded: () => void;
 }) {
-  /* 19 Nov: a line worth AED 0 has nothing to invoice or book as revenue, so nothing is asked; it is recorded as "to invoice", like most lines, so the work order's answers stay one. */
+  /* 19 Nov: a line worth AED 0 has nothing to invoice or book as revenue. */
   const worthNothing = (line.amount ?? 0) <= 0.005 && line.invoicedAmount <= 0.005;
-  const [purpose, setPurpose] = useState<ProgressPurpose | null>(worthNothing ? "invoice" : null);
+  const purpose: ProgressPurpose = "invoice";
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const left = round2(Math.max(0, line.remaining));
 
   const submit = async () => {
-    if (!purpose) return;
     setBusy(true);
     setProblem(null);
     try {
@@ -1823,17 +1834,9 @@ function CompleteDialog({
           <DialogDescription>
             {worthNothing
               ? "100% done. This line is worth AED 0, so there is nothing to invoice or book as revenue: it is only marked complete."
-              : "100% done. Nothing is invoiced here."}
+              : `100% done, so it is ready for Finance to invoice: ${aed(left)} before VAT${left < (line.amount ?? 0) - 0.005 ? " not invoiced yet" : ""}. Revenue only is for work below 100%: use Partial for that. Nothing is invoiced here.`}
           </DialogDescription>
         </DialogHeader>
-        {worthNothing ? null : (
-          <PurposeChoice
-            question="Should this line be ready to invoice?"
-            purpose={purpose}
-            onChange={setPurpose}
-            invoiceHint={`Finance may invoice ${aed(left)} before VAT now.`}
-          />
-        )}
         <div className="grid gap-1.5">
           <Label htmlFor="complete-note">Note</Label>
           <Textarea id="complete-note" rows={2} maxLength={2000} value={note} onChange={(e) => setNote(e.target.value)} />
@@ -1843,48 +1846,12 @@ function CompleteDialog({
           <Button variant="outline" onClick={onClose} disabled={busy}>
             Cancel
           </Button>
-          <SubmitButton pending={busy} disabled={!purpose} onClick={() => void submit()}>
+          <SubmitButton pending={busy} onClick={() => void submit()}>
             Mark complete
           </SubmitButton>
         </DialogFooter>
       </ActionDialogContent>
     </Dialog>
-  );
-}
-
-/* Asked for every % recorded (27 Oct, and 30 Oct for Complete too): ready to invoice, or revenue only. */
-function PurposeChoice({
-  question,
-  purpose,
-  onChange,
-  invoiceHint,
-}: {
-  question: string;
-  purpose: ProgressPurpose | null;
-  onChange: (purpose: ProgressPurpose) => void;
-  invoiceHint: string;
-}) {
-  return (
-    <div className="grid gap-2" role="radiogroup" aria-label="Ready to invoice">
-      <Label>{question}</Label>
-      <div className="grid gap-2">
-        {(["invoice", "revenue_only"] as const).map((p) => (
-          <button
-            key={p}
-            type="button"
-            role="radio"
-            aria-checked={purpose === p}
-            onClick={() => onChange(p)}
-            className={cn("rounded-lg border px-3 py-2 text-left text-sm transition-colors", purpose === p ? "border-brand/40 bg-brand-50/40" : "hover:bg-muted/50")}
-          >
-            <span className="font-medium">{p === "invoice" ? "Yes, ready to invoice" : "No, revenue only"}</span>
-            <span className="text-muted-foreground block text-xs tabular-nums">
-              {p === "invoice" ? invoiceHint : "Booked as revenue at month end; not invoiced until it is ready to invoice."}
-            </span>
-          </button>
-        ))}
-      </div>
-    </div>
   );
 }
 
@@ -2190,7 +2157,20 @@ function HistoryCard({ events }: { events: WorkOrderEvent[] }) {
    the lines it covers under it before VAT; the total includes VAT (2 Nov).
    --------------------------------------------------------------------- */
 
-function InvoicesCard({ workOrderId, invoices }: { workOrderId: string; invoices: WorkOrderInvoice[]; lines: WorkOrderLine[] }) {
+function InvoicesCard({
+  workOrderId,
+  invoices,
+  canSend = false,
+  onSent,
+}: {
+  workOrderId: string;
+  invoices: WorkOrderInvoice[];
+  lines: WorkOrderLine[];
+  /** Finance (record invoices): may email an invoice to the client (BRD v1.5 Step 10). */
+  canSend?: boolean;
+  onSent?: () => void;
+}) {
+  const [sending, setSending] = useState<WorkOrderInvoice | null>(null);
   return (
     <SectionCard
       icon={<ReceiptText />}
@@ -2225,6 +2205,13 @@ function InvoicesCard({ workOrderId, invoices }: { workOrderId: string; invoices
                         </a>
                       </Badge>
                     ) : null}
+                    {/* BRD v1.5 Step 10: Finance sends the uploaded invoice to the client from here, by email. */}
+                    {canSend && inv.hasFile ? (
+                      <Button size="sm" variant="outline" className="h-7" onClick={() => setSending(inv)}>
+                        <Mail className="size-3.5" />
+                        {inv.emails.length ? "Email again" : "Email to client"}
+                      </Button>
+                    ) : null}
                   </div>
                   <p className="text-muted-foreground mt-0.5 text-xs">
                     Invoice date {formatZonedDate(inv.date)} · recorded by {inv.recordedBy ?? "—"} · {formatWhen(inv.recordedAt)}
@@ -2238,6 +2225,29 @@ function InvoicesCard({ workOrderId, invoices }: { workOrderId: string; invoices
                   ) : null}
                 </div>
               </div>
+              {/* When and to whom it was shared with the client (both sides see it, BRD Step 10). */}
+              {inv.emails.length ? (
+                <ul className="border-t px-4 py-2 text-xs">
+                  {inv.emails.map((e) => (
+                    <li key={e.id} className="text-muted-foreground flex flex-wrap items-center gap-1.5 py-0.5">
+                      <Mail className="size-3.5 shrink-0" aria-hidden />
+                      {e.delivery === "live" ? (
+                        <span>
+                          <span className="text-foreground font-medium">Emailed to {e.to.join(", ")}</span>
+                          {e.cc.length ? <> (copy {e.cc.join(", ")})</> : null}
+                        </span>
+                      ) : (
+                        <span>
+                          <span className="text-foreground font-medium">Test copy</span> for {[...e.to, ...e.cc].join(", ")}: went to the test inbox, not the client
+                        </span>
+                      )}
+                      <span>
+                        · by {e.sentBy ?? "—"} · <span title={formatZonedDateTime(e.sentAt)}>{formatWhen(e.sentAt)}</span>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
               {/* Why MAHER's total differs from the lines' (13 Nov). */}
               {inv.varianceReason ? (
                 <p className="text-muted-foreground border-t px-4 py-2 text-xs">
@@ -2263,7 +2273,198 @@ function InvoicesCard({ workOrderId, invoices }: { workOrderId: string; invoices
           ))}
         </ul>
       )}
+      {sending ? (
+        <SendInvoiceDialog
+          workOrderId={workOrderId}
+          invoice={sending}
+          onClose={() => setSending(null)}
+          onSent={() => {
+            setSending(null);
+            onSent?.();
+          }}
+        />
+      ) : null}
     </SectionCard>
+  );
+}
+
+/*
+  BRD v1.4/v1.5 Step 10 (TC28): the MAHER invoice emailed to the client
+  from the portal, not WhatsApp. The addresses come from Zoho FSM (the work
+  order's email, then its company's) and can be changed; the PDF uploaded
+  with the invoice goes as an attachment; the portal records who sent it,
+  when and to whom. Outside live (FINANCE_NOTIFY_LIVE) it goes to the test
+  inbox only, and the dialog says so before anything is sent.
+*/
+function SendInvoiceDialog({
+  workOrderId,
+  invoice,
+  onClose,
+  onSent,
+}: {
+  workOrderId: string;
+  invoice: WorkOrderInvoice;
+  onClose: () => void;
+  onSent: () => void;
+}) {
+  const [draft, setDraft] = useState<InvoiceEmailDraft | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [to, setTo] = useState("");
+  const [cc, setCc] = useState("");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    financeService
+      .invoiceEmailDraft(workOrderId, invoice.id)
+      .then((d) => {
+        if (!live) return;
+        /* Nothing is chosen for Finance: the company's and the work order's addresses can be different people. */
+        setDraft(d);
+      })
+      .catch((e) => live && setLoadError(e instanceof Error ? e.message : "Could not load the client's details"));
+    return () => {
+      live = false;
+    };
+  }, [workOrderId, invoice.id]);
+
+  const toList = splitEmails(to);
+  const ccList = splitEmails(cc).filter((e) => !toList.includes(e));
+  const badAddress = [...toList, ...ccList].find((e) => !isEmail(e)) ?? null;
+  const blockedWhy = !draft
+    ? null
+    : !draft.storageReady
+      ? "Sending invoices is not set up yet: a database update (20261126100000) is still to be applied."
+      : !draft.hasFile
+        ? "Upload the MAHER invoice PDF first: there is nothing to attach."
+        : draft.delivery === "blocked"
+          ? "Email is switched off on this server (neither FINANCE_NOTIFY_LIVE nor NOTIFY_REDIRECT_TO is set), so nothing can be sent."
+          : null;
+  const canSend = Boolean(draft) && !blockedWhy && toList.length > 0 && !badAddress && !busy;
+
+  const submit = async () => {
+    setBusy(true);
+    setProblem(null);
+    try {
+      const result = await financeService.sendInvoiceEmail(workOrderId, invoice.id, { to: toList, cc: ccList, message: message.trim() || null });
+      toast.success(result.delivery === "live" ? `Invoice emailed to ${toList.join(", ")}` : "Test copy sent to the test inbox (not to the client)");
+      onSent();
+    } catch (e) {
+      setProblem(e instanceof Error ? e.message : "Nothing was sent");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const addSuggestion = (email: string) => setTo((current) => (splitEmails(current).includes(email) ? current : [current.trim(), email].filter(Boolean).join(", ")));
+
+  return (
+    <Dialog open onOpenChange={(next) => !next && !busy && onClose()}>
+      <ActionDialogContent busy={busy} className="flex max-h-[calc(100dvh-2rem)] flex-col sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Email invoice {invoice.number} to the client</DialogTitle>
+          <DialogDescription>
+            The MAHER invoice PDF uploaded with it goes as an attachment. The portal records who sent it, when and to whom.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="-mx-4 grid min-h-0 flex-1 gap-4 overflow-y-auto px-4 py-0.5">
+          {loadError ? (
+            <p className="text-destructive text-sm">{loadError}</p>
+          ) : !draft ? (
+            <p className="text-muted-foreground flex items-center gap-2 text-sm">
+              <Loader2 className="size-4 animate-spin" /> Reading the client&apos;s email from Zoho FSM…
+            </p>
+          ) : (
+            <>
+              {draft.delivery === "redirect" && !blockedWhy ? (
+                <Alert>
+                  <Info />
+                  <AlertTitle>Test mode</AlertTitle>
+                  <AlertDescription>FINANCE_NOTIFY_LIVE is not on, so this goes to the test inbox only, not to the client. It is recorded as a test copy.</AlertDescription>
+                </Alert>
+              ) : null}
+              {blockedWhy ? (
+                <Alert variant="destructive">
+                  <TriangleAlert />
+                  <AlertTitle>Cannot send</AlertTitle>
+                  <AlertDescription>{blockedWhy}</AlertDescription>
+                </Alert>
+              ) : null}
+              {draft.sent.length ? (
+                <p className="text-muted-foreground text-xs">
+                  Already sent {draft.sent.length === 1 ? "once" : `${draft.sent.length} times`}, last on {formatZonedDateTime(draft.sent[0].sentAt)} to{" "}
+                  {draft.sent[0].to.join(", ")}. Sending again sends another copy.
+                </p>
+              ) : null}
+
+              <div className="grid gap-1.5">
+                <Label htmlFor="invoice-email-to">To</Label>
+                <Input id="invoice-email-to" value={to} onChange={(e) => setTo(e.target.value)} placeholder="client@example.com" disabled={busy} />
+                {draft.suggested.length ? (
+                  <div className="grid gap-1 text-xs">
+                    <span className="text-muted-foreground">In Zoho FSM (check which one is billed before adding it):</span>
+                    <div className="flex flex-wrap gap-1.5">
+                      {draft.suggested.map((s) => (
+                        <Button
+                          key={s.email}
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          className="h-auto px-2 py-1 text-left text-xs"
+                          disabled={toList.includes(s.email)}
+                          onClick={() => addSuggestion(s.email)}
+                        >
+                          <span>
+                            <span className="text-muted-foreground block">{s.source === "company" ? `Company${draft.clientName ? `: ${draft.clientName}` : ""}` : "On the work order"}</span>
+                            {s.email}
+                          </span>
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                ) : draft.suggested.length === 0 ? (
+                  <p className="text-muted-foreground text-xs">Zoho FSM has no email for this client: type it in.</p>
+                ) : null}
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="invoice-email-cc">Copy (optional)</Label>
+                <Input id="invoice-email-cc" value={cc} onChange={(e) => setCc(e.target.value)} placeholder="Separate several with commas" disabled={busy} />
+              </div>
+              {badAddress ? <p className="text-destructive text-xs">&quot;{badAddress}&quot; is not an email address.</p> : null}
+              <div className="grid gap-1.5">
+                <Label htmlFor="invoice-email-message">Message (optional)</Label>
+                <Textarea
+                  id="invoice-email-message"
+                  rows={3}
+                  maxLength={2000}
+                  value={message}
+                  onChange={(e) => setMessage(e.target.value)}
+                  placeholder={`Please find attached our invoice ${invoice.number}${draft.workOrderNumber ? ` for work order ${draft.workOrderNumber}` : ""}.`}
+                  disabled={busy}
+                />
+                <p className="text-muted-foreground text-xs">
+                  Subject: {draft.subject}. The email also shows the invoice number, date{invoice.maherTotal !== null ? ", amount" : ""} and work order.
+                </p>
+              </div>
+            </>
+          )}
+          {problem ? <p className="text-destructive text-sm">{problem}</p> : null}
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <SubmitButton pending={busy} disabled={!canSend} onClick={() => void submit()}>
+            <Mail className="size-4" />
+            {draft?.delivery === "redirect" ? "Send test copy" : "Send"}
+          </SubmitButton>
+        </DialogFooter>
+      </ActionDialogContent>
+    </Dialog>
   );
 }
 

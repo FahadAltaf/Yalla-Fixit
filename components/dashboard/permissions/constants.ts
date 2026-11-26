@@ -176,7 +176,8 @@ RESOURCE_ACTIONS[ResourceType.REPORTS_COMPLIANCE] = [
   ActionType.EXPORT,
 ];
 RESOURCE_ACTIONS[ResourceType.COMPLIANCE_SELF] = [ActionType.VIEW];
-RESOURCE_ACTIONS[ResourceType.REPORTING_SETTINGS] = [ActionType.VIEW, ActionType.EDIT];
+/* BRD v1.5: Approve is management's: the billable hours percentage, which the team may not change. */
+RESOURCE_ACTIONS[ResourceType.REPORTING_SETTINGS] = [ActionType.VIEW, ActionType.EDIT, ActionType.APPROVE];
 
 // Helper to get display name for resource based on menu item titles
 const resourceDisplayNameMap: Partial<Record<ResourceType, string>> =
@@ -298,6 +299,7 @@ const RESOURCE_ACTION_NAMES: Partial<Record<ResourceType, Partial<Record<ActionT
     [ActionType.CREATE]: "Create (progress, ready, queries)",
     [ActionType.APPROVE]: "Approve (verify older items)",
   },
+  [ResourceType.REPORTING_SETTINGS]: { [ActionType.APPROVE]: "Approve (billable hours %, management)" },
   /* AMC (23 Nov 2026): what Approve and the rest do, said where the permission is picked. */
   [ResourceType.AMC]: { [ActionType.APPROVE]: "Approve proposals" },
   [ResourceType.AMC_CONFIG]: { [ActionType.APPROVE]: "Approve thresholds and payment bands" },

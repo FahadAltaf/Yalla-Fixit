@@ -922,6 +922,8 @@ export type WorkOrderInvoice = {
   recordedAt: string;
   hasFile: boolean;
   allocations: Array<{ lineId: string; lineName: string | null; amount: number }>;
+  /** BRD v1.5 Step 10: each time it was emailed to the client from the portal (newest first; empty before 20261126100000). */
+  emails: Array<{ id: string; to: string[]; cc: string[]; delivery: "live" | "redirect"; sentBy: string | null; sentAt: string }>;
 };
 
 export type WorkOrderEventType =
@@ -1166,7 +1168,19 @@ async function readHistoryRows(admin: SupabaseClient, workOrderId: string) {
     fin.from("line_states").select("fsm_line_id, name").eq("fsm_work_order_id", workOrderId),
   ]);
   for (const r of [allocations, events, exclusions, states]) if (r.error) throw new Error(r.error.message);
-  return { allocations: allocations.data ?? [], events: events.data ?? [], exclusions: exclusions.data ?? [], states: states.data ?? [] };
+  /* Invoices emailed to the client (20261126100000); none before it is applied. */
+  const emails = await fin
+    .from("invoice_emails")
+    .select("id, invoice_id, to_emails, cc_emails, delivery, sent_by_label, sent_at")
+    .eq("fsm_work_order_id", workOrderId)
+    .order("sent_at", { ascending: false });
+  return {
+    allocations: allocations.data ?? [],
+    events: events.data ?? [],
+    exclusions: exclusions.data ?? [],
+    states: states.data ?? [],
+    emails: emails.error ? [] : (emails.data ?? []),
+  };
 }
 
 type InvoiceHeaderRow = {
@@ -1205,6 +1219,16 @@ function shapeHistory(rows: NonNullable<Awaited<ReturnType<typeof readHistoryRow
       recordedBy: str(h.recorded_by_label),
       recordedAt: String(h.recorded_at),
       hasFile: Boolean(h.file_path),
+      emails: rows.emails
+        .filter((e) => String(e.invoice_id) === String(h.id))
+        .map((e) => ({
+          id: String(e.id),
+          to: (e.to_emails as string[]) ?? [],
+          cc: (e.cc_emails as string[]) ?? [],
+          delivery: e.delivery === "live" ? ("live" as const) : ("redirect" as const),
+          sentBy: str(e.sent_by_label),
+          sentAt: String(e.sent_at),
+        })),
       allocations: allocations
         .filter((a) => String(a.invoice_id) === String(h.id))
         .map((a) => ({ lineId: String(a.fsm_line_id), lineName: names.get(String(a.fsm_line_id)) ?? null, amount: Number(a.amount) })),

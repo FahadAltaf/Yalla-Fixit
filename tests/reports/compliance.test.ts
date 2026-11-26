@@ -10,6 +10,10 @@ import {
   missesInOutage,
   monthRange,
   penaltyFor,
+  allowanceOf,
+  appointmentOwners,
+  isNotUpdated,
+  isTestClient,
   requiredEvents,
   type ComplianceAppointment,
   type ComplianceSettings,
@@ -124,31 +128,34 @@ test("TC15: from the leaving date on, nothing is required", () => {
   assert.ok(required.some((e) => e.date === "2026-10-14"), "the days before still count");
 });
 
-test("TC11: 200 required, 7 missed at 97 % gives 96.5 % and AED 350; at 90 % nothing", () => {
+test("TC11 (BRD v1.5): 200 required, 7 missed at 97 % gives 96.5 %, allowance 6, 1 chargeable miss, AED 50; at 90 % nothing", () => {
   const required = synthetic(200);
   const recorded = recordAll(required, missing(required, 7));
   const [at97] = computeCompliance({ required, recorded, waivers: [], settings: AT_97 });
   assert.equal(at97.compliancePercent, 96.5);
   assert.equal(at97.belowThreshold, true);
-  assert.equal(at97.penaltyBeforeCapAed, 350);
-  assert.equal(at97.penaltyPayableAed, 350);
+  assert.equal(at97.allowance, 6);
+  assert.equal(at97.chargeableMisses, 1);
+  assert.equal(at97.penaltyBeforeCapAed, 50);
+  assert.equal(at97.penaltyPayableAed, 50);
   const [at90] = computeCompliance({ required, recorded, waivers: [], settings: AT_90 });
   assert.equal(at90.penaltyPayableAed, 0);
 });
 
-test("TC12: 14 missed at 97 % is AED 700 capped at 500; at 90 % compliant (D-09)", () => {
+test("TC12 (BRD v1.5): 18 missed at 97 % is 12 chargeable, AED 600 capped at 500; at 90 % compliant", () => {
   const required = synthetic(200);
-  const recorded = recordAll(required, missing(required, 14));
+  const recorded = recordAll(required, missing(required, 18));
   const [at97] = computeCompliance({ required, recorded, waivers: [], settings: AT_97 });
-  assert.equal(at97.compliancePercent, 93);
-  assert.equal(at97.penaltyBeforeCapAed, 700);
+  assert.equal(at97.compliancePercent, 91);
+  assert.equal(at97.chargeableMisses, 12);
+  assert.equal(at97.penaltyBeforeCapAed, 600);
   assert.equal(at97.penaltyPayableAed, 500);
   const [at90] = computeCompliance({ required, recorded, waivers: [], settings: AT_90 });
   assert.equal(at90.belowThreshold, false);
   assert.equal(at90.penaltyPayableAed, 0);
 });
 
-test("TC13: waiving 1 of 7 misses leaves 199 required, 96.98 % (still below 97 %) and AED 300", () => {
+test("TC13 (BRD v1.5): waiving 1 of 7 misses leaves 199 required and 6 missed, within the allowance of 6: AED 0", () => {
   const required = synthetic(200);
   const skip = missing(required, 7);
   const waived = [...skip][0];
@@ -164,7 +171,9 @@ test("TC13: waiving 1 of 7 misses leaves 199 required, 96.98 % (still below 97 %
   assert.equal(result.waived, 1);
   assert.equal(result.compliancePercent!.toFixed(1), "97.0", "it would display as 97.0 %");
   assert.equal(result.belowThreshold, true, "but it is below 97 % unrounded");
-  assert.equal(result.penaltyPayableAed, 300);
+  assert.equal(result.allowance, 6, "199 x 3 % = 5.97, to the nearest whole miss");
+  assert.equal(result.chargeableMisses, 0);
+  assert.equal(result.penaltyPayableAed, 0);
   const event = result.events.find((e) => e.key === waived)!;
   assert.equal(event.state, "waived");
   assert.equal(event.waiver?.reason, "No network", "the waiver stays reportable");
@@ -181,7 +190,27 @@ test("with no threshold set (D-09) no penalty is worked out", () => {
   assert.equal(result.compliancePercent, 50);
   assert.equal(result.belowThreshold, null);
   assert.equal(result.penaltyPayableAed, null);
-  assert.deepEqual(penaltyFor({ required: 0, performed: 0, missed: 0 }, AT_97), { belowThreshold: false, beforeCap: 0, payable: 0 });
+  assert.equal(result.allowance, null);
+  assert.deepEqual(penaltyFor({ required: 0, performed: 0, missed: 0 }, AT_97), {
+    belowThreshold: false,
+    allowance: 0,
+    chargeableMisses: 0,
+    beforeCap: 0,
+    payable: 0,
+  });
+});
+
+test("BRD v1.5 penalty examples at 97 % with 200 required: 6 allowed, 10 misses AED 200, 16 or more the cap", () => {
+  const at = (missed: number) => penaltyFor({ required: 200, performed: 200 - missed, missed }, AT_97);
+  assert.equal(at(6).payable, 0, "at the threshold: no action");
+  assert.equal(at(7).payable, 50);
+  assert.equal(at(10).payable, 200);
+  assert.equal(at(15).payable, 450);
+  assert.equal(at(16).payable, 500);
+  assert.equal(at(40).payable, 500);
+  assert.equal(allowanceOf(200, 97), 6);
+  assert.equal(allowanceOf(199, 97), 6);
+  assert.equal(allowanceOf(100, 90), 10);
 });
 
 test("a late check-in counts as performed; a night shift's check-out after midnight counts for its evening", () => {
@@ -413,4 +442,47 @@ test("attendance: nobody is absent today before their expected hours are over", 
     timeZone: TZ,
   });
   assert.equal(later[0].absent, true);
+});
+
+// ---------------------------------------------------------------------
+// BRD v1.5: what is left out of the count, and the lead's check-in
+// ---------------------------------------------------------------------
+
+test("BRD v1.5: test clients' appointments and past appointments nobody started are not required", () => {
+  const avail = availability({ from: "2026-10-05", to: "2026-10-05" });
+  const done = { ...appointment("A1", "2026-10-05", "09:00", "10:00", ["T1"], "Completed"), actualStart: dubai("2026-10-05", "09:05") };
+  const test1 = { ...appointment("A2", "2026-10-05", "11:00", "12:00", ["T1"], "Completed"), clientName: "Test Company", actualStart: dubai("2026-10-05", "11:00") };
+  const stale = appointment("A3", "2026-10-05", "13:00", "14:00", ["T1"], "Dispatched");
+  const failed = appointment("A4", "2026-10-05", "15:00", "16:00", ["T1"], "Cannot Complete");
+  const now = dubai("2026-10-06", "09:00");
+  const ids = new Set(requiredEvents({ availability: avail, appointments: [done, test1, stale, failed], timeZone: TZ, now }).map((e) => e.appointmentId).filter(Boolean));
+  assert.deepEqual([...ids].sort(), ["A1", "A4"], "the test client and the never-started appointment are out; Cannot Complete still counts");
+  assert.equal(isTestClient("Test Company"), true);
+  assert.equal(isTestClient("Contest Holdings"), false, "the word test, not the letters");
+  assert.equal(isNotUpdated(stale, now), true);
+  assert.equal(isNotUpdated(stale, dubai("2026-10-05", "13:30")), false, "not before its scheduled end");
+  assert.equal(isNotUpdated(failed, now), false);
+});
+
+test("BRD v1.5: on a crew only the lead owes the appointment check-ins, and anyone on the crew checking in performs them", () => {
+  const counted = new Set(["T1", "T2", "T3"]);
+  assert.deepEqual(appointmentOwners({ technicianIds: ["T1", "T2", "T3"], leadId: "T2" }, counted), ["T2"]);
+  assert.deepEqual(appointmentOwners({ technicianIds: ["T1", "T2"], leadId: "S1" }, counted), ["T1", "T2"], "a lead who is not counted hands it to the crew");
+  assert.deepEqual(appointmentOwners({ technicianIds: ["T1"], leadId: "T1" }, counted), ["T1"]);
+
+  const techs = [tech("T1"), tech("T2")];
+  const avail = availability({ technicians: techs, from: "2026-10-05", to: "2026-10-05" });
+  const crewJob = { ...appointment("A1", "2026-10-05", "09:00", "10:00", ["T2"]), crew: ["T1", "T2"] };
+  const required = requiredEvents({ availability: avail, appointments: [crewJob], timeZone: TZ });
+  const appointmentEvents = required.filter((e) => e.appointmentId);
+  assert.deepEqual([...new Set(appointmentEvents.map((e) => e.technicianFsmId))], ["T2"], "T1 owes no appointment check-ins");
+  /* T1 (not the lead) checked in and out; the lead did not. */
+  const recorded: RecordedCheckIn[] = [
+    { technicianFsmId: "T1", kind: "appointment_check_in", at: dubai("2026-10-05", "09:02"), appointmentId: "A1" },
+    { technicianFsmId: "T1", kind: "appointment_check_out", at: dubai("2026-10-05", "10:01"), appointmentId: "A1" },
+  ];
+  const results = computeCompliance({ required: appointmentEvents, recorded, waivers: [], settings: AT_97, timeZone: TZ });
+  const lead = results.find((r) => r.technicianFsmId === "T2")!;
+  assert.equal(lead.missed, 0);
+  assert.equal(lead.performed, 2);
 });

@@ -10,6 +10,7 @@ import {
   History,
   Info,
   Loader2,
+  Percent,
   ReceiptText,
   RotateCcw,
   Save,
@@ -55,7 +56,7 @@ import { reportingService } from "@/modules/reporting/reporting-service";
  * from the defaults (lib/reporting/settings.ts explains why).
  */
 
-type View = "finance" | "quotations" | "attendance" | "compliance" | "planning" | "links" | "holidays" | "history" | "fsm";
+type View = "finance" | "quotations" | "attendance" | "compliance" | "utilization" | "planning" | "links" | "holidays" | "history" | "fsm";
 type SectionKey = Exclude<View, "holidays" | "history" | "fsm">;
 
 /*
@@ -74,6 +75,8 @@ type NumberField = {
   min: number;
   max: number;
   step?: number;
+  /** BRD v1.5: changed by management only (Reporting settings Approve). */
+  management?: boolean;
 };
 type TimeField = { kind: "time"; path: string; label: string; hint?: string };
 type PeopleField = { kind: "people"; path: string; label: string; hint?: string };
@@ -102,9 +105,13 @@ const ABOUT: Record<string, string> = {
   "attendance.dataCentreDailyHours": "The working day of technicians whose Service Type is Data Center, used instead of the standard day. It is not overtime.",
   "attendance.unpaidBreakMinutes": "Taken off every working day before Utilization and Capacity count the hours available.",
   "attendance.checkInAlertRecipientUserIds": "Who is told when a technician has not checked in for a shift or an appointment.",
-  "compliance.thresholdPercent": "On App compliance, a technician whose check-ins done, as a share of those needed, fall below this % gets a penalty for each miss.",
-  "compliance.penaltyPerMissAed": "The amount worked out for each missed check-in when a technician is below the threshold. HR decides whether to apply it.",
+  "compliance.thresholdPercent": "On App compliance: it allows each technician required × (100% − this %) misses a month. Below this %, the misses beyond that allowance are charged (BRD v1.5: 97%).",
+  "compliance.penaltyPerMissAed": "The amount worked out for each miss beyond the monthly allowance when a technician is below the threshold. HR decides whether to apply it.",
   "compliance.monthlyCapAed": "The most a technician's penalty can come to in one month.",
+  "utilization.billablePercentMobile":
+    "Billable hours for mobile units (maintenance technicians) = expected hours × this %. Commercial utilization is chargeable hours ÷ billable hours, so this is 100%. Management only.",
+  "utilization.billablePercentDataCentre":
+    "Billable hours for Data Center technicians (stationary units) = expected hours × this %. Commercial utilization is chargeable hours ÷ billable hours. Management only.",
   "compliance.disputeCutoffDay": "Technicians can dispute a missed check-in until this day of the following month. After it the month can be finalised and nothing changes.",
   "compliance.hrRecipientUserIds": "Who receives the final monthly compliance report by email when a month is finalised.",
   "compliance.disputeReviewerUserIds": "Who can accept or reject a technician's dispute of a missed check-in, on App compliance.",
@@ -251,6 +258,36 @@ const SECTIONS: Record<SectionKey, { title: string; description: string; icon: R
       { kind: "number", path: "exceptions.completedWithoutFlagAfterDays", label: "Completed without invoice flag after", unit: "days", min: 0, max: 365 },
     ],
   },
+  utilization: {
+    title: "Billable hours",
+    description:
+      "Commercial utilization is measured against billable hours: the hours that can realistically be charged after travel and breaks, as a share of expected hours. Data Center and mobile units each have their own. Only management can change these.",
+    icon: <Percent />,
+    fields: [
+      {
+        kind: "number",
+        path: "utilization.billablePercentMobile",
+        label: "Mobile units (maintenance)",
+        unit: "% of expected hours",
+        hint: "80% for now, an approximation: an 8-hour day gives 6.4 billable hours.",
+        min: 1,
+        max: 100,
+        step: 0.1,
+        management: true,
+      },
+      {
+        kind: "number",
+        path: "utilization.billablePercentDataCentre",
+        label: "Data Center (stationary units)",
+        unit: "% of expected hours",
+        hint: "Technicians whose Service Type is Data Center.",
+        min: 1,
+        max: 100,
+        step: 0.1,
+        management: true,
+      },
+    ],
+  },
   links: {
     title: "Zoho FSM report links",
     description:
@@ -306,6 +343,7 @@ export function ReportingSettingsPage() {
   const [history, setHistory] = useState<ReportingSettingsHistoryEntry[]>([]);
   const [users, setUsers] = useState<PickableUser[]>([]);
   const [canEdit, setCanEdit] = useState(false);
+  const [canEditManagement, setCanEditManagement] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadFailed, setLoadFailed] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -322,6 +360,7 @@ export function ReportingSettingsPage() {
       setHistory(response.history);
       setUsers(response.users);
       setCanEdit(response.canEdit);
+      setCanEditManagement(Boolean(response.canEditManagement));
     } catch {
       setLoadFailed(true);
     } finally {
@@ -458,6 +497,7 @@ export function ReportingSettingsPage() {
           { value: "quotations", label: "Quotations", count: changedIn("quotations") || undefined },
           { value: "attendance", label: "Check-in alerts", count: changedIn("attendance") || undefined },
           { value: "compliance", label: "Compliance", count: changedIn("compliance") || undefined },
+          { value: "utilization", label: "Billable hours", count: changedIn("utilization") || undefined },
           { value: "planning", label: "Capacity and exceptions", count: changedIn("planning") || undefined },
           { value: "links", label: "FSM report links", count: changedIn("links") || undefined },
           { value: "holidays", label: "Public holidays" },
@@ -480,6 +520,11 @@ export function ReportingSettingsPage() {
           description={SECTIONS[view].description}
           bodyClassName="px-5 pb-5"
         >
+          {view === "utilization" && canEdit && !canEditManagement ? (
+            <p className="text-muted-foreground mb-4 text-sm">
+              Only management can change these: it needs the Reporting settings Approve permission.
+            </p>
+          ) : null}
           <div className="grid gap-5 md:grid-cols-2">
             {SECTIONS[view].fields.map((field) => (
               <SettingField
@@ -488,7 +533,7 @@ export function ReportingSettingsPage() {
                 value={getPath(draft, field.path)}
                 defaultValue={getPath(defaults, field.path)}
                 users={users}
-                disabled={!canEdit || saving}
+                disabled={!canEdit || saving || (field.kind === "number" && field.management === true && !canEditManagement)}
                 problem={problems[field.path]}
                 onChange={(value) => setDraft((current) => (current ? setPath(current, field.path, value) : current))}
               />

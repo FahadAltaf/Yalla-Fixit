@@ -12,12 +12,21 @@ import type { TechnicianAvailability } from "./available-hours";
  *    leaving date (all from the available-hours engine), and a day the
  *    technician is on leave for the whole shift. Part-day leave keeps the
  *    day's events required (assumption, D-11).
+ *  - Left out too (BRD v1.5): appointments for test clients; past
+ *    appointments that never started (shown to coordinators as
+ *    "appointment not updated" instead); supervisor and office accounts
+ *    (the caller's roster). On an appointment with several technicians
+ *    only the lead owes its check-in and check-out, and anyone on the crew
+ *    checking in counts for it.
  *  - Performed: recorded at all; a late check-in counts.
  *  - Waived: a miss with a waiver leaves both required and performed. A
  *    waiver on an event that was performed changes nothing.
- *  - Penalty: compliance below the threshold (compared unrounded: TC13's
- *    96.98 % is below 97 %), misses x rate, capped per month. With no
- *    threshold set (D-09) no penalty is worked out at all.
+ *  - Penalty (BRD v1.5, allowance-based, Behrouz's rule): the threshold
+ *    gives a monthly allowance of misses, required x (100 % - threshold),
+ *    rounded to the nearest whole miss (TC13: 199 x 3 % = 5.97 is 6). Only
+ *    the misses beyond it cost the rate each, capped per month: at 97 %
+ *    with 200 required, 6 are allowed, 7 cost AED 50, 16 or more reach
+ *    the AED 500 cap. With no threshold set (D-09) no penalty is worked out.
  *
  * Check-ins come from FSM once its token can read them (B-01); until then
  * the caller has none to pass. Cancelled appointments are taken as
@@ -53,7 +62,12 @@ export type ComplianceAppointment = {
   status: string | null;
   scheduledStart: string | null;
   scheduledEnd: string | null;
+  /** Who owes its check-ins (appointmentOwners: the lead, on a crew). */
   technicianIds: string[];
+  /** Everyone on it, for matching: anyone on the crew checking in counts (BRD v1.5). Defaults to technicianIds. */
+  crew?: string[];
+  clientName?: string | null;
+  actualStart?: string | null;
 };
 
 export type RecordedCheckIn = {
@@ -89,6 +103,8 @@ export type RequiredEvent = {
   dueAt: string | null;
   appointmentId: string | null;
   appointmentNumber: string | null;
+  /** Appointment kinds: everyone on it, any of whom checking in performs it. */
+  crew?: string[];
 };
 
 export type EventOutcome = RequiredEvent & {
@@ -114,6 +130,10 @@ export type TechnicianCompliance = {
   compliancePercent: number | null;
   /** null when no threshold is set (D-09). */
   belowThreshold: boolean | null;
+  /** Misses allowed this month before any penalty; null when no threshold is set. */
+  allowance: number | null;
+  /** Misses beyond the allowance: the ones that cost; null when no threshold is set. */
+  chargeableMisses: number | null;
   /** null when no threshold is set. */
   penaltyBeforeCapAed: number | null;
   penaltyPayableAed: number | null;
@@ -129,6 +149,37 @@ export function eventKey(technicianFsmId: string, kind: ComplianceEventKind, ref
 const SHIFT_KINDS: ComplianceEventKind[] = ["shift_check_in", "shift_check_out"];
 const isShiftKind = (kind: ComplianceEventKind) => SHIFT_KINDS.includes(kind);
 export const isCancelled = (a: { status: string | null }) => (a.status ?? "").toLowerCase() === "cancelled";
+
+/** BRD v1.5: a test client's appointments are left out. A client is a test one when its name has the word "test" in it. */
+export const isTestClient = (name: string | null | undefined) => /\btest\b/i.test(name ?? "");
+
+/* Statuses of an appointment nobody has started in FSM. */
+const NOT_STARTED = new Set(["new", "scheduled", "dispatched"]);
+
+/**
+ * BRD v1.5: a past appointment that never started (still New, Scheduled or
+ * Dispatched, no actual start, its scheduled end gone by) is left out of
+ * the count and shown to coordinators as "appointment not updated".
+ */
+export function isNotUpdated(a: Pick<ComplianceAppointment, "status" | "scheduledStart" | "scheduledEnd" | "actualStart">, nowIso: string): boolean {
+  if (a.actualStart) return false;
+  if (!NOT_STARTED.has((a.status ?? "").trim().toLowerCase())) return false;
+  const end = a.scheduledEnd ?? a.scheduledStart;
+  return Boolean(end) && Date.parse(end!) < Date.parse(nowIso);
+}
+
+/**
+ * Who owes an appointment's check-in and check-out (BRD v1.5): on an
+ * appointment with several technicians the lead's is enough, so the lead
+ * alone owes them when the lead is counted; otherwise everyone counted on
+ * it (a lead who is a supervisor, or not on the roster, hands it to the
+ * crew).
+ */
+export function appointmentOwners(a: { technicianIds: string[]; leadId?: string | null }, counted: ReadonlySet<string>): string[] {
+  const crew = [...new Set(a.technicianIds)].filter((t) => counted.has(t));
+  if (crew.length > 1 && a.leadId && crew.includes(a.leadId)) return [a.leadId];
+  return crew;
+}
 
 /** Whether a day counts: a working day not wholly on leave. */
 function eligibleDays(tech: TechnicianAvailability) {
@@ -147,6 +198,8 @@ export function requiredEvents(input: {
   availability: TechnicianAvailability[];
   appointments: ComplianceAppointment[];
   timeZone?: string;
+  /** For "appointment not updated" (the caller's clock; this stays pure). Without it none is left out. */
+  now?: string;
 }): RequiredEvent[] {
   const out: RequiredEvent[] = [];
   const eligible = new Map(input.availability.map((t) => [t.fsmId, eligibleDays(t)]));
@@ -160,6 +213,9 @@ export function requiredEvents(input: {
   }
   for (const a of input.appointments) {
     if (isCancelled(a) || !a.scheduledStart) continue;
+    /* BRD v1.5: test clients, and past appointments nobody started, are not counted. */
+    if (isTestClient(a.clientName)) continue;
+    if (input.now && isNotUpdated(a, input.now)) continue;
     const date = zonedDateString(a.scheduledStart, input.timeZone);
     for (const tech of new Set(a.technicianIds)) {
       if (!eligible.get(tech)?.has(date)) continue;
@@ -172,6 +228,7 @@ export function requiredEvents(input: {
           dueAt: kind === "appointment_check_in" ? a.scheduledStart : (a.scheduledEnd ?? a.scheduledStart),
           appointmentId: a.id,
           appointmentNumber: a.number,
+          crew: [...new Set(a.crew ?? a.technicianIds)],
         });
       }
     }
@@ -218,15 +275,37 @@ function recordedIndex(recorded: RecordedCheckIn[], windows: Map<string, ShiftWi
   return index;
 }
 
+/** Misses allowed in a month (BRD v1.5): required x (100 % - threshold), to the nearest whole miss. */
+export function allowanceOf(required: number, thresholdPercent: number): number {
+  /* In hundredths first, so 200 x 3 % is exactly 6 and not 5.999…. */
+  return Math.round(Math.round(required * (100 - thresholdPercent) * 100) / 10_000);
+}
+
+/**
+ * The allowance and chargeable misses of figures that keep only the counts
+ * (a stored statement, an email, a page): the same rule as penaltyFor.
+ */
+export function allowanceFigures(
+  r: { required: number; missed: number; belowThreshold: boolean | null },
+  thresholdPercent: number | null,
+): { allowance: number | null; chargeableMisses: number | null } {
+  if (thresholdPercent === null) return { allowance: null, chargeableMisses: null };
+  const allowance = allowanceOf(r.required, thresholdPercent);
+  return { allowance, chargeableMisses: r.belowThreshold ? Math.max(0, r.missed - allowance) : 0 };
+}
+
 export function penaltyFor(
   counts: { required: number; performed: number; missed: number },
   settings: ComplianceSettings,
-): { belowThreshold: boolean | null; beforeCap: number | null; payable: number | null } {
-  if (settings.thresholdPercent === null) return { belowThreshold: null, beforeCap: null, payable: null };
+): { belowThreshold: boolean | null; allowance: number | null; chargeableMisses: number | null; beforeCap: number | null; payable: number | null } {
+  if (settings.thresholdPercent === null) return { belowThreshold: null, allowance: null, chargeableMisses: null, beforeCap: null, payable: null };
   // Unrounded, and in whole numbers so 193/200 is exactly 96.5 %.
   const below = counts.required > 0 && counts.performed * 100 < settings.thresholdPercent * counts.required;
-  const beforeCap = below ? counts.missed * settings.penaltyPerMissAed : 0;
-  return { belowThreshold: below, beforeCap, payable: Math.min(beforeCap, settings.monthlyCapAed) };
+  const allowance = allowanceOf(counts.required, settings.thresholdPercent);
+  /* At or above the threshold nothing is charged; below it, only the misses beyond the allowance. */
+  const chargeableMisses = below ? Math.max(0, counts.missed - allowance) : 0;
+  const beforeCap = chargeableMisses * settings.penaltyPerMissAed;
+  return { belowThreshold: below, allowance, chargeableMisses, beforeCap, payable: Math.min(beforeCap, settings.monthlyCapAed) };
 }
 
 export function computeCompliance(input: {
@@ -248,8 +327,14 @@ export function computeCompliance(input: {
   const recorded = recordedIndex(input.recorded, windows, input.timeZone);
   const waivers = new Map(input.waivers.map((w) => [w.eventKey, w]));
   const byTech = new Map<string, EventOutcome[]>();
+  /* BRD v1.5: on a crew, anyone checking in performs the lead's appointment check-in (the first check-in, the last check-out). */
+  const crewAt = (event: RequiredEvent): string | null => {
+    if (!event.appointmentId || !event.crew?.length) return null;
+    const times = event.crew.map((t) => recorded.get(eventKey(t, event.kind, event.appointmentId!))).filter((v): v is string => Boolean(v)).sort();
+    return (event.kind.endsWith("check_out") ? times.at(-1) : times[0]) ?? null;
+  };
   for (const event of input.required) {
-    const at = recorded.get(event.key) ?? null;
+    const at = recorded.get(event.key) ?? crewAt(event);
     const waiver = at ? null : (waivers.get(event.key) ?? null);
     const outcome: EventOutcome = { ...event, state: at ? "performed" : waiver ? "waived" : "missed", recordedAt: at, waiver };
     const list = byTech.get(event.technicianFsmId) ?? [];
@@ -271,6 +356,8 @@ export function computeCompliance(input: {
       waived,
       compliancePercent: required ? (performed / required) * 100 : null,
       belowThreshold: penalty.belowThreshold,
+      allowance: penalty.allowance,
+      chargeableMisses: penalty.chargeableMisses,
       penaltyBeforeCapAed: penalty.beforeCap,
       penaltyPayableAed: penalty.payable,
       settings: input.settings,

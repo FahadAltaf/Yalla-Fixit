@@ -1,6 +1,6 @@
 import { addDaysToDateString } from "@/lib/scheduling/org-time";
 
-import { EVENT_KIND_LABELS, type ComplianceEventKind, type EventOutcome, type TechnicianCompliance } from "./compliance";
+import { allowanceFigures, EVENT_KIND_LABELS, type ComplianceEventKind, type EventOutcome, type TechnicianCompliance } from "./compliance";
 
 /**
  * Compliance disputes and the compliance messages (BRD 5.2 B4, §6.1, §6.2,
@@ -288,10 +288,15 @@ export function statementEmail(input: {
       ? []
       : r.belowThreshold
         ? [
+            { label: "Allowance", value: `${r.allowance ?? 0} misses` },
+            { label: "Chargeable misses", value: String(r.chargeableMisses ?? 0) },
             { label: "Penalty before cap", value: aed(r.penaltyBeforeCapAed) },
             { label: "Penalty after cap", value: aed(r.penaltyPayableAed) },
           ]
-        : [{ label: "Penalty", value: `None (at or above ${input.thresholdPercent}%)` }];
+        : [
+            { label: "Allowance", value: `${r.allowance ?? 0} misses` },
+            { label: "Penalty", value: `None (at or above ${input.thresholdPercent}%)` },
+          ];
   return {
     eyebrow: "App compliance",
     heading: `Your statement for ${monthName(input.month)}`,
@@ -332,11 +337,21 @@ export type StatementRow = {
 export function hrReportEmail(input: { month: string; rows: StatementRow[]; thresholdPercent: number | null; appUrl: string }): EmailParts {
   const cell = "padding:4px 6px;border-top:1px solid #eee";
   const num = `${cell};text-align:right`;
-  const header = ["Technician", "Required", "Performed", "Missed", "Waived", "Compliance", "Penalty", "Payable"]
+  const header = ["Technician", "Required", "Performed", "Missed", "Waived", "Allowance", "Chargeable", "Compliance", "Penalty", "Payable"]
     .map((h, i) => `<th style="padding:4px 6px;text-align:${i ? "right" : "left"};color:#6b7280">${h}</th>`)
     .join("");
-  const line = (r: Pick<StatementRow, "required" | "performed" | "missed" | "waived" | "compliancePercent" | "penaltyBeforeCapAed" | "penaltyPayableAed">, label: string, bold = false) =>
-    `<tr${bold ? ' style="font-weight:600"' : ""}><td style="${cell}">${esc(label)}</td><td style="${num}">${r.required}</td><td style="${num}">${r.performed}</td><td style="${num}">${r.missed}</td><td style="${num}">${r.waived}</td><td style="${num}">${pct(r.compliancePercent)}</td><td style="${num}">${aed(r.penaltyBeforeCapAed)}</td><td style="${num}">${aed(r.penaltyPayableAed)}</td></tr>`;
+  /* BRD v1.5: the allowance and the misses beyond it, from the counts (the same rule as the statement). */
+  const figures = (r: Pick<StatementRow, "required" | "missed" | "belowThreshold">) => allowanceFigures(r, input.thresholdPercent);
+  const count = (v: number | null) => (v === null ? "—" : String(v));
+  const line = (
+    r: Pick<StatementRow, "required" | "performed" | "missed" | "waived" | "compliancePercent" | "penaltyBeforeCapAed" | "penaltyPayableAed"> & {
+      allowance: number | null;
+      chargeableMisses: number | null;
+    },
+    label: string,
+    bold = false,
+  ) =>
+    `<tr${bold ? ' style="font-weight:600"' : ""}><td style="${cell}">${esc(label)}</td><td style="${num}">${r.required}</td><td style="${num}">${r.performed}</td><td style="${num}">${r.missed}</td><td style="${num}">${r.waived}</td><td style="${num}">${count(r.allowance)}</td><td style="${num}">${count(r.chargeableMisses)}</td><td style="${num}">${pct(r.compliancePercent)}</td><td style="${num}">${aed(r.penaltyBeforeCapAed)}</td><td style="${num}">${aed(r.penaltyPayableAed)}</td></tr>`;
 
   const teams = new Map<string, StatementRow[]>();
   for (const r of input.rows) teams.set(r.teamName, [...(teams.get(r.teamName) ?? []), r]);
@@ -344,7 +359,10 @@ export function hrReportEmail(input: { month: string; rows: StatementRow[]; thre
     const required = rows.reduce((a, r) => a + r.required, 0);
     const performed = rows.reduce((a, r) => a + r.performed, 0);
     const money = (pick: (r: StatementRow) => number | null) => (input.thresholdPercent === null ? null : rows.reduce((a, r) => a + (pick(r) ?? 0), 0));
+    const add = (pick: (f: ReturnType<typeof figures>) => number | null) => (input.thresholdPercent === null ? null : rows.reduce((a, r) => a + (pick(figures(r)) ?? 0), 0));
     return {
+      allowance: add((f) => f.allowance),
+      chargeableMisses: add((f) => f.chargeableMisses),
       required,
       performed,
       missed: rows.reduce((a, r) => a + r.missed, 0),
@@ -360,7 +378,7 @@ export function hrReportEmail(input: { month: string; rows: StatementRow[]; thre
       ([team, rows]) =>
         rows
           .sort((a, b) => a.name.localeCompare(b.name))
-          .map((r) => line(r, r.name))
+          .map((r) => line({ ...r, ...figures(r) }, r.name))
           .join("") + line(total(rows), `${team}: total`, true),
     )
     .join("");

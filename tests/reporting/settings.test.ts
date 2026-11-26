@@ -31,9 +31,10 @@ test("the BRD §6.6 suggestions are the defaults", () => {
   assert.equal(d.exceptions.completedWithoutFlagAfterDays, 3);
 });
 
-test("the compliance threshold is 90 % (D-09, decided 29 Oct), and the Data Center day 12 h", () => {
+test("the compliance threshold is 97 % (BRD v1.5), the Data Center day 12 h, and billable hours 80 % mobile / 100 % Data Center", () => {
   const defaults = getReportingSettingsDefaults();
-  assert.equal(defaults.compliance.thresholdPercent, 90);
+  assert.equal(defaults.compliance.thresholdPercent, 97);
+  assert.deepEqual(defaults.utilization, { billablePercentMobile: 80, billablePercentDataCentre: 100 });
   assert.equal(defaults.attendance.dataCentreDailyHours, 12);
   assert.deepEqual(defaults.compliance.disputeReviewerUserIds, []);
 });
@@ -109,7 +110,7 @@ test("the audit diff names each changed leaf, and nothing else", () => {
   const before = getReportingSettingsDefaults();
   const after = mergeReportingSettings(before, {
     quotations: { ageingDaysByStatus: { approved: 6 } },
-    compliance: { thresholdPercent: 97 },
+    compliance: { thresholdPercent: 90 },
   }).settings;
   assert.deepEqual(diffSettingsPaths(before, after), [
     "compliance.thresholdPercent",
@@ -128,11 +129,11 @@ test("only the fields that differ from the defaults are saved", () => {
   assert.deepEqual(overridesFrom(defaults, defaults), {});
   const draft = structuredClone(defaults);
   draft.quotations.ageingDaysByStatus.sent = 12;
-  draft.compliance.thresholdPercent = 97;
+  draft.compliance.thresholdPercent = 90;
   const overrides = overridesFrom(defaults, draft);
   assert.deepEqual(overrides, {
     quotations: { ageingDaysByStatus: { sent: 12 } },
-    compliance: { thresholdPercent: 97 },
+    compliance: { thresholdPercent: 90 },
   });
   assert.ok(reportingSettingsOverridesSchema.safeParse(overrides).success);
   assert.deepEqual(mergeReportingSettings(defaults, overrides).settings, draft);

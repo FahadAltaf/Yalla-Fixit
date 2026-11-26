@@ -5,9 +5,13 @@ import { computeAttendance, summariseAttendance, type AttendanceDay, type Attend
 import { computeAvailability, datesBetween, MAX_RANGE_DAYS } from "@/lib/reports/available-hours";
 import {
   breakdownOf,
+  allowanceFigures,
   complianceMonthPhase,
   computeCompliance,
+  appointmentOwners,
   isCancelled,
+  isNotUpdated,
+  isTestClient,
   missesInOutage,
   monthRange,
   requiredEvents,
@@ -132,12 +136,20 @@ function inScope(
   const forClient = filters.client
     ? new Set(appointments.filter((a) => a.clientName === filters.client && !isCancelled(a)).flatMap((a) => a.technicianIds))
     : null;
+  /* BRD v1.5: supervisor accounts are not counted: a technician who leads a team in Workforce. (Office accounts never reach the roster: it holds FSM Field Agents only.) */
+  const supervisors = supervisorsOf(roster);
   return [...roster.values()].filter((t) => {
+    if (supervisors.has(t.fsmId)) return false;
     if (filters.technician && t.fsmId !== filters.technician) return false;
     if (filters.team && teamKeyOf(t) !== filters.team) return false;
     if (forClient && !forClient.has(t.fsmId)) return false;
     return t.isActive || Boolean(t.leavingDate) || worked.has(t.fsmId);
   });
+}
+
+/** Team leaders in Workforce: the supervisors, left out of compliance (BRD v1.5). */
+export function supervisorsOf(roster: Roster): Set<string> {
+  return new Set([...roster.values()].map((t) => t.teamLeaderId).filter((id): id is string => Boolean(id)));
 }
 
 /** The clients of the appointments in the dates, for the client filter. */
@@ -169,6 +181,8 @@ export type MonthWork = {
   storageReady: boolean;
   /** The clients of the month's appointments, for the client filter. */
   clients: string[];
+  /** BRD v1.5: past appointments nobody started in FSM, left out of the count and shown to coordinators. */
+  notUpdated: ComplianceAppointmentRow[];
 };
 
 export async function workOutMonth(
@@ -199,15 +213,28 @@ export async function workOutMonth(
       crewsUnknown: 0,
       storageReady: true,
       clients: [],
+      notUpdated: [],
     };
   }
 
   const loaded = await loadComplianceAppointments(admin, { from: range.from, to });
-  const technicians = inScope(roster, workedIn(loaded.appointments), filters, loaded.appointments);
+  const worked = workedIn(loaded.appointments);
+  const technicians = inScope(roster, worked, filters, loaded.appointments);
   const scopeIds = new Set(technicians.map((t) => t.fsmId));
+  /*
+    BRD v1.5: on a crew the lead's check-in is enough, so the lead owes it,
+    whatever the filters (everyone counted, not only those shown); anyone
+    on the crew checking in performs it.
+  */
+  const counted = new Set(inScope(roster, worked, {}).map((t) => t.fsmId));
   const appointments = loaded.appointments
-    .map((a) => ({ ...a, technicianIds: a.technicianIds.filter((t) => scopeIds.has(t)) }))
+    .map((a) => ({ ...a, crew: a.technicianIds, technicianIds: appointmentOwners(a, counted).filter((t) => scopeIds.has(t)) }))
     .filter((a) => a.technicianIds.length > 0);
+  const nowIso = new Date().toISOString();
+  /* "Appointment not updated": those of the people shown, so a filter narrows it as it narrows the table. */
+  const notUpdated = loaded.appointments.filter(
+    (a) => !isCancelled(a) && !isTestClient(a.clientName) && isNotUpdated(a, nowIso) && a.technicianIds.some((t) => scopeIds.has(t)),
+  );
 
   const availability = computeAvailability(
     await loadAvailabilityInput(admin, {
@@ -222,7 +249,7 @@ export async function workOutMonth(
 
   /* Only what was due by now: the rest of today's shift is not missed yet. */
   const now = Date.now();
-  const owedEvents = requiredEvents({ availability, appointments }).filter((e) => !e.dueAt || Date.parse(e.dueAt) <= now);
+  const owedEvents = requiredEvents({ availability, appointments, now: nowIso }).filter((e) => !e.dueAt || Date.parse(e.dueAt) <= now);
   const owed = new Map<string, { shift: number; appointment: number }>();
   for (const e of owedEvents) {
     const entry = owed.get(e.technicianFsmId) ?? { shift: 0, appointment: 0 };
@@ -236,7 +263,8 @@ export async function workOutMonth(
     sources.appointment ? loadAppointmentCheckIns(admin, { from: range.from, to }, appointments) : Promise.resolve([] as RecordedCheckIn[]),
   ]);
   const scope = new Set(technicians.map((t) => t.fsmId));
-  const recorded = [...shiftCheckIns, ...appointmentCheckIns].filter((c) => scope.has(c.technicianFsmId));
+  /* Appointment check-ins of anyone on a crew count for its lead (BRD v1.5), so they are all kept. */
+  const recorded = [...shiftCheckIns.filter((c) => scope.has(c.technicianFsmId)), ...appointmentCheckIns];
 
   const { data: waiverRows, error } = await admin
     .schema("hr")
@@ -274,6 +302,7 @@ export async function workOutMonth(
     crewsUnknown: loaded.crewsUnknown,
     storageReady,
     clients: clientsOf(loaded.appointments),
+    notUpdated,
   };
 }
 
@@ -367,6 +396,9 @@ export type ComplianceRow = {
   waived: number;
   compliancePercent: number | null;
   belowThreshold: boolean | null;
+  /** BRD v1.5: misses allowed this month, and those beyond it (the ones that cost); null with no threshold. */
+  allowance: number | null;
+  chargeableMisses: number | null;
   penaltyBeforeCapAed: number | null;
   penaltyPayableAed: number | null;
   /** Owed in the period, measured or not. */
@@ -420,7 +452,9 @@ export type ComplianceReport = {
   /** False until migration 20261029100000 is applied: no disputes. */
   disputesReady: boolean;
   total: number;
-  notes: { crewsUnknown: number; noRestDays: number };
+  notes: { crewsUnknown: number; noRestDays: number; supervisors: number };
+  /** BRD v1.5: past appointments nobody started in FSM ("appointment not updated"), left out of the count. */
+  notUpdated: Array<{ id: string; number: string | null; workOrderNumber: string | null; clientName: string | null; status: string | null; scheduledStart: string | null; technicians: string[] }>;
   options: {
     technicians: Array<{ id: string; name: string }>;
     teams: Array<{ id: string; name: string }>;
@@ -487,6 +521,10 @@ export async function buildComplianceReport(
           waived: Number(s.waived),
           compliancePercent: s.compliance_percent === null ? null : Number(s.compliance_percent),
           belowThreshold: (s.below_threshold as boolean | null) ?? null,
+          ...allowanceFigures(
+            { required: Number(s.required), missed: Number(s.missed), belowThreshold: (s.below_threshold as boolean | null) ?? null },
+            settingsUsed.thresholdPercent,
+          ),
           penaltyBeforeCapAed: s.penalty_before_cap === null ? null : Number(s.penalty_before_cap),
           penaltyPayableAed: s.penalty_payable === null ? null : Number(s.penalty_payable),
           owedShift: 0,
@@ -509,6 +547,8 @@ export async function buildComplianceReport(
         waived: r?.waived ?? 0,
         compliancePercent: r?.compliancePercent ?? null,
         belowThreshold: r?.belowThreshold ?? (work.settings.thresholdPercent === null ? null : false),
+        allowance: r?.allowance ?? (work.settings.thresholdPercent === null ? null : 0),
+        chargeableMisses: r?.chargeableMisses ?? (work.settings.thresholdPercent === null ? null : 0),
         penaltyBeforeCapAed: r?.penaltyBeforeCapAed ?? (work.settings.thresholdPercent === null ? null : 0),
         penaltyPayableAed: r?.penaltyPayableAed ?? (work.settings.thresholdPercent === null ? null : 0),
         owedShift: owed.shift,
@@ -642,7 +682,19 @@ export async function buildComplianceReport(
     notes: {
       crewsUnknown: work.crewsUnknown,
       noRestDays: work.technicians.filter((t) => t.restWeekdays.length === 0).length,
+      supervisors: supervisorsOf(roster).size,
     },
+    notUpdated: work.notUpdated
+      .map((a) => ({
+        id: a.id,
+        number: a.number,
+        workOrderNumber: a.workOrderNumber,
+        clientName: a.clientName,
+        status: a.status,
+        scheduledStart: a.scheduledStart,
+        technicians: a.technicianIds.map((t) => roster.get(t)?.name ?? t),
+      }))
+      .sort((x, y) => (y.scheduledStart ?? "").localeCompare(x.scheduledStart ?? "")),
     options: { technicians: technicianOptions(roster), teams: teamOptions(roster), months: monthOptions(today), clients: work.clients },
     dataAsOf: asOf,
   };

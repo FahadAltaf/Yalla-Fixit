@@ -25,7 +25,7 @@ import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useDebounce } from "@/hooks/use-debounce";
-import { CHARGEABILITY_LABELS, type TeamUtilization } from "@/lib/reports/utilization";
+import { CHARGEABILITY_LABELS, UNIT_LABELS, type TeamUtilization, type UnitType } from "@/lib/reports/utilization";
 import type { UtilizationReport } from "@/lib/server/reports/planning";
 import { exportFilename, exportTable, type ExportFormat } from "@/lib/snagging/export-table";
 import { reportsService } from "@/modules/reports/reports-service";
@@ -50,6 +50,7 @@ const DEFAULTS = {
   technician: "",
   team: "",
   client: "",
+  unit: "",
   chargeability: "",
   missing: "",
   q: "",
@@ -74,6 +75,7 @@ export function UtilizationPage() {
       technician: filters.technician,
       team: filters.team,
       client: filters.client,
+      unit: filters.unit,
       q: debouncedQ,
     };
     return view === "appointments" ? { ...shared, chargeability: filters.chargeability, missing: filters.missing } : shared;
@@ -144,6 +146,12 @@ export function UtilizationPage() {
     { key: "technician", allLabel: "All technicians", options: technicianOptions },
     { key: "team", allLabel: "All teams", options: teamOptions },
     { key: "client", allLabel: "All clients", options: (data?.options.clients ?? []).map((c) => ({ value: c, label: c })) },
+    /* BRD v1.4: Data Center and mobile units are reported apart. */
+    {
+      key: "unit",
+      allLabel: "Data Center and mobile",
+      options: (Object.keys(UNIT_LABELS) as UnitType[]).map((u) => ({ value: u, label: UNIT_LABELS[u] })),
+    },
     ...(view === "appointments"
       ? [
           {
@@ -179,7 +187,7 @@ export function UtilizationPage() {
       onFiltersChange={change}
       selects={selects}
       switches={view === "appointments" ? [{ key: "missing", label: "Missing actual times only" }] : []}
-      clearable={["technician", "team", "client", "chargeability", "missing"]}
+      clearable={["technician", "team", "client", "unit", "chargeability", "missing"]}
       canExport={Boolean(data?.can.export) && view !== "teams"}
       exporting={exporting}
       onExport={(format) => void doExport(format)}
@@ -242,7 +250,16 @@ export function UtilizationPage() {
           <StatCard
             label="Commercial utilization"
             value={pct(overall.commercialPercent)}
-            headline={`${hrs(overall.chargeableMinutes)} chargeable`}
+            headline={`${hrs(overall.chargeableMinutes)} chargeable of ${hrs(overall.billableMinutes)} billable`}
+            caption={
+              /* BRD v1.4: Data Center and mobile units apart, each over its own billable hours. */
+              data
+                ? (Object.keys(UNIT_LABELS) as UnitType[])
+                    .filter((u) => data.units[u].technicians > 0)
+                    .map((u) => `${UNIT_LABELS[u]} ${pct(data.units[u].commercialPercent)} (billable ${data.billablePercent[u]}%)`)
+                    .join(" · ") || undefined
+                : undefined
+            }
           />
           <StatCard label="Above expected" value={hrs(overall.overtimeMinutes)} headline="Hours beyond each week's expected hours" />
           <StatCard
@@ -390,7 +407,7 @@ function TeamTable({ rows, onSelect }: { rows: TeamUtilization[]; onSelect: (tea
                 <Explained
                   help={{
                     title: `Commercial utilization ${pct(row.commercialPercent)}`,
-                    lines: [`${hrs(row.chargeableMinutes)} chargeable ÷ ${hrs(row.availableMinutes)} expected = ${pct(row.commercialPercent)}`],
+                    lines: [`${hrs(row.chargeableMinutes)} chargeable ÷ ${hrs(row.billableMinutes)} billable = ${pct(row.commercialPercent)}`],
                   }}
                 >
                   {pct(row.commercialPercent)}

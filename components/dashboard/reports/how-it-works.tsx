@@ -116,8 +116,9 @@ export function utilizationHowItWorks(s?: { standardDailyHours?: number; dataCen
         heading: "The two measures",
         lines: [
           "Time utilization = job hours ÷ expected hours.",
-          "Commercial utilization = chargeable job hours ÷ expected hours. Chargeable: the quotation's total is above zero or, with no quotation, the work order has a value. A total of zero (inspection, internal work) counts for time only.",
-          "AMC and in-contract work is never chargeable, whatever its value: FSM marks it with Work Type AMC PPM or an AMC contract reference on the work order. It counts for time utilization only.",
+          "Commercial utilization = chargeable job hours ÷ billable hours (BRD v1.4). Billable hours = expected hours × the unit type's percentage, which only management sets in Reporting settings (now 80% for mobile units, an approximation, and 100% for Data Center): they are 100% commercial utilization. Data Center (stationary) and mobile units are reported apart; filter by unit type.",
+          "Chargeable: the quotation's total is above zero or, with no quotation, the work order has a value. A total of zero (inspection, internal work) counts for time only.",
+          "AMC PPM visits and in-contract callouts (Work Type AMC PPM, or an AMC contract reference on the work order) are chargeable until the AMC expires (BRD v1.5). FSM holds no contract dates, so a visit counts as after expiry only when its work order is linked to a portal AMC contract that had ended.",
         ],
       },
       {
@@ -274,6 +275,8 @@ export function complianceHowItWorks(s?: { thresholdPercent?: number | null; pen
         lines: [
           "On each working day: a shift check-in and check-out, and a check-in and check-out for every appointment they are on. A shift with three appointments needs eight.",
           "Not required: off-shift days, rest days, public holidays, days wholly on leave, days from the leaving date, and appointments cancelled or reassigned before they started.",
+          "Also left out (BRD v1.5): appointments for test clients (a client name with the word \"test\"); past appointments that never started in FSM, listed as \"appointment not updated\" until FSM is updated; supervisors (anyone who leads a team in Workforce); and office accounts (only FSM Field Agents are counted, so people without a linked FSM account are not either).",
+          "On an appointment with several technicians the lead's check-in and check-out are enough: only the lead owes them, and anyone on the crew checking in counts for it.",
         ],
       },
       {
@@ -290,7 +293,7 @@ export function complianceHowItWorks(s?: { thresholdPercent?: number | null; pen
           "Compliance % = performed ÷ required, waived events left out of both.",
           s?.thresholdPercent === null || s?.thresholdPercent === undefined
             ? "Threshold cleared in Reporting Settings: no penalty is worked out."
-            : `Below ${s.thresholdPercent}%: every miss costs AED ${s.penaltyPerMissAed ?? 50}, capped at AED ${s.monthlyCapAed ?? 500} a month. At or above it, nothing.`,
+            : `The ${s.thresholdPercent}% threshold allows each technician required × ${Math.round((100 - s.thresholdPercent) * 10) / 10}% misses a month (to the nearest whole miss). At or above the threshold, nothing; below it, only the misses beyond that allowance cost AED ${s.penaltyPerMissAed ?? 50} each, capped at AED ${s.monthlyCapAed ?? 500} a month (BRD v1.5).`,
           "Waivers: a supervisor or coordinator removes a miss with a reason; a confirmed outage can be waived for everyone at once.",
         ],
       },

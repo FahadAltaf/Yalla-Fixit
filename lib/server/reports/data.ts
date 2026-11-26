@@ -602,8 +602,12 @@ export async function loadUtilizationAppointments(
     return out;
   };
 
+  /* BRD v1.5: AMC work is chargeable until the AMC expires; FSM has no contract dates, so only a work order linked to a portal AMC contract can be known to be past it. */
+  const contractEnds = await amcContractEndsByWorkOrder(admin);
   const appointments = rows.map<UtilizationAppointment>((a) => {
     const wo = a.workOrderId ? wos.get(a.workOrderId) : undefined;
+    const contractEnd = a.workOrderId ? contractEnds.get(a.workOrderId) : undefined;
+    const visitAt = a.actualStart ?? a.scheduledStart;
     const quotation = (wo?.estimateId ? quotations.byId.get(wo.estimateId) : undefined) ?? (a.workOrderId ? quotations.byWorkOrder.get(a.workOrderId) : undefined);
     return {
       id: a.id,
@@ -621,12 +625,37 @@ export async function loadUtilizationAppointments(
       chargeability: chargeabilityOf({
         quotationTotal: quotation ? (quotation.subTotal ?? 0) : null,
         workOrderTotal: wo?.subTotal ?? null,
-        contract: wo ? isContractWork(wo) : false,
+        contract: wo ? isContractWork(wo) : Boolean(contractEnd),
+        contractExpired: Boolean(contractEnd && visitAt && zonedDateString(visitAt) > contractEnd),
       }),
       work: workOf(a, crews.get(a.id) ?? []),
     };
   });
   return { appointments, crewsUnknown: unknown };
+}
+
+/**
+ * The end date of the portal AMC contract each FSM work order is linked to
+ * (AMC → FSM links), for "chargeable until the AMC expires" (BRD v1.5).
+ * None before the AMC tables exist.
+ */
+async function amcContractEndsByWorkOrder(admin: SupabaseClient): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  try {
+    const links = await readAllRows<Record<string, unknown>>(
+      (from, to) => admin.from("amc_fsm_links").select("fsm_work_order_id, contract:amc_contracts(end_date)").order("id").range(from, to),
+      "AMC work order links",
+    );
+    for (const l of links) {
+      const contract = (Array.isArray(l.contract) ? l.contract[0] : l.contract) as { end_date?: unknown } | null;
+      const end = str(contract?.end_date);
+      const wo = str(l.fsm_work_order_id);
+      if (wo && end) out.set(wo, end.slice(0, 10));
+    }
+  } catch (error) {
+    if (!/amc_fsm_links|amc_contracts|PGRST20|42P01|schema cache/i.test(error instanceof Error ? error.message : String(error))) throw error;
+  }
+  return out;
 }
 
 /**

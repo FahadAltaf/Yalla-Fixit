@@ -3,6 +3,7 @@ import type { PeriodMetrics, QueueMetrics, QueueSummary } from "@/lib/finance/me
 import type { ScanProposal } from "@/lib/server/finance/invoice-scan";
 import type { LiveAttachment, LiveServiceReport } from "@/lib/server/finance/fsm-live";
 import type { FsmCompletionResult } from "@/lib/server/finance/fsm-completion";
+import type { InvoiceEmailDraft } from "@/lib/server/finance/invoice-email";
 import type { QueryKind, QueryReplyAction, QuerySide } from "@/lib/server/finance/queries";
 import type { WorkOrderDetail } from "@/lib/server/finance/work-orders";
 
@@ -49,6 +50,17 @@ export const financeService = {
     executeRESTBackend<{ serviceReports: LiveServiceReport[]; files: LiveAttachment[]; appointments: number }>(`/api/finance/work-orders/${workOrderId}/attachments`, {
       params: refresh ? { refresh: "1" } : undefined,
     }),
+
+  /** BRD v1.5 Step 10: what emailing an invoice to the client would do (addresses from FSM, where it goes, what was sent). */
+  invoiceEmailDraft: (workOrderId: string, invoiceId: string) =>
+    executeRESTBackend<InvoiceEmailDraft>(`/api/finance/work-orders/${encodeURIComponent(workOrderId)}/invoices/${encodeURIComponent(invoiceId)}/email`),
+
+  /** Email the uploaded MAHER invoice to the client; the portal records who, when and to whom. */
+  sendInvoiceEmail: (workOrderId: string, invoiceId: string, input: { to: string[]; cc: string[]; message?: string | null }) =>
+    executeRESTBackend<{ id: string; delivery: "live" | "redirect"; deliveredTo: string[] }>(
+      `/api/finance/work-orders/${encodeURIComponent(workOrderId)}/invoices/${encodeURIComponent(invoiceId)}/email`,
+      { method: "POST", body: input },
+    ),
 
   /** Where a recorded MAHER invoice's file opens (a short-lived link to it). */
   invoiceFileUrl: (workOrderId: string, invoiceId: string) =>

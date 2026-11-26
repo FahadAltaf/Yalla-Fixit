@@ -24,11 +24,12 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { useDebounce } from "@/hooks/use-debounce";
 import { EVENT_KIND_LABELS, WAIVER_REASONS, type ComplianceEventKind } from "@/lib/reports/compliance";
 import { eventLabel } from "@/lib/reports/compliance-disputes";
-import { zonedTimeToUtc } from "@/lib/scheduling/org-time";
+import { formatZonedDateTime, zonedTimeToUtc } from "@/lib/scheduling/org-time";
 import type { ComplianceDisputeRow, ComplianceEventRow, ComplianceReport } from "@/lib/server/reports/compliance";
 import { exportFilename, exportTable, type ExportFormat } from "@/lib/snagging/export-table";
 import { reportsService } from "@/modules/reports/reports-service";
@@ -82,6 +83,7 @@ export function CompliancePage() {
   const [waiveOpen, setWaiveOpen] = useState<"selected" | "outage" | null>(null);
   const [disputing, setDisputing] = useState<ComplianceEventRow | null>(null);
   const [deciding, setDeciding] = useState<ComplianceDisputeRow | null>(null);
+  const [showNotUpdated, setShowNotUpdated] = useState(false);
   const { confirm, dialog } = useConfirm();
 
   const query = useMemo(
@@ -367,6 +369,61 @@ export function CompliancePage() {
       ) : (
         <StatGridSkeleton count={5} columns={5} />
       )}
+
+      {/* BRD v1.5: past appointments nobody started are not counted; coordinators see them here to update FSM. */}
+      {data?.notUpdated.length ? (
+        <p className="text-muted-foreground -mt-3 text-xs">
+          {plural(data.notUpdated.length, "past appointment")} never started in FSM (appointment not updated): not counted until FSM is updated.{" "}
+          <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => setShowNotUpdated(true)}>
+            Show {data.notUpdated.length === 1 ? "it" : "them"}
+          </Button>
+        </p>
+      ) : null}
+      <Dialog open={showNotUpdated} onOpenChange={setShowNotUpdated}>
+        <ActionDialogContent busy={false} className="flex max-h-[calc(100dvh-2rem)] flex-col sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle>Appointments not updated</DialogTitle>
+            <DialogDescription>
+              Past appointments still New, Scheduled or Dispatched in Zoho FSM, with no actual start. They are left out of compliance until they are updated in FSM:
+              started and completed, rescheduled or cancelled.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Appointment</TableHead>
+                  <TableHead>Client</TableHead>
+                  <TableHead>Scheduled</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Technicians</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(data?.notUpdated ?? []).map((a) => (
+                  <TableRow key={a.id}>
+                    <TableCell className="font-medium">
+                      {a.number ?? a.id}
+                      {a.workOrderNumber ? <span className="text-muted-foreground block text-xs">{a.workOrderNumber}</span> : null}
+                    </TableCell>
+                    <TableCell>{a.clientName ?? "—"}</TableCell>
+                    <TableCell className="tabular-nums">{a.scheduledStart ? formatZonedDateTime(a.scheduledStart) : "—"}</TableCell>
+                    <TableCell>{a.status ?? "—"}</TableCell>
+                    <TableCell className="max-w-56 truncate" title={a.technicians.join(", ")}>
+                      {a.technicians.join(", ") || "—"}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowNotUpdated(false)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </ActionDialogContent>
+      </Dialog>
 
       {/* The views sit right above the table they switch (28 Oct). */}
       <PillTabs<View>

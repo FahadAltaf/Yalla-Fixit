@@ -12,9 +12,10 @@ import { z } from "zod";
  * confirmed with Sharon". They are shown as suggestions on the page until
  * someone saves a value.
  *
- *   compliance.thresholdPercent  90 % (decided 29 Oct, D-09; the BRD
- *     gave 90 % or 97 %). It may still be cleared, and then no penalty
- *     is worked out.
+ *   compliance.thresholdPercent  97 % (BRD v1.5, 24 Nov: confirmed with
+ *     the allowance-based penalty; 90 % was the 29 Oct interim, D-09). A
+ *     value saved on the page wins over this. It may still be cleared,
+ *     and then no penalty is worked out.
  */
 
 const HH_MM = /^([01]\d|2[0-3]):[0-5]\d$/;
@@ -90,6 +91,17 @@ export const reportingSettingsSchema = z.object({
         stored value still parses. */
     appointmentActualsAsCheckIns: z.boolean(),
   }),
+  /**
+   * BRD v1.4/v1.5: billable hours = expected hours × this percentage, per
+   * unit type; they are 100 % commercial utilization. Only management may
+   * change them (Reporting settings Approve), not the team.
+   */
+  utilization: z.object({
+    /** Mobile units, the maintenance technicians: 80 % for now, an approximation. */
+    billablePercentMobile: z.number().min(1).max(100),
+    /** Stationary units, the Data Center technicians: 100 %. */
+    billablePercentDataCentre: z.number().min(1).max(100),
+  }),
   capacity: z.object({
     horizonDays: z.number().int().min(1).max(90),
     /** A day is spare when booked hours are below this share of available
@@ -134,6 +146,7 @@ export const reportingSettingsOverridesSchema = z
       .strict(),
     attendance: shape.attendance.partial().strict(),
     compliance: shape.compliance.partial().strict(),
+    utilization: shape.utilization.partial().strict(),
     capacity: shape.capacity.partial().strict(),
     exceptions: shape.exceptions.partial().strict(),
     fsmLinks: shape.fsmLinks.partial().strict(),
@@ -161,7 +174,7 @@ export function getReportingSettingsDefaults(): ReportingSettings {
       checkInAlertRecipientUserIds: [],
     },
     compliance: {
-      thresholdPercent: 90,
+      thresholdPercent: 97,
       penaltyPerMissAed: 50,
       monthlyCapAed: 500,
       disputeCutoffDay: 25,
@@ -170,6 +183,7 @@ export function getReportingSettingsDefaults(): ReportingSettings {
       belowThresholdRecipientUserIds: [],
       appointmentActualsAsCheckIns: false,
     },
+    utilization: { billablePercentMobile: 80, billablePercentDataCentre: 100 },
     capacity: { horizonDays: 14, spareBelowPercent: 50, alertRecipientUserIds: [] },
     exceptions: { completedWithoutFlagAfterDays: 3 },
     fsmLinks: { checkInLog: null, appointmentsByStatus: null, workOrdersByStatus: null, revenue: null, ratings: null },

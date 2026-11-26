@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { breakdownOf, complianceMonthPhase, type EventOutcome, type TechnicianCompliance } from "@/lib/reports/compliance";
+import { allowanceOf, breakdownOf, complianceMonthPhase, type EventOutcome, type TechnicianCompliance } from "@/lib/reports/compliance";
 import {
   COMPLIANCE_ALERT_EVENTS,
   disputeRefusal,
@@ -34,6 +34,9 @@ const compliance = (events: EventOutcome[], threshold: number | null = 90, tech 
   const waived = events.filter((e) => e.state === "waived").length;
   const required = performed + missed;
   const below = threshold === null ? null : required > 0 && performed * 100 < threshold * required;
+  /* BRD v1.5: only the misses beyond the allowance are charged. */
+  const allowance = threshold === null ? null : allowanceOf(required, threshold);
+  const chargeable = below === null ? null : below ? Math.max(0, missed - (allowance ?? 0)) : 0;
   return {
     technicianFsmId: tech,
     required,
@@ -42,8 +45,10 @@ const compliance = (events: EventOutcome[], threshold: number | null = 90, tech 
     waived,
     compliancePercent: required ? (performed / required) * 100 : null,
     belowThreshold: below,
-    penaltyBeforeCapAed: below === null ? null : below ? missed * 50 : 0,
-    penaltyPayableAed: below === null ? null : below ? Math.min(missed * 50, 500) : 0,
+    allowance,
+    chargeableMisses: chargeable,
+    penaltyBeforeCapAed: chargeable === null ? null : chargeable * 50,
+    penaltyPayableAed: chargeable === null ? null : Math.min(chargeable * 50, 500),
     settings: { thresholdPercent: threshold, penaltyPerMissAed: 50, monthlyCapAed: 500 },
     events,
   };

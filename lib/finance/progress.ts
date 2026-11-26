@@ -249,16 +249,20 @@ export function workOrderCompletion(lines: Array<{ billable: boolean; completion
 }
 
 /**
- * Why a completion entry is refused, or null. Complete is 100 %, Partially
- * complete above 0 and below it, either to invoice or revenue only; the whole work order
- * is only ever marked Complete, and only once every billable line is (after
- * this request's own lines are applied).
+ * Why a completion entry is refused, or null. Complete is 100 %, to
+ * invoice (BRD v1.5: revenue only is allowed only below 100 %); Partially
+ * complete above 0 and below it, either to invoice or revenue only; the
+ * whole work order is only ever marked Complete, and only once every
+ * billable line is (after this request's own lines are applied).
  */
 export function completionRefusal(
   entries: Array<{ line: string | null; percent: number; purpose: ProgressPurpose }>,
   lines: Array<{ id: string; name: string | null; billable: boolean; completion: Completion }>,
 ): string | null {
   for (const e of entries) {
+    if (e.percent >= 100 && e.purpose === "revenue_only") {
+      return "A line 100% complete is ready to invoice: revenue only is for work below 100%.";
+    }
     if (e.line === null) {
       if (e.percent < 100) return "Partially complete is entered line by line, not for the whole work order.";
       continue;

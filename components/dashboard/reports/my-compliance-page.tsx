@@ -15,6 +15,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { allowanceFigures } from "@/lib/reports/compliance";
 import { dayName, eventLabel, monthName } from "@/lib/reports/compliance-disputes";
 import { useViewerZone, viewerDateTime } from "@/lib/reports/viewer-time";
 import type { MyCompliance, MyComplianceEvent } from "@/lib/server/reports/disputes";
@@ -119,11 +120,14 @@ export function MyCompliancePage() {
             <StatCard
               label="Penalty"
               value={linked.settings.thresholdPercent === null ? "—" : aed(linked.figures.belowThreshold ? linked.figures.penaltyPayableAed : 0)}
-              headline={
-                linked.figures.belowThreshold
-                  ? `AED ${linked.settings.penaltyPerMissAed} a miss, capped at AED ${linked.settings.monthlyCapAed}`
-                  : `None at or above ${linked.settings.thresholdPercent ?? "—"}%`
-              }
+              headline={(() => {
+                /* BRD v1.5: only the misses beyond the month's allowance are charged. */
+                const { allowance, chargeableMisses } = allowanceFigures(linked.figures, linked.settings.thresholdPercent);
+                if (allowance === null) return "No threshold set";
+                return linked.figures.belowThreshold
+                  ? `${chargeableMisses ?? 0} ${chargeableMisses === 1 ? "miss" : "misses"} beyond the ${allowance} allowed, AED ${linked.settings.penaltyPerMissAed} each, capped at AED ${linked.settings.monthlyCapAed}`
+                  : `None at or above ${linked.settings.thresholdPercent}% (${allowance} misses allowed this month)`;
+              })()}
               caption="Decided by HR; not deducted by the portal"
             />
           </StatCardGrid>

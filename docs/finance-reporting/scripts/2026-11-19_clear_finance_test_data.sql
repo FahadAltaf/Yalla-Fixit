@@ -17,6 +17,9 @@
 -- (Storage > finance-evidence > select all > Delete). Nothing links to them
 -- once these rows are gone.
 --
+-- 26 Nov: also finance.invoice_emails (invoices emailed to clients, migration 20261126100000), when it exists:
+-- it points at finance.line_invoices, so it must be emptied with it. The script checks for it.
+--
 -- One transaction: if any step fails, nothing changes.
 
 -- 0. Before: how many rows each table holds now (run on its own first, to see what will go).
@@ -47,6 +50,13 @@ ALTER TABLE finance.line_invoice_allocations DISABLE TRIGGER USER;
 ALTER TABLE finance.line_events              DISABLE TRIGGER USER;
 ALTER TABLE finance.progress_entries         DISABLE TRIGGER USER;
 ALTER TABLE finance.query_comments           DISABLE TRIGGER USER;
+DO $$ BEGIN
+  IF to_regclass('finance.invoice_emails') IS NOT NULL THEN
+    ALTER TABLE finance.invoice_emails DISABLE TRIGGER USER;
+    TRUNCATE TABLE finance.invoice_emails;
+    ALTER TABLE finance.invoice_emails ENABLE TRIGGER USER;
+  END IF;
+END $$;
 
 -- 2. Empty all fourteen together (their foreign keys point only at each other; no CASCADE).
 TRUNCATE TABLE
