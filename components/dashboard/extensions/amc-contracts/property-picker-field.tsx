@@ -1,5 +1,6 @@
 "use client";
 
+import { amcFresh } from "@/lib/amc/http-cache";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
@@ -162,7 +163,8 @@ export function PropertyPickerField({
           onSaved={(id) => {
             setDialog(null);
             setListKey((k) => k + 1);
-            void pick(id);
+            /* Read past the AMC cache: the card from before the edit still said the built-up area was missing (26 Nov 2026). */
+            void amcFresh(() => pick(id));
           }}
         />
       ) : null}

@@ -590,27 +590,8 @@ export function AccessSection({ visit: v, canEdit, working, setWorking, changed 
           two tall empty ones; otherwise each part, an empty one as one line.
         */}
         {v.accessRules.length === 0 && passList.length === 0 ? (
-          <CompactEmpty
-            icon={<ShieldCheck />}
-            title="Nothing needed for access"
-            description="This property asks for no pass or permit, and no pass is on file."
-            action={
-              canEdit ? (
-                <div className="flex flex-wrap gap-2">
-                  {v.propertyId ? (
-                    <Button size="sm" variant="outline" disabled={working !== null} onClick={() => openRule(null)}>
-                      <KeyRound className="size-4" />
-                      Add rule
-                    </Button>
-                  ) : null}
-                  <Button size="sm" variant="outline" disabled={working !== null} onClick={startAdd}>
-                    <Plus className="size-4" />
-                    Add pass
-                  </Button>
-                </div>
-              ) : null
-            }
-          />
+          /* The buttons are in the section's header only (26 Nov 2026: they showed twice). */
+          <CompactEmpty icon={<ShieldCheck />} title="Nothing needed for access" description="This property asks for no pass or permit, and no pass is on file." />
         ) : (
         <div className="grid gap-6">
           <div className="grid gap-2">

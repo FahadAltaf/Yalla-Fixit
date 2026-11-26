@@ -23,7 +23,7 @@ const COPY: Record<Purpose, { title: string; description: string }> = {
   },
   access_upload: {
     title: "Ask the client for the pass",
-    description: "The client opens it without a login and uploads the gate pass or work permit. The file is kept on this visit and you are told, to check it and mark the access.",
+    description: "The client opens it without a login and uploads the gate pass or work permit. The file is kept on this visit (or site visit) and you are told, to check it and mark the access.",
   },
 };
 
@@ -32,7 +32,30 @@ const COPY: Record<Purpose, { title: string; description: string }> = {
  * DEV-494 pass upload): pick how it is sent, make the link, then copy the
  * message or open WhatsApp with it.
  */
-export function ClientLinkButton({ visitId, purpose, label, icon, disabled, variant = "outline" }: { visitId: string; purpose: Purpose; label: string; icon: ReactNode; disabled?: boolean; variant?: "outline" | "default" }) {
+export function ClientLinkButton({
+  visitId,
+  siteVisitId,
+  purpose,
+  label,
+  icon,
+  disabled,
+  variant = "outline",
+  size,
+}: {
+  /** A planned visit's link. */
+  visitId?: string;
+  /** Or a site visit's (26 Nov 2026: the pass upload link on a site visit too). */
+  siteVisitId?: string;
+  purpose: Purpose;
+  label: string;
+  icon: ReactNode;
+  disabled?: boolean;
+  variant?: "outline" | "default";
+  size?: "sm";
+}) {
+  const endpoint = siteVisitId
+    ? `/api/amc-contracts/assessments/${encodeURIComponent(siteVisitId)}/client-link`
+    : `/api/amc-visits/${encodeURIComponent(visitId ?? "")}/client-link`;
   const [open, setOpen] = useState(false);
   const [channel, setChannel] = useState<Channel>("whatsapp");
   const [busy, setBusy] = useState(false);
@@ -41,18 +64,18 @@ export function ClientLinkButton({ visitId, purpose, label, icon, disabled, vari
   const make = async () => {
     setBusy(true);
     try {
-      setResult(await amcRequest<LinkResult>(`/api/amc-visits/${encodeURIComponent(visitId)}/client-link`, { method: "POST", body: JSON.stringify({ purpose, channel }) }));
+      setResult(await amcRequest<LinkResult>(endpoint, { method: "POST", body: JSON.stringify({ purpose, channel }) }));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Could not make the link.");
     } finally {
       setBusy(false);
     }
   };
-  const copy = async () => {
+  const copy = async (what: "message" | "link") => {
     if (!result) return;
     try {
-      await navigator.clipboard.writeText(result.message);
-      toast.success("Message copied");
+      await navigator.clipboard.writeText(what === "link" ? result.url : result.message);
+      toast.success(what === "link" ? "Link copied" : "Message copied");
     } catch {
       toast.error("Could not copy: select the text and copy it.");
     }
@@ -60,7 +83,7 @@ export function ClientLinkButton({ visitId, purpose, label, icon, disabled, vari
 
   return (
     <>
-      <Button variant={variant} disabled={disabled} onClick={() => (setResult(null), setOpen(true))}>
+      <Button variant={variant} size={size} disabled={disabled} onClick={() => (setResult(null), setOpen(true))}>
         {icon}
         {label}
       </Button>
@@ -74,6 +97,10 @@ export function ClientLinkButton({ visitId, purpose, label, icon, disabled, vari
             <div className="grid gap-2 py-1">
               <Label htmlFor={`client-link-${purpose}`}>Message with the link</Label>
               <Textarea id={`client-link-${purpose}`} readOnly rows={5} value={result.message} />
+              <Label htmlFor={`client-link-url-${purpose}`} className="pt-2">
+                The link alone
+              </Label>
+              <input id={`client-link-url-${purpose}`} readOnly value={result.url} className="border-input bg-muted/40 h-9 w-full rounded-md border px-3 font-mono text-xs" onFocus={(e) => e.currentTarget.select()} />
               <p className="text-muted-foreground text-xs">Works until {new Date(result.expiresAt).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })}.</p>
             </div>
           ) : (
@@ -94,9 +121,13 @@ export function ClientLinkButton({ visitId, purpose, label, icon, disabled, vari
           <DialogFooter>
             {result ? (
               <>
-                <Button variant="outline" onClick={() => void copy()}>
+                <Button variant="outline" onClick={() => void copy("message")}>
                   <Copy className="size-4" />
                   Copy message
+                </Button>
+                <Button variant="outline" onClick={() => void copy("link")}>
+                  <Link2 className="size-4" />
+                  Copy link
                 </Button>
                 {result.whatsapp ? (
                   <Button asChild>

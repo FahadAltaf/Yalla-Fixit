@@ -6,7 +6,8 @@ import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { uploadDocument } from "@/lib/server/amc/client-profile";
 import { ContractError, isMissingTable } from "@/lib/server/amc/contracts";
 import { notifyUsers } from "@/lib/server/amc/notifications";
-import { performVisitAction, visitDetail } from "@/lib/server/amc/visits";
+import { getAssessment } from "@/lib/server/amc/business";
+import { performVisitAction, siteVisitAccess, visitDetail } from "@/lib/server/amc/visits";
 import { hashLinkToken, linkTokenExpiry, mintLinkToken } from "@/lib/server/link-token";
 
 /*
@@ -14,6 +15,10 @@ import { hashLinkToken, linkTokenExpiry, mintLinkToken } from "@/lib/server/link
     visit_confirmation (DEV-507): Confirm or Reschedule, stored on the visit;
     access_upload (DEV-494): the gate pass or work permit, kept on the visit.
   The coordinator is told either way. Needs migration 20261122100000.
+
+  26 Nov 2026: a site visit takes the pass upload link too (entity_type
+  'assessment', migration 20261126110000); the file is kept on the site
+  visit and whoever booked it (and the enquiry's owner) is told.
 */
 
 type Admin = SupabaseClient;
@@ -71,6 +76,66 @@ export async function createVisitClientLink(admin: Admin, input: { visitId: stri
   return { url, expiresAt, message };
 }
 
+const NOT_READY_SITE_VISIT = "Pass links for site visits need the database update 20261126110000 first.";
+
+/** The site visit as its pass link shows it: whose it is, where, when, and who to tell. */
+async function siteVisitFacts(admin: Admin, assessmentId: string) {
+  const a = await getAssessment(admin, assessmentId);
+  const day = a.scheduledAt ? todayInDubai(new Date(a.scheduledAt)) : (a.assessedOn ?? todayInDubai());
+  const time = a.scheduledAt ? new Date(a.scheduledAt).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Dubai" }) : null;
+  let enquiryOwner: string | null = null;
+  if (a.enquiryId) {
+    const { data } = await admin.from("amc_enquiries").select("owner_id").eq("id", a.enquiryId).maybeSingle<Row>();
+    enquiryOwner = str(data?.owner_id);
+  }
+  return {
+    a,
+    day,
+    time,
+    customerName: a.customer?.name ?? "Client",
+    propertyLabel: a.property?.label ?? "the property",
+    /* Whoever booked it and the enquiry's owner hear about an upload. */
+    tell: [...new Set([a.createdBy, enquiryOwner].filter((v): v is string => Boolean(v)))],
+  };
+}
+
+/** DEV-494 on a site visit (26 Nov 2026): the pass upload link (an earlier one stops working). */
+export async function createSiteVisitClientLink(admin: Admin, input: { assessmentId: string; channel: ClientLinkChannel }, actor: Actor) {
+  const f = await siteVisitFacts(admin, input.assessmentId);
+  if (f.a.status === "completed") throw new ContractError(`Site visit ${f.a.assessmentNumber} is already completed.`, 409);
+  const now = new Date().toISOString();
+  const { error: revokeError } = await admin.from(TABLE).update({ revoked_at: now }).eq("entity_type", "assessment").eq("entity_id", input.assessmentId).eq("purpose", "access_upload").is("revoked_at", null);
+  if (revokeError) throw isMissingTable(revokeError) ? new ContractError(NOT_READY, 503) : new ContractError(revokeError.message, 500);
+  const token = mintLinkToken();
+  const expiresAt = linkTokenExpiry(TTL_DAYS.access_upload);
+  const { error } = await admin.from(TABLE).insert({
+    purpose: "access_upload",
+    entity_type: "assessment",
+    entity_id: input.assessmentId,
+    channel: input.channel,
+    token_hash: token.hash,
+    token_hint: token.hint,
+    expires_at: expiresAt,
+    created_by: actor.id,
+  });
+  if (error) {
+    if (isMissingTable(error)) throw new ContractError(NOT_READY, 503);
+    if (error.code === "23514") throw new ContractError(NOT_READY_SITE_VISIT, 503);
+    throw new ContractError(error.message, 500);
+  }
+  await recordAmcAudit(admin, {
+    entityType: "assessment",
+    entityId: input.assessmentId,
+    eventType: "site_visit_access_link_created",
+    actorId: actor.id,
+    actorLabel: actor.label,
+    payload: { channel: input.channel, hint: token.hint, expiresAt },
+  });
+  const url = `${appUrl()}/amc-visit/${token.raw}`;
+  const message = `Dear ${f.customerName}, for our site visit at ${f.propertyLabel} on ${fmtDay(f.day)}${f.time ? ` at ${f.time}` : ""} we need the gate pass or work permit. Please upload it here: ${url}`;
+  return { url, expiresAt, message, phone: f.a.customer?.phone ?? null };
+}
+
 /** The link behind a token, or why it does not work. */
 export async function resolveClientLink(admin: Admin, raw: string): Promise<{ link: Row | null; problem: "not_found" | "expired" | "revoked" | "not_ready" | null }> {
   if (!/^[A-Za-z0-9_-]{20,100}$/.test(raw)) return { link: null, problem: "not_found" };
@@ -84,10 +149,33 @@ export async function resolveClientLink(admin: Admin, raw: string): Promise<{ li
 
 /** What the client sees: only the visit's own facts, nothing internal. */
 export async function clientLinkView(admin: Admin, link: Row, config: AmcConfig) {
+  if (link.entity_type === "assessment") {
+    const f = await siteVisitFacts(admin, String(link.entity_id));
+    const access = await siteVisitAccess(admin, { id: f.a.id, propertyId: f.a.property?.id ?? null, day: f.day });
+    return {
+      purpose: "access_upload" as ClientLinkPurpose,
+      reference: `Site visit ${f.a.assessmentNumber}`,
+      customerName: f.customerName,
+      propertyLabel: f.propertyLabel,
+      contractNumber: f.a.assessmentNumber,
+      visitNo: 0,
+      day: f.day,
+      time: f.time,
+      /* A site visit has a set time, not a service window: none is shown. */
+      windowStart: "",
+      windowEnd: "",
+      services: ["Site visit"],
+      confirmed: false,
+      status: f.a.status,
+      passesNeeded: access.accessRules.filter((r) => /pass|permit|clearance/i.test(String(r.accessType))).map((r) => `${String(r.accessType).replace(/_/g, " ")}${r.issuer ? ` (${r.issuer})` : ""}`),
+      lastResponse: (link.response ?? null) as Row | null,
+    };
+  }
   const d = await visitDetail(admin, String(link.entity_id), config, new Date(), false);
   const passRules = d.accessRules.filter((r) => /pass|permit|clearance/i.test(String(r.accessType)));
   return {
     purpose: String(link.purpose) as ClientLinkPurpose,
+    reference: `AMC ${d.contractNumber} · Visit ${d.visitNo}`,
     customerName: d.customerName,
     propertyLabel: d.propertyLabel,
     contractNumber: d.contractNumber,
@@ -105,6 +193,21 @@ export async function clientLinkView(admin: Admin, link: Row, config: AmcConfig)
 }
 
 async function tellCoordinator(admin: Admin, link: Row, config: AmcConfig, title: string, body: string, kind: string) {
+  if (link.entity_type === "assessment") {
+    const f = await siteVisitFacts(admin, String(link.entity_id));
+    if (!f.tell.length) return;
+    await notifyUsers(admin, {
+      event: kind,
+      userIds: f.tell,
+      title: `${title}: site visit ${f.a.assessmentNumber}`,
+      body: `${f.customerName}: ${body}`,
+      link: `/extensions/amc-contracts/assessments/${f.a.id}?tab=access`,
+      entityType: "assessment",
+      entityId: f.a.id,
+      dedupeKey: `${kind}:${String(link.id)}:${Date.now()}`,
+    });
+    return;
+  }
   const d = await visitDetail(admin, String(link.entity_id), config, new Date(), false);
   if (!d.ownerId) return;
   await notifyUsers(admin, {
@@ -132,7 +235,7 @@ export async function answerVisitConfirmation(
   input: { answer: "confirm" | "reschedule"; name: string; preferredDate?: string | null; note?: string | null },
   config: AmcConfig,
 ) {
-  if (link.purpose !== "visit_confirmation") throw new ContractError("This link is not for confirming a visit.", 400);
+  if (link.purpose !== "visit_confirmation" || link.entity_type === "assessment") throw new ContractError("This link is not for confirming a visit.", 400);
   const name = input.name.trim();
   const note =
     input.answer === "confirm"
@@ -165,6 +268,28 @@ export async function answerVisitConfirmation(
 /** DEV-494: a pass or permit from the client, kept on the visit; the coordinator checks it and marks access. */
 export async function uploadVisitPass(admin: Admin, link: Row, file: { bytes: Uint8Array; fileName: string }, input: { name: string; note?: string | null }, config: AmcConfig) {
   if (link.purpose !== "access_upload") throw new ContractError("This link is not for uploading a pass.", 400);
+  if (link.entity_type === "assessment") {
+    const f = await siteVisitFacts(admin, String(link.entity_id));
+    const who = input.name.trim();
+    const sdoc = await uploadDocument(
+      admin,
+      {
+        level: "site_visit",
+        entityId: f.a.id,
+        customerId: f.a.customer?.id ?? null,
+        category: "Gate pass",
+        title: `Pass from ${who}`.slice(0, 200),
+        notes: input.note?.trim() ? `Uploaded by the client on the link: ${input.note.trim()}`.slice(0, 1000) : "Uploaded by the client on the link.",
+      },
+      file,
+      { id: null, label: `${who} (client)` },
+    );
+    const before = (link.response ?? {}) as Row;
+    const at = new Date().toISOString();
+    await admin.from(TABLE).update({ last_used_at: at, response: { uploads: Number(before.uploads ?? 0) + 1, name: who, at } }).eq("id", String(link.id));
+    await tellCoordinator(admin, link, config, "Client uploaded a pass", `uploaded "${file.fileName}". Check it and mark the access approved.`, "visit_pass_uploaded");
+    return { ok: true as const, documentId: sdoc.id };
+  }
   const d = await visitDetail(admin, String(link.entity_id), config, new Date(), false);
   const { data: c } = await admin.from("amc_contracts").select("customer_id").eq("id", d.contractId).maybeSingle<Row>();
   const name = input.name.trim();
