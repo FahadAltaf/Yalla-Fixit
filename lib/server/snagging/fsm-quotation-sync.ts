@@ -152,6 +152,9 @@ async function ensureCompany(
       ? String(found.json.data[0].id)
       : null;
   if (!id) {
+    /* FSM refuses a company without a Maher ID (27 Nov 2026): the client's, read on its own so a database without the column still works. */
+    const { data: maherRow } = await admin.from("snagging_clients").select("maher_id").eq("id", String(client.id)).maybeSingle();
+    const maherId = String((maherRow as Row | null)?.maher_id ?? "").trim();
     const created = await fsmFetch(
       token,
       "/Companies",
@@ -164,6 +167,7 @@ async function ensureCompany(
               Company_Name: name,
               ...(client.phone ? { Phone: String(client.phone) } : {}),
               ...(client.email ? { Email: String(client.email) } : {}),
+              ...(maherId ? { Maher_Id__C: maherId } : {}),
             },
           ],
         }),

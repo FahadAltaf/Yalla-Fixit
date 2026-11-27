@@ -66,7 +66,9 @@ function describeZohoError(json: any, status: number, fallback: string): string 
           : (recordModule ?? "the record");
     /* The Maher ID is optional in the portal; when FSM's settings ask for it, say what to do (27 Nov 2026). */
     if (missing === "Maher_Id__C") {
-      return `Zoho FSM needs the client's Maher ID (on ${what}). Add it with Edit client, then try again`;
+      return recordModule === "Companies"
+        ? "A Maher ID is required for the company: Zoho FSM does not create a company without it. Add the client's Maher ID with Edit client, then try again"
+        : `Zoho FSM needs the client's Maher ID (on ${what}). Add it with Edit client, then try again`;
     }
     return `Zoho FSM requires the field ${missing ?? "(not named)"} on ${what}, which the portal did not send`;
   }
@@ -269,8 +271,10 @@ export async function ensureCompany(
   token: string,
   name: string,
   /* A new company needs a Phone in this FSM account; the client's own
-     number and email are what the portal has for it. */
-  contact: { phone?: string | null; email?: string | null } = {},
+     number and email are what the portal has for it. And the Maher ID:
+     FSM refuses a company without Maher_Id__C (27 Nov 2026, twice on live),
+     though a contact may have none; the client's own is sent when known. */
+  contact: { phone?: string | null; email?: string | null; maherId?: string | null } = {},
 ): Promise<string> {
   const found = await fsmFetch(
     token,
@@ -289,6 +293,7 @@ export async function ensureCompany(
             Company_Name: name,
             ...(contact.phone ? { Phone: contact.phone } : {}),
             ...(contact.email ? { Email: contact.email } : {}),
+            ...(contact.maherId?.trim() ? { Maher_Id__C: contact.maherId.trim() } : {}),
           },
         ],
       }),

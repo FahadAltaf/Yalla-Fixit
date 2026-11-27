@@ -83,7 +83,37 @@ test("DEV-504: a client without a Maher ID is sent to Zoho FSM, whose settings d
 
   const { fsmMessage } = await import("@/lib/server/zoho/fsm-contacts");
   const refusal = { code: "INVALID_DATA", details: { Companies: [{ code: "MANDATORY_NOT_FOUND", details: { api_name: "Maher_Id__C" } }] } };
-  assert.equal(fsmMessage(refusal, 400), "Zoho FSM needs the client's Maher ID (on a company). Add it with Edit client, then try again");
+  assert.equal(fsmMessage(refusal, 400), "A Maher ID is required for the company: Zoho FSM does not create a company without it. Add the client's Maher ID with Edit client, then try again");
   const other = { code: "INVALID_DATA", details: { Contacts: [{ code: "MANDATORY_NOT_FOUND", details: { api_name: "Tax_Name" } }] } };
   assert.match(fsmMessage(other, 400), /requires the field Tax_Name on a contact/);
+});
+
+test("a new FSM company carries the client's Maher ID, which FSM requires on a company (27 Nov 2026)", async () => {
+  const { ensureCompany } = await import("@/lib/server/zoho/fsm-contacts");
+  const before = { fetch: globalThis.fetch, fsm: process.env.ZOHO_FSM };
+  process.env.ZOHO_FSM = "on";
+  const posted: Array<Record<string, unknown>> = [];
+  /* A stand-in for FSM: nothing found by name, the create answered with an id. Nothing leaves the machine. */
+  globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    if ((init?.method ?? "GET") === "POST") {
+      posted.push(JSON.parse(String(init?.body)).data[0]);
+      return new Response(JSON.stringify({ data: { Companies: [{ id: "co-1" }] } }), { status: 201, headers: { "content-type": "application/json" } });
+    }
+    return new Response(JSON.stringify({ data: [] }), { status: 200, headers: { "content-type": "application/json" } });
+  }) as typeof fetch;
+  try {
+    await ensureCompany("t", "Test Company", { phone: "+971500000000", email: "a@b.ae", maherId: " C0354059 " }).catch(() => undefined);
+    await ensureCompany("t", "Other Company", { phone: "+971500000000", email: "a@b.ae", maherId: null }).catch(() => undefined);
+  } finally {
+    globalThis.fetch = before.fetch;
+    if (before.fsm === undefined) delete process.env.ZOHO_FSM;
+    else process.env.ZOHO_FSM = before.fsm;
+  }
+  assert.equal(posted.length, 2);
+  assert.equal(posted[0].Maher_Id__C, "C0354059");
+  assert.equal("Maher_Id__C" in posted[1], false, "none known: none sent");
+
+  const { readFileSync } = await import("node:fs");
+  const clients = readFileSync("lib/server/snagging/fsm-clients.ts", "utf8");
+  assert.equal((clients.match(/ensureCompany\([^)]*maherId/g) ?? []).length, 3, "every company the Clients module makes sends it");
 });

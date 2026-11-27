@@ -279,7 +279,7 @@ export async function createClientWithFsm(
   let companyId: string | null = null;
   try {
     companyId = input.company
-      ? await ensureCompany(token, input.company, { phone: input.phone, email: input.email })
+      ? await ensureCompany(token, input.company, { phone: input.phone, email: input.email, maherId: input.maherId })
       : null;
     contactId = await createContact(token, {
       name: input.name,
@@ -389,7 +389,7 @@ export async function putClientInFsm(admin: Admin, clientId: string, actorId: st
   let contactId: string;
   let companyId: string | null = null;
   try {
-    companyId = company ? await ensureCompany(token, company, { phone, email }) : null;
+    companyId = company ? await ensureCompany(token, company, { phone, email, maherId: maherId || null }) : null;
     contactId = await createContact(token, { name, email, mobile: phone, companyId, maherId: maherId || null });
   } catch (err) {
     await log(admin, {
@@ -443,7 +443,7 @@ export async function updateClientWithFsm(
       fields.company === undefined
         ? undefined
         : fields.company
-          ? await ensureCompany(token, fields.company, { phone: fields.phone ?? local?.phone, email: fields.email ?? local?.email })
+          ? await ensureCompany(token, fields.company, { phone: fields.phone ?? local?.phone, email: fields.email ?? local?.email, maherId: fields.maherId ?? local?.maher_id })
           : null;
     await updateContact(token, contactId, {
       name: fields.name,

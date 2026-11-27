@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { UserPlus } from "lucide-react";
 
+import { CompanyMaherNotice } from "@/components/dashboard/clients/company-maher-notice";
+
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -264,6 +266,8 @@ function NewClientForm({
             maxLength={200}
           />
         </Field>
+        {/* Zoho FSM creates a company only with a Maher ID (27 Nov 2026). */}
+        {requireEmail ? <CompanyMaherNotice company={value.company} maherId={value.maherId} /> : null}
       </fieldset>
       <DialogFooter>
         <Button variant="outline" onClick={onClose} disabled={saving}>

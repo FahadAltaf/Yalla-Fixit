@@ -445,14 +445,22 @@ export function PropertyCustomerStep({
                     value={field.value}
                     placeholder="Select start date"
                     onChange={(nextStartDate) => {
+                      const previousStartDate = field.value;
                       field.onChange(nextStartDate);
 
                       const currentEndDate = form.getValues("endDate");
                       /*
                           The end date follows the start: set when there is
                           none, or when it is before the start or would make
-                          the term shorter than the minimum.
+                          the term shorter than the minimum. And when it is
+                          still the one the old start date gave (27 Nov
+                          2026: moving the start from 27 Nov to 1 Dec left
+                          it on 26 Nov 2027); an end date chosen by hand
+                          stays.
                         */
+                      const stillDefault =
+                        Boolean(previousStartDate) &&
+                        currentEndDate === endDateFor(previousStartDate, minimumTermMonths);
                       const currentTerm =
                         nextStartDate && currentEndDate
                           ? proposalTermMonths(nextStartDate, currentEndDate)
@@ -460,6 +468,7 @@ export function PropertyCustomerStep({
                       if (
                         nextStartDate &&
                         (!currentEndDate ||
+                          stillDefault ||
                           isEndDateBeforeStartDate(
                             nextStartDate,
                             currentEndDate,

@@ -289,6 +289,26 @@ export async function siteVisitAccess(admin: Admin, siteVisit: { id: string; pro
 
 type AccessWrite = { status: AccessStatus; validUntil: string | null; documentId: string | null; note?: string | null };
 
+/**
+ * What a visit goes back to once its access is settled: confirmed by the
+ * client, or Scheduled when it has a slot or its contract's PPM schedule is
+ * confirmed (that is what Scheduled means: confirmPpmSchedule), else Not
+ * scheduled. 27 Nov 2026: approving a client's pass turned a planned visit
+ * of a confirmed schedule into Not scheduled, as it had no time slot yet.
+ */
+async function statusOnRelease(admin: Admin, v: Row): Promise<string> {
+  if (v.client_confirmation === "confirmed") return "confirmed";
+  if (v.scheduled_start) return "scheduled";
+  let contractId = str(v.contract_id);
+  if (!contractId) {
+    const { data } = await admin.from("amc_visits").select("contract_id").eq("id", String(v.id)).maybeSingle<Row>();
+    contractId = str(data?.contract_id);
+  }
+  if (!contractId) return "not_scheduled";
+  const { data: c } = await admin.from("amc_contracts").select("ppm_confirmed_at").eq("id", contractId).maybeSingle<Row>();
+  return c?.ppm_confirmed_at ? "scheduled" : "not_scheduled";
+}
+
 /** A visit's access, with what follows: the visit waits for access or is released, and the access to-do closes. */
 async function writeVisitAccess(admin: Admin, v: Row, input: AccessWrite, nowIso: string) {
   const visitId = String(v.id);
@@ -299,7 +319,7 @@ async function writeVisitAccess(admin: Admin, v: Row, input: AccessWrite, nowIso
         ? { status: "pending_access" }
         : {}
       : v.status === "pending_access"
-        ? { status: v.client_confirmation === "confirmed" ? "confirmed" : v.scheduled_start ? "scheduled" : "not_scheduled" }
+        ? { status: await statusOnRelease(admin, v) }
         : {};
   const { error } = await admin
     .from("amc_visits")
