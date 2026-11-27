@@ -377,15 +377,12 @@ export async function putClientInFsm(admin: Admin, clientId: string, actorId: st
     return { state: "missing_details", message: "Zoho FSM needs the client's email to create them. Add it with Edit client, then create them in FSM from the contract." };
   }
   /*
-    27 Nov 2026 (AMC-C-2026-0001 on live): the Maher ID is optional when a
-    client is added in the portal, but Zoho FSM refuses a new contact
-    without it ("requires the field Maher_Id__C"). Asked for here, before
-    FSM is called, in words the team can act on. A client FSM already has
-    (by email, above) is linked without one.
+    No Maher ID check here (27 Nov 2026): FSM's own settings decide. It
+    refused a company without Maher_Id__C on the morning of 27 Nov and no
+    longer requires it on Contacts or Companies (read from its field
+    settings that afternoon). If it asks again, describeZohoError says so
+    in words the team can act on.
   */
-  if (!maherId) {
-    return { state: "missing_details", message: "Zoho FSM needs the client's Maher ID to create them. Add it with Edit client, then use Create in FSM." };
-  }
 
   const company = (row.company as string | null) ?? null;
   const phone = (row.phone as string | null) ?? null;

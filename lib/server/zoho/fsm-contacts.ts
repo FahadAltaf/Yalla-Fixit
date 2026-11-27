@@ -64,6 +64,10 @@ function describeZohoError(json: any, status: number, fallback: string): string 
         : recordModule === "Contacts"
           ? "a contact"
           : (recordModule ?? "the record");
+    /* The Maher ID is optional in the portal; when FSM's settings ask for it, say what to do (27 Nov 2026). */
+    if (missing === "Maher_Id__C") {
+      return `Zoho FSM needs the client's Maher ID (on ${what}). Add it with Edit client, then try again`;
+    }
     return `Zoho FSM requires the field ${missing ?? "(not named)"} on ${what}, which the portal did not send`;
   }
   const first = perRecord ?? zohoError(json);
