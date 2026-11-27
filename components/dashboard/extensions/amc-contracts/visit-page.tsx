@@ -18,7 +18,7 @@ import { TRADE_LABELS } from "@/lib/amc/client-profile";
 import { CALL_OUT_PRIORITY_LABELS } from "@/lib/amc/call-outs";
 import { FIELD_VISIT_KIND_LABELS, FIELD_VISIT_STAGE_LABELS, fieldVisitHref, type FieldVisitStage } from "@/lib/amc/field-visits";
 import { amcRefresh } from "@/lib/amc/http-cache";
-import { ACCESS_STATUS_LABELS, CONFIRMATION_LABELS } from "@/lib/amc/visits";
+import { ACCESS_STATUS_LABELS, confirmationLabel } from "@/lib/amc/visits";
 import { cn } from "@/lib/utils";
 import { callOutsService } from "@/modules/amc-contracts/call-outs-service";
 import { fieldVisitsService, type FieldVisitHistoryItem, type FieldVisitRow } from "@/modules/amc-contracts/field-visits-service";
@@ -517,7 +517,6 @@ function PpmOverview({ v, data, onTab }: { v: FieldVisitRow; data: Loaded<PpmDat
   if (data.error) return <ErrorState title="Could not load the visit's details" message={data.error} onRetry={data.reload} />;
   const d = data.data?.visit;
   if (!d) return <SectionSkeleton />;
-  const confirmation = (d.clientConfirmation ?? "pending") as keyof typeof CONFIRMATION_LABELS;
   const confirmed = d.clientConfirmation === "confirmed";
   const lead = v.crew.find((c) => c.lead) ?? v.crew[0];
   return (
@@ -544,7 +543,7 @@ function PpmOverview({ v, data, onTab }: { v: FieldVisitRow; data: Loaded<PpmDat
         />
         <StatCard
           label="Client"
-          value={d.clientConfirmation ? (CONFIRMATION_LABELS[confirmation] ?? confirmation) : "Not requested yet"}
+          value={confirmationLabel(d.clientConfirmation, d.attempts)}
           headline={d.confirmedAt ? `Confirmed ${shortDateTime(d.confirmedAt)}` : `${d.attemptState.tried} of ${d.rule.attemptCount} requests sent${d.attemptState.exhausted ? ", used up" : ""}`}
           caption={d.attempts.length ? `Last by ${channelLabel(d.attempts[d.attempts.length - 1].channel)}` : "Not contacted yet"}
           tone={confirmed ? "good" : d.attemptState.exhausted ? "bad" : "review"}

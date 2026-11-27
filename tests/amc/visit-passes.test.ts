@@ -53,6 +53,24 @@ test("a property pass valid on the visit day approves the visits there", async (
   assert.equal(v.status, "confirmed", "released from waiting for access");
 });
 
+/* 27 Nov 2026: approving a client's pass turned a planned visit of a confirmed schedule (no slot yet) into Not scheduled. */
+test("released from waiting for access, a visit of a confirmed schedule is Scheduled again, slot or not", async () => {
+  const visit = (id: string, contractId: string) => ({ id, contract_id: contractId, status: "pending_access", target_date: "2026-11-20", scheduled_start: null, client_confirmation: "pending", access_status: "pending", access_valid_until: null, access_document_id: null });
+  const w = fakeSupabase({
+    amc_contracts: [
+      { id: "c1", property_id: "p1", ppm_confirmed_at: "2026-11-27T05:19:47Z" },
+      { id: "c2", property_id: "p1", ppm_confirmed_at: null },
+    ],
+    amc_visits: [visit("v1", "c1"), visit("v2", "c2")],
+    amc_property_access_rules: [{ id: "r1", property_id: "p1", active: true }],
+    amc_documents: [{ id: "d1", level: "property", entity_id: "p1", category: "Gate pass", expires_on: "2026-12-31", uploaded_at: "2026-11-17T10:00:00Z", superseded_by: null }],
+  });
+  assert.equal(await refreshPropertyVisitsAccess(w.client as never, "p1"), 2);
+  const status = (id: string) => w.table("amc_visits").find((v) => v.id === id)!.status;
+  assert.equal(status("v1"), "scheduled", "part of a confirmed schedule");
+  assert.equal(status("v2"), "not_scheduled", "a schedule not confirmed yet");
+});
+
 /* 17 Nov 2026: each pass has an access type and a status. */
 const typed = (id: string, status: "approved" | "pending" | "rejected" | "expired" | "not_required", validUntil: string | null = null, uploadedAt = "2026-11-17T10:00:00Z") => ({ id, validUntil, uploadedAt, status });
 

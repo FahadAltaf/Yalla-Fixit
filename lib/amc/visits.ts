@@ -227,6 +227,24 @@ export const CONFIRMATION_LABELS = {
 
 export const ATTEMPT_OUTCOMES = ["message_sent", "no_answer", "confirmed", "reschedule_requested", "declined"] as const;
 export type AttemptOutcome = (typeof ATTEMPT_OUTCOMES)[number];
+
+/**
+ * The client's confirmation as the visit shows it. Still pending, but the
+ * client's last answer was a request for another date: it is the team's
+ * turn, not the client's (27 Nov 2026: the link's "Ask for another date"
+ * left the visit reading "Awaiting the client").
+ */
+export function confirmationLabel(state: string | null | undefined, attempts: ReadonlyArray<{ outcome: AttemptOutcome; attemptedAt: string }>): string {
+  if (!state) return "Not requested yet";
+  if (state === "pending") {
+    const lastAnswer = attempts
+      .filter((a) => a.outcome === "confirmed" || a.outcome === "declined" || a.outcome === "reschedule_requested")
+      .sort((a, b) => a.attemptedAt.localeCompare(b.attemptedAt))
+      .at(-1);
+    if (lastAnswer?.outcome === "reschedule_requested") return "Client asked for another date";
+  }
+  return CONFIRMATION_LABELS[state as keyof typeof CONFIRMATION_LABELS] ?? state;
+}
 export const ATTEMPT_OUTCOME_LABELS: Record<AttemptOutcome, string> = {
   message_sent: "Request sent",
   no_answer: "No answer",

@@ -23,7 +23,7 @@ import { PLANNABLE_STATUSES, VISIT_STATUS_LABELS } from "@/lib/amc/ppm";
 import {
   ATTEMPT_OUTCOME_LABELS,
   LOGGED_OUTCOMES,
-  CONFIRMATION_LABELS,
+  confirmationLabel,
   startProblems,
   type AttemptOutcome,
   type Trade,
@@ -327,7 +327,7 @@ export function ConfirmationSection({ visit: v, canEdit, working, setWorking, ch
         <Rows>
           <Row label="Status">
             <Badge variant="secondary" className={`border-0 font-medium ${state ? CONFIRMATION_TONE[state] : "bg-mist text-ink-soft"}`}>
-              {state ? CONFIRMATION_LABELS[state] : "Not requested yet"}
+              {confirmationLabel(state, v.attempts)}
             </Badge>
           </Row>
           {v.confirmedAt ? (

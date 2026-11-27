@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, type UIEvent } from 
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { LucideIcon } from "lucide-react";
+
+import { CompanyMaherNotice } from "@/components/dashboard/clients/company-maher-notice";
 import { OptionToggle } from "@/components/dashboard/shared/option-toggle";
 import {
   AlertTriangle,
@@ -1885,6 +1887,8 @@ function AddClientDialog({
               placeholder="e.g. Driven Properties"
             />
           </Field>
+          {/* Zoho FSM creates a company only with a Maher ID (27 Nov 2026). */}
+          {requireEmail ? <CompanyMaherNotice company={company} maherId={maherId} /> : null}
         </div>
 
         <DialogFooter>

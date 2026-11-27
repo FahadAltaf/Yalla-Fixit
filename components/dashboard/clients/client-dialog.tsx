@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
+import { CompanyMaherNotice } from "./company-maher-notice";
+
 import { ActionDialogContent, ErrorState, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
 import { Button } from "@/components/ui/button";
 import DateSelect from "@/components/ui/date-select";
@@ -177,6 +179,8 @@ export function ClientDialog({
                 <Input id="client-company" value={contact.company ?? ""} onChange={(e) => set("company")(e.target.value)} placeholder="Agency or developer, if any" maxLength={200} />
               </Field>
             </div>
+            {/* Zoho FSM creates a company only with a Maher ID (27 Nov 2026); a client not in FSM yet goes there when a contract is signed. */}
+            <CompanyMaherNotice company={contact.company} maherId={contact.maherId} />
             {!creating ? (
               <Field label="Notes" htmlFor="client-notes">
                 <Textarea id="client-notes" rows={2} value={contact.notes ?? ""} onChange={(e) => set("notes")(e.target.value)} placeholder="Anything the team should know before calling…" maxLength={2000} />
