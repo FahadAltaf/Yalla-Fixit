@@ -331,11 +331,12 @@ export async function listMyNotifications(
   userId: string,
   limit = 30,
   options: { offset?: number; unreadOnly?: boolean } = {},
-): Promise<{ notifications: InAppNotification[]; unread: number; migrated: boolean }> {
+): Promise<{ notifications: InAppNotification[]; unread: number; migrated: boolean; total: number }> {
   const offset = Math.max(0, options.offset ?? 0);
   let listQuery = admin
     .from(TABLE)
-    .select("id, event, title, body, link, created_at, read_at")
+    /* With how many match in all, for the inbox's pages (27 Nov 2026). */
+    .select("id, event, title, body, link, created_at, read_at", { count: "exact" })
     .eq("recipient_user_id", userId)
     .eq("channel", "in_app");
   if (options.unreadOnly) listQuery = listQuery.is("read_at", null);
@@ -349,7 +350,7 @@ export async function listMyNotifications(
       .is("read_at", null),
   ]);
   if (list.error) {
-    if (missing(list.error)) return { notifications: [], unread: 0, migrated: false };
+    if (missing(list.error)) return { notifications: [], unread: 0, migrated: false, total: 0 };
     throw new Error(list.error.message);
   }
   return {
@@ -364,6 +365,7 @@ export async function listMyNotifications(
     })),
     unread: count.count ?? 0,
     migrated: true,
+    total: list.count ?? 0,
   };
 }
 
