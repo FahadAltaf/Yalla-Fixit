@@ -16,7 +16,6 @@ import {
   Hourglass,
   Inbox,
   Link2,
-  MapPin,
   Megaphone,
   MessageSquarePlus,
   MessageSquareText,
@@ -37,7 +36,6 @@ import {
   SectionCard,
   StatCard,
   StatCardGrid,
-  SubHeading,
   timeAgo,
 } from "@/components/dashboard/shared/kaizen";
 import {
@@ -47,11 +45,6 @@ import {
   SubmitButton,
   useConfirm,
 } from "@/components/dashboard/shared/kaizen-states";
-import {
-  GoogleLocationMap,
-  hasGoogleMapsKey,
-} from "@/components/dashboard/snagging/google-location-map";
-import { LocationMap } from "@/components/dashboard/snagging/location-map";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -104,18 +97,16 @@ import {
   StageDialog,
 } from "./enquiry-dialogs";
 import {
-  DetailList,
   HeadingIconButton,
-  HeadingWithActions,
   SiteVisitStatusBadge,
   StageBadge,
-  propertyRows,
 } from "./enquiry-ui";
 import { LinkPropertyDialog } from "./link-property-dialog";
 import { useLeadTimeConfirm } from "../lead-time-confirm";
 import { formatPhone, phoneHref, toE164Phone } from "@/lib/phone/format-phone";
 import { toDubaiInput } from "@/lib/amc/dubai-clock";
 
+import { Fact } from "@/components/dashboard/extensions/amc/steps/review-step";
 /* Three tabs, as on a quotation: what it is, the work done for it (site visits), and what happened to it. */
 const TABS = ["details", "site-visits", "activity"] as const;
 type OpenDialog =
@@ -569,234 +560,97 @@ export function EnquiryDetail({ id }: { id: string }) {
                   />
                 </StatCardGrid>
 
+                {/*
+                  27 Nov 2026 (the user): the proposal's design -- one card,
+                  the client and the property as facts in a grid -- in place
+                  of the two lists and the map.
+                */}
                 <SectionCard
                   title="Client & property"
                   icon={<Building2 />}
                   description="Who is enquiring, how to reach them, and the property it is for."
                   bodyClassName="px-5 pb-5"
+                  action={
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="secondary" className={`border-0 font-medium ${LIFECYCLE_TONE[e.customer.lifecycle as keyof typeof LIFECYCLE_TONE] ?? ""}`}>
+                        {LIFECYCLE_LABELS[e.customer.lifecycle as keyof typeof LIFECYCLE_LABELS] ?? e.customer.lifecycle}
+                      </Badge>
+                      {e.property ? (
+                        <Button asChild variant="outline" size="sm">
+                          <Link href={`/extensions/amc-contracts/properties/${e.property.id}?tab=assets&view=scope`}>
+                            <Boxes className="size-3.5" />
+                            Assets and scope
+                          </Link>
+                        </Button>
+                      ) : canEdit ? (
+                        <Button variant="outline" size="sm" onClick={() => setDialog("link")}>
+                          <Link2 className="size-3.5" />
+                          Link a property
+                        </Button>
+                      ) : null}
+                    </div>
+                  }
                 >
-                  {/*
-                    As the job's Setup tab: the two lists stacked on the left and
-                    the map filling the right. Side by side, Client (seven rows)
-                    and Property (four) left a hole under the shorter one.
-                  */}
-                  <div className="grid items-stretch gap-6 lg:grid-cols-2">
-                    <div className="min-w-0 space-y-6">
-                      <div className="space-y-3">
-                        <SubHeading
-                          action={
-                            <Badge
-                              variant="secondary"
-                              className={`border-0 font-medium ${LIFECYCLE_TONE[e.customer.lifecycle as keyof typeof LIFECYCLE_TONE] ?? ""}`}
-                            >
-                              {LIFECYCLE_LABELS[
-                                e.customer
-                                  .lifecycle as keyof typeof LIFECYCLE_LABELS
-                              ] ?? e.customer.lifecycle}
-                            </Badge>
-                          }
-                        >
-                          <HeadingWithActions label="Client">
-                            {canEdit ? (
-                              <HeadingIconButton
-                                label="Edit client"
-                                icon={<SquarePen />}
-                                onClick={() => setDialog("client")}
-                              />
-                            ) : null}
-                          </HeadingWithActions>
-                        </SubHeading>
-                        <DetailList
-                          rows={[
-                            {
-                              label: "Name",
-                              value: (
-                                <Link
-                                  href={`/clients/${e.customer.id}`}
-                                  className={LINK}
-                                >
-                                  {e.customer.name}
-                                </Link>
-                              ),
-                            },
-                            {
-                              label: "Customer ID",
-                              value: e.customer.customerRef,
-                            },
-                            ...(e.contactName &&
-                            e.contactName !== e.customer.name
-                              ? [{ label: "Contact", value: e.contactName }]
-                              : []),
-                            {
-                              label: "Phone",
-                              value: e.contactPhone ? (
-                                <a
-                                  href={phoneHref(e.contactPhone)}
-                                  className={LINK}
-                                >
-                                  {formatPhone(e.contactPhone)}
-                                </a>
-                              ) : null,
-                            },
-                            {
-                              label: "Email",
-                              value: e.contactEmail ? (
-                                <a
-                                  href={`mailto:${e.contactEmail}`}
-                                  className={LINK}
-                                >
-                                  {e.contactEmail}
-                                </a>
-                              ) : null,
-                            },
-                            {
-                              label: "WhatsApp",
-                              value: e.contactWhatsapp ? (
-                                <a
-                                  href={`https://wa.me/${toE164Phone(e.contactWhatsapp).slice(1)}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className={LINK}
-                                >
-                                  {formatPhone(e.contactWhatsapp)}
-                                </a>
-                              ) : null,
-                            },
-                            {
-                              label: "Prefers",
-                              value:
-                                [
-                                  e.preferredChannel
-                                    ? (CHANNEL_LABELS[
-                                        e.preferredChannel as keyof typeof CHANNEL_LABELS
-                                      ] ?? e.preferredChannel)
-                                    : null,
-                                  e.preferredLanguage,
-                                ]
-                                  .filter(Boolean)
-                                  .join(" · ") || null,
-                            },
-                          ]}
-                        />
-                      </div>
-
-                      <div className="space-y-3">
-                        <SubHeading
-                          action={
-                            e.property ? (
-                              <Button asChild variant="ghost" size="sm">
-                                <Link
-                                  href={`/extensions/amc-contracts/properties/${e.property.id}?tab=assets&view=scope`}
-                                >
-                                  <Boxes className="size-3.5" />
-                                  Assets and scope
-                                </Link>
-                              </Button>
-                            ) : canEdit ? (
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setDialog("link")}
-                              >
-                                <Link2 className="size-3.5" />
-                                Link a property
-                              </Button>
-                            ) : null
-                          }
-                        >
-                          <HeadingWithActions label="Property">
-                            {e.property && canEdit && addressForm ? (
-                              <HeadingIconButton
-                                label="Edit property"
-                                icon={<SquarePen />}
-                                onClick={() => setDialog("property")}
-                              />
-                            ) : null}
-                          </HeadingWithActions>
-                        </SubHeading>
-                        <DetailList
-                          rows={[
-                            /* As the job's Setup tab, then the area the client named on the enquiry. */
-                            ...propertyRows({
-                              unit: e.property ? (
-                                <Link
-                                  href={`/extensions/amc-contracts/properties/${e.property.id}`}
-                                  className={LINK}
-                                >
-                                  {e.property.label}
-                                </Link>
-                              ) : (
-                                <span className="text-muted-foreground font-normal">
-                                  Not linked yet
-                                </span>
-                              ),
-                              place: e.property,
-                              typeLabel:
-                                unitType(e.property?.unitType ?? null) ??
-                                unitType(e.unitType),
-                              category:
-                                capitalise(
-                                  e.property?.propertyCategory ??
-                                    e.propertyCategory ??
-                                    "",
-                                ) || null,
-                            }),
-                            { label: "Area", value: e.area },
-                          ]}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="flex min-w-0 flex-col space-y-3">
-                      <SubHeading>Location</SubHeading>
-                      {e.property?.lat != null && e.property?.lng != null ? (
-                        hasGoogleMapsKey() ? (
-                          <GoogleLocationMap
-                            className="min-h-64 flex-1"
-                            lat={e.property.lat}
-                            lng={e.property.lng}
-                            label={e.property.label || null}
-                          />
-                        ) : (
-                          <LocationMap
-                            className="min-h-64 flex-1"
-                            lat={e.property.lat}
-                            lng={e.property.lng}
-                            label={e.property.label || null}
-                          />
-                        )
+                  <dl className="grid gap-x-6 gap-y-4 rounded-lg border p-4 sm:grid-cols-2 xl:grid-cols-4">
+                    <Fact
+                      label="Customer"
+                      action={canEdit ? <HeadingIconButton label="Edit client" icon={<SquarePen />} onClick={() => setDialog("client")} /> : null}
+                    >
+                      <Link href={`/clients/${e.customer.id}`} className={LINK}>
+                        {e.customer.name}
+                      </Link>
+                    </Fact>
+                    <Fact label="Customer ID">{e.customer.customerRef}</Fact>
+                    <Fact label="Phone">
+                      {e.contactPhone ? (
+                        <a href={phoneHref(e.contactPhone)} className={LINK}>
+                          {formatPhone(e.contactPhone)}
+                        </a>
+                      ) : null}
+                    </Fact>
+                    <Fact label="Email">
+                      {e.contactEmail ? (
+                        <a href={`mailto:${e.contactEmail}`} className={LINK}>
+                          {e.contactEmail}
+                        </a>
+                      ) : null}
+                    </Fact>
+                    {e.contactName && e.contactName !== e.customer.name ? <Fact label="Contact">{e.contactName}</Fact> : null}
+                    <Fact label="WhatsApp">
+                      {e.contactWhatsapp ? (
+                        <a href={`https://wa.me/${toE164Phone(e.contactWhatsapp).slice(1)}`} target="_blank" rel="noopener noreferrer" className={LINK}>
+                          {formatPhone(e.contactWhatsapp)}
+                        </a>
+                      ) : null}
+                    </Fact>
+                    <Fact label="Prefers">
+                      {[
+                        e.preferredChannel ? (CHANNEL_LABELS[e.preferredChannel as keyof typeof CHANNEL_LABELS] ?? e.preferredChannel) : null,
+                        e.preferredLanguage,
+                      ]
+                        .filter(Boolean)
+                        .join(" · ") || null}
+                    </Fact>
+                    <Fact
+                      label="Property detail"
+                      action={e.property && canEdit && addressForm ? <HeadingIconButton label="Edit property" icon={<SquarePen />} onClick={() => setDialog("property")} /> : null}
+                    >
+                      {e.property ? (
+                        <Link href={`/extensions/amc-contracts/properties/${e.property.id}`} className={LINK}>
+                          {e.property.label}
+                        </Link>
                       ) : (
-                        <div className="text-muted-foreground flex min-h-48 flex-1 flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-6 text-center text-sm">
-                          {e.property ? (
-                            <>
-                              <p>No location pinned on the property record.</p>
-                              <Button asChild variant="outline" size="sm">
-                                <Link
-                                  href={`/extensions/amc-contracts/properties/${e.property.id}`}
-                                >
-                                  <MapPin className="size-3.5" />
-                                  Open the property
-                                </Link>
-                              </Button>
-                            </>
-                          ) : (
-                            <p className="max-w-xs">
-                              No property linked yet. The property record,
-                              assets and scope are captured at the site visit,
-                              or on the{" "}
-                              <Link
-                                href={`/clients/${e.customer.id}`}
-                                className="hover:text-foreground underline underline-offset-2"
-                              >
-                                client&apos;s page
-                              </Link>
-                              .
-                            </p>
-                          )}
-                        </div>
+                        <span className="text-muted-foreground font-normal">Not linked yet</span>
                       )}
-                    </div>
-                  </div>
+                    </Fact>
+                    <Fact label="Building">{e.property?.buildingName}</Fact>
+                    <Fact label="Community">{e.property?.community}</Fact>
+                    <Fact label="Property category">{capitalise(e.property?.propertyCategory ?? e.propertyCategory ?? "") || null}</Fact>
+                    <Fact label="Unit type">{unitType(e.property?.unitType ?? null) ?? unitType(e.unitType)}</Fact>
+                    <Fact label="Bedrooms">{e.property?.bedrooms == null ? null : e.property.bedrooms === 0 ? "Studio" : String(e.property.bedrooms)}</Fact>
+                    <Fact label="Built-up area">{sqftText(e.property?.builtUpSqft)}</Fact>
+                    <Fact label="Area">{e.area}</Fact>
+                  </dl>
                 </SectionCard>
 
                 <SectionCard
@@ -1232,3 +1086,5 @@ const timeOf = (value: string) => toDubaiInput(value).slice(11);
 
 const capitalise = (v: string) =>
   v ? v.charAt(0).toUpperCase() + v.slice(1) : v;
+
+const sqftText = (n: number | null | undefined) => (n == null ? null : `${Number(n).toLocaleString("en-AE")} sq ft`);

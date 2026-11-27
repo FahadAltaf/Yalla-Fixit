@@ -99,9 +99,33 @@ export interface JobReviewItem {
   reportState: ReportState;
 }
 
+export interface ApprovalReviewItem {
+  type: "proposal" | "amendment";
+  id: string;
+  title: string;
+  subtitle: string | null;
+  when: string | null;
+  status: string | null;
+  href: string;
+}
+
+export interface SiteVisitReviewItem {
+  id: string;
+  number: string;
+  customerName: string | null;
+  propertyLabel: string | null;
+  assessorName: string | null;
+  completedAt: string | null;
+  href: string;
+}
+
 export interface JobReviewsResponse {
   migrated: boolean;
   items: JobReviewItem[];
+  /** Completed site visits waiting for the viewer's approval (27 Nov 2026). */
+  siteVisits?: SiteVisitReviewItem[];
+  /** Proposals and contract amendments waiting for the viewer's decision (27 Nov 2026). */
+  approvals?: ApprovalReviewItem[];
   canReview: boolean;
 }
 

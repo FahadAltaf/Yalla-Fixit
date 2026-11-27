@@ -363,7 +363,7 @@ export const baseSectionsItems: MenuItem[] = [
       /* The coordinators' month of planned visits: not contacted, contacted, confirmed (DEV-492). */
       { title: "PPM month", url: "/extensions/amc-contracts/ppm-month", canSee: canViewAmcVisits },
       /* The supervisor's review of submitted job sheets (BRD 5.12). */
-      { title: "Job reviews", url: "/extensions/amc-contracts/job-reviews", canSee: canViewAmcVisits },
+      { title: "Approvals & reviews", url: "/extensions/amc-contracts/job-reviews", canSee: canViewAmcVisits },
       /* Finance: instalments, cheques and collections (BRD 5.8). */
       { title: "Payments", url: "/extensions/amc-contracts/payments", canSee: canViewAmcPayments },
       { title: "Reports", url: "/extensions/amc-contracts/reports", resource: ResourceType.AMC_REPORTS },

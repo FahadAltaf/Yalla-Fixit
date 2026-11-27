@@ -144,10 +144,14 @@ export const AuthProvider = ({
   };
 
   const fetchSettings = async () => {
-    const settingsData = await settingsService.getSettingsById({
-      type: UserRoles.ADMIN,
-    });
-    localStorage.setItem("SK_PROJECT_SETTINGS", JSON.stringify(settingsData));
+    /* A failed read keeps the last copy (27 Nov 2026): it used to leave the page with no settings at all. */
+    const settingsData = await settingsService
+      .getSettingsById({ type: UserRoles.ADMIN })
+      .catch((error: unknown) => {
+        console.warn("Site settings not loaded, using the saved copy:", error instanceof Error ? error.message : error);
+        return null;
+      });
+    if (settingsData) localStorage.setItem("SK_PROJECT_SETTINGS", JSON.stringify(settingsData));
     if (settingsData) {
       setSettings(settingsData);
     } else {

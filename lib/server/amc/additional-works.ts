@@ -618,6 +618,8 @@ export async function performWorkAction(admin: Admin, id: string, action: Additi
       return { ok: true as const };
     case "invoice":
       await moveTo(admin, row, "invoiced", { invoice_number: action.invoiceNumber, invoiced_at: action.invoicedAt ?? now }, actor);
+      /* Its charge already paid (before the visit): the work is paid as well, not asked for again (27 Nov 2026). */
+      await settleWorkFromCharge(admin, id, actor);
       return { ok: true as const };
     case "pay": {
       await moveTo(admin, row, "paid", { paid_at: action.paidAt ?? now, payment_reference: action.reference }, actor);
@@ -635,6 +637,28 @@ export async function performWorkAction(admin: Admin, id: string, action: Additi
       return { ok: true as const };
     }
   }
+}
+
+/**
+ * Invoiced work whose charge is paid moves to Paid with that payment's day
+ * and reference (27 Nov 2026): the payment is recorded once, on the charge,
+ * as a call out's is, and the work follows it. Best effort; nothing when
+ * the work is not invoiced or the charge not paid.
+ */
+export async function settleWorkFromCharge(admin: Admin, id: string, actor: Actor): Promise<boolean> {
+  const row = await loadWork(admin, id).catch(() => null);
+  if (!row || row.status !== "invoiced") return false;
+  const { charge } = await readCharge(admin, "additional_work", id).catch(() => ({ charge: null }));
+  if (charge?.status !== "paid") return false;
+  await moveTo(
+    admin,
+    row,
+    "paid",
+    { paid_at: charge.paidOn ? `${charge.paidOn}T00:00:00+04:00` : new Date().toISOString(), payment_reference: charge.paymentReference ?? null },
+    actor,
+    "The charge was paid",
+  ).catch(() => null);
+  return true;
 }
 
 /** Settled work no longer holds its call out open. */

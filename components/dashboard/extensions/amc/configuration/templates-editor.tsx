@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Mail, MessageCircle, RotateCcw, Save } from "lucide-react";
+import { Mail, MessageCircle, RotateCcw, Save, FileText } from "lucide-react";
 import { toast } from "sonner";
 
 import { SectionCard } from "@/components/dashboard/shared/kaizen";
@@ -78,6 +78,13 @@ export function TemplatesEditor({
       description:
         "The portal prepares the text and the coordinator sends it from WhatsApp, or by SMS when WhatsApp is not possible.",
       icon: <MessageCircle />,
+    },
+    {
+      kind: "document",
+      title: "Quotation texts",
+      description:
+        "Printed on the quotation for additional work and call outs, as Snagging's quotations print theirs. A change applies to quotations generated after you save.",
+      icon: <FileText />,
     },
   ];
 
@@ -161,10 +168,10 @@ function TemplateRow({
             </div>
           ) : null}
           <div className="space-y-1.5">
-            <Label htmlFor={`${t.id}-body`}>{t.kind === "email" ? "Body" : "Message"}</Label>
+            <Label htmlFor={`${t.id}-body`}>{t.kind === "email" ? "Body" : t.kind === "document" ? "Text" : "Message"}</Label>
             <Textarea
               id={`${t.id}-body`}
-              rows={t.kind === "email" ? 9 : 4}
+              rows={t.kind === "message" ? 4 : 9}
               value={text.body}
               disabled={!editable}
               onChange={(e) => onChange({ body: e.target.value })}

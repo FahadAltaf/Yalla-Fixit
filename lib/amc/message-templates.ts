@@ -11,7 +11,8 @@ import { z } from "zod";
  * workbook text.
  */
 
-export type AmcTemplateKind = "email" | "message";
+/** "document": text printed on a document (the quotation's scope and terms, 27 Nov 2026). */
+export type AmcTemplateKind = "email" | "message" | "document";
 
 export interface AmcTemplateDefinition {
   id: string;
@@ -147,6 +148,43 @@ export const AMC_TEMPLATE_DEFINITIONS: AmcTemplateDefinition[] = [
     source: "BRD 5.16, 6.3 (workbook text pending)",
     draft: true,
     body: "Dear {Client name}, your AMC contract {Old contract no} expires on {Expiry date}. Your renewal proposal {Proposal no} is ready: {Approval link}",
+  },
+  /*
+    27 Nov 2026 (the user): the quotation for additional work or a call out
+    carries a scope of work and terms as Snagging's quotations do, editable
+    here rather than fixed in the code.
+  */
+  {
+    id: "quotationScope",
+    kind: "document",
+    label: "Quotation: scope of work",
+    source: "AMC quotations",
+    draft: false,
+    body: [
+      "{Work type} {Work no} under AMC contract {Contract no}, at {Property}.",
+      "Finding: {Finding}",
+      "Work to be carried out by Yalla Fix It, including but not limited to the below:",
+      "{Service list}",
+      "Any further fault found on the day is reported and quoted separately for your approval.",
+    ].join("\n"),
+  },
+  {
+    id: "quotationTerms",
+    kind: "document",
+    label: "Quotation: terms and conditions",
+    source: "AMC quotations",
+    draft: false,
+    body: [
+      "1- This quotation is valid for {Validity days} calendar days and is specifically limited to the scope of work and these terms and conditions.",
+      "2- This work is outside the scope of your annual maintenance contract {Contract no} and is charged separately. Prices are in UAE dirhams; VAT at 5% is added as shown.",
+      "3- Payment Terms: before the visit or on completion, as agreed with your coordinator when the visit is booked.",
+      "4- Materials and spare parts not listed above are charged at cost plus a {Handling fee}% handling fee, after your written approval.",
+      "5- All access passes and entry permits are to be arranged by the client ahead of the visit.",
+      "6- Authority approval/NOC to be provided by the client (if applicable).",
+      "7- Water and electricity needed for the work are to be provided by the client.",
+      "8- The work is carried out during Yalla Fix It working hours (Saturday to Thursday, 9:00 AM to 6:00 PM). Work needed outside these hours is quoted separately.",
+      "9- The work is scheduled once the quotation is approved.",
+    ].join("\n"),
   },
 ];
 

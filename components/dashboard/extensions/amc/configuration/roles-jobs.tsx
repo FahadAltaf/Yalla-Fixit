@@ -495,7 +495,7 @@ function RunDetailsDialog({ run, jobs, onClose }: { run: AmcJobRun | null; jobs:
               )}
             </div>
 
-            <DialogFooter className="border-t px-6 py-4">
+            <DialogFooter className="m-0 rounded-none border-t px-6 py-4">
               <Button onClick={onClose}>Close</Button>
             </DialogFooter>
           </>

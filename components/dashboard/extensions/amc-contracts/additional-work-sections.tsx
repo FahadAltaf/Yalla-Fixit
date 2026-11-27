@@ -40,7 +40,7 @@ import { shareGeneratedQuotation } from "@/modules/amc-contracts/quotations-serv
 
 import { CrewList, Fact, FactTile, Field, Muted, Panel, PanelEmpty, PhotosPanel, ReadText, errorText, SectionDialog, shortDateTime, useActionForm } from "./call-out-shared";
 import { SendDialog } from "./send-options";
-import { useVisitCharge } from "./visit-charge";
+import { RecordChargePaymentDialog, useVisitCharge } from "./visit-charge";
 import type { PricedService } from "@/lib/amc/visit-charges";
 import { formatContractDate } from "./contract-status";
 import { CrewPicker, crewOptions, crewSummary } from "./crew-picker";
@@ -146,10 +146,14 @@ export function WorkSteps({ work: w }: { work: AdditionalWorkRecord }) {
 */
 /* The commercial steps in the header; scheduling is on Crew & time, as a call out's (19 Nov 2026). */
 export function useWorkActions(data: AdditionalWorkResponse | null, changed: () => Promise<void>, busy: boolean) {
-  const { dialog: confirmDialog } = useConfirm();
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const actionForm = useActionForm();
   /* Shared by WhatsApp, email or a link to copy (17 Nov 2026). */
   const [sharing, setSharing] = useState(false);
+  /* The charge, so the payment is recorded on it as a call out's (27 Nov 2026). */
+  const [paying, setPaying] = useState(false);
+  const chargeData = useVisitCharge("additional_work", data?.work?.id ?? "", Boolean(data?.work?.id));
+  const charge = chargeData.data?.charge ?? null;
   const w = data?.work ?? null;
 
   if (!w || !data) return { buttons: null, dialogs: <>{confirmDialog}{actionForm.dialog}</>, notice: null };
@@ -159,6 +163,7 @@ export function useWorkActions(data: AdditionalWorkResponse | null, changed: () 
   const post = async (action: Parameters<typeof additionalWorksService.action>[1], success: string) => {
     await additionalWorksService.action(w.id, action);
     toast.success(success);
+    chargeData.reload();
     await changed();
   };
 
@@ -234,14 +239,40 @@ export function useWorkActions(data: AdditionalWorkResponse | null, changed: () 
             Invoice
           </Button>
         ) : null}
-        {can("paid") ? (
+        {/*
+          27 Nov 2026 (the user): the payment is recorded as a call out's is --
+          once, on the charge, with its amount, day, method and reference --
+          and the work follows it to Paid. A charge already paid (before the
+          visit) is not asked for again: the work is closed with it.
+        */}
+        {can("paid") && charge?.status === "due" ? (
+          <Button disabled={busy} onClick={() => setPaying(true)}>
+            <Banknote className="size-4" />
+            Record payment
+          </Button>
+        ) : can("paid") && charge?.status === "paid" ? (
+          <Button
+            disabled={busy}
+            onClick={() =>
+              void confirm({
+                title: `Close ${w.workNo} as paid?`,
+                description: `The charge was paid${charge.paidOn ? ` on ${formatContractDate(charge.paidOn)}` : ""}${charge.paymentMode ? ` by ${charge.paymentMode}` : ""}${charge.paymentReference ? ` (${charge.paymentReference})` : ""}. The work is marked paid with that payment.`,
+                confirmText: "Mark paid",
+                action: () => post({ action: "pay", reference: charge.paymentReference ?? null }, "Marked paid"),
+              })
+            }
+          >
+            <Banknote className="size-4" />
+            Mark paid
+          </Button>
+        ) : can("paid") && charge && charge.status !== "due" && charge.status !== "paid" ? (
           <Button
             disabled={busy}
             onClick={() =>
               actionForm.ask({
                 title: `Mark ${w.workNo} as paid`,
-                description: "The client paid the invoice.",
-                fields: [{ key: "reference", label: "Payment reference", maxLength: 120 }],
+                description: "Nothing is charged on this work. Mark it paid to close it.",
+                fields: [{ key: "reference", label: "Reference (optional)", maxLength: 120 }],
                 confirmText: "Mark paid",
                 icon: <Banknote className="size-4" />,
                 submit: (v) => post({ action: "pay", reference: v.reference || null }, "Marked paid"),
@@ -249,7 +280,7 @@ export function useWorkActions(data: AdditionalWorkResponse | null, changed: () 
             }
           >
             <Banknote className="size-4" />
-            Paid
+            Mark paid
           </Button>
         ) : null}
       </>
@@ -262,6 +293,19 @@ export function useWorkActions(data: AdditionalWorkResponse | null, changed: () 
     dialogs: (
       <>
         {confirmDialog}
+        {charge && paying ? (
+          <RecordChargePaymentDialog
+            open={paying}
+            onOpenChange={setPaying}
+            kind="additional_work"
+            id={w.id}
+            charge={charge}
+            onSaved={async () => {
+              chargeData.reload();
+              await changed();
+            }}
+          />
+        ) : null}
         {actionForm.dialog}
         <SendDialog
           open={sharing}

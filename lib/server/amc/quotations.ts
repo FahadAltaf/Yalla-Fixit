@@ -1,7 +1,9 @@
 import { after } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
-import { whatsappUrl } from "@/lib/amc/approval-ladder";
+import { fillTemplate, whatsappUrl } from "@/lib/amc/approval-ladder";
+import { templateText } from "@/lib/amc/message-templates";
+import { readAmcConfig } from "@/lib/server/amc/config";
 import type { ChargeLine } from "@/lib/amc/visit-charges";
 import type { SendChannel } from "@/lib/amc/send-channels";
 import { clientEmailHtml, escapeEmailHtml } from "@/lib/email-brand";
@@ -242,14 +244,32 @@ export async function quotationBlocker(admin: Admin, kind: AmcQuoteKind, id: str
   }
 }
 
-function termsFor(kind: AmcQuoteKind, contractNumber: string): string {
-  return [
-    `1- This work is outside the scope of your annual maintenance contract ${contractNumber}.`,
-    "2- Prices are in UAE dirhams. VAT at 5% is added as shown.",
-    "3- Materials and spare parts carry a handling fee where they are listed.",
-    `4- This quotation is valid for ${LINK_DAYS} days from its date.`,
-    kind === "call_out" ? "5- The visit is booked once the quotation is approved." : "5- The work is scheduled once the quotation is approved.",
-  ].join("\n");
+/*
+  The scope of work and the terms, from AMC configuration -> Emails and
+  messages -> Quotation texts (27 Nov 2026), filled from the work. Fixed in
+  the code before, a one-line scope and five short terms.
+*/
+async function quotationTexts(
+  admin: Admin,
+  kind: AmcQuoteKind,
+  f: Awaited<ReturnType<typeof facts>>,
+  lines: ReturnType<typeof quoteLinesFrom>,
+): Promise<{ scope: string; terms: string }> {
+  const config = await readAmcConfig(admin);
+  const property = tidyPropertyLabel(f.contract.property_label) ?? "your property";
+  const values = {
+    "Work type": KIND_LABEL[kind],
+    "Work no": f.ref,
+    "Contract no": String(f.contract.contract_number ?? ""),
+    Property: property,
+    Finding: (kind === "call_out" ? str(f.rec.issue) : str(f.rec.finding)) ?? (kind === "call_out" ? "the reported fault" : "work outside the contract"),
+    "Service list": lines.map((l) => `- ${l.description}${l.qty ? ` (${l.qty}${l.unit ? ` ${l.unit}` : ""})` : ""}`).join("\n"),
+    "Validity days": LINK_DAYS,
+    "Handling fee": config.additionalWork.materialHandlingFeePercent,
+  };
+  const scope = fillTemplate(templateText("quotationScope", config.templates)?.body ?? "", values);
+  const terms = fillTemplate(templateText("quotationTerms", config.templates)?.body ?? "", values);
+  return { scope, terms };
 }
 
 /* ── FSM ──────────────────────────────────────────────────────────────── */
@@ -418,10 +438,7 @@ export async function generateQuotation(admin: Admin, kind: AmcQuoteKind, id: st
     contract_number: str(f.contract.contract_number),
     ref: f.ref,
   };
-  const scope =
-    kind === "call_out"
-      ? `${KIND_LABEL.call_out} ${f.ref} on AMC ${String(f.contract.contract_number ?? "")}: ${str(f.rec.issue) ?? "the reported fault"}`
-      : `${KIND_LABEL.additional_work} ${f.ref} on AMC ${String(f.contract.contract_number ?? "")}: ${str(f.rec.finding) ?? "work outside the contract"}`;
+  const { scope, terms } = await quotationTexts(admin, kind, f, lines);
 
   await voidLiveQuotation(admin, kind, id, "A new quotation was generated", actor);
   const { data, error } = await admin
@@ -436,8 +453,8 @@ export async function generateQuotation(admin: Admin, kind: AmcQuoteKind, id: st
       tax_rate: subtotal > 0 ? round2((taxAmount / subtotal) * 100) : 5,
       tax_amount: taxAmount,
       total: round2(charge.total),
-      scope_of_work: scope.slice(0, 2000),
-      terms: termsFor(kind, String(f.contract.contract_number ?? "")),
+      scope_of_work: scope.slice(0, 4000),
+      terms: terms.slice(0, 5000),
       client_snapshot: snapshot,
       created_by: actor.id,
     })

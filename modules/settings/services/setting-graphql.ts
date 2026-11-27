@@ -5,6 +5,27 @@
   every one of these documents, which put it in every visitor's browser
   and in localStorage; it is server-only now (lib/server/zoho/fsm-client).
 */
+/** The same columns, for the REST read behind /api/settings/public (27 Nov 2026). */
+export const SETTINGS_PUBLIC_COLUMNS = [
+  "id",
+  "site_name",
+  "site_image",
+  "appearance_theme",
+  "primary_color",
+  "secondary_color",
+  "logo_url",
+  "favicon_url",
+  "logo_setting",
+  "site_description",
+  "meta_keywords",
+  "contact_email",
+  "social_links",
+  "created_at",
+  "logo_horizontal_url",
+  "updated_at",
+  "type",
+] as const;
+
 export const GET_SETTINGS_BY_ID = `
     query getSettingsById($filter: settingsFilter) {
         settingsCollection(filter: $filter) {

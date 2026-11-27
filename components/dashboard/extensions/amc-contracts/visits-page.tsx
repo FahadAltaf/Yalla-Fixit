@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
-import { CalendarClock, ClipboardCheck, Database, PhoneCall, Plus, Route, Wrench } from "lucide-react";
+import { CalendarClock, ChevronDown, ClipboardCheck, Database, PhoneCall, Plus, Route, Wrench } from "lucide-react";
 
 import { DataTable } from "@/components/data-table";
 import { ReportFiltersButton } from "@/components/data-table/toolbars/report-toolbar";
@@ -13,6 +13,7 @@ import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { EmptyState } from "@/components/ui/empty-state";
 import { IdentityCell } from "@/components/ui/entity-avatar";
 import { TruncatedText } from "@/components/ui/truncated-text";
@@ -24,7 +25,9 @@ import {
   FIELD_VISIT_STAGE_LABELS,
   FIELD_VISIT_WHEN,
   OPEN_FIELD_VISIT_STAGES,
+  additionalWorkPageHref,
   fieldVisitHref,
+  visitPageHref,
   type FieldVisitKind,
   type FieldVisitStage,
   type FieldVisitWhen,
@@ -34,6 +37,9 @@ import { cn } from "@/lib/utils";
 import { fieldVisitsService, type FieldVisitRow } from "@/modules/amc-contracts/field-visits-service";
 
 import { NewSiteVisitDialog } from "./assessments";
+import { LogCallOutDialog } from "./log-call-out-dialog";
+import { RaiseAdditionalWorkDialog } from "./raise-additional-work-dialog";
+import { useDialog } from "./profile/use-dialog";
 import { ListToolbar } from "./call-out-shared";
 import { formatContractDate } from "./contract-status";
 import { ModuleGuide } from "./module-guide";
@@ -190,6 +196,9 @@ export function VisitsPage() {
   const [technician, setTechnician] = useState<string>(() => searchParams.get("technician") ?? "any");
   const [search, setSearch] = useState("");
   const [startingSiteVisit, setStartingSiteVisit] = useState(false);
+  /* The New menu (27 Nov 2026): a site visit, a call out or additional work, each in its own dialog. */
+  const logging = useDialog<true>();
+  const raising = useDialog<true>();
   const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState(25);
   const q = useDebounce(search.trim(), 400);
@@ -264,10 +273,42 @@ export function VisitsPage() {
         info={<ModuleGuide module="visits" />}
         description="Every AMC visit in one place: planned maintenance, call outs, additional work and site visits, with where each one stands."
         actions={
-          <Button onClick={() => setStartingSiteVisit(true)}>
-            <Plus className="size-4" />
-            New site visit
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button>
+                <Plus className="size-4" />
+                New
+                <ChevronDown className="size-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-64">
+              <DropdownMenuItem onSelect={() => setStartingSiteVisit(true)}>
+                <ClipboardCheck className="size-4" />
+                <span className="grid">
+                  <span>Site visit</span>
+                  <span className="text-muted-foreground text-xs">Survey a property before a proposal</span>
+                </span>
+              </DropdownMenuItem>
+              {data?.canCreate?.callOut ? (
+                <DropdownMenuItem onSelect={() => logging.show(true)}>
+                  <PhoneCall className="size-4" />
+                  <span className="grid">
+                    <span>Call out</span>
+                    <span className="text-muted-foreground text-xs">A client request on a contract</span>
+                  </span>
+                </DropdownMenuItem>
+              ) : null}
+              {data?.canCreate?.additionalWork ? (
+                <DropdownMenuItem onSelect={() => raising.show(true)}>
+                  <Wrench className="size-4" />
+                  <span className="grid">
+                    <span>Additional work</span>
+                    <span className="text-muted-foreground text-xs">Work outside a contract, quoted to the client</span>
+                  </span>
+                </DropdownMenuItem>
+              ) : null}
+            </DropdownMenuContent>
+          </DropdownMenu>
         }
       />
 
@@ -348,6 +389,23 @@ export function VisitsPage() {
         />
       </Card>
       <NewSiteVisitDialog open={startingSiteVisit} onOpenChange={setStartingSiteVisit} />
+      <LogCallOutDialog
+        key={`log-${logging.key}`}
+        open={logging.open}
+        onOpenChange={logging.onOpenChange}
+        onLogged={reload}
+        onOpenCallOut={(id) => {
+          logging.onOpenChange(false);
+          router.push(visitPageHref(id));
+        }}
+      />
+      <RaiseAdditionalWorkDialog
+        key={`raise-${raising.key}`}
+        open={raising.open}
+        onOpenChange={raising.onOpenChange}
+        source="manual"
+        onRaised={(w) => router.push(additionalWorkPageHref(w.id))}
+      />
     </div>
   );
 }

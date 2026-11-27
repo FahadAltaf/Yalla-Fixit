@@ -16,7 +16,6 @@ import {
   EllipsisVerticalIcon,
   FileSignature,
   Inbox,
-  MapPin,
   SquarePen,
   Plus,
   Lock,
@@ -47,8 +46,6 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import DateTimeSelect from "@/components/ui/date-time-select";
-import { GoogleLocationMap, hasGoogleMapsKey } from "@/components/dashboard/snagging/google-location-map";
-import { LocationMap } from "@/components/dashboard/snagging/location-map";
 import { PageHeading, SectionCard, StatCard, StatCardGrid, SubHeading } from "@/components/dashboard/shared/kaizen";
 import { ActionDialogContent, ErrorState, ListSkeleton, SectionSkeleton, StatGridSkeleton, SubmitButton, useConfirm } from "@/components/dashboard/shared/kaizen-states";
 import { assessmentSummary, type AssessmentResult } from "@/lib/amc/business";
@@ -70,7 +67,7 @@ import { EditClientDialog } from "./edit-client-dialog";
 import { EnquiryPropertySelect } from "./enquiries/enquiry-property-select";
 import { PropertyPickerField } from "./property-picker-field";
 import { AssessorPicker } from "./assessor-picker";
-import { DetailList, HeadingIconButton, HeadingWithActions, SiteVisitStatusBadge, clientRows, fromLocalInput, propertyRows, toLocalInput } from "./enquiries/enquiry-ui";
+import { HeadingIconButton, SiteVisitStatusBadge, fromLocalInput, toLocalInput } from "./enquiries/enquiry-ui";
 import { ListToolbar } from "./enquiries/list-toolbar";
 import { useUrlTab } from "./profile/use-url-tab";
 import { useAmcData } from "./use-amc-data";
@@ -78,6 +75,8 @@ import { HistoryPanel } from "./visit-page";
 import { SiteVisitAccessCard } from "./access-card";
 import { ModuleGuide } from "@/components/dashboard/extensions/amc-contracts/module-guide";
 
+import { Fact } from "@/components/dashboard/extensions/amc/steps/review-step";
+import { formatPhone, phoneHref } from "@/lib/phone/format-phone";
 const RESULT_LABELS: Record<AssessmentResult, string> = {
   ok: "OK",
   attention: "Attention required",
@@ -848,106 +847,81 @@ export function AssessmentDetail({ id }: { id: string }) {
                 </StatCardGrid>
 
 
-                <SectionCard title="Client & property" icon={<Building2 />} description="Who the visit is for and the property being assessed." bodyClassName="px-5 pb-5">
-                  {/* As the enquiry and the job's Setup tab: the lists stacked on the left, the map filling the right. */}
-                  <div className="grid items-stretch gap-6 lg:grid-cols-2">
-                    <div className="min-w-0 space-y-6">
-                      <div className="space-y-3">
-                        <SubHeading>
-                          <HeadingWithActions label="Client">
-                            {a.customer ? <HeadingIconButton label="Edit client" icon={<SquarePen />} onClick={() => setEditingRecord("client")} /> : null}
-                          </HeadingWithActions>
-                        </SubHeading>
-                        {/* As the job's Setup tab: who the client is and how to reach them. The enquiry and the proposal are in the card above. */}
-                        <DetailList
-                          rows={clientRows({
-                            name: a.customer ? (
-                              <Link href={`/clients/${a.customer.id}`} className="hover:text-brand underline underline-offset-2">
-                                {a.customer.name}
-                              </Link>
-                            ) : null,
-                            customerRef: a.customer?.customerRef,
-                            email: a.customer?.email,
-                            phone: a.customer?.phone,
-                            linkClassName: "hover:text-brand underline underline-offset-2",
-                          })}
-                        />
-                      </div>
-                      <div className="space-y-3">
-                        <SubHeading
-                          action={
-                            a.property ? (
-                              <Button asChild variant="ghost" size="sm">
-                                <Link href={`/extensions/amc-contracts/properties/${a.property.id}?tab=assets&view=scope`}>
-                                  <Boxes className="size-3.5" />
-                                  Assets and scope
-                                </Link>
-                              </Button>
-                            ) : null
-                          }
-                        >
-                          <HeadingWithActions label="Property">
-                            {a.property && addressForm && a.customer ? <HeadingIconButton label="Edit property" icon={<SquarePen />} onClick={() => setEditingRecord("property")} /> : null}
-                          </HeadingWithActions>
-                        </SubHeading>
-                        {a.property ? (
-                          <DetailList
-                            rows={propertyRows({
-                              unit: (
-                                <Link href={`/extensions/amc-contracts/properties/${a.property.id}`} className="hover:text-brand underline underline-offset-2">
-                                  {a.property.label}
-                                </Link>
-                              ),
-                              place: a.property,
-                              typeLabel: unitLabel(draft.unitType),
-                              category: draft.propertyCategory ? capitalise(draft.propertyCategory) : null,
-                            })}
-                          />
-                        ) : editable && a.customer ? (
-                          <div className="grid gap-2">
-                            <EnquiryPropertySelect
-                              customerId={a.customer.id}
-                              clientName={a.customer.name}
-                              requireComplete
-                              value={draft.propertyId}
-                              onChange={(pid) => void linkProperty(pid)}
-                              onAddNew={addressForm ? () => setAddingAddress(true) : undefined}
-                            />
-                            <p className="text-muted-foreground text-xs">The property is needed to complete the visit. Pick one of the client&apos;s addresses, or add a new one.</p>
-                          </div>
-                        ) : (
-                          <p className="text-muted-foreground text-sm">No property linked.</p>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="flex min-w-0 flex-col space-y-3">
-                      <SubHeading>Location</SubHeading>
-                      {a.property?.lat != null && a.property?.lng != null ? (
-                        hasGoogleMapsKey() ? (
-                          <GoogleLocationMap className="min-h-64 flex-1" lat={a.property.lat} lng={a.property.lng} label={a.property.label || null} />
-                        ) : (
-                          <LocationMap className="min-h-64 flex-1" lat={a.property.lat} lng={a.property.lng} label={a.property.label || null} />
-                        )
+                {/* 27 Nov 2026 (the user): the proposal's design -- the client and the property as facts in one grid. */}
+                <SectionCard
+                  title="Client & property"
+                  icon={<Building2 />}
+                  description="Who the visit is for and the property being assessed."
+                  bodyClassName="px-5 pb-5 grid gap-4"
+                  action={
+                    a.property ? (
+                      <Button asChild variant="outline" size="sm">
+                        <Link href={`/extensions/amc-contracts/properties/${a.property.id}?tab=assets&view=scope`}>
+                          <Boxes className="size-3.5" />
+                          Assets and scope
+                        </Link>
+                      </Button>
+                    ) : null
+                  }
+                >
+                  <dl className="grid gap-x-6 gap-y-4 rounded-lg border p-4 sm:grid-cols-2 xl:grid-cols-4">
+                    <Fact
+                      label="Customer"
+                      action={a.customer ? <HeadingIconButton label="Edit client" icon={<SquarePen />} onClick={() => setEditingRecord("client")} /> : null}
+                    >
+                      {a.customer ? (
+                        <Link href={`/clients/${a.customer.id}`} className="hover:text-brand underline underline-offset-2">
+                          {a.customer.name}
+                        </Link>
+                      ) : null}
+                    </Fact>
+                    <Fact label="Customer ID">{a.customer?.customerRef}</Fact>
+                    <Fact label="Phone">
+                      {a.customer?.phone ? (
+                        <a href={phoneHref(a.customer.phone)} className="hover:text-brand underline underline-offset-2">
+                          {formatPhone(a.customer.phone)}
+                        </a>
+                      ) : null}
+                    </Fact>
+                    <Fact label="Email">
+                      {a.customer?.email ? (
+                        <a href={`mailto:${a.customer.email}`} className="hover:text-brand underline underline-offset-2">
+                          {a.customer.email}
+                        </a>
+                      ) : null}
+                    </Fact>
+                    <Fact
+                      label="Property detail"
+                      action={a.property && addressForm && a.customer ? <HeadingIconButton label="Edit property" icon={<SquarePen />} onClick={() => setEditingRecord("property")} /> : null}
+                    >
+                      {a.property ? (
+                        <Link href={`/extensions/amc-contracts/properties/${a.property.id}`} className="hover:text-brand underline underline-offset-2">
+                          {a.property.label}
+                        </Link>
                       ) : (
-                        <div className="text-muted-foreground flex min-h-48 flex-1 flex-col items-center justify-center gap-3 rounded-lg border border-dashed p-6 text-center text-sm">
-                          {a.property ? (
-                            <>
-                              <p>No location pinned on the property record.</p>
-                              <Button asChild variant="outline" size="sm">
-                                <Link href={`/extensions/amc-contracts/properties/${a.property.id}`}>
-                                  <MapPin className="size-3.5" />
-                                  Open the property
-                                </Link>
-                              </Button>
-                            </>
-                          ) : (
-                            <p>Link the property to see where it is.</p>
-                          )}
-                        </div>
+                        <span className="text-muted-foreground font-normal">Not linked yet</span>
                       )}
+                    </Fact>
+                    <Fact label="Building">{a.property?.buildingName}</Fact>
+                    <Fact label="Community">{a.property?.community}</Fact>
+                    <Fact label="Property category">{draft.propertyCategory ? capitalise(draft.propertyCategory) : null}</Fact>
+                    <Fact label="Unit type">{unitLabel(draft.unitType)}</Fact>
+                    <Fact label="Bedrooms">{a.property?.bedrooms == null ? null : a.property.bedrooms === 0 ? "Studio" : String(a.property.bedrooms)}</Fact>
+                    <Fact label="Built-up area">{sqftText(a.property?.builtUpSqft)}</Fact>
+                  </dl>
+                  {!a.property && editable && a.customer ? (
+                    <div className="grid gap-2">
+                      <EnquiryPropertySelect
+                        customerId={a.customer.id}
+                        clientName={a.customer.name}
+                        requireComplete
+                        value={draft.propertyId}
+                        onChange={(pid) => void linkProperty(pid)}
+                        onAddNew={addressForm ? () => setAddingAddress(true) : undefined}
+                      />
+                      <p className="text-muted-foreground text-xs">The property is needed to complete the visit. Pick one of the client&apos;s addresses, or add a new one.</p>
                     </div>
-                  </div>
+                  ) : null}
                 </SectionCard>
 
                 <SectionCard
@@ -1725,3 +1699,5 @@ function findingList(text: string | null | undefined): string[] {
 function ReportEmpty({ text }: { text: string }) {
   return <p className="text-muted-foreground rounded-lg border border-dashed px-4 py-4 text-center text-sm">{text}</p>;
 }
+
+const sqftText = (n: number | null | undefined) => (n == null ? null : `${Number(n).toLocaleString("en-AE")} sq ft`);

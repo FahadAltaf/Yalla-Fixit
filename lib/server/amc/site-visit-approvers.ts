@@ -117,3 +117,58 @@ export async function approverName(admin: Admin, userId: string): Promise<string
   return str(person.full_name) ?? str(person.email) ?? "User";
 }
 
+
+export interface SiteVisitReviewItem {
+  id: string;
+  number: string;
+  customerName: string | null;
+  propertyLabel: string | null;
+  assessorName: string | null;
+  completedAt: string | null;
+  href: string;
+}
+
+/**
+ * Completed site visits waiting for this person's approval, oldest first:
+ * the same rule as the home page's "Site visit reports to approve" (a
+ * configured decider sees them all, anyone else the ones naming them).
+ * 27 Nov 2026: the home page counted one while Job reviews showed nothing.
+ */
+export async function siteVisitsAwaitingApproval(admin: Admin, userId: string): Promise<SiteVisitReviewItem[]> {
+  const [{ data, error }, deciders] = await Promise.all([
+    admin
+      .from("amc_assessments")
+      .select("id, assessment_number, customer_id, property_id, approver_id, assessor_name, completed_at")
+      .eq("status", "completed")
+      .is("approved_at", null)
+      .not("approver_id", "is", null)
+      .order("completed_at", { ascending: true })
+      .limit(200),
+    siteVisitDeciders(admin).catch(() => ({ ids: [] as string[] })),
+  ]);
+  if (error) throw new Error(error.message);
+  const decider = deciders.ids.includes(userId);
+  const rows = ((data ?? []) as Row[]).filter((r) => decider || r.approver_id === userId);
+  if (!rows.length) return [];
+  const ids = (key: string) => [...new Set(rows.map((r) => (r[key] ? String(r[key]) : "")).filter(Boolean))];
+  const [clients, properties] = await Promise.all([
+    ids("customer_id").length ? admin.from("snagging_clients").select("id, name").in("id", ids("customer_id")) : Promise.resolve({ data: [] }),
+    ids("property_id").length ? admin.from("snagging_properties").select("id, unit_label, building_name, community").in("id", ids("property_id")) : Promise.resolve({ data: [] }),
+  ]);
+  const clientName = new Map(((clients.data ?? []) as Row[]).map((c) => [String(c.id), String(c.name ?? "")]));
+  const propertyLabel = new Map(
+    ((properties.data ?? []) as Row[]).map((p) => [
+      String(p.id),
+      [p.unit_label, p.building_name, p.community].map((v) => (typeof v === "string" ? v.trim() : "")).filter(Boolean).join(", "),
+    ]),
+  );
+  return rows.map((r) => ({
+    id: String(r.id),
+    number: String(r.assessment_number ?? "Site visit"),
+    customerName: clientName.get(String(r.customer_id)) || null,
+    propertyLabel: propertyLabel.get(String(r.property_id)) || null,
+    assessorName: typeof r.assessor_name === "string" ? r.assessor_name : null,
+    completedAt: typeof r.completed_at === "string" ? r.completed_at : null,
+    href: `/extensions/amc-contracts/assessments/${String(r.id)}`,
+  }));
+}
