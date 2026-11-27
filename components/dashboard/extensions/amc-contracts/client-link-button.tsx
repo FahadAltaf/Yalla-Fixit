@@ -35,6 +35,7 @@ const COPY: Record<Purpose, { title: string; description: string }> = {
 export function ClientLinkButton({
   visitId,
   siteVisitId,
+  fieldWork,
   purpose,
   label,
   icon,
@@ -46,6 +47,8 @@ export function ClientLinkButton({
   visitId?: string;
   /** Or a site visit's (26 Nov 2026: the pass upload link on a site visit too). */
   siteVisitId?: string;
+  /** Or a call out's or additional work's (27 Nov 2026). */
+  fieldWork?: { kind: "call_out" | "additional_work"; id: string };
   purpose: Purpose;
   label: string;
   icon: ReactNode;
@@ -53,9 +56,11 @@ export function ClientLinkButton({
   variant?: "outline" | "default";
   size?: "sm";
 }) {
-  const endpoint = siteVisitId
-    ? `/api/amc-contracts/assessments/${encodeURIComponent(siteVisitId)}/client-link`
-    : `/api/amc-visits/${encodeURIComponent(visitId ?? "")}/client-link`;
+  const endpoint = fieldWork
+    ? `/api/amc-field-work/${fieldWork.kind}/${encodeURIComponent(fieldWork.id)}/client-link`
+    : siteVisitId
+      ? `/api/amc-contracts/assessments/${encodeURIComponent(siteVisitId)}/client-link`
+      : `/api/amc-visits/${encodeURIComponent(visitId ?? "")}/client-link`;
   const [open, setOpen] = useState(false);
   const [channel, setChannel] = useState<Channel>("whatsapp");
   const [busy, setBusy] = useState(false);

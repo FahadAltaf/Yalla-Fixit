@@ -79,6 +79,12 @@ export const additionalWorksService = {
     const params = new URLSearchParams({ suggest: "1", date, time, duration: String(durationMinutes) });
     return request<WorkCrewSuggestion>(`${workUrl(id)}?${params.toString()}`);
   },
+  /** The same, while the work is being raised: from its contract and trade (27 Nov 2026). */
+  suggestForContract(contractId: string, trade: string | null, date: string, time: string, durationMinutes: number) {
+    const params = new URLSearchParams({ suggest: "1", contractId, date, time, duration: String(durationMinutes) });
+    if (trade) params.set("trade", trade);
+    return request<WorkCrewSuggestion>(`/api/amc-additional-works?${params}`);
+  },
   /** Everything that happened to the work, newest first (its page's History tab). */
   history(id: string) {
     return request<{ history: FieldVisitHistoryItem[] }>(`${workUrl(id)}/history`);

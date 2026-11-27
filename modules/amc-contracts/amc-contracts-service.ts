@@ -150,6 +150,8 @@ export interface ContractListRow {
   kind: "contract" | "pending";
   id: string;
   submissionId: string;
+  /** AMC-C-…; null for a signed proposal not activated yet. */
+  contractNumber: string | null;
   proposalNumber: string;
   customerName: string;
   propertyLabel: string;

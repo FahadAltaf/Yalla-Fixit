@@ -58,9 +58,16 @@ export function ContractsSummary({ refreshKey }: { refreshKey: number }) {
           href={`${BASE}?status=active`}
         />
         <StatCard
-          label="Pending activation"
-          value={<span className="tabular-nums">{data.pendingActivation}</span>}
-          headline={data.pendingActivation ? "Signed, waiting to start" : "Nothing waiting"}
+          label="Not started yet"
+          value={<span className="tabular-nums">{data.pendingActivation + data.notStarted}</span>}
+          headline={
+            /* 27 Nov 2026: one card for both, saying which (it read "Signed, waiting to start" for a contract waiting for its first payment). */
+            data.pendingActivation + data.notStarted
+              ? [data.notStarted ? `${data.notStarted} starts on its date` : null, data.pendingActivation ? `${data.pendingActivation} waiting for payment or activation` : null]
+                  .filter(Boolean)
+                  .join(" · ")
+              : "Nothing waiting"
+          }
           caption="Signed proposals without a contract"
           tone={data.pendingActivation ? "progress" : "neutral"}
           href={`${BASE}?status=pending_activation`}

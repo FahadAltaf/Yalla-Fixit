@@ -7,7 +7,11 @@ import { formatDubaiDate, formatDubaiDateTime } from "@/lib/amc/dubai-clock";
    in force, amber needs attention soon, red is over, muted is not yet. */
 export const CONTRACT_STATUS_LABELS: Record<ContractDisplayStatus, string> = {
   pending_activation: "Pending activation",
-  not_started: "Not started",
+  /*
+    Activated, its start date still ahead: it is Active, as stored (27 Nov
+    2026, the user). The start date shows beside it ("Starts in 4 days").
+  */
+  not_started: "Active",
   active: "Active",
   expiring: "Expiring",
   expired: "Expired",
@@ -44,6 +48,7 @@ export function contractStatusTone(status: ContractDisplayStatus): string {
     case "signed":
       return "bg-success/10 text-success";
     case "not_started":
+      return "bg-success/10 text-success";
     default:
       return "bg-brand-50 text-brand";
   }

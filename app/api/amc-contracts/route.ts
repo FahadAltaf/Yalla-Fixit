@@ -112,13 +112,13 @@ export async function GET(req: NextRequest) {
       .select(
         head
           ? "id, amc_submissions!amc_contracts_submission_id_fkey!inner(owner_id)"
-          : `${CONTRACT_COLUMNS}, amc_submissions!amc_contracts_submission_id_fkey!inner(owner_id), amc_contract_entitlements(entitlement_type, included_quantity, used_quantity)`,
+          : `${CONTRACT_COLUMNS}, contract_number, amc_submissions!amc_contracts_submission_id_fkey!inner(owner_id), amc_contract_entitlements(entitlement_type, included_quantity, used_quantity)`,
         head ? { count: "exact", head: true } : { count: "exact" },
       );
     if (!canApprove) q = q.eq("amc_submissions.owner_id", userId);
     if (term) {
       q = q.or(
-        `customer_name.ilike.${term},proposal_number.ilike.${term},property_label.ilike.${term},customer_ref.ilike.${term},account_manager_names.ilike.${term}`,
+        `customer_name.ilike.${term},proposal_number.ilike.${term},contract_number.ilike.${term},property_label.ilike.${term},customer_ref.ilike.${term},account_manager_names.ilike.${term}`,
       );
     }
     if (manager) q = q.ilike("account_manager_names", manager);
@@ -172,6 +172,7 @@ export async function GET(req: NextRequest) {
           kind: "pending" as const,
           id: String(row.id),
           submissionId: String(row.id),
+          contractNumber: null,
           proposalNumber: String(row.proposal_number ?? ""),
           customerName: String(c.customerName ?? ""),
           propertyLabel: [p.propertyDetail, p.propertyAddress].filter(Boolean).join(" — "),
@@ -252,6 +253,8 @@ export async function GET(req: NextRequest) {
         kind: "contract" as const,
         id: view.id,
         submissionId: view.submissionId,
+        /* The contract's own number (27 Nov 2026): the list showed the proposal's. */
+        contractNumber: (row.contract_number as string | null) ?? null,
         proposalNumber: view.proposalNumber,
         customerName: view.customerName,
         propertyLabel: view.propertyLabel,

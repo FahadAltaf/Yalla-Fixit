@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { CheckCircle2, MessageCircle, Play, Send, XCircle } from "lucide-react";
+import { CheckCircle2, MessageCircle, Play, Send, XCircle, Link2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { SectionCard } from "@/components/dashboard/shared/kaizen";
@@ -21,6 +21,7 @@ import { Money } from "@/components/ui/money";
 import type { FieldAccessView } from "@/lib/server/amc/field-access";
 
 import { AccessCard } from "./access-card";
+import { ClientLinkButton } from "./client-link-button";
 import { errorText } from "./call-out-shared";
 import { formatDateTime } from "./contract-status";
 import { SendDialog } from "./send-options";
@@ -63,6 +64,12 @@ export function FieldWorkAccessCard({ kind, id, fw, onChanged }: { kind: FieldSt
       savePass={(input) => post(kind, id, { action: "pass", ...input })}
       removePass={(documentId) => post(kind, id, { action: "pass_remove", documentId })}
       onChanged={onChanged}
+      /* The client sends the passes and the property's rules on a link, as on a planned visit (27 Nov 2026). */
+      clientLink={
+        d && d.canEdit && d.ready && !d.startedAt ? (
+          <ClientLinkButton fieldWork={{ kind, id }} purpose="access_upload" label="Ask client for pass" icon={<Link2 className="size-4" />} size="sm" />
+        ) : null
+      }
     />
   );
 }
