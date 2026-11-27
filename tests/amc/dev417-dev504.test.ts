@@ -75,13 +75,15 @@ test("DEV-504: with FSM writes off nothing is sent and nothing is asked of the d
   }
 });
 
-test("DEV-504: a client with no Maher ID is asked for one before Zoho FSM is called, not refused by it (27 Nov 2026)", async () => {
+test("DEV-504: a client without a Maher ID is sent to Zoho FSM, whose settings decide; a refusal for it says what to do (27 Nov 2026)", async () => {
   const { readFileSync } = await import("node:fs");
   const src = readFileSync("lib/server/snagging/fsm-clients.ts", "utf8");
-  const put = src.slice(src.indexOf("export async function putClientInFsm"));
-  const guard = put.indexOf("if (!maherId)");
-  assert.ok(guard > 0, "the Maher ID is checked");
-  assert.ok(guard > put.indexOf("findContactByEmail("), "a client FSM already has is linked by email without one");
-  assert.ok(guard < put.indexOf("createContact("), "asked for before FSM would refuse the contact");
-  assert.match(put.slice(guard, guard + 300), /missing_details[\s\S]*Maher ID[\s\S]*Edit client/);
+  const put = src.slice(src.indexOf("export async function putClientInFsm"), src.indexOf("createContact(", src.indexOf("export async function putClientInFsm")));
+  assert.doesNotMatch(put, /if \(!maherId\)/, "FSM no longer requires it: the portal does not stop the client first");
+
+  const { fsmMessage } = await import("@/lib/server/zoho/fsm-contacts");
+  const refusal = { code: "INVALID_DATA", details: { Companies: [{ code: "MANDATORY_NOT_FOUND", details: { api_name: "Maher_Id__C" } }] } };
+  assert.equal(fsmMessage(refusal, 400), "Zoho FSM needs the client's Maher ID (on a company). Add it with Edit client, then try again");
+  const other = { code: "INVALID_DATA", details: { Contacts: [{ code: "MANDATORY_NOT_FOUND", details: { api_name: "Tax_Name" } }] } };
+  assert.match(fsmMessage(other, 400), /requires the field Tax_Name on a contact/);
 });
