@@ -575,7 +575,7 @@ export async function activateSignedContract(
       event: "initial_payment_pending",
       userIds: [String(s?.owner_id ?? ""), ...config.payments.financeUserIds],
       title: `Contract ${String(c.contract_number ?? "")} is waiting for its first payment`,
-      body: `${String(c.customer_name ?? "")}: activated from ${input.commencementDate}. No visits are released until the first instalment is received.`,
+      body: `${String(c.customer_name ?? "")}: activated from ${input.commencementDate.split("-").reverse().join("/")}. No visits are released until the first instalment is received.`,
       link: `/extensions/amc-contracts/${contractId}?tab=payments`,
       entityType: "contract",
       entityId: contractId,

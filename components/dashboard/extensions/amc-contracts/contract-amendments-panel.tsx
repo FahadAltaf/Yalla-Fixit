@@ -184,7 +184,7 @@ export function ContractAmendmentsPanel({
     <SectionCard
       title="Amendments"
       icon={<FilePen />}
-      description="Edge cases that need approval: each is asked for with a reason, approved by someone else, then applied."
+      description="Edge cases that need approval: each is asked for with a reason, approved by an AMC approver (an approver may approve and apply their own in one step), then applied."
       bodyClassName="px-5 pb-5 space-y-4"
       action={
         canRequest ? (
@@ -210,7 +210,6 @@ export function ContractAmendmentsPanel({
           icon={<FilePen />}
           title="No amendments"
           description="A scope or property change, a hold or resume, a transfer, an early termination or a cancellation is asked for here and approved before the contract changes."
-          action={canRequest ? { label: "Request an amendment", onClick: () => requesting.show(true) } : undefined}
         />
       ) : (
         <ul className="grid gap-3">
@@ -244,7 +243,8 @@ export function ContractAmendmentsPanel({
         contractStatus={contractStatus}
         contractNumber={contractNumber}
         canApprove={Boolean(data?.canApprove)}
-        onRequested={reload}
+        /* The contract too (27 Nov 2026): approved and applied in one step, a hold left the header on "Not started" until a reload. */
+        onRequested={afterChange}
       />
       <ApproveAmendmentDialog
         key={`approve-${approving.key}`}

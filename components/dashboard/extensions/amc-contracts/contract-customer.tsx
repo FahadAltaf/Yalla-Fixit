@@ -11,6 +11,7 @@ import { UNIT_TYPE_LABELS } from "@/lib/amc/client-profile";
 import { formatPhone, phoneHref } from "@/lib/phone/format-phone";
 import { amcContractsService, type ContractDetail, type LiveLinks } from "@/modules/amc-contracts/amc-contracts-service";
 
+import { useAmcRefreshSignal } from "./use-amc-data";
 /**
  * Who the customer and property are, as signed (the snapshot, which never
  * changes). The names open today's client and property records; where one
@@ -27,6 +28,8 @@ export function ContractCustomer({
   const [links, setLinks] = useState<LiveLinks | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
+  /* The page's Refresh reads this again too (27 Nov 2026). */
+  useAmcRefreshSignal(() => setAttempt((a) => a + 1));
 
   useEffect(() => {
     let stale = false;

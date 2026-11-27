@@ -85,7 +85,8 @@ export async function recordClientDecision(
     submissionId: input.id,
     actor,
     at: now,
-    facts: { signedByName: input.clientName.trim(), reason: approved ? null : note },
+    /* A change request reads as one in the notice, not as a rejection (27 Nov 2026). */
+    facts: { signedByName: input.clientName.trim(), reason: approved ? null : input.answer === "revision_requested" ? `Revision requested: ${note ?? ""}` : note },
   });
   /* Phase 6: the contract record from the client's approval. */
   const contract = approved ? await createContractFromApproval(admin, input.id, actor, await readAmcConfig(admin)) : null;

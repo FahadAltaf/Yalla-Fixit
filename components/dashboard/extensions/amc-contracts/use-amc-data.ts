@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
-import { amcFresh } from "@/lib/amc/http-cache";
+import { AMC_REFRESH_EVENT, amcFresh, amcRefreshing, subscribeAmcRefreshing } from "@/lib/amc/http-cache";
 
 /**
  * Loads data for a page or card: the latest answer wins, an answer for a
@@ -34,6 +34,8 @@ export function useAmcData<T>(load: () => Promise<T>, key: string) {
   }, [key, version]);
 
   const reload = useCallback(() => setVersion((v) => v + 1), []);
+  /* The page's Refresh reads every card again, not only the page's own record (27 Nov 2026). */
+  useAmcRefreshSignal(reload);
   const current = state.key === key ? state : { data: null, error: null, version };
   return {
     data: current.data,
@@ -43,4 +45,25 @@ export function useAmcData<T>(load: () => Promise<T>, key: string) {
     reloading: current.data !== null && current.version !== version,
     reload,
   };
+}
+
+/**
+ * Runs `onRefresh` when the page's Refresh is pressed (amcRefresh), for a
+ * card that loads its data itself rather than through useAmcData.
+ */
+export function useAmcRefreshSignal(onRefresh: () => void | Promise<unknown>): void {
+  const latest = useRef(onRefresh);
+  useEffect(() => {
+    latest.current = onRefresh;
+  });
+  useEffect(() => {
+    const run = () => void latest.current();
+    window.addEventListener(AMC_REFRESH_EVENT, run);
+    return () => window.removeEventListener(AMC_REFRESH_EVENT, run);
+  }, []);
+}
+
+/** Whether a Refresh is still loading: for the Refresh button to turn. */
+export function useAmcRefreshing(): boolean {
+  return useSyncExternalStore(subscribeAmcRefreshing, amcRefreshing, () => false);
 }

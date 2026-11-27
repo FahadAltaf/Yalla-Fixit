@@ -28,6 +28,7 @@ import {
 import { formatContractDate } from "./contract-status";
 import { DetailList } from "./enquiries/enquiry-ui";
 
+import { useAmcRefreshSignal } from "./use-amc-data";
 const LINK = "hover:text-brand underline underline-offset-2";
 
 type Entitlement = ContractDetail["entitlements"][number];
@@ -98,6 +99,8 @@ export function ContractCommercial({
 
   const [version, setVersion] = useState(0);
   const load = useCallback(() => setVersion((v) => v + 1), []);
+  /* The page's Refresh reads this again too (27 Nov 2026). */
+  useAmcRefreshSignal(load);
   useEffect(() => {
     let stale = false;
     amcContractsService.commercial(contract.id).then(

@@ -44,6 +44,7 @@ import { useTechnicianName } from "./people-pickers";
 import { useUrlTab } from "./profile/use-url-tab";
 import { useAmcData } from "./use-amc-data";
 import { ChargeCard } from "./visit-charge";
+import { QuotationCard } from "./quotation-card";
 import { HistoryPanel } from "./visit-page";
 import { slotLabel } from "./visit-status";
 
@@ -279,7 +280,14 @@ export function AdditionalWorkPage({ id }: { id: string }) {
               {panel("crew", withWork((d) => <WorkScheduleSection {...props(d)} />))}
               {panel("access", <FieldWorkAccessCard kind="additional_work" id={id} fw={fieldWork} onChanged={changed} />)}
               {/* Exactly a call out's Services tab (19 Nov 2026): the services and their price, each charged or free; they are the quotation the client approves. */}
-              {panel("services", <ChargeCard kind="additional_work" id={id} onChanged={changed} refreshKey={sheetVersion} />)}
+              {panel(
+                "services",
+                <div className="grid gap-4">
+                  <ChargeCard kind="additional_work" id={id} onChanged={changed} refreshKey={sheetVersion} />
+                  {/* The quotation the client approves on a link, as Snagging's (27 Nov 2026). */}
+                  <QuotationCard kind="additional_work" id={id} onChanged={changed} refreshKey={sheetVersion} />
+                </div>,
+              )}
               {/* Exactly the planned visit's and the call out's Job sheet tab (18 Nov 2026). */}
               {/* Exactly the call out's Job sheet tab: its photos are the crew's, on the sheet (no separate photos card, 19 Nov 2026). */}
               {panel("job_sheet", <JobSheetPanel visitId={id} calls={WORK_SHEET} onChanged={changed} readOnly refreshKey={sheetVersion} />)}

@@ -33,6 +33,7 @@ import { AMC_PHOTO_MAX_BYTES } from "@/lib/amc/photos";
 import { cn } from "@/lib/utils";
 import { amcContractsService, type ContractListRow } from "@/modules/amc-contracts/amc-contracts-service";
 import { amcRefresh } from "@/lib/amc/http-cache";
+import { useAmcRefreshing } from "./use-amc-data";
 import { dubaiInputIn, formatDubaiShort, fromDubaiInput, toDubaiInput } from "@/lib/amc/dubai-clock";
 
 /**
@@ -850,6 +851,7 @@ export function ListToolbar({
   onPageSizeChange: (size: number) => void;
   onRefresh: () => void;
 }) {
+  const refreshing = useAmcRefreshing();
   const searchId = useId();
   const rowsId = useId();
   return (
@@ -895,8 +897,9 @@ export function ListToolbar({
             </Select>
           </div>
 
-          <Button onClick={() => amcRefresh(onRefresh)} variant="outline" disabled={loading}>
-            <RefreshCwIcon className="size-4 sm:mr-1" />
+          {/* Turns while the list (and anything else on the page) reads again (27 Nov 2026: nothing showed it). */}
+          <Button onClick={() => amcRefresh(onRefresh)} variant="outline" disabled={loading || refreshing} aria-label="Refresh">
+            <RefreshCwIcon className={cn("size-4 sm:mr-1", (loading || refreshing) && "animate-spin")} />
             <span className="hidden sm:inline">Refresh</span>
           </Button>
         </div>

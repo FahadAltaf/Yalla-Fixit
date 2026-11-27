@@ -68,9 +68,44 @@ type Entry = { at: number; stable: boolean; value: AmcJson };
 
 const done = new Map<string, Entry>();
 const inFlight = new Map<string, Promise<AmcJson>>();
+/* The generation each in-flight read started in: a fresh read can share one started since the last save or Refresh. */
+const inFlightGen = new Map<string, number>();
 /* Bumped by every write, so a read that started before it is not stored after it. */
 let generation = 0;
 let freshDepth = 0;
+
+/*
+  Refresh (27 Nov 2026): every AMC loader on the page reloads, not only the
+  page's own record (a visit's charge, quotation, access and job sheet
+  cards kept what they had), and the button turns while the reads it set
+  off are on their way (a list's Refresh showed nothing happening).
+*/
+export const AMC_REFRESH_EVENT = "amc:refresh";
+let pendingReads = 0;
+let refreshing = false;
+const refreshListeners = new Set<() => void>();
+function setRefreshing(next: boolean) {
+  if (refreshing === next) return;
+  refreshing = next;
+  for (const listener of refreshListeners) listener();
+}
+/* Done once nothing is left on its way (a beat later, for reads that start after a render). */
+function settleRefresh(delay: number) {
+  setTimeout(() => {
+    if (pendingReads === 0) setRefreshing(false);
+  }, delay);
+}
+/** For useAmcRefreshing: told when a Refresh starts and when its reads are in. */
+export function subscribeAmcRefreshing(listener: () => void): () => void {
+  refreshListeners.add(listener);
+  return () => {
+    refreshListeners.delete(listener);
+  };
+}
+/** Whether a Refresh is still loading. */
+export function amcRefreshing(): boolean {
+  return refreshing;
+}
 
 const pathOf = (url: string) => url.split("#")[0];
 /* "/api/amc-contracts/assessments/123?x" → "/api/amc-contracts/assessments": a write's own area. */
@@ -150,9 +185,14 @@ export function amcFetchJson(url: string, init?: RequestInit): Promise<AmcJson> 
     if (hit && now - hit.at <= (hit.stable ? STABLE_TTL_MS : RECORD_TTL_MS)) return Promise.resolve(hit.value);
     const pending = inFlight.get(key);
     if (pending) return pending;
+  } else {
+    /* Fresh, but one Refresh can ask twice (a card's own reload and the page's): share a read started since it (27 Nov 2026). */
+    const pending = inFlight.get(key);
+    if (pending && inFlightGen.get(key) === generation) return pending;
   }
 
   const startedIn = generation;
+  pendingReads += 1;
   const request = send(url, init).then((value) => {
     if (inFlight.get(key) === request) inFlight.delete(key);
     /* Kept only when it succeeded and nothing was saved while it was on its way. */
@@ -166,7 +206,12 @@ export function amcFetchJson(url: string, init?: RequestInit): Promise<AmcJson> 
   request.catch(() => {
     if (inFlight.get(key) === request) inFlight.delete(key);
   });
+  void request.then(
+    () => readSettled(),
+    () => readSettled(),
+  );
   inFlight.set(key, request);
+  inFlightGen.set(key, startedIn);
   return request;
 }
 
@@ -213,8 +258,20 @@ export async function amcRest<T = unknown>(
   return (value && value.data !== undefined ? value.data : value) as T;
 }
 
-/** A Refresh button: drops the cached AMC reads, then reloads, so what follows comes from the server. */
+function readSettled() {
+  pendingReads = Math.max(0, pendingReads - 1);
+  if (refreshing && pendingReads === 0) settleRefresh(150);
+}
+
+/**
+ * A Refresh button: drops the cached AMC reads, tells every AMC loader on
+ * the page to read again (useAmcData, useAmcRefreshSignal), and runs
+ * `reload`, so everything shown comes from the server.
+ */
 export function amcRefresh(reload?: () => void): void {
   clearAmcCache();
+  setRefreshing(true);
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(AMC_REFRESH_EVENT));
   reload?.();
+  settleRefresh(600);
 }

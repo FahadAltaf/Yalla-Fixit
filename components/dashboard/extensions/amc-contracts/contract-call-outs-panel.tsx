@@ -230,7 +230,6 @@ export function ContractCallOutsPanel({ contractId, contractOpen }: { contractId
                   icon={<PhoneCall />}
                   title="No call outs yet"
                   description="When the client calls about a fault, log it here: the coverage answer and the SLA clock start at once."
-                  action={canLog ? { label: "Log call out", onClick: () => logging.show(true) } : undefined}
                 />
               }
             />

@@ -149,6 +149,39 @@ async function portalOnlyClients(
   return rows.filter((r) => !inFsm.has(r.id));
 }
 
+/**
+ * The portal's clients whose name (or Client ID, company, phone, email)
+ * matches a search, FSM-linked ones too, with the FSM contact Snagging
+ * linked them to. Zoho FSM's contact search matches only a last name, an
+ * email or a phone, so "Test Client QA" found nobody there (27 Nov 2026);
+ * these fill that gap on the first page of a search.
+ */
+async function portalMatches(
+  admin: Admin,
+  search: string,
+): Promise<Array<{ customer: CustomerRecord; fsmContactId: string | null }>> {
+  const term = safeTerm(search);
+  if (!term) return [];
+  const { data, error } = await admin
+    .from(CLIENT_DIRECTORY)
+    .select(CUSTOMER_COLUMNS)
+    .or(searchFilter(term))
+    .order("name")
+    .limit(PORTAL_ONLY_LIMIT);
+  if (error) throw new ContractError(error.message, 400);
+  const rows = ((data ?? []) as unknown as Row[]).map(mapCustomer);
+  if (rows.length === 0) return [];
+  const { data: linked } = await admin
+    .from("snagging_clients")
+    .select("id, fsm_contact_id")
+    .in(
+      "id",
+      rows.map((r) => r.id),
+    );
+  const fsmOf = new Map(((linked ?? []) as Row[]).map((r) => [String(r.id), r.fsm_contact_id ? String(r.fsm_contact_id) : null]));
+  return rows.map((customer) => ({ customer, fsmContactId: fsmOf.get(customer.id) ?? customer.fsmContactId ?? null }));
+}
+
 export async function listClientsPage(
   admin: Admin,
   query: {
@@ -176,12 +209,15 @@ export async function listClientsPage(
   */
   let fsm: Awaited<ReturnType<typeof listContacts>>;
   let portalOnly: CustomerRecord[];
+  let matches: Awaited<ReturnType<typeof portalMatches>>;
   try {
     const token = await getFsmAccessToken(admin);
     const paging = { page: query.page, perPage: query.perPage };
-    [fsm, portalOnly] = await Promise.all([
+    const firstPage = query.page === 0;
+    [fsm, portalOnly, matches] = await Promise.all([
       search ? searchContacts(token, search, paging) : listContacts(token, paging),
-      query.page === 0 ? portalOnlyClients(admin, search) : Promise.resolve([] as CustomerRecord[]),
+      firstPage ? portalOnlyClients(admin, search) : Promise.resolve([] as CustomerRecord[]),
+      firstPage && search ? portalMatches(admin, search) : Promise.resolve([]),
     ]);
   } catch (error) {
     if (!(error instanceof FsmApiError) && !(error instanceof FsmConfigError)) throw error;
@@ -241,11 +277,17 @@ export async function listClientsPage(
     };
   });
   const shown = new Set(fsmRows.map((r) => r.id).filter(Boolean));
+  const shownContacts = new Set(fsmRows.map((r) => r.fsmContactId).filter(Boolean));
+  const onlyHere = portalOnly.filter((c) => !shown.has(c.id));
+  for (const c of onlyHere) shown.add(c.id);
+  // Name matches FSM's search missed: linked clients keep their FSM contact.
+  const named = matches
+    .filter((m) => !shown.has(m.customer.id) && !(m.fsmContactId && shownContacts.has(m.fsmContactId)))
+    .map((m) => fromCustomer(m.customer, !m.fsmContactId, m.fsmContactId));
   return {
     clients: [
-      ...portalOnly
-        .filter((c) => !shown.has(c.id))
-        .map((c) => fromCustomer(c, true, null)),
+      ...onlyHere.map((c) => fromCustomer(c, true, null)),
+      ...named,
       ...fsmRows,
     ],
     hasMore,

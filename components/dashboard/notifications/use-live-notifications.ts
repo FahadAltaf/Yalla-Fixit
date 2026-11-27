@@ -49,10 +49,13 @@ export function useLiveNotifications(enabled: boolean) {
     let channel: RealtimeChannel | null = null;
     let token: string | null = null;
     let renewTimer: ReturnType<typeof setTimeout> | null = null;
+    /* When the token runs out (ms), to renew on waking only when it is due. */
+    let expiresAtMs: number | null = null;
     const shown = new Set<string>();
 
     const scheduleRenew = (expiresAt: number | null) => {
       if (renewTimer) clearTimeout(renewTimer);
+      expiresAtMs = expiresAt ? expiresAt * 1000 : null;
       /* A minute before the token runs out; at least 30 s, at most an hour. */
       const wait = expiresAt ? expiresAt * 1000 - Date.now() - 60_000 : 30 * 60_000;
       renewTimer = setTimeout(() => void renew(), Math.min(Math.max(wait, 30_000), 60 * 60_000));
@@ -117,9 +120,14 @@ export function useLiveNotifications(enabled: boolean) {
       scheduleRenew(access.expiresAt);
     })();
 
-    /* A laptop waking from sleep: the timer may have missed the renewal. */
+    /*
+      A laptop waking from sleep: the timer may have missed the renewal.
+      Only when the token is near its end (27 Nov 2026): every return to the
+      tab used to ask for a new one.
+    */
     const onVisible = () => {
-      if (document.visibilityState === "visible" && client) void renew();
+      if (document.visibilityState !== "visible" || !client) return;
+      if (expiresAtMs === null || expiresAtMs - Date.now() < 2 * 60_000) void renew();
     };
     document.addEventListener("visibilitychange", onVisible);
 

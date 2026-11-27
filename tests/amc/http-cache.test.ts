@@ -1,7 +1,7 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 
-import { amcFetchJson, amcFresh, amcRefresh, amcRequest, clearAmcCache } from "@/lib/amc/http-cache";
+import { AMC_REFRESH_EVENT, amcFetchJson, amcFresh, amcRefresh, amcRefreshing, amcRequest, clearAmcCache, subscribeAmcRefreshing } from "@/lib/amc/http-cache";
 
 /* A fake fetch that counts calls per "METHOD url" and answers { url, n }. */
 let calls: string[] = [];
@@ -112,3 +112,44 @@ test("a read that was on its way during a save is not stored", async () => {
   await amcRequest("/api/amc-contracts/properties/p1");
   assert.equal(gets(), 2);
 });
+
+/* 27 Nov 2026: Refresh reads every card on the page again, turns while it does, and asks once per card. */
+test("Refresh tells every loader on the page, and says when its reads are in", async () => {
+  const target = new EventTarget();
+  const before = (globalThis as { window?: unknown }).window;
+  (globalThis as { window?: unknown }).window = target;
+  let heard = 0;
+  target.addEventListener(AMC_REFRESH_EVENT, () => (heard += 1));
+  const changes: boolean[] = [];
+  const stop = subscribeAmcRefreshing(() => changes.push(amcRefreshing()));
+  try {
+    let open!: () => void;
+    gate = new Promise((r) => (open = r));
+    amcRefresh(() => void amcFresh(() => amcRequest("/api/amc-contracts/c1")));
+    assert.equal(heard, 1, "the cards are told");
+    assert.equal(amcRefreshing(), true, "turning while the read is on its way");
+    open();
+    await new Promise((r) => setTimeout(r, 900));
+    assert.equal(amcRefreshing(), false, "stops once it is in");
+    assert.equal(changes.at(-1), false, "the button is told it stopped");
+  } finally {
+    stop();
+    (globalThis as { window?: unknown }).window = before;
+  }
+});
+
+test("two fresh reads of one Refresh share a request; a save after it reads again", async () => {
+  let open!: () => void;
+  gate = new Promise((r) => (open = r));
+  clearAmcCache();
+  const a = amcFresh(() => amcRequest("/api/amc-field-work/call_out/x/charge"));
+  const b = amcFresh(() => amcRequest("/api/amc-field-work/call_out/x/charge"));
+  open();
+  await Promise.all([a, b]);
+  assert.equal(gets(), 1, "the card's own reload and the page's ask once");
+  gate = null;
+  await amcFetchJson("/api/amc-field-work/call_out/x/charge", { method: "POST", body: "{}" });
+  await amcFresh(() => amcRequest("/api/amc-field-work/call_out/x/charge"));
+  assert.equal(gets(), 2, "after a save it is read again");
+});
+

@@ -29,6 +29,7 @@ import {
 
 import { formatContractDate, formatDateTime } from "./contract-status";
 
+import { useAmcRefreshSignal } from "./use-amc-data";
 type Entitlement = ContractDetail["entitlements"][number];
 type Visit = ContractFsmActivity["visits"][number];
 
@@ -93,6 +94,8 @@ export function ContractFsm({
   useEffect(() => {
     void load();
   }, [load]);
+  /* The page's Refresh reads this again too (27 Nov 2026). */
+  useAmcRefreshSignal(load);
 
   /* Asked first (11 Nov 2026): it acts at once, so it is confirmed like every other step. */
   const checkFsm = () =>

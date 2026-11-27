@@ -572,12 +572,13 @@ function estimateBody(
   };
 }
 
-async function readEstimate(token: string, id: string): Promise<Row | null> {
+export async function readEstimate(token: string, id: string): Promise<Row | null> {
   const res = await fsmGetRecord<Row>(token, "Estimates", id);
   return res.ok ? (res.record ?? null) : null;
 }
 
-async function createEstimate(token: string, body: unknown) {
+/* Also used by AMC quotations (lib/server/amc/quotations.ts, 27 Nov 2026). */
+export async function createEstimate(token: string, body: unknown) {
   const res = await fsmFetch(
     token,
     "/Estimates",
@@ -608,7 +609,8 @@ const TRANSITION: Record<"mark_as_sent" | "approve" | "reject" | "cancel" | "con
   cancel: /^cancel/i,
 };
 
-async function transition(
+/* Also used by AMC quotations (lib/server/amc/quotations.ts, 27 Nov 2026). */
+export async function transition(
   token: string,
   estimateId: string,
   action: keyof typeof TRANSITION,

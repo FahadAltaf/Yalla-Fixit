@@ -100,7 +100,7 @@ import { UsageHistory } from "./usage-history";
 import { TruncateIfText, TruncatedText } from "@/components/ui/truncated-text";
 import { Fact } from "@/components/dashboard/extensions/amc/steps/review-step";
 import { amcRefresh } from "@/lib/amc/http-cache";
-import { useAmcData } from "./use-amc-data";
+import { useAmcData, useAmcRefreshing } from "./use-amc-data";
 import { callOutsService } from "@/modules/amc-contracts/call-outs-service";
 
 /* "What each service covers" on the Coverage tab: hidden for now. The terms still apply to call outs and print in the contract. */
@@ -269,6 +269,8 @@ export function ContractDetail({ id }: { id: string }) {
     void load();
   }, [load]);
 
+  /* Turns while every tab's reads are in (27 Nov 2026). */
+  const refreshingAll = useAmcRefreshing();
   const toolbar = (onRefresh: () => void) => (
     <div className="flex flex-wrap items-center justify-between gap-2">
       <BackToContracts />
@@ -276,8 +278,8 @@ export function ContractDetail({ id }: { id: string }) {
         {fetchedAt ? (
           <span className="text-muted-foreground hidden text-xs sm:inline">Updated {formatClock(fetchedAt)}</span>
         ) : null}
-        <Button variant="outline" size="sm" onClick={() => amcRefresh(onRefresh)} disabled={loading} aria-label="Refresh this contract">
-          <RefreshCw className={loading ? "size-4 animate-spin" : "size-4"} />
+        <Button variant="outline" size="sm" onClick={() => amcRefresh(onRefresh)} disabled={loading || refreshingAll} aria-label="Refresh this contract">
+          <RefreshCw className={loading || refreshingAll ? "size-4 animate-spin" : "size-4"} />
           <span className="hidden sm:inline">Refresh</span>
         </Button>
       </div>

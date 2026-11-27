@@ -168,7 +168,7 @@ export function ChargeCard({
                 : "Add the services the crew will do, so the client knows the price before the visit."
               : "Add the services and their price: they are the quotation the client approves."
           }
-          action={servicesEditable ? { label: "Add services", onClick: () => setEditing(true) } : undefined}
+          /* Add services is in the card's header only (27 Nov 2026: it showed twice). */
         />
       ) : (
         <div className="grid gap-4">

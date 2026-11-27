@@ -2,7 +2,7 @@
 
 import { useId, useState } from "react";
 import type { ColumnDef } from "@tanstack/react-table";
-import { EllipsisVerticalIcon, LoaderCircleIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
+import { EllipsisVerticalIcon, LoaderCircleIcon, SearchIcon } from "lucide-react";
 
 import { DataTable } from "@/components/data-table";
 import { Button } from "@/components/ui/button";
@@ -10,7 +10,8 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { amcRefresh } from "@/lib/amc/http-cache";
+
+import { AmcRefreshButton } from "./refresh-button";
 
 /**
  * Toolbar for the AMC settings and report tables: the same shape as the
@@ -95,10 +96,7 @@ export function ConfigTableToolbar({
             </div>
           ) : null}
           {onRefresh ? (
-            <Button onClick={() => amcRefresh(onRefresh)} variant="outline" disabled={loading}>
-              <RefreshCwIcon className="size-4 sm:mr-1" />
-              <span className="hidden sm:inline">Refresh</span>
-            </Button>
+            <AmcRefreshButton onRefresh={onRefresh} loading={loading} />
           ) : null}
         </div>
       </div>

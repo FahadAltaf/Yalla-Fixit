@@ -252,13 +252,8 @@ export function CallOutsPage() {
                   ? "No call out matches this search and filter."
                   : "When a client calls about a fault on an AMC property, log it here: the coverage answer and the SLA clock start at once."
               }
-              action={
-                all.length && filtered
-                  ? { label: "Clear filters", variant: "outline", onClick: clearFilters }
-                  : data?.canCreate && data.migrated
-                    ? { label: "Log call out", onClick: () => logging.show(true) }
-                    : undefined
-              }
+              /* Log call out is in the page header only (27 Nov 2026: it showed twice). */
+              action={all.length && filtered ? { label: "Clear filters", variant: "outline", onClick: clearFilters } : undefined}
             />
           }
         />

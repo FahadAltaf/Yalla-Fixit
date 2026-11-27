@@ -11,6 +11,7 @@ import { amcContractsService, type ContractsDashboard } from "@/modules/amc-cont
 
 import { formatContractDate } from "./contract-status";
 
+import { useAmcRefreshSignal } from "./use-amc-data";
 const BASE = "/extensions/amc-contracts";
 
 /**
@@ -23,6 +24,9 @@ const SHOW_RECENT_USAGE = false;
 export function ContractsSummary({ refreshKey }: { refreshKey: number }) {
   const [data, setData] = useState<ContractsDashboard | null>(null);
   const [failed, setFailed] = useState(false);
+  /* The page's Refresh reads this again too (27 Nov 2026). */
+  const [tick, setTick] = useState(0);
+  useAmcRefreshSignal(() => setTick((t) => t + 1));
 
   useEffect(() => {
     let stale = false;
@@ -37,7 +41,7 @@ export function ContractsSummary({ refreshKey }: { refreshKey: number }) {
     return () => {
       stale = true;
     };
-  }, [refreshKey]);
+  }, [refreshKey, tick]);
 
   /* The list below shows its own error; the cards just step aside. */
   if (failed) return null;

@@ -1,10 +1,10 @@
 "use client";
 
 import { useId } from "react";
-import { LoaderCircleIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
+import { LoaderCircleIcon, SearchIcon } from "lucide-react";
 
 import { StatusSelect } from "@/components/data-table/toolbars/status-select";
-import { Button } from "@/components/ui/button";
+
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -14,7 +14,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { amcRefresh } from "@/lib/amc/http-cache";
+
+import { AmcRefreshButton } from "@/components/dashboard/extensions/amc-contracts/refresh-button";
 
 export type ProposalScope = "all" | "mine" | "others";
 
@@ -121,10 +122,7 @@ export function ProposalsToolbar({
             </Select>
           </div>
 
-          <Button onClick={() => amcRefresh(onRefresh)} variant="outline" disabled={isLoading}>
-            <RefreshCwIcon className="size-4 sm:mr-1" />
-            <span className="hidden sm:inline">Refresh</span>
-          </Button>
+          <AmcRefreshButton onRefresh={onRefresh} loading={isLoading} />
         </div>
       </div>
     </div>

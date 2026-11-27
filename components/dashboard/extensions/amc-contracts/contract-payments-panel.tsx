@@ -25,6 +25,7 @@ import { ChequeStatusBadge, DaysOverdue, InstalmentStatusBadge, isSettled } from
 import { VisitChargesSection } from "./visit-charge";
 import { TruncatedText } from "@/components/ui/truncated-text";
 
+import { useAmcRefreshSignal } from "./use-amc-data";
 /**
  * A contract's payments (Phase 7), loaded by the contract page itself so
  * its header (Record payment while it waits for the first instalment) and
@@ -57,6 +58,8 @@ export function useContractPayments(contractId: string, enabled: boolean) {
   useEffect(() => {
     void reload();
   }, [reload]);
+  /* The page's Refresh reads this again too (27 Nov 2026). */
+  useAmcRefreshSignal(reload);
 
   return { data, error, loading, reload };
 }

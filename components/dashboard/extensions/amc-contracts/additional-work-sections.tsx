@@ -36,6 +36,7 @@ import {
   type WorkCrewSuggestion,
   type WorkPhotoKind,
 } from "@/modules/amc-contracts/additional-works-service";
+import { shareGeneratedQuotation } from "@/modules/amc-contracts/quotations-service";
 
 import { CrewList, Fact, FactTile, Field, Muted, Panel, PanelEmpty, PhotosPanel, ReadText, errorText, SectionDialog, shortDateTime, useActionForm } from "./call-out-shared";
 import { SendDialog } from "./send-options";
@@ -272,8 +273,9 @@ export function useWorkActions(data: AdditionalWorkResponse | null, changed: () 
           contacts={{ email: approver?.email ?? null, phone: approver?.phone ?? null }}
           attach
           onSend={async (channel) => {
-            const r = await additionalWorksService.action(w.id, { action: "share", channel });
-            return { outcome: r.outcome ?? "prepared", message: r.message ?? "", whatsapp: r.whatsapp ?? null, link: r.link ?? null, file: r.file ?? null };
+            /* The quotation as Snagging's (27 Nov 2026): generated if there is none open, then a link the client answers on. */
+            const r = await shareGeneratedQuotation("additional_work", w.id, channel);
+            return { outcome: channel === "email" ? (r.emailed ? "sent" : "no_recipient") : channel === "whatsapp" ? "prepared" : "link_created", message: r.message, whatsapp: r.whatsapp, link: r.url, file: null };
           }}
           onDone={changed}
         />

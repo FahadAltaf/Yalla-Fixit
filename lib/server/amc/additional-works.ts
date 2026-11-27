@@ -27,7 +27,7 @@ import { alertCrewChange } from "@/lib/server/amc/crew-alerts";
 import { approveExpiredBooking } from "@/lib/server/amc/expired-booking";
 import { todayInDubai } from "@/lib/amc/contracts";
 import { checkCrewForSlot, fail, notMigrated, one, str, workPhotos } from "@/lib/server/amc/call-outs";
-import { ContractError } from "@/lib/server/amc/contracts";
+import { ContractError, tidyPropertyLabel } from "@/lib/server/amc/contracts";
 import { notifyUsers } from "@/lib/server/amc/notifications";
 import { recordSend } from "@/lib/server/amc/proposal-share";
 import { AMC_DOCUMENTS_BUCKET, renderPdf } from "@/lib/server/amc/signed-archive";
@@ -36,6 +36,7 @@ import { sendEmail } from "@/lib/server/send-email";
 import { initialOutcome, type SendChannel } from "@/lib/amc/send-channels";
 import { readCharge, recordChargePayment, syncWorkCharge } from "@/lib/server/amc/visit-charges";
 import { assertFsmQuotation, recordFsmQuotationSkip, setFsmQuotation } from "@/lib/server/amc/fsm-quotation";
+import { recordQuotationDecision, voidLiveQuotation } from "@/lib/server/amc/quotations";
 
 /**
  * Additional works on the server (Phase 11: DEV-407). Raised from a PPM
@@ -111,7 +112,7 @@ function mapWork(r: Row): AdditionalWorkRecord {
     contractId: String(r.contract_id),
     contractNumber: String(c.contract_number ?? c.proposal_number ?? ""),
     customerName: String(c.customer_name ?? ""),
-    propertyLabel: String(c.property_label ?? ""),
+    propertyLabel: tidyPropertyLabel(c.property_label) ?? "",
     ownerId: str(one(c.submission)?.owner_id),
     source: r.source as AdditionalWorkRecord["source"],
     visitId: str(r.visit_id),
@@ -434,6 +435,39 @@ export async function saveWorkServices(
   );
 }
 
+/* Shared with the client: the status, the call out it came from, and the coordinator told it waits on the client. */
+async function workShared(admin: Admin, row: Row, actor: Actor) {
+  const id = String(row.id);
+  await moveTo(admin, row, "shared", { shared_at: new Date().toISOString() }, actor);
+  await followCallOut(admin, str(row.call_out_id), actor);
+  const owner = str(one(one(row.contract)?.submission)?.owner_id);
+  if (owner) {
+    await notifyUsers(admin, {
+      event: "additional_work_awaiting_approval",
+      userIds: [owner],
+      title: `Quotation awaiting client approval: ${String(row.work_no)}`,
+      body: `${String(one(row.contract)?.customer_name ?? "")}: AED ${money(Number(row.total ?? 0))}.`,
+      link: `/extensions/amc-contracts/additional-works/${id}`,
+      entityType: "additional_work",
+      entityId: id,
+      contractId: String(row.contract_id),
+      dedupeKey: `additional_work_awaiting_approval:${id}:${String(row.quoted_at ?? "")}`,
+    });
+  }
+}
+
+/**
+ * A generated quotation was shared (27 Nov 2026): the work moves to Shared
+ * as with the old Share quotation, once; a second share keeps it there.
+ */
+export async function markWorkShared(admin: Admin, id: string, actor: Actor): Promise<void> {
+  const row = await loadWork(admin, id);
+  const status = String(row.status) as AdditionalWorkStatus;
+  if (status === "shared") return;
+  if (!canMoveWork(status, "shared")) throw new ContractError(`${String(row.work_no)} is ${ADDITIONAL_WORK_STATUS_LABELS[status].toLowerCase()}: prepare the quotation first.`, 409);
+  await workShared(admin, row, actor);
+}
+
 export async function performWorkAction(admin: Admin, id: string, action: AdditionalWorkAction, actor: Actor, config: AmcConfig) {
   const row = await loadWork(admin, id);
   const status = row.status as AdditionalWorkStatus;
@@ -472,6 +506,8 @@ export async function performWorkAction(admin: Admin, id: string, action: Additi
       return { ok: true as const };
     }
     case "quote": {
+      /* New services: a generated quotation for the old ones is set aside, its link stops (27 Nov 2026). */
+      await voidLiveQuotation(admin, "additional_work", id, "The services changed", actor).catch(() => undefined);
       const totals = quotationTotals(action.lines, Number(row.material_fee_percent ?? config.additionalWork.materialHandlingFeePercent));
       await moveTo(
         admin,
@@ -494,25 +530,12 @@ export async function performWorkAction(admin: Admin, id: string, action: Additi
     case "share": {
       if (!canMoveWork(status, "shared")) throw new ContractError(`${String(row.work_no)} is ${ADDITIONAL_WORK_STATUS_LABELS[status].toLowerCase()}: prepare the quotation first.`, 409);
       const sent = await shareQuotation(admin, row, actor, action.channel);
-      await moveTo(admin, row, "shared", { shared_at: now }, actor);
-      await followCallOut(admin, str(row.call_out_id), actor);
-      const owner = str(one(one(row.contract)?.submission)?.owner_id);
-      if (owner) {
-        await notifyUsers(admin, {
-          event: "additional_work_awaiting_approval",
-          userIds: [owner],
-          title: `Quotation awaiting client approval: ${String(row.work_no)}`,
-          body: `${String(one(row.contract)?.customer_name ?? "")}: AED ${money(Number(row.total ?? 0))}.`,
-          link: `/extensions/amc-contracts/additional-works/${id}`,
-          entityType: "additional_work",
-          entityId: id,
-          contractId: String(row.contract_id),
-          dedupeKey: `additional_work_awaiting_approval:${id}:${String(row.quoted_at ?? "")}`,
-        });
-      }
+      await workShared(admin, row, actor);
       return { ok: true as const, ...sent };
     }
     case "approve": {
+      /* A generated quotation follows (27 Nov 2026): approved by staff on the client's word. */
+      await recordQuotationDecision(admin, "additional_work", id, "approve", action.evidence, actor).catch(() => undefined);
       await moveTo(admin, row, "approved", { approved_at: now, approval_evidence: `${action.evidence}${action.approvedBy ? ` (approved by ${action.approvedBy})` : ""}` }, actor);
       /* Approved: what the client pays, from the quotation, on the contract's Payments tab (18 Nov 2026). */
       await syncWorkCharge(admin, id, actor).catch(() => null);
@@ -522,6 +545,7 @@ export async function performWorkAction(admin: Admin, id: string, action: Additi
       return { ok: true as const };
     }
     case "reject":
+      await recordQuotationDecision(admin, "additional_work", id, "reject", action.reason, actor).catch(() => undefined);
       await moveTo(admin, row, "rejected", { rejected_at: now, rejection_reason: action.reason }, actor, action.reason);
       return { ok: true as const };
     case "schedule": {
@@ -725,8 +749,15 @@ async function shareQuotation(admin: Admin, row: Row, actor: Actor, channel: Sen
     }
   }
   const { data: link } = await admin.storage.from(AMC_DOCUMENTS_BUCKET).createSignedUrl(path, 14 * 86_400);
-  /* No link in the text (18 Nov 2026): the coordinator attaches the quotation PDF. */
-  const message = `Dear ${approver?.name ?? w.customerName}, our technician found: ${w.finding.slice(0, 300)}. Please find attached quotation ${w.workNo}: AED ${money(w.totals.total)} incl. VAT. Please reply to approve.`;
+  /*
+    No link in the WhatsApp text (18 Nov 2026): the coordinator attaches the
+    quotation PDF. Shared as a link, the link is how the client gets it, so
+    the message carries it (27 Nov 2026: it said "attached" with nothing
+    attached). The finding's own full stop is not doubled.
+  */
+  const finding = w.finding.slice(0, 300).trim().replace(/[.\s]+$/, "");
+  const quote = channel === "link" && link?.signedUrl ? `Here is quotation ${w.workNo}: AED ${money(w.totals.total)} incl. VAT: ${link.signedUrl}` : `Please find attached quotation ${w.workNo}: AED ${money(w.totals.total)} incl. VAT.`;
+  const message = `Dear ${approver?.name ?? w.customerName}, our technician found: ${finding}. ${quote} Please reply to approve.`;
   const submissionId = str(one(contract.submission)?.id);
   if (submissionId) {
     await recordSend(admin, {

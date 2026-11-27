@@ -4,12 +4,16 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { AmcConfig } from "@/lib/amc/config";
 import { todayInDubai } from "@/lib/amc/contracts";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
-import { uploadDocument } from "@/lib/server/amc/client-profile";
+import { createAccessRule, uploadDocument } from "@/lib/server/amc/client-profile";
+import { ACCESS_TYPE_LABELS, type accessRuleSchema } from "@/lib/amc/client-profile";
+import type { z } from "zod";
 import { ContractError, isMissingTable } from "@/lib/server/amc/contracts";
 import { notifyUsers } from "@/lib/server/amc/notifications";
 import { getAssessment } from "@/lib/server/amc/business";
-import { performVisitAction, siteVisitAccess, visitDetail } from "@/lib/server/amc/visits";
+import { performVisitAction, siteVisitAccess, visitDetail, writePassType } from "@/lib/server/amc/visits";
 import { hashLinkToken, linkTokenExpiry, mintLinkToken } from "@/lib/server/link-token";
+
+type AccessRuleInput = z.infer<typeof accessRuleSchema>;
 
 /*
   Client links without a login for one PPM visit (22 Nov 2026):
@@ -157,6 +161,17 @@ function afterAnswer(work: () => Promise<unknown>): Promise<void> {
   }
 }
 
+/** A property rule as the client's page lists it (27 Nov 2026): what, who issues it, how long ahead. */
+function clientRuleView(r: { accessType: unknown; issuer?: unknown; leadTimeDays?: unknown }) {
+  const type = String(r.accessType);
+  return {
+    type,
+    label: (ACCESS_TYPE_LABELS as Record<string, string>)[type] ?? type.replace(/_/g, " "),
+    issuer: typeof r.issuer === "string" && r.issuer.trim() ? r.issuer.trim() : null,
+    leadTimeDays: Number(r.leadTimeDays ?? 0) || 0,
+  };
+}
+
 /** The link behind a token, or why it does not work. */
 export async function resolveClientLink(admin: Admin, raw: string): Promise<{ link: Row | null; problem: "not_found" | "expired" | "revoked" | "not_ready" | null }> {
   if (!/^[A-Za-z0-9_-]{20,100}$/.test(raw)) return { link: null, problem: "not_found" };
@@ -189,6 +204,7 @@ export async function clientLinkView(admin: Admin, link: Row, config: AmcConfig)
       confirmed: false,
       status: f.a.status,
       passesNeeded: access.accessRules.filter((r) => /pass|permit|clearance/i.test(String(r.accessType))).map((r) => `${String(r.accessType).replace(/_/g, " ")}${r.issuer ? ` (${r.issuer})` : ""}`),
+      rules: access.accessRules.map(clientRuleView),
       lastResponse: (link.response ?? null) as Row | null,
     };
   }
@@ -209,6 +225,7 @@ export async function clientLinkView(admin: Admin, link: Row, config: AmcConfig)
     confirmed: d.clientConfirmation === "confirmed",
     status: String(d.status),
     passesNeeded: passRules.map((r) => `${String(r.accessType).replace(/_/g, " ")}${r.issuer ? ` (${r.issuer})` : ""}`),
+    rules: link.purpose === "access_upload" ? d.accessRules.map(clientRuleView) : [],
     lastResponse: (link.response ?? null) as Row | null,
   };
 }
@@ -297,54 +314,133 @@ async function markPending(admin: Admin, documentId: string) {
 }
 
 /** DEV-494: a pass or permit from the client, kept on the visit; the coordinator checks it and marks access. */
-export async function uploadVisitPass(admin: Admin, link: Row, file: { bytes: Uint8Array; fileName: string }, input: { name: string; note?: string | null }, config: AmcConfig) {
-  if (link.purpose !== "access_upload") throw new ContractError("This link is not for uploading a pass.", 400);
+/** A pass the client sends (27 Nov 2026): what it is and until when it is valid. */
+export type ClientPassMeta = {
+  /** One of ACCESS_TYPES, or "other" with its own name. */
+  accessType: string;
+  /** The name for "other" (or a more exact one: "Emaar gate pass"). */
+  label?: string | null;
+  /** The last day the pass is valid, when it says so. */
+  validUntil?: string | null;
+};
+
+/** Where the client's pass and rules go: the visit (or site visit), its property, and its client. */
+async function passTarget(admin: Admin, link: Row, config: AmcConfig) {
   if (link.entity_type === "assessment") {
     const f = await siteVisitFacts(admin, String(link.entity_id));
-    const who = input.name.trim();
-    const sdoc = await uploadDocument(
-      admin,
-      {
-        level: "site_visit",
-        entityId: f.a.id,
-        customerId: f.a.customer?.id ?? null,
-        category: "Gate pass",
-        title: `Pass from ${who}`.slice(0, 200),
-        notes: input.note?.trim() ? `Uploaded by the client on the link: ${input.note.trim()}`.slice(0, 1000) : "Uploaded by the client on the link.",
-      },
-      file,
-      { id: null, label: `${who} (client)` },
-    );
-    await markPending(admin, sdoc.id);
-    const before = (link.response ?? {}) as Row;
-    const at = new Date().toISOString();
-    await admin.from(TABLE).update({ last_used_at: at, response: { uploads: Number(before.uploads ?? 0) + 1, name: who, at } }).eq("id", String(link.id));
-    await afterAnswer(() => tellCoordinator(admin, link, config, "Client uploaded a pass", `uploaded "${file.fileName}". Check it and mark the access approved.`, "visit_pass_uploaded"));
-    return { ok: true as const, documentId: sdoc.id };
+    return { level: "site_visit" as const, entityId: f.a.id, customerId: f.a.customer?.id ?? null, propertyId: f.a.property?.id ?? null };
   }
   const d = await visitDetail(admin, String(link.entity_id), config, new Date(), false);
   const { data: c } = await admin.from("amc_contracts").select("customer_id").eq("id", d.contractId).maybeSingle<Row>();
-  const name = input.name.trim();
+  return { level: "visit" as const, entityId: d.id, customerId: str(c?.customer_id), propertyId: d.propertyId };
+}
+
+const passLabel = (meta: ClientPassMeta | null) =>
+  meta ? (meta.label?.trim() || (ACCESS_TYPE_LABELS as Record<string, string>)[meta.accessType] || "Pass") : "Pass";
+
+/**
+ * DEV-494: a pass or permit from the client, kept on the visit (or site
+ * visit) as pending for the coordinator to check. 27 Nov 2026: each pass
+ * says what it is (its access type, or a name of its own) and until when it
+ * is valid, and is tied to the property's rule for that type; the client
+ * sends several, one file per request, and the coordinator is told once,
+ * after the last (quiet: true until then).
+ */
+export async function uploadVisitPass(
+  admin: Admin,
+  link: Row,
+  file: { bytes: Uint8Array; fileName: string },
+  input: { name: string; note?: string | null; meta?: ClientPassMeta | null; quiet?: boolean },
+  config: AmcConfig,
+) {
+  if (link.purpose !== "access_upload") throw new ContractError("This link is not for uploading a pass.", 400);
+  const t = await passTarget(admin, link, config);
+  const who = input.name.trim();
+  const meta = input.meta ?? null;
+  if (meta?.validUntil && !/^\d{4}-\d{2}-\d{2}$/.test(meta.validUntil)) throw new ContractError("Give the end date as a date.", 400);
+  const label = passLabel(meta);
   const doc = await uploadDocument(
     admin,
     {
-      level: "visit",
-      entityId: d.id,
-      customerId: str(c?.customer_id),
+      level: t.level,
+      entityId: t.entityId,
+      customerId: t.customerId,
       category: "Gate pass",
-      title: `Pass from ${name}`.slice(0, 200),
+      title: `${label} from ${who}`.slice(0, 200),
+      expiresOn: meta?.validUntil || null,
       notes: input.note?.trim() ? `Uploaded by the client on the link: ${input.note.trim()}`.slice(0, 1000) : "Uploaded by the client on the link.",
     },
     file,
-    { id: null, label: `${name} (client)` },
+    { id: null, label: `${who} (client)` },
   );
   await markPending(admin, doc.id);
-  const previous = (link.response ?? {}) as Row;
-  const now = new Date().toISOString();
-  await admin
-    .from(TABLE)
-    .update({ last_used_at: now, response: { uploads: Number(previous.uploads ?? 0) + 1, name, at: now } })
-    .eq("id", String(link.id));
-  await afterAnswer(() => tellCoordinator(admin, link, config, "Client uploaded a pass", `uploaded "${file.fileName}". Check it and mark the access approved.`, "visit_pass_uploaded"));
+  /* Tied to the property's rule for its type, when there is one (the coordinator can change it). */
+  if (meta && t.propertyId && meta.accessType !== "other") {
+    const { data: rule } = await admin
+      .from("amc_property_access_rules")
+      .select("id")
+      .eq("property_id", t.propertyId)
+      .eq("access_type", meta.accessType)
+      .eq("active", true)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle<Row>();
+    if (rule?.id) await writePassType(admin, doc.id, { accessRuleId: String(rule.id) }, t.propertyId).catch(() => undefined);
+  }
+  const before = (link.response ?? {}) as Row;
+  const at = new Date().toISOString();
+  await admin.from(TABLE).update({ last_used_at: at, response: { ...before, uploads: Number(before.uploads ?? 0) + 1, name: who, at } }).eq("id", String(link.id));
+  link.response = { ...before, uploads: Number(before.uploads ?? 0) + 1, name: who, at };
+  if (!input.quiet) {
+    await afterAnswer(() =>
+      tellCoordinator(admin, link, config, "Client uploaded a pass", `uploaded "${label}" (${file.fileName})${meta?.validUntil ? `, valid until ${fmtDay(meta.validUntil)}` : ""}. Check it and mark the access approved.`, "visit_pass_uploaded"),
+    );
+  }
   return { ok: true as const, documentId: doc.id };
+}
+
+/**
+ * The client tells the coordinator what was sent, once, after the last pass
+ * and any rules (27 Nov 2026).
+ */
+export async function finishClientPasses(admin: Admin, link: Row, input: { name: string; passes: number; rules: number; note?: string | null }, config: AmcConfig) {
+  if (link.purpose !== "access_upload") throw new ContractError("This link is not for uploading a pass.", 400);
+  if (input.passes <= 0 && input.rules <= 0) return { ok: true as const };
+  const parts = [
+    input.passes > 0 ? `${input.passes} ${input.passes === 1 ? "pass" : "passes"}` : null,
+    input.rules > 0 ? `${input.rules} access ${input.rules === 1 ? "rule" : "rules"} for the property` : null,
+  ].filter(Boolean);
+  await afterAnswer(() =>
+    tellCoordinator(
+      admin,
+      link,
+      config,
+      input.passes > 0 ? "Client uploaded passes" : "Client added access rules",
+      `sent ${parts.join(" and ")}${input.note?.trim() ? ` (“${input.note.trim().slice(0, 200)}”)` : ""}. Check them and mark the access approved.`,
+      "visit_pass_uploaded",
+    ),
+  );
+  return { ok: true as const };
+}
+
+/**
+ * What the property asks for before a crew can get in, as the client knows
+ * it (27 Nov 2026): kept as the property's access rules, said to come from
+ * the client, for every visit there. The coordinator checks them.
+ */
+export async function addClientAccessRules(admin: Admin, link: Row, input: { name: string; rules: AccessRuleInput[] }, config: AmcConfig) {
+  if (link.purpose !== "access_upload") throw new ContractError("This link is not for access details.", 400);
+  if (!input.rules.length) return { ok: true as const, added: 0 };
+  const t = await passTarget(admin, link, config);
+  if (!t.propertyId) throw new ContractError("This visit has no property to keep the rules on.", 409);
+  const who = input.name.trim();
+  for (const rule of input.rules.slice(0, 10)) {
+    await createAccessRule(
+      admin,
+      t.propertyId,
+      { ...rule, notes: [`Added by ${who} (client) on the link.`, rule.notes?.trim()].filter(Boolean).join(" ").slice(0, 2000) },
+      { id: null, label: `${who} (client)` },
+    );
+  }
+  return { ok: true as const, added: Math.min(input.rules.length, 10) };
 }

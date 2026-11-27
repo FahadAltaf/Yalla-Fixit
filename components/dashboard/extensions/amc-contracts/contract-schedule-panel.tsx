@@ -77,6 +77,7 @@ import {
 } from "./visit-status";
 import { ConfirmationUrgencyBadge, visitDayOf } from "./visit-board-shared";
 
+import { useAmcRefreshSignal } from "./use-amc-data";
 /**
  * A contract's PPM schedule (Phase 8), loaded by the contract page itself
  * so the Schedule tab's count and the tab read the same figures. A failed
@@ -107,6 +108,8 @@ export function useContractSchedule(contractId: string) {
   useEffect(() => {
     void reload();
   }, [reload]);
+  /* The page's Refresh reads this again too (27 Nov 2026). */
+  useAmcRefreshSignal(reload);
 
   return { data, error, loading, reload };
 }

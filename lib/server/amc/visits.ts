@@ -345,6 +345,8 @@ export interface PassView {
   level: "visit" | "property" | "site_visit" | "call_out" | "additional_work";
   entityId: string;
   fileName: string;
+  /** Its name: "Building permit from <client>" on a pass the client sent (27 Nov 2026). */
+  title: string | null;
   expiresOn: string | null;
   notes: string | null;
   uploadedAt: string;
@@ -355,7 +357,7 @@ export interface PassView {
   accessStatus: AccessStatus | null;
 }
 
-const PASS_COLUMNS = "id, level, entity_id, file_name, expires_on, notes, uploaded_at, uploader:user_profile!amc_documents_uploaded_by_fkey(full_name, email)";
+const PASS_COLUMNS = "id, level, entity_id, file_name, title, expires_on, notes, uploaded_at, uploader:user_profile!amc_documents_uploaded_by_fkey(full_name, email)";
 /* Until 20261117120000 the columns are missing: the passes are read without them. */
 const missingPassColumns = (e: { code?: string; message?: string } | null) =>
   Boolean(e && (e.code === "42703" || e.code === "PGRST204" || /access_(rule_id|status)/.test(e.message ?? "")));
@@ -381,6 +383,7 @@ export async function readPasses(admin: Admin, level: PassView["level"], ids: st
         level,
         entityId: String(d.entity_id),
         fileName: String(d.file_name),
+        title: str(d.title),
         expiresOn: str(d.expires_on),
         notes: str(d.notes),
         uploadedAt: String(d.uploaded_at),

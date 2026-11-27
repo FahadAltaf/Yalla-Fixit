@@ -212,6 +212,11 @@ test("messages never claim more than the facts, and dedupe keys separate rounds"
   assert.equal(dedupeKey("contract_expiring", { contractId: "c", threshold: 30 }), "contract_expiring:c:30");
   assert.notEqual(dedupeKey("proposal_submitted", { submissionId: "s", at: "a" }), dedupeKey("proposal_submitted", { submissionId: "s", at: "b" }));
   assert.match(amcMessage("client_rejected", { proposalNumber: "P" }).body, /^The client rejected P\.$/);
+  /* 27 Nov 2026: "Request a change" on the link is not reported as a rejection. */
+  const change = amcMessage("client_rejected", { proposalNumber: "P", signedByName: "Sami", reason: "Revision requested: plumbing 3 visits a year" });
+  assert.equal(change.title, "P: the client asked for a change");
+  assert.equal(change.body, "Sami asked for a change to P. What they asked: plumbing 3 visits a year. Revise it and send it again.");
+  assert.doesNotMatch(change.body, /rejected/);
 });
 
 /* ------------------------------------------------------------------ */

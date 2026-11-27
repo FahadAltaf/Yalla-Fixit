@@ -1,13 +1,13 @@
 "use client";
 
 import { useId, type ReactNode } from "react";
-import { LoaderCircleIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
+import { LoaderCircleIcon, SearchIcon } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { amcRefresh } from "@/lib/amc/http-cache";
+
+import { AmcRefreshButton } from "./refresh-button";
 
 /**
  * The toolbar for Finance's instalments and cheques tables, the same shape
@@ -78,10 +78,7 @@ export function PaymentsToolbar({
             </Select>
           </div>
 
-          <Button onClick={() => amcRefresh(onRefresh)} variant="outline" disabled={loading}>
-            <RefreshCwIcon className="size-4 sm:mr-1" />
-            <span className="hidden sm:inline">Refresh</span>
-          </Button>
+          <AmcRefreshButton onRefresh={onRefresh} loading={loading} />
         </div>
       </div>
     </div>
