@@ -185,6 +185,36 @@ export function rateItemFor(card: RateCard, serviceId: string, model: ModelChain
 }
 
 /**
+ * A package's lines whose visits a year the card's rates do not allow, per
+ * property model the package is offered on (every rate of the service when
+ * it is offered everywhere). 27 Nov 2026: Gold on live was saved with
+ * Plumbing once and Electrical 10 times a year while the rates allowed only
+ * 2 and 4, and proposals were priced at those. `counted` leaves out lines
+ * not counted in visits (the hotline, unlimited call-outs).
+ */
+export function packageFrequencyProblems(
+  card: RateCard,
+  pkg: Pick<RatePackage, "models" | "lines">,
+  counted: (serviceId: string) => boolean = () => true,
+): Array<{ serviceId: string; frequency: number; model: string; allowed: number[] }> {
+  const problems: Array<{ serviceId: string; frequency: number; model: string; allowed: number[] }> = [];
+  for (const line of pkg.lines) {
+    if (!counted(line.serviceId)) continue;
+    const rates = pkg.models.length
+      ? pkg.models.map((m) => rateItemFor(card, line.serviceId, m)).filter((r): r is RateItem => Boolean(r))
+      : card.items.filter((i) => !i.retired && i.serviceId === line.serviceId);
+    for (const rate of rates) {
+      const allowed = [...(rate.allowedFrequencies ?? [])];
+      if (allowed.length && !allowed.includes(line.frequency)) {
+        problems.push({ serviceId: line.serviceId, frequency: line.frequency, model: rate.model, allowed });
+        break;
+      }
+    }
+  }
+  return problems;
+}
+
+/**
  * The frequency the card allows nearest to the one wanted (a tie goes to
  * the higher, more visits being the safer reading). Unchanged when the card
  * does not limit it.

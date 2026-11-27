@@ -164,7 +164,9 @@ export function escalationRecipients(kind: AmcTodoKind, config: AmcConfig, level
     case "proposal_approval": {
       /* The approval level is in the key (…:l<level>, Phase 5); each escalation climbs one level more, level 3 at most. */
       const approvalLevel = Number(/:l([1-3])$/.exec(dedupeKey ?? "")?.[1] ?? 0);
-      return approversForLevel(config, Math.min((approvalLevel || 1) + level, 3));
+      /* A next level that names nobody falls back to the escalation contacts, so it reaches someone (27 Nov 2026). */
+      const next = approversForLevel(config, Math.min((approvalLevel || 1) + level, 3));
+      return next.length ? next : escalationPeople(config);
     }
     case "call_out":
     case "job_closure_review":

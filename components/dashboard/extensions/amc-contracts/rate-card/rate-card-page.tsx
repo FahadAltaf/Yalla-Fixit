@@ -29,6 +29,8 @@ import {
   RATE_BASIS_LABELS,
   diffRateCards,
   emptyRateCard,
+  nearestAllowedFrequency,
+  packageFrequencyProblems,
   packageSchema,
   promotionSchema,
   rateCardSchema,
@@ -615,7 +617,7 @@ function PackagesTab({ card, editing, services, onChange }: { card: RateCard; ed
     <SectionCard
       title="Packages"
       icon={<Package />}
-      description="Preset service sets, as in the brochure. Picking one in the wizard ticks its services with these units and visits."
+      description="Preset service sets, as in the brochure. Picking one on a new proposal ticks its services with these units and visits a year."
       bodyClassName="px-5 pb-5"
       action={
         editing ? (
@@ -649,6 +651,8 @@ function PackagesTab({ card, editing, services, onChange }: { card: RateCard; ed
             const visits = p.lines.reduce((n, l) => n + l.frequency, 0);
             const units = p.lines.reduce((n, l) => n + l.units, 0);
             const unpriced = p.lines.filter((l) => !priced(l.serviceId, p.models)).length;
+            /* Visits a year its rates do not allow: the wizard would move them (27 Nov 2026). */
+            const offCard = packageFrequencyProblems(card, p, (id) => !["covered", "unlimited"].includes(services.find((s) => s.id === id)?.frequencyType ?? ""));
             return (
               <div key={p.id} className={cn("bg-card flex flex-col overflow-hidden rounded-xl border shadow-xs", !p.active && "opacity-60")}>
                 <div className="flex items-start gap-3 border-b px-4 py-3.5">
@@ -658,7 +662,7 @@ function PackagesTab({ card, editing, services, onChange }: { card: RateCard; ed
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="truncate text-base font-semibold">{p.name}</span>
-                      {p.active ? <Tone tone="good">Active</Tone> : <Tone tone="neutral">Inactive</Tone>}
+                      {p.active ? <Tone tone="good">On proposals</Tone> : <Tone tone="neutral">Hidden from proposals</Tone>}
                     </div>
                     <div className="text-muted-foreground truncate text-xs">{p.models.length ? p.models.map((m) => MODEL_LABELS[m]).join(", ") : "Every property model"}</div>
                   </div>
@@ -701,6 +705,11 @@ function PackagesTab({ card, editing, services, onChange }: { card: RateCard; ed
                   </span>
                   <span className="text-foreground font-medium tabular-nums">{visits} visits a year</span>
                 </div>
+                {offCard.length ? (
+                  <div className="bg-warning/10 text-warning border-t px-4 py-2 text-xs">
+                    {offCard.map((w) => `${label(w.serviceId)}: ${w.frequency} a year, the rate allows ${w.allowed.join(" or ")}`).join("; ")}. Edit the package so proposals are priced as it shows.
+                  </div>
+                ) : null}
                 {unpriced ? (
                   <div className="bg-warning/10 text-warning border-t px-4 py-2 text-xs">
                     {unpriced} {unpriced === 1 ? "service has" : "services have"} no rate on the card yet, so proposals cannot use this package until {unpriced === 1 ? "it is" : "they are"} priced.
@@ -715,6 +724,7 @@ function PackagesTab({ card, editing, services, onChange }: { card: RateCard; ed
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         pkg={editingPkg === "new" ? null : editingPkg}
+        card={card}
         services={services}
         takenIds={card.packages.map((p) => p.id)}
         onSave={(pkg) => {
@@ -731,6 +741,7 @@ function PackageDialog({
   open,
   onOpenChange,
   pkg,
+  card,
   services,
   takenIds,
   onSave,
@@ -738,6 +749,7 @@ function PackageDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   pkg: RatePackage | null;
+  card: RateCard;
   services: Services;
   takenIds: string[];
   onSave: (pkg: RatePackage) => void;
@@ -754,10 +766,30 @@ function PackageDialog({
       setError(null);
     }
   }
+  /* The rates a line is priced on: each model the package is for, else every rate of the service. */
+  const ratesFor = (serviceId: string): RateItem[] =>
+    value.models.length
+      ? value.models.map((m) => rateItemFor(card, serviceId, m)).filter((r): r is RateItem => Boolean(r))
+      : card.items.filter((i) => !i.retired && i.serviceId === serviceId);
+  const allowedFor = (serviceId: string): number[] =>
+    [...new Set(ratesFor(serviceId).flatMap((r) => r.allowedFrequencies ?? []))].sort((a, b) => a - b);
+  /* Not counted in visits: the hotline (covered) and unlimited call-outs. */
+  const countedService = (serviceId: string) => !["covered", "unlimited"].includes(services.find((s) => s.id === serviceId)?.frequencyType ?? "");
   const setLine = (index: number, patch: Partial<RatePackage["lines"][number]>) => setValue((v) => ({ ...v, lines: v.lines.map((l, i) => (i === index ? { ...l, ...patch } : l)) }));
   const save = () => {
     const parsed = packageSchema.safeParse({ ...value, id: pkg?.id ?? uniqueId(value.name, takenIds) });
     if (!parsed.success) return setError(firstIssue(parsed));
+    /* Visits a year the rates allow, as the wizard prices them (27 Nov 2026). */
+    const counted = (id: string) => !["covered", "unlimited"].includes(services.find((s) => s.id === id)?.frequencyType ?? "");
+    const wrong = packageFrequencyProblems(card, parsed.data, counted);
+    if (wrong.length) {
+      const name = (id: string) => services.find((s) => s.id === id)?.label ?? id;
+      return setError(
+        wrong
+          .map((w) => `${name(w.serviceId)}: ${w.frequency} a year is not on the ${w.model === "any" ? "" : `${MODEL_LABELS[w.model as PropertyModel] ?? w.model} `}rate, which allows ${w.allowed.join(" or ")} a year.`)
+          .join(" "),
+      );
+    }
     onSave(parsed.data);
   };
   return (
@@ -793,50 +825,115 @@ function PackageDialog({
           </div>
           <div className="grid gap-2">
             <Label>Services</Label>
-            {value.lines.map((line, index) => (
-              <div key={index} className="flex items-center gap-2">
-                <Select value={line.serviceId} onValueChange={(serviceId) => setLine(index, { serviceId })}>
-                  <SelectTrigger className="min-w-0 flex-1" aria-label={`Service ${index + 1}`}>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {services.map((s) => (
-                      <SelectItem key={s.id} value={s.id}>
-                        {s.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Input className="w-16" type="number" min={1} value={line.units} onChange={(e) => setLine(index, { units: Math.max(1, Number(e.target.value) || 1) })} aria-label="Units" />
-                <Input
-                  className="w-16"
-                  type="number"
-                  min={1}
-                  value={line.frequency}
-                  onChange={(e) => setLine(index, { frequency: Math.max(1, Number(e.target.value) || 1) })}
-                  aria-label="Visits a year"
-                />
-                <Button
-                  size="icon"
-                  variant="ghost"
-                  className="size-8"
-                  disabled={value.lines.length <= 1}
-                  onClick={() => setValue((v) => ({ ...v, lines: v.lines.filter((_, i) => i !== index) }))}
-                  aria-label="Remove service"
-                >
-                  <Trash2 className="size-4" />
-                </Button>
-              </div>
-            ))}
-            <Button size="sm" variant="outline" className="w-fit" onClick={() => setValue((v) => ({ ...v, lines: [...v.lines, { serviceId: services[0]?.id ?? "", units: 1, frequency: 1 }] }))}>
+            {/*
+              Labelled columns (27 Nov 2026): two bare number boxes read as
+              nothing. Visits a year is a choice of the frequencies the rate
+              allows, and a service not counted in visits (the hotline) says
+              Included rather than offering a number.
+            */}
+            <div className="text-muted-foreground hidden grid-cols-[minmax(0,1fr)_4.5rem_8.5rem_2rem] gap-2 px-0.5 text-xs font-medium sm:grid">
+              <span>Service</span>
+              <span>Units</span>
+              <span>Visits a year</span>
+              <span className="sr-only">Remove</span>
+            </div>
+            {value.lines.map((line, index) => {
+              const counted = countedService(line.serviceId);
+              const allowed = allowedFor(line.serviceId);
+              const rate = ratesFor(line.serviceId)[0] ?? null;
+              const options = allowed.includes(line.frequency) || !allowed.length ? allowed : [...allowed, line.frequency].sort((a, b) => a - b);
+              return (
+                <div key={index} className="grid gap-1">
+                  <div className="grid grid-cols-[4.5rem_minmax(0,1fr)_2rem] items-center gap-2 sm:grid-cols-[minmax(0,1fr)_4.5rem_8.5rem_2rem]">
+                    <Select
+                      value={line.serviceId}
+                      onValueChange={(serviceId) => {
+                        const next = allowedFor(serviceId);
+                        setLine(index, { serviceId, frequency: countedService(serviceId) ? nearestAllowedFrequency(next, line.frequency) : 1 });
+                      }}
+                    >
+                      <SelectTrigger className="col-span-3 w-full min-w-0 sm:col-span-1" aria-label={`Service ${index + 1}`}>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {services.map((s) => (
+                          <SelectItem key={s.id} value={s.id}>
+                            {s.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Input type="number" min={1} value={line.units} onChange={(e) => setLine(index, { units: Math.max(1, Number(e.target.value) || 1) })} aria-label={`Units for service ${index + 1}`} />
+                    {!counted ? (
+                      <div className="text-muted-foreground flex h-9 items-center rounded-md border border-dashed px-3 text-sm">Included</div>
+                    ) : options.length ? (
+                      <Select value={String(line.frequency)} onValueChange={(v) => setLine(index, { frequency: Number(v) })}>
+                        <SelectTrigger className="w-full" aria-label={`Visits a year for service ${index + 1}`}>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {options.map((n) => (
+                            <SelectItem key={n} value={String(n)}>
+                              {n} a year{allowed.includes(n) ? "" : " (not on the rate)"}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <Input
+                        type="number"
+                        min={1}
+                        value={line.frequency}
+                        onChange={(e) => setLine(index, { frequency: Math.max(1, Number(e.target.value) || 1) })}
+                        aria-label={`Visits a year for service ${index + 1}`}
+                      />
+                    )}
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="size-8"
+                      disabled={value.lines.length <= 1}
+                      onClick={() => setValue((v) => ({ ...v, lines: v.lines.filter((_, i) => i !== index) }))}
+                      aria-label={`Remove service ${index + 1}`}
+                    >
+                      <Trash2 className="size-4" />
+                    </Button>
+                  </div>
+                  <p className="text-muted-foreground px-0.5 text-xs">
+                    {!counted
+                      ? "Covered for the whole term: not counted in visits."
+                      : rate
+                        ? `Priced ${rate.unit}: ${line.units} ${line.units === 1 ? "unit" : "units"} × ${line.frequency} ${line.frequency === 1 ? "visit" : "visits"} a year.`
+                        : "No rate on the card for this service yet: add one under Rates."}
+                  </p>
+                </div>
+              );
+            })}
+            <Button
+              size="sm"
+              variant="outline"
+              className="w-fit"
+              onClick={() =>
+                setValue((v) => {
+                  const serviceId = services[0]?.id ?? "";
+                  return { ...v, lines: [...v.lines, { serviceId, units: 1, frequency: countedService(serviceId) ? nearestAllowedFrequency(allowedFor(serviceId), 1) : 1 }] };
+                })
+              }
+            >
               <Plus className="size-4" />
               Add a service
             </Button>
-            <p className="text-muted-foreground text-xs">Units, then visits a year.</p>
+            <p className="text-muted-foreground text-xs">Units: how many of the thing the rate is priced on (for example AC units). Visits a year: how often each is serviced.</p>
           </div>
-          <label className="flex items-center gap-2 text-sm">
-            <Switch checked={value.active} onCheckedChange={(active) => setValue((v) => ({ ...v, active }))} />
-            Offered in the wizard
+          {/* "Offered in the wizard" read as nothing to the team (27 Nov 2026). */}
+          <label className="flex items-start gap-3 rounded-lg border p-3 text-sm">
+            <Switch className="mt-0.5" checked={value.active} onCheckedChange={(active) => setValue((v) => ({ ...v, active }))} />
+            <span className="grid gap-0.5">
+              <span className="font-medium">Show on new proposals</span>
+              <span className="text-muted-foreground text-xs">
+                On: the package is one of the choices under Package when a proposal is made. Off: it stays on the rate card but cannot be picked.
+              </span>
+            </span>
           </label>
           {error ? (
             <p className="text-destructive text-xs" role="alert">

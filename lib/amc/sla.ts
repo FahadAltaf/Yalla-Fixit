@@ -46,6 +46,39 @@ export const AMC_SLA_DEFAULTS: Record<CallOutClass, SlaDefinition> = {
   },
 };
 
+/** "120 minutes", "2 hours", "48 hours": a duration as a target reads. */
+function minutesText(minutes: number): string {
+  if (minutes % 60 === 0) {
+    const h = minutes / 60;
+    return `${h} hour${h === 1 ? "" : "s"}`;
+  }
+  return `${minutes} minutes`;
+}
+
+/**
+ * The targets as AMC configuration sets them (Scheduling and SLA), with the
+ * requirement defaults where none is given. 27 Nov 2026: the contract page,
+ * the coverage check and the FSM visit list printed the defaults (and "6 h")
+ * whatever the settings said.
+ */
+export function slaDefinitionsFrom(
+  sla?: { emergencyAttendMinutes?: number | null; nonEmergencyScheduleHours?: number | null } | null,
+): Record<CallOutClass, SlaDefinition> {
+  const emergency = sla?.emergencyAttendMinutes ?? AMC_SLA_DEFAULTS.emergency.targetMinutes;
+  const nonEmergency = (sla?.nonEmergencyScheduleHours ?? AMC_SLA_DEFAULTS.non_emergency.targetMinutes / 60) * 60;
+  return {
+    emergency: { ...AMC_SLA_DEFAULTS.emergency, targetMinutes: emergency, label: `Emergency attendance within ${minutesText(emergency)}` },
+    non_emergency: { ...AMC_SLA_DEFAULTS.non_emergency, targetMinutes: nonEmergency, label: `Non-emergency scheduling within ${minutesText(nonEmergency)}` },
+  };
+}
+
+/** "Emergency: 120 min", "Non-emergency: 48 h": the short form on a visit row. */
+export function slaShortLabel(definition: SlaDefinition): string {
+  const m = definition.targetMinutes;
+  const target = m % 60 === 0 && m >= 180 ? `${m / 60} h` : `${m} min`;
+  return `${definition.callOutClass === "emergency" ? "Emergency" : "Non-emergency"}: ${target}`;
+}
+
 export type SlaState =
   /* the measured event happened within target */
   | "met"

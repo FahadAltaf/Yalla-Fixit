@@ -298,3 +298,17 @@ test("every property type: its own rate, else its family's, else any", () => {
   assert.deepEqual(packagesFor(card, "warehouse").map((p) => p.id), ["office-pack"], "an office package covers warehouses");
   assert.deepEqual(packagesFor(card, "apartment"), [], "apartments are not villas");
 });
+
+test("a package line the rates do not allow is named, per model; the hotline is not counted", async () => {
+  /* 27 Nov 2026: Gold on live saved Electrical at 10 a year while the apartment rate allows 4. */
+  const { packageFrequencyProblems } = await import("@/lib/amc/rate-card");
+  const c = structuredClone(card);
+  c.items = [
+    { id: "e-apt", serviceId: "electrical-ppm", model: "apartment", standardRate: 43, floorRate: 23, allowedFrequencies: [4], retired: false } as (typeof c.items)[number],
+    { id: "h-any", serviceId: "helpdesk", model: "any", standardRate: 100, floorRate: 100, allowedFrequencies: [2], retired: false } as (typeof c.items)[number],
+  ];
+  const pkg = { models: ["apartment"] as never, lines: [{ serviceId: "electrical-ppm", units: 6, frequency: 10 }, { serviceId: "helpdesk", units: 1, frequency: 1 }] };
+  const wrong = packageFrequencyProblems(c, pkg, (id) => id !== "helpdesk");
+  assert.deepEqual(wrong, [{ serviceId: "electrical-ppm", frequency: 10, model: "apartment", allowed: [4] }]);
+  assert.deepEqual(packageFrequencyProblems(c, { ...pkg, lines: [{ serviceId: "electrical-ppm", units: 6, frequency: 4 }] }), []);
+});

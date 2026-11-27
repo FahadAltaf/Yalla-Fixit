@@ -145,7 +145,11 @@ export async function POST(req: NextRequest) {
     if (problem) return NextResponse.json({ error: problem }, { status: 400 });
     const submitConfig = await readAmcConfig(admin);
     /* BRD 5.7: the contract term, against the configured minimum, before it goes for approval. */
-    const { data: dates } = await admin.from("amc_submissions").select("customer").eq("id", existing.id).maybeSingle<{ customer: { startDate?: string; endDate?: string } | null }>();
+    const { data: dates } = await admin.from("amc_submissions").select("customer, payment_plan").eq("id", existing.id).maybeSingle<{ customer: { startDate?: string; endDate?: string } | null; payment_plan?: string | null }>();
+    /* "Other payment plans" switched off in Approvals and payments: no custom plan, not only in the wizard (27 Nov 2026). */
+    if (dates?.payment_plan === "custom" && !submitConfig.payments.customPlanAllowed) {
+      return NextResponse.json({ error: "Custom payment plans are switched off in AMC configuration (Approvals and payments). Choose one of the standard plans." }, { status: 400 });
+    }
     const term = dates?.customer?.startDate && dates.customer.endDate ? proposalTermMonths(dates.customer.startDate, dates.customer.endDate) : null;
     const termProblem = term !== null ? checkTerm(term, submitConfig.contracts) : null;
     if (termProblem) return NextResponse.json({ error: `${termProblem} This proposal runs ${term} months.` }, { status: 400 });

@@ -38,6 +38,8 @@ import {
   usageError,
 } from "@/lib/server/amc/contracts";
 import { readAmcSettings } from "@/lib/server/amc/settings";
+import { readAmcConfig } from "@/lib/server/amc/config";
+import { slaDefinitionsFrom, slaShortLabel } from "@/lib/amc/sla";
 import { getFsmContactSummary } from "@/lib/server/zoho/contacts";
 import { FsmConfigError, fsmGetRecord, getFsmAccessToken } from "@/lib/server/zoho/fsm-client";
 import { getFsmWorkOrderLines, searchFsmWorkOrders } from "@/lib/server/zoho/work-orders";
@@ -1001,11 +1003,14 @@ export interface FsmVisit {
 
 export async function contractFsmActivity(admin: Admin, contractId: string) {
   const { contract, entitlements } = await loadContract(admin, contractId);
-  const [customer, { links, migrated }, { mappings, migrated: mappingsMigrated }] = await Promise.all([
+  const [customer, { links, migrated }, { mappings, migrated: mappingsMigrated }, config] = await Promise.all([
     loadContractFsmCustomer(admin, contractId),
     loadLinks(admin, contractId),
     loadServiceMappings(admin),
+    readAmcConfig(admin),
   ]);
+  /* The response targets as Scheduling and SLA sets them (27 Nov 2026). */
+  const slaDefinitions = slaDefinitionsFrom(config.sla);
   const automation = automationSummary(AMC_FSM_AUTOMATION);
   const coverageOfMappings = mappingCoverage(entitlements, mappings);
   const callOutClasses = entitlements.map((e) => e.callOutClass).filter(Boolean);
@@ -1146,10 +1151,10 @@ export async function contractFsmActivity(admin: Admin, contractId: string) {
       requestedAt: link?.requestedAt ?? null,
       snapshot: { actualStart: (s.fsm_actual_start_at as string | null) ?? null },
       completed: isCompletedAppointment({ status: (s.fsm_status as string | null) ?? null, actualEnd: (s.fsm_actual_end_at as string | null) ?? null }),
-    });
+    }, { definitions: slaDefinitions });
     if (ent?.callOutClass) {
       v.sla = {
-        label: ent.callOutClass === "emergency" ? "Emergency: 120 min" : "Non-emergency: 6 h",
+        label: slaShortLabel(slaDefinitions[ent.callOutClass]),
         state: sla.state,
         actualMinutes: sla.actualMinutes,
         missing: sla.missing,

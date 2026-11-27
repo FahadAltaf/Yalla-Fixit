@@ -59,7 +59,7 @@ export const AMC_BROCHURE_FIELDS = [
     label: "Why choose: point 3 (fast forward)",
     hint: "The title, a blank line, then the text.",
     value:
-      "Fast Response Times\n\nEmergency call-outs attended within 120 minutes; non-emergency visits scheduled within 6 hours.",
+      "Fast Response Times\n\nEmergency call-outs attended within 120 minutes; non-emergency visits scheduled within 48 hours.",
   },
   {
     key: "why4",
