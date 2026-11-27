@@ -132,8 +132,12 @@ test("periods: valid, invalid, default end date", () => {
   assert.equal(validatePeriod("2026-10-01", "2026-09-30").ok, false);
   assert.equal(validatePeriod("2026-02-30", "2027-01-01").ok, false, "not a real date");
   assert.equal(validatePeriod("01/10/2026", "2027-01-01").ok, false, "wrong format");
-  assert.equal(defaultEndDate("2026-10-01"), "2027-10-01");
-  assert.equal(defaultEndDate("2026-10-01", 6), "2027-04-01");
+  /* DEV-372: a term ends the day before the same date (27 Nov 2026: the proposal now agrees with activation). */
+  assert.equal(defaultEndDate("2026-10-01"), "2027-09-30");
+  assert.equal(defaultEndDate("2026-10-01", 6), "2027-03-31");
+  assert.equal(defaultEndDate("2026-12-01"), "2027-11-30");
+  assert.equal(defaultEndDate("2027-01-31", 1), "2027-02-27", "31 Jan for a month ends the day before 28 Feb");
+  assert.equal(defaultEndDate("not a date"), null);
   assert.equal(addMonths("2026-01-31", 1), "2026-02-28", "month end clamps");
 });
 
@@ -249,9 +253,9 @@ test("renewal: pre-filled from the contract, current catalogue, old contract unc
   const frozen = JSON.stringify(source);
   const draft = buildRenewalDraft(source, ["ac-ppm", "handyman", "emergency"]);
   assert.equal(JSON.stringify(source), frozen, "the source is not modified");
-  /* The day after the old end date (no overlap), same 12-month term. */
+  /* The day after the old end date (no overlap), same 12-month term, ending the day before (DEV-372). */
   assert.equal(draft.customer.startDate, "2027-10-02");
-  assert.equal(draft.customer.endDate, "2028-10-02");
+  assert.equal(draft.customer.endDate, "2028-10-01");
   assert.equal(draft.customer.proposalNumber, "", "the new proposal gets its own number");
   assert.deepEqual(draft.services.map((s) => s.serviceId), ["ac-ppm", "handyman", "emergency"]);
   assert.deepEqual(draft.droppedServiceIds, ["helpdesk"], "services no longer offered are reported");
@@ -315,4 +319,30 @@ test("additional-service discount: nothing applies until configured", () => {
   assert.equal(additionalServicePrice({ serviceKey: "painting", standardPrice: 400, hasContractInForce: false, config }).eligible, false);
   assert.equal(additionalServicePrice({ serviceKey: "plumbing", standardPrice: 400, hasContractInForce: true, config }).eligible, false);
   assert.equal(discountedPrice(99.99, 25), 74.99, "rounded half up to the fil");
+});
+
+test("a contract's property label does not repeat the unit the address starts with (27 Nov 2026)", async () => {
+  const { propertyLabelOf } = await import("@/lib/server/amc/contracts");
+  assert.equal(propertyLabelOf({ propertyDetail: "Unit 101", propertyAddress: "Unit 101, Test Tower QA, JLT, Dubai" }), "Unit 101, Test Tower QA, JLT, Dubai");
+  assert.equal(propertyLabelOf({ propertyDetail: "Villa 7", propertyAddress: "Street 4, Arabian Ranches" }), "Villa 7 — Street 4, Arabian Ranches");
+  assert.equal(propertyLabelOf({ propertyDetail: "", propertyAddress: "Street 4" }), "Street 4");
+  assert.equal(propertyLabelOf({}), "");
+});
+
+test("a term is counted to its last day inclusive: both ways of writing a year are 12 months, and renewals keep it (27 Nov 2026)", async () => {
+  const { termMonthsBetween, defaultEndDate: endOf } = await import("@/lib/amc/contracts");
+  const { buildRenewalDraft } = await import("@/lib/amc/renewal");
+  assert.equal(termMonthsBetween("2026-12-01", "2027-11-30"), 12, "DEV-372: ends the day before");
+  assert.equal(termMonthsBetween("2026-12-01", "2027-12-01"), 12, "written to the same date");
+  assert.equal(termMonthsBetween("2026-10-01", "2027-03-31"), 6);
+  assert.equal(termMonthsBetween("2026-01-01", "2026-03-31"), 3, "January to March served is three months");
+  assert.equal(termMonthsBetween("2026-01-01", "2026-03-15"), 2);
+  /* Three renewals in a row: still a year each, never a month shorter. */
+  let source = { id: "c", startDate: "2026-12-01", endDate: endOf("2026-12-01")!, customer: {}, property: {}, accountManagers: [], discountPercent: 0, entitlements: [] };
+  for (let i = 0; i < 3; i++) {
+    const draft = buildRenewalDraft(source as never, []);
+    assert.equal(termMonthsBetween(String(draft.customer.startDate), String(draft.customer.endDate)), 12);
+    source = { ...source, startDate: String(draft.customer.startDate), endDate: String(draft.customer.endDate) };
+  }
+  assert.deepEqual([source.startDate, source.endDate], ["2029-12-01", "2030-11-30"]);
 });

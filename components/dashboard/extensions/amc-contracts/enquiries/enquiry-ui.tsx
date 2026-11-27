@@ -14,6 +14,7 @@ import type { EnquiryRecord } from "@/modules/amc-contracts/enquiries-service";
 import { formatPhone, phoneHref } from "@/lib/phone/format-phone";
 import type { PropertyPlace } from "@/lib/server/amc/business";
 import { TruncateIfText } from "@/components/ui/truncated-text";
+import { dubaiInputIn, fromDubaiInput, toDubaiInput } from "@/lib/amc/dubai-clock";
 
 /* Soft-tinted pills in theme tokens, as on Snagging: one tone per part of the pipeline. */
 const TONE = {
@@ -80,31 +81,22 @@ export function EnquiryFlags({ enquiry, compact = false }: { enquiry: Pick<Enqui
 }
 
 /* ------------------------------------------------------------------ */
-/* Dates (portal users are in Dubai; inputs use the browser's clock)    */
+/* Dates: Dubai's clock in every input (26 Nov 2026, lib/amc/dubai-clock) */
 /* ------------------------------------------------------------------ */
 
-/** An instant as the value of a datetime-local input, in the browser's time. */
+/** An instant as the value of a datetime-local input, on Dubai's clock. */
 export function toLocalInput(iso: string | null | undefined): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-  return d.toISOString().slice(0, 16);
+  return toDubaiInput(iso);
 }
 
-/** A datetime-local value back to an instant (ISO with offset), or null when empty. */
+/** A datetime-local value, typed as Dubai time, back to an instant (ISO), or null when empty. */
 export function fromLocalInput(value: string): string | null {
-  if (!value) return null;
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  return fromDubaiInput(value);
 }
 
-/** Now, or `days` from now at 10:00, as a datetime-local value. */
+/** Now, or `days` from now at `hour`:00, as a datetime-local value on Dubai's clock. */
 export function localInputIn(days = 0, hour?: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() + days);
-  if (hour !== undefined) d.setHours(hour, 0, 0, 0);
-  return toLocalInput(d.toISOString());
+  return dubaiInputIn(days, hour);
 }
 
 /** "14:32" on the viewer's own clock, for the "Updated" note beside Refresh. */

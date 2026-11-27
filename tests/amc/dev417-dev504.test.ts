@@ -74,3 +74,14 @@ test("DEV-504: with FSM writes off nothing is sent and nothing is asked of the d
     else process.env.ZOHO_FSM = before;
   }
 });
+
+test("DEV-504: a client with no Maher ID is asked for one before Zoho FSM is called, not refused by it (27 Nov 2026)", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync("lib/server/snagging/fsm-clients.ts", "utf8");
+  const put = src.slice(src.indexOf("export async function putClientInFsm"));
+  const guard = put.indexOf("if (!maherId)");
+  assert.ok(guard > 0, "the Maher ID is checked");
+  assert.ok(guard > put.indexOf("findContactByEmail("), "a client FSM already has is linked by email without one");
+  assert.ok(guard < put.indexOf("createContact("), "asked for before FSM would refuse the contact");
+  assert.match(put.slice(guard, guard + 300), /missing_details[\s\S]*Maher ID[\s\S]*Edit client/);
+});

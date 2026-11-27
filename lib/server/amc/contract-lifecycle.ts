@@ -20,7 +20,7 @@ import {
 import { includedQuantityFor, termMonthsBetween, todayInDubai } from "@/lib/amc/contracts";
 import { grandTotalFromFinal, vatOnFinal } from "@/lib/amc/pricing";
 import { recordAmcAudit } from "@/lib/server/amc/audit";
-import { ContractError, isMissingTable, prepareActivation } from "@/lib/server/amc/contracts";
+import { ContractError, isMissingTable, prepareActivation, propertyLabelOf as sharedPropertyLabelOf } from "@/lib/server/amc/contracts";
 import { prospectBecomesClient, setContractStatus } from "@/lib/server/amc/contract-state";
 import { createSchedule } from "@/lib/server/amc/payments";
 import { ensurePpmSchedule } from "@/lib/server/amc/ppm";
@@ -57,11 +57,8 @@ type Actor = { id: string | null; label: string | null };
 export const LIFECYCLE_NOT_MIGRATED = "The contract lifecycle needs the AMC database update 20261007160000, which has not been applied yet.";
 
 const isDate = (v: unknown): v is string => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v);
-const propertyLabelOf = (property: Row) =>
-  [property.propertyDetail, property.propertyAddress]
-    .map((v) => (typeof v === "string" ? v.trim() : ""))
-    .filter(Boolean)
-    .join(" — ");
+/* One label for a contract's property (lib/server/amc/contracts.ts): the unit is not repeated. */
+const propertyLabelOf = (property: Row) => sharedPropertyLabelOf(property);
 
 export interface SignatoryRecord {
   id: string;

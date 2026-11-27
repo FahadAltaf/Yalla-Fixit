@@ -1,6 +1,7 @@
 import { format } from "date-fns";
 
 import type { ContractDisplayStatus, EntitlementState, EntitlementType } from "@/lib/amc/contracts";
+import { formatDubaiDate, formatDubaiDateTime } from "@/lib/amc/dubai-clock";
 
 /* Same colour language as the proposal statuses (amc-status.ts): green is
    in force, amber needs attention soon, red is over, muted is not yet. */
@@ -55,17 +56,17 @@ export const ENTITLEMENT_TYPE_LABELS: Record<EntitlementType, string> = {
   informational: "Included",
 };
 
-/** dd/MM/yyyy, as the AMC documents print dates. */
+/** dd/MM/yyyy, as the AMC documents print dates (an instant: its day in Dubai). */
 export function formatContractDate(value: string | null | undefined): string {
   if (!value) return "—";
-  const date = new Date(value.length === 10 ? `${value}T00:00:00` : value);
+  if (value.length !== 10) return formatDubaiDate(value);
+  const date = new Date(`${value}T00:00:00`);
   return Number.isNaN(date.getTime()) ? "—" : format(date, "dd/MM/yyyy");
 }
 
+/** "26 Nov 2026, 18:00", on Dubai's clock wherever the viewer is (26 Nov 2026). */
 export function formatDateTime(value: string | null | undefined): string {
-  if (!value) return "—";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "—" : format(date, "d MMM yyyy, HH:mm");
+  return formatDubaiDateTime(value);
 }
 
 /** "30 days left", "Ends today", "Ended 3 days ago", or "—". */

@@ -54,6 +54,28 @@ export async function recordAmcAudit(
   }
 }
 
+/** Several entries in one write (26 Nov 2026: a site visit's approval wrote one per change, ~0.7 s each on live). */
+export async function recordAmcAudits(admin: SupabaseClient, entries: AmcAuditEntry[]): Promise<void> {
+  if (!entries.length) return;
+  try {
+    const { error } = await admin.from(AUDIT_TABLE).insert(
+      entries.map((entry) => ({
+        entity_type: entry.entityType,
+        entity_id: entry.entityId ?? null,
+        event_type: entry.eventType,
+        actor_id: entry.actorId ?? null,
+        actor_label: entry.actorLabel ?? null,
+        origin: entry.origin ?? "portal",
+        justification: entry.justification ?? null,
+        payload: entry.payload ?? null,
+      })),
+    );
+    if (error) console.error("[amc:audit] insert failed:", error.message, entries[0].eventType);
+  } catch (error) {
+    console.error("[amc:audit] insert threw:", error);
+  }
+}
+
 /**
  * Which settings keys changed, for FR6.5's "who changed what".
  *

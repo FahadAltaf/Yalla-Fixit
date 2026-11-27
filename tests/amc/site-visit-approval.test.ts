@@ -117,3 +117,35 @@ test("a site visit submitted from the mobile app cannot be changed, its approver
   );
   assert.equal(fake.table("amc_assessments")[0].approver_id, APPROVER, "the approver named at submission stays");
 });
+
+test("approving many changes costs a handful of database calls, not four a change, and a retry adds nothing twice (26 Nov 2026)", async () => {
+  const { admin, fake } = setup();
+  const id = (n: number) => `77777777-7777-4777-8777-${String(n).padStart(12, "0")}`;
+  /* Four new assets and six new scope items, two of them on a new asset: ten changes, as ASM-2026-0001 on live. */
+  for (let n = 0; n < 4; n++) fake.table("amc_site_visit_changes").push({ assessment_id: SITE, entity: "asset", target_id: id(n), op: "insert", payload: { ...asset, location: `Room ${n}` }, updated_at: `2026-11-16T08:0${n}:00Z`, applied_at: null });
+  for (let n = 4; n < 10; n++) fake.table("amc_site_visit_changes").push({ assessment_id: SITE, entity: "scope", target_id: id(n), op: "insert", payload: { ...scope, assetId: n < 6 ? id(0) : null }, updated_at: `2026-11-16T08:1${n - 4}:00Z`, applied_at: null });
+  const client = fake.client as unknown as { from: (t: string) => unknown };
+  const from = client.from.bind(client);
+  let calls = 0;
+  client.from = (t: string) => (calls++, from(t));
+
+  await approveSiteVisit(admin, SITE, { id: APPROVER, label: "Sara" });
+  assert.equal(fake.table("amc_property_assets").length, 4);
+  assert.equal(fake.table("amc_scope_items").filter((r) => String(r.id).startsWith("77777777")).length, 6);
+  assert.ok(fake.table("amc_site_visit_changes").every((r) => r.applied_at), "every change marked applied");
+  /* The same approval with nothing held: what the changes themselves cost on top. */
+  const bare = setup();
+  const bareClient = bare.fake.client as unknown as { from: (t: string) => unknown };
+  const bareFrom = bareClient.from.bind(bareClient);
+  let bareCalls = 0;
+  bareClient.from = (t: string) => (bareCalls++, bareFrom(t));
+  await approveSiteVisit(bare.admin, SITE, { id: APPROVER, label: "Sara" });
+  assert.ok(calls - bareCalls <= 9, `${calls - bareCalls} calls for ten changes (was 40, four a change)`);
+
+  /* A retry after a failure before the "applied" mark: the same ids are skipped, not added again. */
+  for (const r of fake.table("amc_site_visit_changes")) r.applied_at = null;
+  fake.table("amc_assessments")[0].approved_at = null;
+  await approveSiteVisit(admin, SITE, { id: APPROVER, label: "Sara" });
+  assert.equal(fake.table("amc_property_assets").length, 4);
+  assert.equal(fake.table("amc_scope_items").filter((r) => String(r.id).startsWith("77777777")).length, 6);
+});

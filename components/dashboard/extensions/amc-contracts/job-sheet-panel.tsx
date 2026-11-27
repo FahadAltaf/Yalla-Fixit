@@ -1,7 +1,6 @@
 "use client";
 
 import { createContext, useContext, useEffect, useId, useRef, useState, type ReactNode } from "react";
-import { format } from "date-fns";
 import { AlertTriangle, CheckCircle2, ChevronDown, CircleDashed, LogIn, Package, Timer, ClipboardCheck, Database, Download, Eye, ExternalLink, FileText, Hammer, ImagePlus, Plus, Save, Send, Trash2, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -58,6 +57,7 @@ import { createPortal } from "react-dom";
 import { formatDateTime } from "./contract-status";
 import { useDialog } from "./profile/use-dialog";
 import { RaiseAdditionalWorkDialog } from "./raise-additional-work-dialog";
+import { fromDubaiInput, toDubaiInput } from "@/lib/amc/dubai-clock";
 
 /* ------------------------------------------------------------------ */
 /* Labels and tones                                                    */
@@ -108,16 +108,12 @@ const isCheckResult = (r: string): r is CheckResult => (CHECK_RESULTS as readonl
 const isPhotoKind = (k: string): k is PhotoKind => (PHOTO_KINDS as readonly string[]).includes(k);
 const newKey = () => `new-${Math.random().toString(36).slice(2)}`;
 
-/** An ISO timestamp as a datetime-local value, in the browser's time. */
+/** An ISO timestamp as a datetime-local value, on Dubai's clock (26 Nov 2026). */
 function toLocalInput(iso: string | null): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? "" : format(d, "yyyy-MM-dd'T'HH:mm");
+  return toDubaiInput(iso);
 }
 function fromLocalInput(value: string): string | null {
-  if (!value) return null;
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  return fromDubaiInput(value);
 }
 
 /* ------------------------------------------------------------------ */

@@ -450,8 +450,25 @@ function contractBlocks(
   const numberOf = new Map<string, string>();
   let major = 0;
   let minor = 0;
+  /*
+    Clauses that print as part of the clause above, with no heading of their
+    own (the bank table and invoice terms under the general terms, the
+    confirmation under termination, the other services under the
+    exclusions): they carry that clause's number and take no sub-number.
+    27 Nov 2026: the proposal's wording step listed them as "6.1 Bank
+    Details", "7.1 Confirmation" while the contract printed 6.1 as the first
+    general term.
+  */
+  const CONTINUES = new Set(["excludedOffer", "bankDetails", "invoiceTerms", "contractConfirmation", "signatures"]);
   for (const clause of clauses) {
     let number: string;
+    if (clause.level !== 1 && clause.role && CONTINUES.has(clause.role)) {
+      number = String(major);
+      numbered.push({ clause, number, subFrom: minor });
+      numberOf.set(clause.id, number);
+      numberOf.set(clause.role, number);
+      continue;
+    }
     if (clause.level === 1) {
       major += 1;
       minor = 0;

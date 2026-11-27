@@ -1,6 +1,6 @@
-import { addYears, format } from "date-fns";
+import { format } from "date-fns";
 
-import { proposalTermMonths } from "@/lib/amc/contracts";
+import { defaultEndDate, proposalTermMonths } from "@/lib/amc/contracts";
 
 export function parseIsoDate(value?: string): Date | undefined {
   if (!value) return undefined;
@@ -21,10 +21,9 @@ export function isEndDateBeforeStartDate(
   return endDate < startDate;
 }
 
+/* A year on, ending the day before (DEV-372, as activation counts it): see defaultEndDate. */
 export function getDefaultEndDateFromStart(startDate: string): string {
-  const parsed = parseIsoDate(startDate);
-  if (!parsed) return "";
-  return toIsoDate(addYears(parsed, 1));
+  return defaultEndDate(startDate, 12) ?? "";
 }
 
 /*

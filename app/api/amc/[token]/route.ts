@@ -6,6 +6,7 @@ import { notifyProposalEvent } from "@/lib/server/amc/notifications";
 import { archiveSignedContract } from "@/lib/server/amc/signed-archive";
 import { readAmcSettings } from "@/lib/server/amc/settings";
 import type { AmcSettings } from "@/components/dashboard/extensions/amc/amc-settings";
+import type { AmcDocumentSource } from "@/components/dashboard/extensions/amc/amc-types";
 import { clientTransition } from "@/lib/amc/workflow";
 import { createAdminServerClient } from "@/lib/supabase/supabase-helpers";
 import {
@@ -116,8 +117,15 @@ async function findByToken(token: string) {
 /**
  * FR5.5 / FR5.7 — what the client page needs to rebuild the full document
  * the team sent, with the same renderer. Only fields that print on the
- * document: the internal customer id stays behind, as do owner, status
- * history and the token columns.
+ * document: the internal customer id (the customer_id column) stays
+ * behind, as do owner, status history and the token columns.
+ *
+ * 27 Nov 2026 (AMC-C-2026-0001 on live): the client's contract printed
+ * "Customer ID: —" and "Terms of Payment: Annual" on a 50/50 proposal. The
+ * customer's `customerId` is the Customer ID the documents print (YFI1003),
+ * not the internal id, and the payment plan was never passed, so the
+ * document fell back to the old payment terms. Both now reach the client,
+ * who reads what the team previewed.
  */
 async function toPublicDocument(
   admin: Awaited<ReturnType<typeof createAdminServerClient>>,
@@ -125,7 +133,6 @@ async function toPublicDocument(
   kind: "proposal" | "contract",
 ) {
   const customer = { ...((row.customer ?? {}) as Record<string, unknown>) };
-  delete customer.customerId;
   const services = (row.services ?? []) as Array<{ serviceId?: string; included?: boolean }>;
   const includedIds = services
     .filter((service) => service.included && typeof service.serviceId === "string")
@@ -158,6 +165,8 @@ async function toPublicDocument(
       document_options: row.document_options ?? {},
       services,
       discount_percent: Number(row.discount_percent ?? 0),
+      payment_plan: (row.payment_plan ?? null) as AmcDocumentSource["payment_plan"],
+      payment_plan_custom: (row.payment_plan_custom ?? null) as AmcDocumentSource["payment_plan_custom"],
     },
     documentType: kind,
     /* Only what this document prints: no approver emails, no disabled

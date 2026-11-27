@@ -4,7 +4,6 @@ import { useCallback, useId, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
-import { format } from "date-fns";
 import { ClipboardCheck, Database, ExternalLink, LoaderCircleIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
 
 import { DataTable } from "@/components/data-table";
@@ -27,6 +26,7 @@ import { TruncatedText } from "@/components/ui/truncated-text";
 import { ModuleGuide } from "@/components/dashboard/extensions/amc-contracts/module-guide";
 import { visitPageHref } from "@/lib/amc/field-visits";
 import { amcRefresh } from "@/lib/amc/http-cache";
+import { formatDubaiShort } from "@/lib/amc/dubai-clock";
 
 const FILTER_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: "any", label: "All job sheets" },
@@ -40,8 +40,7 @@ const contractHref = (r: Pick<JobReviewItem, "contractId" | "visitId" | "kind">)
 const KIND_LABEL: Record<JobReviewItem["kind"], string> = { ppm: "Planned visit", call_out: "Call out", additional_work: "Additional work" };
 
 function submittedLabel(iso: string): string {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? "—" : format(d, "dd MMM HH:mm");
+  return formatDubaiShort(iso);
 }
 
 /**

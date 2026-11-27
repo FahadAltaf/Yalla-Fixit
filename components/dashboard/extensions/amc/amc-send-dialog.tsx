@@ -1,7 +1,6 @@
 "use client";
 
 import { useState } from "react";
-import { format } from "date-fns";
 import { Link as LinkIcon, MessageCircle, Plus, Send, TriangleAlert } from "lucide-react";
 
 import { SubmitButton } from "@/components/dashboard/shared/kaizen-states";
@@ -23,6 +22,7 @@ import { defaultShareChannel, whatsappNumber } from "@/lib/amc/approval-ladder";
 
 import type { AmcSubmission } from "./amc-types";
 import { formatPhone } from "@/lib/phone/format-phone";
+import { formatDubaiDateTime } from "@/lib/amc/dubai-clock";
 
 export type AmcSendDeliver = "email" | "link" | "whatsapp";
 
@@ -301,7 +301,7 @@ export function AmcSendDialog({
               <TriangleAlert className="text-warning size-4" />
               <AlertTitle>
                 A link was already sent on{" "}
-                {format(new Date(sentAt), "d MMM yyyy, HH:mm")}
+                {formatDubaiDateTime(sentAt)}
               </AlertTitle>
               <AlertDescription>
                 Sharing again creates a new link, and the one the client already

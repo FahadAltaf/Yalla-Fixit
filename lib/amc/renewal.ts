@@ -15,7 +15,7 @@
  * prices for the team to review. Whether renewals should start from a
  * standard rate card instead is open.
  */
-import { addMonths, shiftDays, termMonthsBetween, type ContractEntitlement } from "./contracts";
+import { defaultEndDate, shiftDays, termMonthsBetween, type ContractEntitlement } from "./contracts";
 
 export interface RenewalSource {
   id: string;
@@ -58,10 +58,10 @@ export function buildRenewalDraft(
   const term = Math.max(1, termMonthsBetween(source.startDate, source.endDate) ?? 12);
   /* The day after the old contract ends: both ends of a period are
      covered, so starting on the end date would overlap by a day. The new
-     period runs the same number of months, by the same convention as
-     activation (defaultEndDate: 2 Oct 2027 to 2 Oct 2028). */
+     period runs the same number of months and ends the day before the same
+     date (DEV-372, as activation counts it: 1 Dec 2027 to 30 Nov 2028). */
   const startDate = shiftDays(source.endDate, 1);
-  const endDate = addMonths(startDate, term) ?? "";
+  const endDate = defaultEndDate(startDate, term) ?? "";
 
   const services = source.entitlements
     .filter((e) => offered.has(e.serviceId))

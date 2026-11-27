@@ -1,3 +1,4 @@
+import { after } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { AmcConfig } from "@/lib/amc/config";
@@ -136,6 +137,26 @@ export async function createSiteVisitClientLink(admin: Admin, input: { assessmen
   return { url, expiresAt, message, phone: f.a.customer?.phone ?? null };
 }
 
+/*
+  The coordinator's notice goes out once the client has the answer (27 Nov
+  2026): it reads the whole visit and sends emails, and a confirmation on
+  live took 6.8 s with it in the way. Inside a request it runs after the
+  response; anywhere else (tests, scripts) it runs now and is awaited.
+*/
+function afterAnswer(work: () => Promise<unknown>): Promise<void> {
+  const run = () =>
+    work().then(
+      () => undefined,
+      (e) => console.error("[amc:client-link] notice not sent:", e instanceof Error ? e.message : e),
+    );
+  try {
+    after(run);
+    return Promise.resolve();
+  } catch {
+    return run();
+  }
+}
+
 /** The link behind a token, or why it does not work. */
 export async function resolveClientLink(admin: Admin, raw: string): Promise<{ link: Row | null; problem: "not_found" | "expired" | "revoked" | "not_ready" | null }> {
   if (!/^[A-Za-z0-9_-]{20,100}$/.test(raw)) return { link: null, problem: "not_found" };
@@ -254,15 +275,25 @@ export async function answerVisitConfirmation(
     .from(TABLE)
     .update({ last_used_at: now, response: { answer: input.answer, name, note: input.note?.trim() || null, preferredDate: input.preferredDate ?? null, at: now } })
     .eq("id", String(link.id));
-  await tellCoordinator(
+  await afterAnswer(() => tellCoordinator(
     admin,
     link,
     config,
     input.answer === "confirm" ? "Client confirmed the visit" : "Client asked to reschedule",
     input.answer === "confirm" ? "confirmed on the link." : `asked for another date${input.preferredDate ? ` (${fmtDay(input.preferredDate)})` : ""}. Agree a new date and move the visit.`,
     input.answer === "confirm" ? "visit_confirmed_by_client" : "visit_reschedule_requested",
-  );
+  ));
   return { ok: true as const };
+}
+
+/**
+ * A pass from the client waits for the coordinator's check (26 Nov 2026):
+ * without a status a pass counts as approved, so the client's upload showed
+ * Approved before anyone had looked at it.
+ */
+async function markPending(admin: Admin, documentId: string) {
+  const { error } = await admin.from("amc_documents").update({ access_status: "pending" }).eq("id", documentId);
+  if (error) console.warn("[amc:client-link] uploaded pass not marked pending:", error.message);
 }
 
 /** DEV-494: a pass or permit from the client, kept on the visit; the coordinator checks it and marks access. */
@@ -284,10 +315,11 @@ export async function uploadVisitPass(admin: Admin, link: Row, file: { bytes: Ui
       file,
       { id: null, label: `${who} (client)` },
     );
+    await markPending(admin, sdoc.id);
     const before = (link.response ?? {}) as Row;
     const at = new Date().toISOString();
     await admin.from(TABLE).update({ last_used_at: at, response: { uploads: Number(before.uploads ?? 0) + 1, name: who, at } }).eq("id", String(link.id));
-    await tellCoordinator(admin, link, config, "Client uploaded a pass", `uploaded "${file.fileName}". Check it and mark the access approved.`, "visit_pass_uploaded");
+    await afterAnswer(() => tellCoordinator(admin, link, config, "Client uploaded a pass", `uploaded "${file.fileName}". Check it and mark the access approved.`, "visit_pass_uploaded"));
     return { ok: true as const, documentId: sdoc.id };
   }
   const d = await visitDetail(admin, String(link.entity_id), config, new Date(), false);
@@ -306,12 +338,13 @@ export async function uploadVisitPass(admin: Admin, link: Row, file: { bytes: Ui
     file,
     { id: null, label: `${name} (client)` },
   );
+  await markPending(admin, doc.id);
   const previous = (link.response ?? {}) as Row;
   const now = new Date().toISOString();
   await admin
     .from(TABLE)
     .update({ last_used_at: now, response: { uploads: Number(previous.uploads ?? 0) + 1, name, at: now } })
     .eq("id", String(link.id));
-  await tellCoordinator(admin, link, config, "Client uploaded a pass", `uploaded "${file.fileName}". Check it and mark the access approved.`, "visit_pass_uploaded");
+  await afterAnswer(() => tellCoordinator(admin, link, config, "Client uploaded a pass", `uploaded "${file.fileName}". Check it and mark the access approved.`, "visit_pass_uploaded"));
   return { ok: true as const, documentId: doc.id };
 }
