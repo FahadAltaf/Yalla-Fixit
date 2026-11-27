@@ -28,7 +28,7 @@ import {
   type EntitlementType,
 } from "./contracts";
 import { resolveAppointmentState, type AppointmentState } from "@/lib/scheduling/appointment-status";
-import { evaluateSla, type SlaEvaluation } from "./sla";
+import { evaluateSla, type SlaDefinition, type SlaEvaluation } from "./sla";
 
 /* ------------------------------------------------------------------ */
 /* Configuration                                                       */
@@ -491,7 +491,11 @@ export function slaForVisit(
     snapshot: Pick<FsmAppointmentSnapshot, "actualStart"> | null;
     completed: boolean;
   },
-  { mapping = AMC_SLA_FSM_FIELDS, now = new Date() }: { mapping?: SlaFieldMapping; now?: Date } = {},
+  {
+    mapping = AMC_SLA_FSM_FIELDS,
+    now = new Date(),
+    definitions,
+  }: { mapping?: SlaFieldMapping; now?: Date; definitions?: Record<CallOutClass, SlaDefinition> } = {},
 ): VisitSla {
   const unknown = (missing: string): VisitSla => ({
     state: "unknown",
@@ -512,7 +516,7 @@ export function slaForVisit(
           ? "The attendance time is not mapped to an FSM field yet."
           : "FSM has no time for when the visit was booked.",
       ),
-      definition: evaluateSla(callOutClass, { requestedAt: input.requestedAt }, { now }).definition,
+      definition: evaluateSla(callOutClass, { requestedAt: input.requestedAt }, { now, definitions }).definition,
     };
   }
   const arrivedAt = field === "actual_start" ? input.snapshot?.actualStart ?? null : null;
@@ -523,7 +527,7 @@ export function slaForVisit(
     callOutClass === "emergency"
       ? { requestedAt: input.requestedAt, arrivedAt }
       : { requestedAt: input.requestedAt, scheduledAt: arrivedAt },
-    { now },
+    { now, definitions },
   );
   const actualMinutes =
     arrivedAt && input.requestedAt

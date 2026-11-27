@@ -75,7 +75,7 @@ export const SECTION_DEFS: SectionDef[] = [
       { key: "valueLevel3AboveAed", label: "Final value above (level 3)", kind: "number", unit: "AED", min: 0, nullable: true },
       { key: "nonStandardPlanLevel", label: "Approval level for an unusual payment plan", kind: "select", options: LEVELS, numeric: true, hint: "Which level approves a proposal whose payment plan is custom, or is not one of the plans allowed for its value below (for example monthly payments on a small contract)." },
       { key: "belowFloorLevel", label: "Approval level for a price below the minimum", kind: "select", options: LEVELS, numeric: true, hint: "Which level approves a proposal where a service ends up below its minimum (floor) rate on the rate card, after the discount or because a lower rate was typed in." },
-      { key: "escalateAfterHours", label: "Pass an undecided approval up after", kind: "number", unit: "hours", min: 1, max: 720, hint: "If nobody decides in this time, the next level's approvers are told and can decide it too. It keeps moving up, at most to level 3." },
+      { key: "escalateAfterHours", label: "Pass an undecided approval up after", kind: "number", unit: "hours", min: 1, max: 720, hint: "If nobody decides in this time, the next level's approvers are told and can decide it too. It keeps moving up, at most to level 3. Checked by the morning job \"Escalate overdue AMC to-dos\" (Daily jobs), which has to be on." },
     ],
   },
   {

@@ -91,7 +91,7 @@ export const AMC_JOBS: AmcJob[] = [
   },
   {
     key: "job_sheets",
-    label: "Job sheets not submitted after the visit, and service reports at risk of missing 48 hours",
+    label: "Job sheets not submitted after the visit, and service reports at risk of being late",
     run: async ({ admin, config, now }) => ({ ...(await runJobSheetSweep(admin, config, now)) }),
   },
   {

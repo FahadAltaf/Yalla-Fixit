@@ -242,6 +242,22 @@ test("to-do escalation goes to the next approval level, else to management (BRD 
   assert.deepEqual(escalationRecipients("proposal_approval", config, 1), ["m"]);
   assert.deepEqual(escalationRecipients("proposal_approval", config, 2), ["x"]);
   assert.deepEqual(escalationRecipients("renewal_due", config, 1), ["m"]);
+  /* 27 Nov 2026: a next level naming nobody falls back to the escalation contacts, not to nobody. */
+  config.approvals.level3ApproverIds = [];
+  config.approvals.escalationUserIds = ["esc"];
+  assert.deepEqual(escalationRecipients("proposal_approval", config, 2), ["esc"]);
+});
+
+test("SLA targets follow AMC configuration (Scheduling and SLA), with the requirement defaults", async () => {
+  const { slaDefinitionsFrom, slaShortLabel } = await import("@/lib/amc/sla");
+  const d = slaDefinitionsFrom({ emergencyAttendMinutes: 90, nonEmergencyScheduleHours: 24 });
+  assert.equal(d.emergency.targetMinutes, 90);
+  assert.equal(d.emergency.label, "Emergency attendance within 90 minutes");
+  assert.equal(d.non_emergency.targetMinutes, 24 * 60);
+  assert.equal(d.non_emergency.label, "Non-emergency scheduling within 24 hours");
+  assert.equal(slaShortLabel(d.non_emergency), "Non-emergency: 24 h");
+  assert.equal(slaShortLabel(slaDefinitionsFrom(null).emergency), "Emergency: 120 min");
+  assert.equal(slaDefinitionsFrom(null).non_emergency.targetMinutes, 48 * 60);
 });
 
 /* -------------------------------- migration -------------------------------- */

@@ -458,6 +458,14 @@ export async function retryQuotationFsm(admin: Admin, kind: AmcQuoteKind, id: st
   if (!(await fsmClientWritesReady(admin))) return "Zoho FSM is not taking changes from this server (ZOHO_FSM is read-only or off).";
   const problem = await createInFsm(admin, data, await facts(admin, kind, id), actor);
   if (!problem && data.status === "sent") fsmStep(admin, String(data.id), "mark_as_sent", null);
+  /*
+    Made in FSM after the client approved (27 Nov 2026, AMQ-2026-0003 on
+    live: estimate 18250 stayed New): FSM offers Mark as Approved from New.
+  */
+  if (!problem && data.status === "approved") {
+    const by = str(data.approved_by_name);
+    fsmStep(admin, String(data.id), "approve", `Approved${by ? ` by ${by}` : ""}${data.decided_origin === "client" ? " on the client link" : ""}`);
+  }
   return problem;
 }
 

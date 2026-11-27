@@ -127,7 +127,7 @@ function namedPeopleRows(config: AmcConfig): Row[] {
       section: "approvals",
       field: "escalationUserIds",
       need: "amc",
-      help: `They decide nothing day to day. They are told, with a to-do, when something is stuck: a proposal not decided within ${hours} hours (they can then decide it too), a to-do not done in time, an enquiry left with no contact, a renewal nobody acts on, an instalment overdue.`,
+      help: `They decide nothing day to day. They are told, with a to-do, when something is stuck: a proposal approval past ${hours} hours whose next level names nobody, a to-do not done in time, an enquiry left with no contact, a renewal nobody acts on, an instalment overdue.`,
     },
     {
       key: "finance",
@@ -163,7 +163,11 @@ function namedPeopleRows(config: AmcConfig): Row[] {
       section: "contracts",
       field: "internalSignatoryIds",
       need: "contracts",
-      help: "After the client signs, the contract goes to them in the order picked, each signing in turn; it is signed once the last one has. Leave it empty if only the client signs.",
+      /* As "Who signs first" (Pipeline and contracts) sets it (27 Nov 2026). */
+      help:
+        config.contracts.signingOrder === "internal_first"
+          ? "They sign first, in the order picked, each in turn; then the contract goes to the client, and it is signed once the client has. Leave it empty if only the client signs."
+          : "After the client signs, the contract goes to them in the order picked, each signing in turn; it is signed once the last one has. Leave it empty if only the client signs.",
     },
   ];
 }

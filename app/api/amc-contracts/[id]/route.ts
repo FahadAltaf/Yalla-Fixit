@@ -12,7 +12,8 @@ import {
   usagePercent,
 } from "@/lib/amc/contracts";
 import { signedCommitments } from "@/lib/amc/commitments";
-import { AMC_SLA_DEFAULTS } from "@/lib/amc/sla";
+import { slaDefinitionsFrom } from "@/lib/amc/sla";
+import { readAmcConfig } from "@/lib/server/amc/config";
 import {
   contractErrorResponse,
   requireContractAccess,
@@ -93,8 +94,9 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     /* Service levels for the call-out services on this contract: the target
        only. Whether a call-out met it is unknown until FSM sends request
        and arrival times. */
+    const slaDefinitions = slaDefinitionsFrom((await readAmcConfig(gate.admin)).sla);
     const sla = [...new Set(entitlements.map((e) => e.callOutClass).filter((c) => c !== null))].map((c) => ({
-      ...AMC_SLA_DEFAULTS[c],
+      ...slaDefinitions[c],
       state: "unknown" as const,
     }));
     const inForce = contract.displayStatus === "active" || contract.displayStatus === "expiring";

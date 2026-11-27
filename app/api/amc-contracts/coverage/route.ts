@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 
-import { AMC_SLA_DEFAULTS } from "@/lib/amc/sla";
+import { slaDefinitionsFrom } from "@/lib/amc/sla";
+import { readAmcConfig } from "@/lib/server/amc/config";
 import { coverageVerdict, todayInDubai } from "@/lib/amc/contracts";
 import {
   contractErrorResponse,
@@ -77,7 +78,7 @@ export async function GET(req: NextRequest) {
       date,
       /* The target for call-outs. Whether it was met is not known: the
          portal does not yet receive request and arrival times from FSM. */
-      sla: callOutClass ? { ...AMC_SLA_DEFAULTS[callOutClass], state: "unknown" as const } : null,
+      sla: callOutClass ? { ...slaDefinitionsFrom((await readAmcConfig(gate.admin)).sla)[callOutClass], state: "unknown" as const } : null,
     });
   } catch (error) {
     return contractErrorResponse(error, "Could not check coverage");

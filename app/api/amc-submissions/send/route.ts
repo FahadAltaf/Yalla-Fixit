@@ -367,7 +367,13 @@ export async function POST(req: NextRequest) {
   }
 
   const token = mintLinkToken();
-  const expiresAt = linkTokenExpiry();
+  /*
+    A proposal's link lasts as long as the proposal is valid (Pipeline and
+    contracts, "Proposal valid for"), never less than the usual 30 days
+    (27 Nov 2026: a validity over 30 days outlived its link).
+  */
+  const linkDays = document === "proposal" ? await readAmcConfig(admin).then((c) => Math.max(30, c.proposals.validityDays)).catch(() => undefined) : undefined;
+  const expiresAt = linkTokenExpiry(linkDays);
   const now = new Date().toISOString();
   const prefix = document === "proposal" ? "proposal" : "contract";
 

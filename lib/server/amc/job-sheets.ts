@@ -1192,7 +1192,9 @@ export async function runJobSheetSweep(admin: Admin, config: AmcConfig, now = ne
     result.notSubmitted += 1;
   }
 
-  const warnBy = new Date(now.getTime() + 12 * 3_600_000).toISOString();
+  /* Warned once the set share of the window has passed (Scheduling and SLA; the defaults, 48 h and 75%, warn 12 h before). */
+  const reportHours = config.sla.serviceReportHours;
+  const warnBy = new Date(now.getTime() + reportHours * (1 - config.sla.atRiskPercent / 100) * 3_600_000).toISOString();
   const { data: risky } = await admin
     .from("amc_visits")
     .select("id, contract_id, visit_no, report_due_at, contract:amc_contracts!amc_visits_contract_id_fkey(contract_number, customer_name, submission:amc_submissions!amc_contracts_submission_id_fkey(owner_id))")
@@ -1211,7 +1213,7 @@ export async function runJobSheetSweep(admin: Admin, config: AmcConfig, now = ne
       event: "service_report_at_risk",
       userIds: [str(one(c.submission)?.owner_id), ...supervisors].filter((id): id is string => Boolean(id)),
       title: `${late ? "Service report late" : "Service report due soon"}: ${String(c.contract_number ?? "")} visit ${String(v.visit_no)}`,
-      body: `${String(c.customer_name ?? "")}: due by ${fmtDay(String(v.report_due_at))} ${fmtTime(String(v.report_due_at))} (contract clause 1.2: within 48 hours of the visit).`,
+      body: `${String(c.customer_name ?? "")}: due by ${fmtDay(String(v.report_due_at))} ${fmtTime(String(v.report_due_at))} (within ${reportHours} hours of the visit).`,
       link: `/extensions/amc-contracts/visits/${String(v.id)}`,
       entityType: "visit",
       entityId: String(v.id),
