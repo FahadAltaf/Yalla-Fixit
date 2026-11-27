@@ -343,7 +343,8 @@ function PackageField({
     setOwnChosen(false);
     form.setValue(
       "serviceRows",
-      applyPackage(form.getValues("serviceRows"), pkg),
+      /* At the frequencies the card shows for it, not the package's raw ones. */
+      applyPackage(form.getValues("serviceRows"), pkg, (sid) => (isFree(sid) ? [] : allowedFor(sid))),
       { shouldValidate: true, shouldDirty: true },
     );
   };

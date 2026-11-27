@@ -214,7 +214,8 @@ export function SendResultView({ channel, result, download }: { channel: SendCha
             Copy link
           </Button>
         </div>
-        <p className="text-muted-foreground text-xs">Anyone with the link can open it: share it only with the client. It works for 14 days.</p>
+        {/* No fixed lifetime here (27 Nov 2026): links last differently (a quotation's 30 days, a stored file's 14). */}
+        <p className="text-muted-foreground text-xs">Anyone with the link can open it: share it only with the client.</p>
         {result.message ? (
           <div className="bg-muted/30 grid gap-2 rounded-lg border px-4 py-3">
             <p className="text-muted-foreground text-xs">Or the whole message</p>

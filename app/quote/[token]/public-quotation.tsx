@@ -57,7 +57,30 @@ type QuoteData = SnaggingQuoteDoc & {
   decided_at?: string | null;
 };
 
-export function PublicQuotation({ token }: { token: string }) {
+/*
+  The same page serves AMC quotations (27 Nov 2026, /amc-quote/<token>):
+  only the API it talks to and what it says happens next differ.
+*/
+export type PublicQuotationCopy = {
+  /** After approval: what the team does next. */
+  approved: string;
+  /** In the approve dialog: what approving means. */
+  approveMeaning: string;
+};
+const SNAGGING_COPY: PublicQuotationCopy = {
+  approved: "Thank you. Your approval has been recorded, and our team will be in touch to schedule your inspection.",
+  approveMeaning: "This confirms you accept the quotation and its terms. It is final, and our team will proceed to schedule your inspection.",
+};
+
+export function PublicQuotation({
+  token,
+  apiBase = "/api/snagging/quotation",
+  copy = SNAGGING_COPY,
+}: {
+  token: string;
+  apiBase?: string;
+  copy?: PublicQuotationCopy;
+}) {
   const [quote, setQuote] = useState<QuoteData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -81,7 +104,7 @@ export function PublicQuotation({ token }: { token: string }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/snagging/quotation/${token}`, { cache: "no-store" });
+      const res = await fetch(`${apiBase}/${token}`, { cache: "no-store" });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
         setError(body?.error ?? "This quotation link is not available.");
@@ -125,7 +148,7 @@ export function PublicQuotation({ token }: { token: string }) {
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  }, [token, apiBase]);
 
   useEffect(() => {
     void load();
@@ -148,7 +171,7 @@ export function PublicQuotation({ token }: { token: string }) {
     if (decision === "reject" && !reason.trim()) return;
     setBusy(true);
     try {
-      const res = await fetch(`/api/snagging/quotation/${token}`, {
+      const res = await fetch(`${apiBase}/${token}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ decision, name: name.trim() || null, reason: reason.trim() || undefined }),
@@ -215,7 +238,7 @@ export function PublicQuotation({ token }: { token: string }) {
     return (
       <StatusMessageCard
         title="Quotation approved"
-        description="Thank you. Your approval has been recorded, and our team will be in touch to schedule your inspection."
+        description={copy.approved}
         icon={<CheckCircle2 size={32} className="text-green-600" />}
         iconBg="bg-green-50"
       />
@@ -280,7 +303,7 @@ export function PublicQuotation({ token }: { token: string }) {
                 {step === "name"
                   ? "We record this against your decision, so please tell us who you are."
                   : decision === "approve"
-                    ? "This confirms you accept the quotation and its terms. It is final, and our team will proceed to schedule your inspection."
+                    ? copy.approveMeaning
                     : "Tell us what is wrong and our team will follow up if anything can be revised."}
               </DialogDescription>
             </DialogHeader>

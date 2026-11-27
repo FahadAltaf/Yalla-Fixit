@@ -17,6 +17,7 @@ import { SubmissionDetails } from "./submission-details";
 import type { AmcSubmission } from "./amc-types";
 import { ProposalBodySkeleton } from "./proposal-skeletons";
 import { useAmcActions } from "./use-amc-actions";
+import { amcRefresh } from "@/lib/amc/http-cache";
 
 /**
  * /extensions/amc/<id> -- one proposal, on its own page.
@@ -72,6 +73,8 @@ export function AmcSubmissionDetail({ id }: { id: string }) {
   */
   const refresh = useCallback(async () => {
     setRefreshing(true);
+    /* From the server, and every tab of the proposal too (27 Nov 2026: a read within 15 s came from the cache). */
+    amcRefresh();
     try {
       apply(await amcSubmissionsService.getSubmission(id));
       toast.success("Up to date");

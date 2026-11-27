@@ -59,6 +59,7 @@ import { useDialog } from "./profile/use-dialog";
 import { RaiseAdditionalWorkDialog } from "./raise-additional-work-dialog";
 import { fromDubaiInput, toDubaiInput } from "@/lib/amc/dubai-clock";
 
+import { useAmcRefreshSignal } from "./use-amc-data";
 /* ------------------------------------------------------------------ */
 /* Labels and tones                                                    */
 /* ------------------------------------------------------------------ */
@@ -268,6 +269,8 @@ export function JobSheetPanel({
     formKey: 0,
   });
   const [attempt, setAttempt] = useState(0);
+  /* The page's Refresh reads this again too (27 Nov 2026). */
+  useAmcRefreshSignal(() => setAttempt((a) => a + 1));
   /* The service report's WhatsApp text, kept here so it outlives the form's remount after a close. */
   const [prepared, setPrepared] = useState<{ id: string; value: Prepared } | null>(null);
 

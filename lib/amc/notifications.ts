@@ -228,11 +228,24 @@ export function amcMessage(event: AmcNotificationEvent, f: AmcNotificationFacts)
         title: `${ref}: the client approved the proposal`,
         body: `${f.signedByName || "The client"} approved ${ref}${who}${where}. The contract can now be sent for signature.`,
       };
-    case "client_rejected":
+    case "client_rejected": {
+      /*
+        27 Nov 2026 (AMC-2026-0003 on live): "Request a change" on the link
+        is recorded as a declined proposal with the note "Revision
+        requested: ...", and the notice said the client had rejected it.
+      */
+      const change = f.reason?.match(/^Revision requested:\s*([\s\S]*)$/);
+      if (change) {
+        return {
+          title: `${ref}: the client asked for a change`,
+          body: `${f.signedByName || "The client"} asked for a change to ${ref}${who}${where}.${change[1].trim() ? ` What they asked: ${change[1].trim().replace(/([^.!?])$/, "$1.")}` : ""} Revise it and send it again.`,
+        };
+      }
       return {
         title: `${ref}: the client rejected the proposal`,
         body: `${f.signedByName || "The client"} rejected ${ref}${who}${where}.${f.reason ? ` Reason given: ${f.reason}` : ""}`,
       };
+    }
     case "contract_sent":
       return { title: `${ref}: contract sent for signature`, body: `The contract for ${ref}${who} was sent for signature${by}.` };
     case "contract_signed":

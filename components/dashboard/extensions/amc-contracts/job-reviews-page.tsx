@@ -4,7 +4,7 @@ import { useCallback, useId, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
-import { ClipboardCheck, Database, ExternalLink, LoaderCircleIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
+import { ClipboardCheck, Database, ExternalLink, LoaderCircleIcon, SearchIcon } from "lucide-react";
 
 import { DataTable } from "@/components/data-table";
 import { StatusSelect } from "@/components/data-table/toolbars/status-select";
@@ -25,8 +25,9 @@ import { useAmcData } from "./use-amc-data";
 import { TruncatedText } from "@/components/ui/truncated-text";
 import { ModuleGuide } from "@/components/dashboard/extensions/amc-contracts/module-guide";
 import { visitPageHref } from "@/lib/amc/field-visits";
-import { amcRefresh } from "@/lib/amc/http-cache";
+
 import { formatDubaiShort } from "@/lib/amc/dubai-clock";
+import { AmcRefreshButton } from "./refresh-button";
 
 const FILTER_OPTIONS: ReadonlyArray<{ value: string; label: string }> = [
   { value: "any", label: "All job sheets" },
@@ -304,10 +305,7 @@ function JobReviewsToolbar({
             </Select>
           </div>
 
-          <Button onClick={() => amcRefresh(onRefresh)} variant="outline" disabled={loading}>
-            <RefreshCwIcon className="size-4 sm:mr-1" />
-            <span className="hidden sm:inline">Refresh</span>
-          </Button>
+          <AmcRefreshButton onRefresh={onRefresh} loading={loading} />
         </div>
       </div>
     </div>

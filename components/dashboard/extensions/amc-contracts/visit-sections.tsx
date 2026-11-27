@@ -641,6 +641,8 @@ export function AccessSection({ visit: v, canEdit, working, setWorking, changed 
                           </Badge>
                         ) : null}
                       </span>
+                      {/* What the pass is, when no rule says it: the name the client gave it (27 Nov 2026). */}
+                      {!d.accessRuleId && d.title && !/^pass from /i.test(d.title) ? <span className="text-sm font-medium">{d.title}</span> : null}
                       {d.notes ? <span className="text-sm whitespace-pre-wrap">{d.notes}</span> : null}
                       <span className="text-muted-foreground text-xs">
                         Added {formatDateTime(d.uploadedAt)}

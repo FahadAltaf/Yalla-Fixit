@@ -5,6 +5,7 @@ import { ShieldCheck } from "lucide-react";
 
 import { amcContractsService, type FsmWorkOrderContext } from "@/modules/amc-contracts/amc-contracts-service";
 
+import { useAmcRefreshSignal } from "./use-amc-data";
 /**
  * On the scheduling board, under a chosen FSM work order: whether its
  * customer has an AMC and whether each service line is covered. Optional
@@ -15,6 +16,9 @@ export function AmcWorkOrderNotice({ workOrderId, date }: { workOrderId: string;
   /* Kept with the work order it answers for, so a new choice never shows the old answer. */
   const [answer, setAnswer] = useState<{ key: string; context: FsmWorkOrderContext } | null>(null);
   const key = `${workOrderId}|${date ?? ""}`;
+  /* The page's Refresh reads this again too (27 Nov 2026). */
+  const [tick, setTick] = useState(0);
+  useAmcRefreshSignal(() => setTick((t) => t + 1));
 
   useEffect(() => {
     let stale = false;
@@ -26,7 +30,7 @@ export function AmcWorkOrderNotice({ workOrderId, date }: { workOrderId: string;
     return () => {
       stale = true;
     };
-  }, [workOrderId, date]);
+  }, [workOrderId, date, tick]);
 
   const context = answer?.key === key ? answer.context : null;
   if (!context || context.status !== "checked") return null;

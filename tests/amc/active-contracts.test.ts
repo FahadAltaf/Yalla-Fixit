@@ -327,6 +327,12 @@ test("a contract's property label does not repeat the unit the address starts wi
   assert.equal(propertyLabelOf({ propertyDetail: "Villa 7", propertyAddress: "Street 4, Arabian Ranches" }), "Villa 7 — Street 4, Arabian Ranches");
   assert.equal(propertyLabelOf({ propertyDetail: "", propertyAddress: "Street 4" }), "Street 4");
   assert.equal(propertyLabelOf({}), "");
+  /* A label saved before the fix reads the unit once too, where it is shown. */
+  const { tidyPropertyLabel } = await import("@/lib/server/amc/contracts");
+  assert.equal(tidyPropertyLabel("Unit 101 — Unit 101, Test Tower QA, JLT, Dubai"), "Unit 101, Test Tower QA, JLT, Dubai");
+  assert.equal(tidyPropertyLabel("Villa 7 — Street 4, Arabian Ranches"), "Villa 7 — Street 4, Arabian Ranches");
+  assert.equal(tidyPropertyLabel("Street 4"), "Street 4");
+  assert.equal(tidyPropertyLabel(null), null);
 });
 
 test("a term is counted to its last day inclusive: both ways of writing a year are 12 months, and renewals keep it (27 Nov 2026)", async () => {

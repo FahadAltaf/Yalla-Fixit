@@ -8,6 +8,7 @@ import { callOutOwner } from "@/lib/server/amc/call-outs";
 import { contractErrorResponse, requireContractAccess } from "@/lib/server/amc/contract-access";
 import { UUID, fieldWorkRights } from "@/lib/server/amc/field-work-access";
 import { draftWorkCharge, priceList, readCharge, recordChargePayment, saveCallOutServices, syncWorkCharge } from "@/lib/server/amc/visit-charges";
+import { voidLiveQuotation } from "@/lib/server/amc/quotations";
 
 /*
   What a call out or additional work costs the client (18 Nov 2026).
@@ -87,7 +88,10 @@ export async function POST(req: NextRequest, ctx: Params) {
         await saveWorkServices(gate.admin, id, parsed.data.lines, actor, await readAmcConfig(gate.admin));
         return NextResponse.json({ charge: await draftWorkCharge(gate.admin, id) });
       }
-      return NextResponse.json({ charge: await saveCallOutServices(gate.admin, id, parsed.data.lines, actor, gate.canApprove || gate.actor.allowanceOverride) });
+      const saved = await saveCallOutServices(gate.admin, id, parsed.data.lines, actor, gate.canApprove || gate.actor.allowanceOverride);
+      /* New services: a generated quotation for the old ones is set aside, its link stops (27 Nov 2026). */
+      await voidLiveQuotation(gate.admin, "call_out", id, "The services changed", actor).catch(() => undefined);
+      return NextResponse.json({ charge: saved });
     }
     if (!rights.edit && !gate.payments.edit) return NextResponse.json({ error: "Recording a payment needs AMC Payments (Edit)." }, { status: 403 });
     const { action: _action, ...rest } = body as Record<string, unknown>;

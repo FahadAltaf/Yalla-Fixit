@@ -6,7 +6,9 @@ import { ArrowLeft, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { SectionSkeleton, StatGridSkeleton } from "@/components/dashboard/shared/kaizen-states";
 import { amcRefresh } from "@/lib/amc/http-cache";
+import { useAmcRefreshing } from "./use-amc-data";
 
 /**
  * The top of every AMC record page (client, property, enquiry, site visit,
@@ -39,6 +41,8 @@ export function DetailToolbar({
   refreshing?: boolean;
   onRefresh?: () => void;
 }) {
+  /* Turns while every card's reads are in, not only the page's own (27 Nov 2026). */
+  const busy = useAmcRefreshing() || Boolean(refreshing);
   return (
     <div className="flex flex-wrap items-center justify-between gap-2">
       <Button asChild variant="ghost" size="sm" className="-ml-2 self-start">
@@ -50,8 +54,8 @@ export function DetailToolbar({
       {onRefresh ? (
         <div className="flex items-center gap-3">
           {fetchedAt ? <span className="text-muted-foreground hidden text-xs sm:inline">Updated {formatClock(fetchedAt)}</span> : null}
-          <Button variant="outline" size="sm" onClick={() => amcRefresh(onRefresh)} disabled={refreshing} aria-label="Refresh this page">
-            <RefreshCw className={refreshing ? "size-4 animate-spin" : "size-4"} />
+          <Button variant="outline" size="sm" onClick={() => amcRefresh(onRefresh)} disabled={busy} aria-label="Refresh this page">
+            <RefreshCw className={busy ? "size-4 animate-spin" : "size-4"} />
             <span className="hidden sm:inline">Refresh</span>
           </Button>
         </div>
@@ -117,3 +121,23 @@ export function DetailHeaderSkeleton() {
     </Card>
   );
 }
+
+/**
+ * A record page's body while it loads (27 Nov 2026): the tab row, the
+ * summary tiles and a section, as the page will draw them, so it does not
+ * show a lone header card first and then jump.
+ */
+export function DetailBodySkeleton({ tabs = 6, tiles = 4 }: { tabs?: number; tiles?: number }) {
+  return (
+    <div className="flex flex-col gap-6" aria-hidden>
+      <div className="bg-muted flex w-fit max-w-full flex-wrap gap-1 rounded-lg p-1">
+        {Array.from({ length: tabs }).map((_, i) => (
+          <Skeleton key={i} className="h-8 w-24 rounded-md" />
+        ))}
+      </div>
+      {tiles ? <StatGridSkeleton count={tiles} /> : null}
+      <SectionSkeleton />
+    </div>
+  );
+}
+

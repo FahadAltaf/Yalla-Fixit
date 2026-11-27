@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import Image from "next/image";
-import { CalendarCheck, CalendarClock, CheckCircle2, Clock, FileUp, KeyRound, Link2Off, Loader2, MapPin, Phone, ShieldCheck, Wrench, X } from "lucide-react";
+import { CalendarCheck, CalendarClock, CheckCircle2, Clock, FileUp, KeyRound, Link2Off, Loader2, MapPin, Phone, ShieldCheck, Wrench } from "lucide-react";
 
 import { DatePickerField } from "@/components/dashboard/extensions/amc/components/date-picker-field";
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +12,8 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import CompanyLogo from "@/public/site-logo.webp";
+
+import { PassesSection, newPass, passesProblem, ruleBody, type ExistingRule, type PassDraft, type RuleDraft } from "./client-passes";
 
 type VisitView = {
   purpose: "visit_confirmation" | "access_upload";
@@ -29,6 +31,8 @@ type VisitView = {
   confirmed: boolean;
   status: string;
   passesNeeded: string[];
+  /** The property's access rules (pass links, 27 Nov 2026). */
+  rules?: ExistingRule[];
   lastResponse: { answer?: string; uploads?: number; preferredDate?: string | null } | null;
 };
 
@@ -66,7 +70,10 @@ export function ClientVisitLink({ token }: { token: string }) {
   const [note, setNote] = useState("");
   const [mode, setMode] = useState<"choose" | "reschedule">("choose");
   const [preferred, setPreferred] = useState("");
-  const [file, setFile] = useState<File | null>(null);
+  /* Several passes, each with what it is and until when; the building's rules (27 Nov 2026). */
+  const [passes, setPasses] = useState<PassDraft[]>(() => [newPass()]);
+  const [rules, setRules] = useState<RuleDraft[]>([]);
+  const [progress, setProgress] = useState<string | null>(null);
 
   const load = useCallback(() => {
     call<{ visit: VisitView }>(url)
@@ -101,22 +108,53 @@ export function ClientVisitLink({ token }: { token: string }) {
     }
   };
 
+  /*
+    The rules first, then each pass on its own (a request stays small), then
+    one note to the team. A pass already sent is not sent again on a retry.
+  */
   const upload = async () => {
     setProblem(null);
     if (name.trim().length < 2) return setProblem("Please write your name, so our team knows who sent it.");
-    if (!file) return setProblem("Choose the pass or permit to upload.");
+    const issue = passesProblem(passes, rules);
+    if (issue) return setProblem(issue);
+    const toSend = passes.filter((p) => p.file);
     setBusy(true);
+    let sent = 0;
+    let rulesAdded = 0;
     try {
-      const form = new FormData();
-      form.append("file", file);
-      form.append("name", name.trim());
-      if (note.trim()) form.append("note", note.trim());
-      await call(url, { method: "POST", body: form });
-      setDone({ title: "Pass received", text: "Thank you. Our team will check it before the visit and tell you if anything else is needed.", tone: "good" });
+      if (rules.length) {
+        setProgress("Saving the access rules…");
+        const r = await call<{ added: number }>(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "rules", name: name.trim(), rules: rules.map(ruleBody) }) });
+        rulesAdded = r.added;
+        setRules([]);
+      }
+      for (const [i, p] of toSend.entries()) {
+        setProgress(`Uploading pass ${i + 1} of ${toSend.length}…`);
+        const form = new FormData();
+        form.append("file", p.file as File);
+        form.append("name", name.trim());
+        form.append("accessType", p.accessType);
+        if (p.label.trim()) form.append("label", p.label.trim());
+        if (p.validUntil) form.append("validUntil", p.validUntil);
+        if (note.trim()) form.append("note", note.trim());
+        form.append("quiet", "1");
+        await call(url, { method: "POST", body: form });
+        sent += 1;
+        setPasses((list) => list.filter((x) => x.key !== p.key));
+      }
+      await call(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "finish", name: name.trim(), passes: sent, rules: rulesAdded, note: note.trim() || null }) });
+      setDone({
+        title: sent ? (sent === 1 ? "Pass received" : `${sent} passes received`) : "Access details received",
+        text: "Thank you. Our team will check them before the visit and tell you if anything else is needed.",
+        tone: "good",
+      });
     } catch (e) {
-      setProblem(e instanceof Error ? e.message : "Could not upload the file.");
+      const why = e instanceof Error ? e.message : "Could not upload the file.";
+      setProblem(sent || rulesAdded ? `${why} What was sent before this is kept; send the rest again.` : why);
+      setPasses((list) => (list.length ? list : [newPass()]));
     } finally {
       setBusy(false);
+      setProgress(null);
     }
   };
 
@@ -203,7 +241,7 @@ export function ClientVisitLink({ token }: { token: string }) {
               </div>
             ) : null}
 
-            {!confirmation ? <FileDrop file={file} onFile={setFile} /> : null}
+            {!confirmation ? <PassesSection passes={passes} rules={rules} existing={visit.rules ?? []} minDate={todayInDubai()} onPasses={setPasses} onRules={setRules} /> : null}
 
             <div className="grid gap-1.5">
               <Label htmlFor="client-note">
@@ -214,7 +252,7 @@ export function ClientVisitLink({ token }: { token: string }) {
                 rows={3}
                 maxLength={500}
                 value={note}
-                placeholder={confirmation ? "For example: please call before you arrive" : "For example: the pass is valid from 9 am"}
+                placeholder={confirmation ? "For example: please call before you arrive" : "For example: the passes are with the security desk"}
                 onChange={(e) => setNote(e.target.value)}
               />
             </div>
@@ -259,7 +297,7 @@ export function ClientVisitLink({ token }: { token: string }) {
           ) : (
             <Button size="lg" className="w-full" disabled={busy} onClick={() => void upload()}>
               {busy ? <Loader2 className="size-4 animate-spin" /> : <FileUp className="size-4" />}
-              Upload the pass
+              {busy && progress ? progress : passes.filter((p) => p.file).length > 1 ? `Send ${passes.filter((p) => p.file).length} passes` : "Send"}
             </Button>
           )}
         </div>
@@ -358,60 +396,5 @@ function ResultCard({ tone, icon, title, text, children }: { tone: "good" | "inf
       </div>
       {children ? <div className="text-left">{children}</div> : null}
     </article>
-  );
-}
-
-/** The pass: a drop area that says what is chosen, with a way to clear it. */
-function FileDrop({ file, onFile }: { file: File | null; onFile: (file: File | null) => void }) {
-  const input = useRef<HTMLInputElement>(null);
-  const [over, setOver] = useState(false);
-  return (
-    <div className="grid gap-1.5">
-      <Label htmlFor="pass-file">The pass or permit</Label>
-      <label
-        htmlFor="pass-file"
-        onDragOver={(e) => {
-          e.preventDefault();
-          setOver(true);
-        }}
-        onDragLeave={() => setOver(false)}
-        onDrop={(e) => {
-          e.preventDefault();
-          setOver(false);
-          const dropped = e.dataTransfer.files?.[0];
-          if (dropped) onFile(dropped);
-        }}
-        className={cn(
-          "flex cursor-pointer flex-col items-center gap-2 rounded-xl border-2 border-dashed px-4 py-6 text-center text-sm transition-colors",
-          over ? "border-brand bg-brand/5" : "hover:bg-muted/40",
-        )}
-      >
-        <FileUp className="text-muted-foreground size-6" />
-        {file ? (
-          <span className="font-medium break-all">{file.name}</span>
-        ) : (
-          <>
-            <span className="font-medium">Choose a file, or drop it here</span>
-            <span className="text-muted-foreground text-xs">PDF or a photo (JPG, PNG, WebP)</span>
-          </>
-        )}
-      </label>
-      <input ref={input} id="pass-file" type="file" className="sr-only" accept="application/pdf,image/jpeg,image/png,image/webp" onChange={(e) => onFile(e.target.files?.[0] ?? null)} />
-      {file ? (
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="justify-self-start"
-          onClick={() => {
-            onFile(null);
-            if (input.current) input.current.value = "";
-          }}
-        >
-          <X className="size-4" />
-          Remove the file
-        </Button>
-      ) : null}
-    </div>
   );
 }

@@ -151,7 +151,8 @@ export function mapContract(row: Row, extra: { renewedByContractId?: string | nu
     daysRemaining: daysRemaining(endDate),
     customerName: String(row.customer_name ?? ""),
     customerRef: (row.customer_ref as string | null) ?? null,
-    propertyLabel: String(row.property_label ?? ""),
+    /* A label saved before 27 Nov 2026 can repeat the unit; it reads once. */
+    propertyLabel: tidyPropertyLabel(row.property_label) ?? "",
     unitType: (row.unit_type as string | null) ?? null,
     customer: (row.customer as Record<string, unknown>) ?? {},
     property: (row.property as Record<string, unknown>) ?? {},
@@ -207,6 +208,17 @@ export function propertyLabelOf(property: Row): string {
   const [detail, address] = [property.propertyDetail, property.propertyAddress].map((v) => (typeof v === "string" ? v.trim() : ""));
   if (detail && address.toLowerCase().startsWith(detail.toLowerCase())) return address;
   return [detail, address].filter(Boolean).join(" — ");
+}
+
+/**
+ * A property label saved before propertyLabelOf (27 Nov 2026) can read
+ * "Unit 101 — Unit 101, Test Tower QA, JLT": the unit once, as it is now.
+ */
+export function tidyPropertyLabel(label: unknown): string | null {
+  if (typeof label !== "string" || !label.trim()) return null;
+  const at = label.indexOf(" — ");
+  if (at < 0) return label.trim();
+  return propertyLabelOf({ propertyDetail: label.slice(0, at), propertyAddress: label.slice(at + 3) });
 }
 
 /** A missing table means the Active AMC migration is not applied yet. */

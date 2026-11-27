@@ -12,6 +12,7 @@ import { ListSkeleton, SubmitButton, useConfirm } from "@/components/dashboard/s
 import { AMC_PHOTOS_PER_ASSESSMENT, AMC_PHOTO_MAX_BYTES } from "@/lib/amc/photos";
 import { amcContractsService, type AssessmentPhoto } from "@/modules/amc-contracts/amc-contracts-service";
 
+import { useAmcRefreshSignal } from "./use-amc-data";
 /**
  * Photos of the property, kept privately with the site visit. Added and
  * removed while it is a draft; once completed they are kept as they are.
@@ -49,6 +50,8 @@ export function AssessmentPhotos({
   useEffect(() => {
     void load();
   }, [load]);
+  /* The page's Refresh reads this again too (27 Nov 2026). */
+  useAmcRefreshSignal(load);
   useEffect(() => {
     if (photos) onCount?.(photos.length);
   }, [photos, onCount]);

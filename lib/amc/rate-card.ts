@@ -367,11 +367,22 @@ export function applyRateCard<R extends CardRow>(
 }
 
 /** A package's services ticked with its units and frequencies; every other charged line unticked, free lines kept. */
-export function applyPackage<R extends CardRow>(rows: readonly R[], pkg: RatePackage): R[] {
+/**
+ * The package's lines ticked on the proposal, at the visits a year the card
+ * allows for each (`allowedFor`). 27 Nov 2026: Gold on live keeps Plumbing
+ * at once and Electrical at 10 times a year while the card allows only 2
+ * and 4; the package card showed 2 and 4 but the proposal was priced and
+ * printed at 1 and 10.
+ */
+export function applyPackage<R extends CardRow>(
+  rows: readonly R[],
+  pkg: RatePackage,
+  allowedFor: (serviceId: string) => readonly number[] = () => [],
+): R[] {
   const lines = new Map(pkg.lines.map((l) => [l.serviceId, l]));
   return rows.map((row) => {
     const line = lines.get(row.serviceId);
-    if (line) return { ...row, included: true, units: line.units, frequency: line.frequency };
+    if (line) return { ...row, included: true, units: line.units, frequency: nearestAllowedFrequency(allowedFor(line.serviceId), line.frequency) };
     return row.free ? row : { ...row, included: false };
   });
 }

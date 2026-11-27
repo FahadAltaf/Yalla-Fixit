@@ -18,8 +18,11 @@ test("a site visit link uploads to the site visit, tells whoever booked it, and 
   assert.match(make, /entity_type: "assessment"/);
   assert.match(make, /purpose: "access_upload"/);
   assert.match(make, /already completed/, "no link for a finished site visit");
+  /* 27 Nov 2026: one upload for both, aimed by passTarget. */
+  const target = src.slice(src.indexOf("async function passTarget"), src.indexOf("const passLabel"));
+  assert.match(target, /entity_type === "assessment"[\s\S]*level: "site_visit"/);
   const upload = src.slice(src.indexOf("export async function uploadVisitPass"));
-  assert.match(upload, /level: "site_visit"/);
+  assert.match(upload, /level: t\.level/);
   assert.match(upload, /category: "Gate pass"/, "it shows among the site visit's passes");
   assert.match(src, /link\.purpose !== "visit_confirmation" \|\| link\.entity_type === "assessment"/);
   assert.match(src, /tell: \[\.\.\.new Set\(\[a\.createdBy, enquiryOwner\]/);
@@ -39,6 +42,47 @@ test("the Access card shows Add rule / Add pass once, with Ask client for pass o
 
 test("a pass from the client waits for the coordinator: marked pending on both visits and site visits", () => {
   const src = read("lib/server/amc/client-links.ts");
-  assert.equal((src.match(/await markPending\(admin, /g) ?? []).length, 2);
+  /* One upload path for visits and site visits (27 Nov 2026). */
+  assert.equal((src.match(/await markPending\(admin, /g) ?? []).length, 1);
   assert.match(src, /update\(\{ access_status: "pending" \}\)/);
 });
+
+/* 27 Nov 2026: several passes, each with what it is and until when; the building's rules from the client. */
+test("each client pass carries its type and end date and is tied to the property's rule; the team is told once", () => {
+  const src = read("lib/server/amc/client-links.ts");
+  const upload = src.slice(src.indexOf("export async function uploadVisitPass"), src.indexOf("export async function finishClientPasses"));
+  assert.match(upload, /expiresOn: meta\?\.validUntil \|\| null/, "the end date is the pass's valid-until");
+  assert.match(upload, /\.eq\("access_type", meta\.accessType\)/, "tied to the rule of its type");
+  assert.match(upload, /if \(!input\.quiet\)/, "quiet while several are sent");
+  const rules = src.slice(src.indexOf("export async function addClientAccessRules"));
+  assert.match(rules, /createAccessRule\(/);
+  assert.match(rules, /Added by \$\{who\} \(client\) on the link/, "a rule says it came from the client");
+  const route = read("app/api/amc-visit-link/[token]/route.ts");
+  assert.match(route, /action: z\.literal\("rules"\)/);
+  assert.match(route, /action: z\.literal\("finish"\)/);
+});
+
+test("the client page checks its passes and rules before sending", async () => {
+  const { passesProblem, ruleBody, newPass, newRule } = await import("@/app/amc-visit/[token]/client-passes");
+  const file = { name: "pass.pdf" } as unknown as File;
+  assert.match(passesProblem([newPass()], [])!, /Add a pass/);
+  assert.equal(passesProblem([{ ...newPass(), file }], []), null);
+  assert.match(passesProblem([{ ...newPass("other"), file }], [])!, /"Other" pass is/);
+  assert.equal(passesProblem([{ ...newPass("other"), file, label: "Parking permit" }], []), null);
+  assert.match(passesProblem([{ ...newPass(), label: "Gate pass" }], [])!, /Choose the file/);
+  assert.equal(passesProblem([newPass()], [newRule()]), null, "rules alone are fine");
+  assert.match(passesProblem([newPass()], [{ ...newRule(), permittedFrom: "08:00" }])!, /both times/);
+  assert.deepEqual(ruleBody({ ...newRule(), issuer: " Emaar ", leadTimeDays: "3", permittedDays: [5, 0], permittedFrom: "08:00", permittedTo: "17:00" }), {
+    accessType: "community_gate_pass",
+    issuer: "Emaar",
+    leadTimeDays: 3,
+    permittedDays: [0, 5],
+    permittedFrom: "08:00",
+    permittedTo: "17:00",
+    parking: null,
+    contactName: null,
+    contactPhone: null,
+    notes: null,
+  });
+});
+

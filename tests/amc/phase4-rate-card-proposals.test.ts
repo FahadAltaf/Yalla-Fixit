@@ -151,6 +151,22 @@ test("packages tick their services with their units and visits", () => {
   );
 });
 
+test("a package's lines land on the visits a year the card allows, as its card shows them", () => {
+  /* 27 Nov 2026: Gold on live keeps Electrical at 10 a year while the card allows only 4. */
+  const rows = [row("ac-ppm", false), row("plumbing-ppm", false), row("helpdesk", true, 1, 1, true)];
+  const pkg = { id: "gold", name: "Gold", description: "", models: [], active: true, lines: [{ serviceId: "ac-ppm", units: 6, frequency: 10 }, { serviceId: "plumbing-ppm", units: 1, frequency: 1 }, { serviceId: "helpdesk", units: 1, frequency: 1 }] };
+  const allowed: Record<string, number[]> = { "ac-ppm": [4], "plumbing-ppm": [2, 4] };
+  const applied = applyPackage(rows, pkg, (id) => allowed[id] ?? []);
+  assert.deepEqual(
+    applied.map((r) => [r.serviceId, r.included, r.units, r.frequency]),
+    [
+      ["ac-ppm", true, 6, 4],
+      ["plumbing-ppm", true, 1, 2],
+      ["helpdesk", true, 1, 1],
+    ],
+  );
+});
+
 test("history: old and new value per field", () => {
   const next = structuredClone(card);
   next.items[0].standardRate = 110;

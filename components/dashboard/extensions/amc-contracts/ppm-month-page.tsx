@@ -4,7 +4,7 @@ import { useCallback, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
 import { format } from "date-fns";
-import { CalendarCheck, ChevronLeft, ChevronRight, RefreshCwIcon, SearchIcon } from "lucide-react";
+import { CalendarCheck, ChevronLeft, ChevronRight, SearchIcon } from "lucide-react";
 
 import { DataTable } from "@/components/data-table";
 import { StatusSelect } from "@/components/data-table/toolbars/status-select";
@@ -18,7 +18,7 @@ import { IdentityCell } from "@/components/ui/entity-avatar";
 import { Input } from "@/components/ui/input";
 import { TruncatedText } from "@/components/ui/truncated-text";
 import { todayInDubai } from "@/lib/amc/contracts";
-import { amcRefresh, amcRequest } from "@/lib/amc/http-cache";
+import { amcRequest } from "@/lib/amc/http-cache";
 import { PPM_CONTACT_LABELS, type PpmContactState } from "@/lib/amc/visits";
 import { cn } from "@/lib/utils";
 import type { PpmMonthItem } from "@/lib/server/amc/ppm-month";
@@ -26,6 +26,7 @@ import type { PpmMonthItem } from "@/lib/server/amc/ppm-month";
 import { ConfirmationUrgencyBadge, ServiceBadges, visitDayOf } from "./visit-board-shared";
 import { useAmcData } from "./use-amc-data";
 import { formatDubaiShort } from "@/lib/amc/dubai-clock";
+import { AmcRefreshButton } from "./refresh-button";
 
 type MonthResponse = { migrated: boolean; items: PpmMonthItem[]; month: string; mine: boolean; canSeeAll: boolean };
 
@@ -219,10 +220,7 @@ export function PpmMonthPage() {
                   />
                 ) : null}
               </div>
-              <Button onClick={() => amcRefresh(reload)} variant="outline" disabled={loading}>
-                <RefreshCwIcon className="size-4 sm:mr-1" />
-                <span className="hidden sm:inline">Refresh</span>
-              </Button>
+              <AmcRefreshButton onRefresh={reload} loading={loading} />
             </div>
           }
           emptyState={

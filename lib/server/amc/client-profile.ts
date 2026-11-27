@@ -540,7 +540,8 @@ const ruleRow = (input: RuleInput) => ({
   ...(input.active !== undefined ? { active: input.active } : {}),
 });
 
-export async function createAccessRule(admin: Admin, propertyId: string, input: RuleInput, actor: Actor): Promise<AccessRuleRecord> {
+/* actor.id null: the client, on a visit's pass link (27 Nov 2026). */
+export async function createAccessRule(admin: Admin, propertyId: string, input: RuleInput, actor: { id: string | null; label: string | null }): Promise<AccessRuleRecord> {
   const { data, error } = await admin
     .from("amc_property_access_rules")
     .insert({ ...ruleRow(input), property_id: propertyId, created_by: actor.id })

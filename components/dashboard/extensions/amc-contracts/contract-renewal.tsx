@@ -27,6 +27,7 @@ import { RENEWAL_OUTCOME_LABELS } from "@/lib/amc/renewal-outcomes";
 
 import { RecordOutcomeDialog, RenewalOutcomeBadge } from "./renewal-shared";
 
+import { useAmcRefreshSignal } from "./use-amc-data";
 /**
  * Renewal: where this contract sits in its chain (the contract it renewed,
  * its renewal proposal, the contract that replaced it), and starting a
@@ -71,6 +72,8 @@ export function ContractRenewal({
   useEffect(() => {
     void load();
   }, [load]);
+  /* The page's Refresh reads this again too (27 Nov 2026). */
+  useAmcRefreshSignal(load);
 
   const create = async () => {
     setCreating(true);

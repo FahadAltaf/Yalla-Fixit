@@ -303,6 +303,8 @@ export function AccessCard({
                                 </Badge>
                               ) : null}
                             </span>
+                            {/* What the pass is, when no rule says it: the name the client gave it (27 Nov 2026). */}
+                            {!p.accessRuleId && p.title && !/^pass from /i.test(p.title) ? <span className="text-sm font-medium">{p.title}</span> : null}
                             {p.notes ? <span className="text-sm whitespace-pre-wrap">{p.notes}</span> : null}
                             <span className="text-muted-foreground text-xs">
                               Added {formatDateTime(p.uploadedAt)}

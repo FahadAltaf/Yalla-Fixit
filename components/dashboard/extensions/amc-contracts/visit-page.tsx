@@ -8,7 +8,7 @@ import { CalendarClock, ClipboardList, FileSignature, FileText, FileWarning, His
 import { SectionCard, StatCard, StatCardGrid, SubHeading } from "@/components/dashboard/shared/kaizen";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { FSM_QUOTATION_SKIP_LABELS } from "@/lib/amc/fsm-quotation";
-import { ErrorState, SectionSkeleton } from "@/components/dashboard/shared/kaizen-states";
+import { ErrorState, SectionSkeleton, StatGridSkeleton } from "@/components/dashboard/shared/kaizen-states";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -34,7 +34,7 @@ import {
 } from "./call-out-sections";
 import { FactTile, HeaderActionsSlot, PanelSurface, shortDateTime } from "./call-out-shared";
 import { formatContractDate } from "./contract-status";
-import { DetailHeaderCard, DetailHeaderSkeleton, DetailToolbar, shortPlace } from "./detail-header";
+import { DetailBodySkeleton, DetailHeaderCard, DetailHeaderSkeleton, DetailToolbar, shortPlace } from "./detail-header";
 import { DetailList } from "./enquiries/enquiry-ui";
 import { JobSheetPanel } from "./job-sheet-panel";
 import { fieldJobSheetCalls } from "@/modules/amc-contracts/job-sheets-service";
@@ -48,6 +48,7 @@ import { AccessSection, AssignmentSection, ConfirmationSection, StartVisitAction
 import { channelLabel, slotLabel } from "./visit-status";
 import { FieldStartAction, FieldWorkAccessCard, useFieldWork } from "./field-work-panels";
 import { ChargeCard } from "./visit-charge";
+import { QuotationCard } from "./quotation-card";
 
 const TABS = ["overview", "crew", "client", "access", "services", "job_sheet", "findings", "photos", "works", "history"] as const;
 type Tab = (typeof TABS)[number];
@@ -333,7 +334,11 @@ export function VisitPage({ id }: { id: string }) {
       {header.error ? (
         <ErrorState title="Could not load the visit" message={header.error} onRetry={header.reload} />
       ) : !v ? (
-        <DetailHeaderSkeleton />
+        /* The whole page while it loads: header, tabs, tiles and a section (27 Nov 2026). */
+        <>
+          <DetailHeaderSkeleton />
+          <DetailBodySkeleton />
+        </>
       ) : (
         <DetailHeaderCard
           badges={
@@ -435,7 +440,14 @@ export function VisitPage({ id }: { id: string }) {
                 {panel("crew", withCallOut((d) => <CallOutCrewSection {...callOutProps(d)} />))}
                 {panel("access", <FieldWorkAccessCard kind="call_out" id={id} fw={fieldWork} onChanged={changed} />)}
                 {/* The services done and their price, from the rate card, charged or free; paid before or after the visit (18 Nov 2026). */}
-                {panel("services", <ChargeCard kind="call_out" id={id} coverage={callOut.data?.callOut.coverage ?? null} onChanged={changed} refreshKey={sheetVersion} />)}
+                {panel(
+                  "services",
+                  <div className="grid gap-4">
+                    <ChargeCard kind="call_out" id={id} coverage={callOut.data?.callOut.coverage ?? null} onChanged={changed} refreshKey={sheetVersion} />
+                    {/* A chargeable call out's quotation, as Snagging's, or the FSM number by hand (27 Nov 2026). */}
+                    <QuotationCard kind="call_out" id={id} onChanged={changed} refreshKey={sheetVersion} />
+                  </div>,
+                )}
                 {/* Exactly the planned visit's Job sheet tab (18 Nov 2026): its photos are the crew's, from the phone. */}
                 {panel("job_sheet", <JobSheetPanel visitId={id} calls={CALL_OUT_SHEET} onChanged={changed} readOnly refreshKey={sheetVersion} />)}
                 {oldFindings ? panel("findings", withCallOut((d) => <CallOutFindingsSection {...callOutProps({ ...d, canEdit: false })} onRaise={works.raise} />)) : null}
@@ -516,7 +528,8 @@ function ServiceTiles({ lines }: { lines: Array<{ id: string; label: string; tra
 function PpmOverview({ v, data, onTab }: { v: FieldVisitRow; data: Loaded<PpmData>; onTab: (tab: Tab) => void }) {
   if (data.error) return <ErrorState title="Could not load the visit's details" message={data.error} onRetry={data.reload} />;
   const d = data.data?.visit;
-  if (!d) return <SectionSkeleton />;
+  /* The tiles and the details as they will be drawn (27 Nov 2026). */
+  if (!d) return <OverviewSkeleton />;
   const confirmed = d.clientConfirmation === "confirmed";
   const lead = v.crew.find((c) => c.lead) ?? v.crew[0];
   return (
@@ -598,7 +611,7 @@ const SLA_LABEL: Record<string, string> = { on_track: "On track", at_risk: "At r
 function CallOutOverview({ v, data, onTab }: { v: FieldVisitRow; data: Loaded<CallOutData>; onTab: (tab: Tab) => void }) {
   if (data.error) return <ErrorState title="Could not load the call out's details" message={data.error} onRetry={data.reload} />;
   const d = data.data;
-  if (!d) return <SectionSkeleton />;
+  if (!d) return <OverviewSkeleton />;
   const c = d.callOut;
   const a = d.allowance;
   const hm = d.handyman ?? null;
@@ -781,5 +794,15 @@ export function HistoryPanel({
       onRetry={data.reload}
       emptyDescription="Status changes, date moves, attempts to reach the client and job sheet decisions appear here as they happen."
     />
+  );
+}
+
+/** An overview while its data loads: the four tiles, then the details section. */
+function OverviewSkeleton() {
+  return (
+    <div className="flex flex-col gap-6" aria-hidden>
+      <StatGridSkeleton count={4} />
+      <SectionSkeleton />
+    </div>
   );
 }

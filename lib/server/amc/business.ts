@@ -36,7 +36,7 @@ import { recordAmcAudit } from "@/lib/server/amc/audit";
 import { approverName } from "@/lib/server/amc/site-visit-approvers";
 import { hasColumn } from "@/lib/server/snagging/columns";
 import { queuePropertyEditToFsm, queuePropertyToFsm } from "@/lib/server/snagging/fsm-clients";
-import { ContractError, isMissingTable, loadContract, toRulesContract } from "@/lib/server/amc/contracts";
+import { ContractError, isMissingTable, loadContract, tidyPropertyLabel, toRulesContract } from "@/lib/server/amc/contracts";
 import { fetchAllRowsById } from "@/lib/server/amc/paging";
 import { removeDraftPhotoFiles } from "@/lib/server/amc/assessment-photos";
 import { priceSubmission } from "@/lib/server/amc/pricing";
@@ -909,7 +909,7 @@ export async function loadContractRows(
     proposalNumber: String(r.proposal_number ?? ""),
     customerName: String(r.customer_name ?? ""),
     customerRef: str(r.customer_ref),
-    propertyLabel: String(r.property_label ?? ""),
+    propertyLabel: tidyPropertyLabel(r.property_label) ?? "",
     status: r.status as StoredContractStatus,
     startDate: String(r.start_date),
     endDate: String(r.end_date),

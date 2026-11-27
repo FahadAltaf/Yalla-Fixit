@@ -1,7 +1,7 @@
 "use client";
 
 import { useId } from "react";
-import { LoaderCircleIcon, RefreshCwIcon, SearchIcon, SlidersHorizontalIcon } from "lucide-react";
+import { LoaderCircleIcon, SearchIcon, SlidersHorizontalIcon } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -9,7 +9,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { amcRefresh } from "@/lib/amc/http-cache";
+
+import { AmcRefreshButton } from "../refresh-button";
 
 /**
  * The toolbar above the enquiries and site visits tables, built like the
@@ -84,10 +85,7 @@ export function ListToolbar({
             </Select>
           </div>
           {extra}
-          <Button onClick={() => amcRefresh(onRefresh)} variant="outline" disabled={loading}>
-            <RefreshCwIcon className="size-4 sm:mr-1" />
-            <span className="hidden sm:inline">Refresh</span>
-          </Button>
+          <AmcRefreshButton onRefresh={onRefresh} loading={loading} />
         </div>
       </div>
     </div>
