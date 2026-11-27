@@ -971,7 +971,7 @@ export default function AddEntryDialog({
         </div>
 
         {loginDialogs}
-        <DialogFooter className="bg-muted/30 flex-col gap-3 border-t px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
+        <DialogFooter className="bg-muted/30 m-0 flex-col gap-3 rounded-none border-t px-6 py-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="text-muted-foreground flex min-w-0 items-center gap-2 text-xs">
             <CalendarClock className="size-4 shrink-0" />
             <span className="truncate">

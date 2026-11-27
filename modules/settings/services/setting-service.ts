@@ -3,6 +3,17 @@ import { GET_SETTINGS_BY_ID } from "./setting-graphql";
 
 const settingsService = {
   getSettingsById: async (values: { type: string }) => {
+    /*
+      In the browser: /api/settings/public, a plain REST read (27 Nov 2026).
+      pg_graphql's cold schema build ran into the anon statement timeout on
+      live, and the page then had no site settings at all.
+    */
+    if (typeof window !== "undefined") {
+      const res = await fetch(`/api/settings/public?type=${encodeURIComponent(values?.type ?? "admin")}`);
+      if (!res.ok) throw new Error(`Could not read the settings (${res.status})`);
+      const body = (await res.json()) as { settings?: unknown };
+      return (body.settings ?? null) as never;
+    }
     const response = await executeGraphQLBackend(GET_SETTINGS_BY_ID, {
       filter: { type: { eq: values?.type } },
     });

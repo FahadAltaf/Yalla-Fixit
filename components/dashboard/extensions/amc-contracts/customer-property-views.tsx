@@ -20,9 +20,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Money } from "@/components/ui/money";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { DataRow, PillTabs, rowLink, SectionCard, StatCard, StatCardGrid, SubHeading, TabCount } from "@/components/dashboard/shared/kaizen";
-import { GoogleLocationMap, hasGoogleMapsKey } from "@/components/dashboard/snagging/google-location-map";
-import { LocationMap } from "@/components/dashboard/snagging/location-map";
+import { DataRow, PillTabs, rowLink, SectionCard, StatCard, StatCardGrid, TabCount } from "@/components/dashboard/shared/kaizen";
 import { ActionDialogContent, ErrorState, SectionSkeleton, StatGridSkeleton, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
 import { canViewAmcPayments } from "@/components/dashboard/extensions/amc/amc-constants";
 import { useAuth } from "@/context/AuthContext";
@@ -42,7 +40,6 @@ import { useAmcData } from "./use-amc-data";
 import { AdditionalWorkTotalsCard, ClientSchedulePanel, ServiceHistoryPanel } from "./profile/client-history-panels";
 import { CommunicationPanel } from "./profile/communication-panel";
 import { ContactsPanel } from "./profile/contacts-panel";
-import { DetailList } from "./profile/detail-list";
 import { DocumentsPanel } from "./profile/documents-panel";
 import { IdentityCard, LIFECYCLE_TONE } from "./profile/identity-card";
 import { AccessRulesPanel, AssetsPanel, PropertyPassesPanel, ScopePanel } from "./profile/property-panels";
@@ -55,6 +52,7 @@ import { ClientDialog } from "@/components/dashboard/clients/client-dialog";
 import { ClientJobsTable } from "@/components/dashboard/snagging/client-jobs-dialog";
 import { CLIENTS_HREF, clientsAccess } from "@/lib/clients/access";
 
+import { Fact } from "@/components/dashboard/extensions/amc/steps/review-step";
 type ContractItem = CustomerOverview["contracts"][number];
 type AssessmentItem = CustomerOverview["assessments"][number];
 type QuoteItem = CustomerOverview["quotes"][number];
@@ -649,7 +647,6 @@ export function PropertyDetail({ id }: { id: string }) {
   const quotes = overview?.quotes ?? [];
   const units = data?.units ?? { parent: null, children: [] };
   const canEdit = data?.canEdit !== false;
-  const location = data?.location ?? null;
   const panel = (value: (typeof PROPERTY_TABS)[number], children: React.ReactNode) =>
     isOpened(value) ? (
       <TabsContent value={value} forceMount className="mt-4 flex flex-col gap-4 data-[state=inactive]:hidden">
@@ -792,75 +789,43 @@ export function PropertyDetail({ id }: { id: string }) {
                   />
                 </StatCardGrid>
 
-                <SectionCard title="Property & client" icon={<Building2 />} description="The address, what it is, who it belongs to, and where it is." bodyClassName="px-5 pb-5">
-                  <div className="grid items-stretch gap-6 lg:grid-cols-2">
-                    <div className="min-w-0 space-y-6">
-                      <div className="space-y-3">
-                        <SubHeading>Property</SubHeading>
-                        <DetailList
-                          rows={[
-                            { label: "Unit", value: property.label },
-                            { label: "Unit no. / floor", value: [property.unitNo, property.floor ? `floor ${property.floor}` : null].filter(Boolean).join(", ") || null },
-                            { label: "Building", value: property.building },
-                            { label: "Community", value: property.community },
-                            { label: "Street / city", value: [property.street, property.city].filter(Boolean).join(", ") || null },
-                            { label: "Developer", value: data?.developer ?? null },
-                            { label: "Type", value: unitTypeLabel(property.unitType) },
-                            { label: "Category", value: property.propertyCategory ? <span className="capitalize">{property.propertyCategory}</span> : null },
-                            {
-                              label: "Size",
-                              value:
-                                [property.sizeSqft ? `${property.sizeSqft.toLocaleString("en-US")} sq ft` : null, property.bedrooms !== null ? `${property.bedrooms} bed` : null]
-                                  .filter(Boolean)
-                                  .join(" · ") || null,
-                            },
-                            { label: "Floors", value: property.floorsCount },
-                            { label: "Zones", value: property.zones.length ? property.zones.join(", ") : null },
-                            { label: "Occupied by", value: property.occupancy ? <span className="capitalize">{property.occupancy}</span> : null },
-                          ]}
-                        />
-                      </div>
-                      <div className="space-y-3">
-                        <SubHeading>Client</SubHeading>
-                        <DetailList
-                          rows={[
-                            {
-                              label: "Name",
-                              value: customer ? (
-                                <Link href={`${CLIENTS_HREF}/${customer.id}`} className="hover:text-brand underline underline-offset-2">
-                                  {customer.name}
-                                </Link>
-                              ) : null,
-                            },
-                            { label: "Customer ID", value: customer?.customerRef ?? null },
-                            {
-                              label: "Status",
-                              value: customer ? (
-                                <Badge variant="secondary" className={`border-0 font-medium ${LIFECYCLE_TONE[customer.lifecycle] ?? ""}`}>
-                                  {LIFECYCLE_LABELS[customer.lifecycle] ?? customer.lifecycle}
-                                </Badge>
-                              ) : null,
-                            },
-                          ]}
-                        />
-                      </div>
-                    </div>
-
-                    <div className="flex min-w-0 flex-col space-y-3">
-                      <SubHeading>Location</SubHeading>
-                      {location ? (
-                        hasGoogleMapsKey() ? (
-                          <GoogleLocationMap className="flex-1" lat={location.lat} lng={location.lng} label={property.label} />
-                        ) : (
-                          <LocationMap className="flex-1" lat={location.lat} lng={location.lng} label={property.label} />
-                        )
-                      ) : (
-                        <div className="text-muted-foreground flex min-h-48 flex-1 flex-col items-center justify-center rounded-lg border border-dashed p-6 text-center text-sm">
-                          No location pinned on the property record.
-                        </div>
-                      )}
-                    </div>
-                  </div>
+                {/* 27 Nov 2026 (the user): the proposal's design -- the property and its client as facts in one grid. */}
+                <SectionCard
+                  title="Property & client"
+                  icon={<Building2 />}
+                  description="The address, what it is and who it belongs to."
+                  bodyClassName="px-5 pb-5"
+                  action={
+                    customer ? (
+                      <Badge variant="secondary" className={`border-0 font-medium ${LIFECYCLE_TONE[customer.lifecycle] ?? ""}`}>
+                        {LIFECYCLE_LABELS[customer.lifecycle] ?? customer.lifecycle}
+                      </Badge>
+                    ) : null
+                  }
+                >
+                  <dl className="grid gap-x-6 gap-y-4 rounded-lg border p-4 sm:grid-cols-2 xl:grid-cols-4">
+                    <Fact label="Property detail">{property.label}</Fact>
+                    <Fact label="Unit no. / floor">{[property.unitNo, property.floor ? `floor ${property.floor}` : null].filter(Boolean).join(", ") || null}</Fact>
+                    <Fact label="Building">{property.building}</Fact>
+                    <Fact label="Community">{property.community}</Fact>
+                    <Fact label="Street / city">{[property.street, property.city].filter(Boolean).join(", ") || null}</Fact>
+                    <Fact label="Developer">{data?.developer ?? null}</Fact>
+                    <Fact label="Property category">{property.propertyCategory ? <span className="capitalize">{property.propertyCategory}</span> : null}</Fact>
+                    <Fact label="Unit type">{unitTypeLabel(property.unitType)}</Fact>
+                    <Fact label="Bedrooms">{property.bedrooms === null ? null : property.bedrooms === 0 ? "Studio" : String(property.bedrooms)}</Fact>
+                    <Fact label="Built-up area">{property.sizeSqft ? `${property.sizeSqft.toLocaleString("en-US")} sq ft` : null}</Fact>
+                    <Fact label="Floors">{property.floorsCount ? String(property.floorsCount) : null}</Fact>
+                    <Fact label="Zones">{property.zones.length ? property.zones.join(", ") : null}</Fact>
+                    <Fact label="Occupied by">{property.occupancy ? <span className="capitalize">{property.occupancy}</span> : null}</Fact>
+                    <Fact label="Customer">
+                      {customer ? (
+                        <Link href={`${CLIENTS_HREF}/${customer.id}`} className="hover:text-brand underline underline-offset-2">
+                          {customer.name}
+                        </Link>
+                      ) : null}
+                    </Fact>
+                    <Fact label="Customer ID">{customer?.customerRef ?? null}</Fact>
+                  </dl>
                 </SectionCard>
 
               </>,

@@ -73,22 +73,28 @@ export function Fact({
   children,
   action,
   note,
+  className,
+  wrap = false,
 }: {
   label: string;
   children: React.ReactNode;
+  /** E.g. a column span, for a long value in a grid. */
+  className?: string;
+  /** Let a long value wrap instead of truncating. */
+  wrap?: boolean;
   /** A small icon button beside the label (change, edit). */
   action?: React.ReactNode;
   /** A muted line under the value, e.g. where a live record now differs. */
   note?: React.ReactNode;
 }) {
   return (
-    <div className="min-w-0">
+    <div className={className ? `min-w-0 ${className}` : "min-w-0"}>
       <dt className="text-muted-foreground flex h-4 items-center gap-1 text-xs">
         {label}
         {action}
       </dt>
-      <dd className="mt-0.5 truncate text-sm font-medium">
-        <TruncateIfText>{children || "—"}</TruncateIfText>
+      <dd className={wrap ? "mt-0.5 text-sm font-medium" : "mt-0.5 truncate text-sm font-medium"}>
+        {wrap ? children || "—" : <TruncateIfText>{children || "—"}</TruncateIfText>}
       </dd>
       {note ? <TruncatedText className="text-muted-foreground mt-0.5 text-xs">{note}</TruncatedText> : null}
     </div>

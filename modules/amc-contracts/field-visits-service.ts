@@ -14,6 +14,8 @@ export interface FieldVisitsResponse {
   today: string;
   page: number;
   pageSize: number;
+  /** Whether the New menu offers a call out or additional work (27 Nov 2026). */
+  canCreate?: { callOut: boolean; additionalWork: boolean };
 }
 
 export interface FieldVisitQuery {

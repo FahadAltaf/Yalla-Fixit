@@ -7,6 +7,7 @@ import { readAmcConfig } from "@/lib/server/amc/config";
 import { callOutOwner } from "@/lib/server/amc/call-outs";
 import { contractErrorResponse, requireContractAccess } from "@/lib/server/amc/contract-access";
 import { UUID, fieldWorkRights } from "@/lib/server/amc/field-work-access";
+import { settleWorkFromCharge } from "@/lib/server/amc/additional-works";
 import { draftWorkCharge, priceList, readCharge, recordChargePayment, saveCallOutServices, syncWorkCharge } from "@/lib/server/amc/visit-charges";
 import { voidLiveQuotation } from "@/lib/server/amc/quotations";
 
@@ -98,7 +99,10 @@ export async function POST(req: NextRequest, ctx: Params) {
     void _action;
     const payment = recordChargePaymentSchema.safeParse(rest);
     if (!payment.success) return NextResponse.json({ error: payment.error.issues[0]?.message ?? "Invalid payment" }, { status: 400 });
-    return NextResponse.json(await recordChargePayment(gate.admin, kind, id, payment.data, actor));
+    const paid = await recordChargePayment(gate.admin, kind, id, payment.data, actor);
+    /* Invoiced additional work follows its paid charge to Paid (27 Nov 2026). */
+    if (kind === "additional_work") await settleWorkFromCharge(gate.admin, id, actor);
+    return NextResponse.json(paid);
   } catch (error) {
     return contractErrorResponse(error, "Could not update the charge");
   }

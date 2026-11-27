@@ -65,7 +65,7 @@ const L = {
   clients: { label: "Clients", href: "/clients" },
   visits: { label: "Visits", href: "/extensions/amc-contracts/visits" },
   visitBoard: { label: "Visit board", href: "/extensions/amc-contracts/board" },
-  jobReviews: { label: "Job reviews", href: "/extensions/amc-contracts/job-reviews" },
+  jobReviews: { label: "Approvals & reviews", href: "/extensions/amc-contracts/job-reviews" },
   callOuts: { label: "Call outs", href: "/extensions/amc-contracts/call-outs" },
   additionalWork: { label: "Additional work", href: "/extensions/amc-contracts/additional-works" },
   technicians: { label: "Technicians", href: "/extensions/amc-contracts/technicians" },
@@ -315,7 +315,7 @@ export const MODULE_GUIDES: Record<ModuleKey, Guide> = {
       { title: "Visits wait in To place", detail: "Visits from active contracts with no time yet, grouped by whether their window is open. Call outs to place sit above, emergencies first." },
       { title: "Confirm with the client", detail: "On the visit: send the request (WhatsApp or email) and Log attempt with the outcome. Sort out access (permit, gate pass) on the Access tab." },
       { title: "Place it", detail: "Drag onto a technician or press Place. The board suggests a crew; choosing another asks why. A day outside the window makes it Rescheduled and asks for a reason." },
-      { title: "The visit happens", detail: "Then the technician's job sheet goes to Job reviews." },
+      { title: "The visit happens", detail: "Then the technician's job sheet goes to Approvals & reviews." },
     ],
     automatic: [
       "Before each window opens, the owner gets a Confirm PPM visit to-do.",
@@ -342,12 +342,13 @@ export const MODULE_GUIDES: Record<ModuleKey, Guide> = {
   },
 
   jobReviews: {
-    title: "Job reviews",
-    summary: "Submitted job sheets waiting for a supervisor, oldest first: return one with what needs fixing, or close the visit and send the client the service report.",
-    who: "Supervisors (named in configuration, otherwise the level 1 approvers).",
+    title: "Approvals & reviews",
+    summary: "Everything waiting for your decision or review, in one list: proposals, contract amendments and site visit reports to approve, and submitted job sheets to return or close. Filter by type and status.",
+    who: "Approvers see what waits for their decision; supervisors (named in configuration, otherwise the level 1 approvers) review the job sheets.",
     steps: [
+      { title: "Approve or decide", detail: "Proposals, contract amendments and site visit reports open on their own page, where you approve, send back or reject them." },
       { title: "The technician's sheet is submitted", detail: "Needs arrival and completion times, an outcome for every trade, a reason for anything unfinished, and the client's signature name when work was done." },
-      { title: "Check it", detail: "The Review column says why a sheet needs a closer look: Pending works, Quality concern, Missing evidence or Incomplete scope." },
+      { title: "Check it", detail: "The Status column says why a sheet needs a closer look: Pending works, Quality concern, Missing evidence or Incomplete scope." },
       { title: "Return or close", detail: "Return (with a comment) sends it back to In progress. Close visit sets the final status, uses the allowance, and puts any unfinished trade on a new visit." },
       { title: "Service report", detail: "On closing, the service report PDF is emailed to the client (owner copied), due within 48 hours of the visit." },
     ],

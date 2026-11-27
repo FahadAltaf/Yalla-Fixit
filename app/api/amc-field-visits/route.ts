@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { FIELD_VISIT_KINDS, FIELD_VISIT_STAGES, FIELD_VISIT_WHEN, type FieldVisitKind, type FieldVisitStage, type FieldVisitWhen } from "@/lib/amc/field-visits";
 import { UUID } from "@/lib/server/amc/business-schemas";
 import { contractErrorResponse, requireContractAccess } from "@/lib/server/amc/contract-access";
+import { fieldWorkRights } from "@/lib/server/amc/field-work-access";
 import { listFieldVisits } from "@/lib/server/amc/field-visits";
 import { pageParams } from "@/lib/server/snagging/search";
 
@@ -43,7 +44,12 @@ export async function GET(req: NextRequest) {
       },
       gate.seesAll || gate.visits.view ? { all: true } : { all: false, userId: gate.userId },
     );
-    return NextResponse.json({ ...result, page, pageSize }, { headers: { "Cache-Control": "no-store" } });
+    /* What the page's New menu may offer (27 Nov 2026): as Call outs and Additional work show their buttons. */
+    const canCreate = {
+      callOut: fieldWorkRights(gate, "call_outs", null).create,
+      additionalWork: fieldWorkRights(gate, "additional_works", null).create,
+    };
+    return NextResponse.json({ ...result, page, pageSize, canCreate }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     return contractErrorResponse(error, "Could not load the visits");
   }

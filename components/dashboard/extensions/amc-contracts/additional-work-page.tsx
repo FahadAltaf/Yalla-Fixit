@@ -3,7 +3,7 @@
 import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ExternalLink, FileSignature, Hammer, SquarePen, XCircle } from "lucide-react";
+import { FileSignature, Hammer, SquarePen, XCircle } from "lucide-react";
 
 import { SectionCard, StatCard, StatCardGrid } from "@/components/dashboard/shared/kaizen";
 import { ActionDialogContent, ErrorState, SectionSkeleton } from "@/components/dashboard/shared/kaizen-states";
@@ -37,7 +37,7 @@ import {
 import { HeaderActionsSlot, Muted, PanelSurface, RiskBadge, WorkStatusBadge, shortDateTime } from "./call-out-shared";
 import { formatContractDate, formatDateTime } from "./contract-status";
 import { DetailHeaderCard, DetailHeaderSkeleton, DetailToolbar, shortPlace } from "./detail-header";
-import { DetailList } from "./enquiries/enquiry-ui";
+import { Fact } from "@/components/dashboard/extensions/amc/steps/review-step";
 import { FieldStartAction, FieldWorkAccessCard, useFieldWork, type FieldWork } from "./field-work-panels";
 import { JobSheetPanel } from "./job-sheet-panel";
 import { useTechnicianName } from "./people-pickers";
@@ -165,7 +165,6 @@ export function AdditionalWorkPage({ id }: { id: string }) {
     );
   }
 
-  const sourceHref = w?.source === "visit" && w.visitId ? visitPageHref(w.visitId) : w?.source === "call_out" && w.callOutId ? visitPageHref(w.callOutId) : null;
   const when = (d: AdditionalWorkResponse) =>
     d.slot.scheduledStart ? slotLabel(d.slot.scheduledStart, d.slot.scheduledEnd) : d.work.scheduledFor ? `${formatContractDate(d.work.scheduledFor)} (no slot yet)` : null;
   const crewText = v ? (v.crew.length ? `${v.crew[0].name}${v.crew.length > 1 ? ` +${v.crew.length - 1}` : ""}` : "No crew yet") : null;
@@ -225,14 +224,7 @@ export function AdditionalWorkPage({ id }: { id: string }) {
                   Open contract
                 </Link>
               </Button>
-              {sourceHref ? (
-                <Button asChild variant="outline">
-                  <Link href={sourceHref}>
-                    <ExternalLink className="size-4" />
-                    Open {w.source === "visit" ? "visit" : "call out"}
-                  </Link>
-                </Button>
-              ) : null}
+              {/* "Open visit" read as this work's own visit (27 Nov 2026): the visit or call out it was found on is the Found on link in the details. */}
               {actions.buttons}
               <span ref={setHeaderSlot} className="contents" />
               {/* Start visit at every status, as a call out's (19 Nov 2026): the dialog says what is missing, first the client's approval. */}
@@ -406,32 +398,43 @@ function WorkOverview({
           ) : null
         }
       >
-        <DetailList
-          rows={[
-            { label: "Trade", value: w.trade ? (TRADE_LABELS[w.trade as Trade] ?? w.trade) : <Muted>Not set</Muted> },
-            { label: "Risk", value: WORK_RISK_LABELS[w.risk] },
-            { label: "Found on", value: workSourceLabel(w) },
-            ...(w.technicianId ? [{ label: "Found by", value: technicianName(w.technicianId) ?? "—" }] : []),
-            { label: "Raised", value: shortDateTime(w.createdAt) },
-            {
-              label: "Contract",
-              value: (
-                <Link href={`/extensions/amc-contracts/${w.contractId}`} className="text-brand hover:underline">
-                  {w.contractNumber || "Open"}
-                </Link>
-              ),
-            },
-            ...(w.approvalEvidence ? [{ label: "Approval", value: w.approvalEvidence }] : []),
-            ...(w.completedAt ? [{ label: "Completed", value: shortDateTime(w.completedAt) }] : []),
-            ...(w.invoiceNumber ? [{ label: "Invoice", value: w.invoiceNumber }] : []),
-            ...(w.paymentReference ? [{ label: "Payment reference", value: w.paymentReference }] : []),
-          ]}
-        />
-        {/* The finding in full, under its label, as a call out's diagnosis. */}
-        <div className="mt-2 grid gap-1 border-t pt-4">
-          <p className="text-muted-foreground text-sm">Finding</p>
-          <p className="text-sm leading-relaxed whitespace-pre-wrap">{w.finding}</p>
-        </div>
+        {/* 27 Nov 2026 (the user): the proposal's design -- the facts in one bordered grid. */}
+        <dl className="grid gap-x-6 gap-y-4 rounded-lg border p-4 sm:grid-cols-2 xl:grid-cols-4">
+          <Fact label="Trade">{w.trade ? (TRADE_LABELS[w.trade as Trade] ?? w.trade) : <Muted>Not set</Muted>}</Fact>
+          <Fact label="Risk">{WORK_RISK_LABELS[w.risk]}</Fact>
+          <Fact label="Found on">
+            {w.source === "visit" && w.visitId ? (
+              <Link href={visitPageHref(w.visitId)} className="hover:text-brand underline underline-offset-2">
+                {workSourceLabel(w)}
+              </Link>
+            ) : w.source === "call_out" && w.callOutId ? (
+              <Link href={visitPageHref(w.callOutId)} className="hover:text-brand underline underline-offset-2">
+                {workSourceLabel(w)}
+              </Link>
+            ) : (
+              workSourceLabel(w)
+            )}
+          </Fact>
+          <Fact label="Found by">{w.technicianId ? (technicianName(w.technicianId) ?? null) : null}</Fact>
+          <Fact label="Raised">{shortDateTime(w.createdAt)}</Fact>
+          <Fact label="Contract">
+            <Link href={`/extensions/amc-contracts/${w.contractId}`} className="hover:text-brand underline underline-offset-2">
+              {w.contractNumber || "Open"}
+            </Link>
+          </Fact>
+          <Fact label="Completed">{w.completedAt ? shortDateTime(w.completedAt) : null}</Fact>
+          <Fact label="Invoice">{w.invoiceNumber}</Fact>
+          {w.paymentReference ? <Fact label="Payment reference">{w.paymentReference}</Fact> : null}
+          {w.approvalEvidence ? (
+            <Fact label="Approval" className="sm:col-span-2 xl:col-span-4" wrap>
+              {w.approvalEvidence}
+            </Fact>
+          ) : null}
+          {/* The finding in full, as a call out's diagnosis. */}
+          <Fact label="Finding" className="sm:col-span-2 xl:col-span-4" wrap>
+            <span className="leading-relaxed font-normal whitespace-pre-wrap">{w.finding}</span>
+          </Fact>
+        </dl>
       </SectionCard>
 
 
