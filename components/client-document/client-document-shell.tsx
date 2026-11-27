@@ -28,6 +28,26 @@ import { AMC_BRAND_IMAGES, AMC_PAGE } from "@/components/dashboard/extensions/am
 
 export type ClientFact = { label: string; value: string; hint?: string | null };
 
+/**
+ * A client page is always light (27 Nov 2026): its background is, and a
+ * viewer whose portal is in dark mode saw the outline buttons (Reject,
+ * Download) as white text on white. The dark class is lifted while the page
+ * is open and put back after, so the viewer's own setting is kept.
+ */
+export function useClientLightTheme() {
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    const wasDark = root.classList.contains("dark");
+    const scheme = root.style.colorScheme;
+    root.classList.remove("dark");
+    root.style.colorScheme = "light";
+    return () => {
+      if (wasDark) root.classList.add("dark");
+      root.style.colorScheme = scheme;
+    };
+  }, []);
+}
+
 export function ClientDocumentShell({
   actions,
   facts,
@@ -37,6 +57,7 @@ export function ClientDocumentShell({
   facts: ClientFact[];
   children: ReactNode;
 }) {
+  useClientLightTheme();
   return (
     <div className="min-h-screen bg-slate-100">
       <header className="sticky top-0 z-20 border-b border-slate-200 bg-white/95 backdrop-blur supports-[backdrop-filter]:bg-white/80">

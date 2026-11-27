@@ -6,11 +6,16 @@ import { readAmcConfig } from "@/lib/server/amc/config";
 import { contractErrorResponse, requireContractAccess } from "@/lib/server/amc/contract-access";
 import { UUID, contractOwner, fieldWorkRights } from "@/lib/server/amc/field-work-access";
 
+import { crewSuggestion } from "@/lib/server/amc/call-outs";
+import { TRADES } from "@/lib/amc/client-profile";
+import type { Trade } from "@/lib/amc/visits";
 /**
  * AMC additional works (DEV-407).
  *
  *   GET  ?contractId&callOutId&visitId   every one with AMC Additional works (View), else
  *                                        those of contracts the caller may read
+ *   GET  ?suggest&contractId&trade&date&time&duration
+ *                                        a crew for a slot before the work is raised (27 Nov 2026)
  *   POST                                 raise one from a visit, a call out, or by hand
  */
 export async function GET(req: NextRequest) {
@@ -22,6 +27,19 @@ export async function GET(req: NextRequest) {
   const visitId = params.get("visitId");
   if ([contractId, callOutId, visitId].some((v) => v && !UUID.test(v))) return NextResponse.json({ error: "Not found." }, { status: 404 });
   try {
+    /* The crew for a slot while the work is being raised: the contract and the trade are enough, as for a raised one. */
+    if (params.has("suggest")) {
+      if (!contractId) return NextResponse.json({ error: "Choose the contract first." }, { status: 400 });
+      const scope = await contractOwner(gate.admin, contractId);
+      if (!scope.found || !fieldWorkRights(gate, "additional_works", scope.ownerId).create) return NextResponse.json({ error: "Contract not found." }, { status: 404 });
+      const date = params.get("date") ?? "";
+      const time = params.get("time") ?? "09:00";
+      const duration = Math.min(1440, Math.max(15, Number(params.get("duration")) || 120));
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !/^\d{2}:\d{2}$/.test(time)) return NextResponse.json({ error: "Use a date and a time." }, { status: 400 });
+      const tradeParam = params.get("trade");
+      const trade = tradeParam && (TRADES as readonly string[]).includes(tradeParam) ? (tradeParam as Trade) : null;
+      return NextResponse.json(await crewSuggestion(gate.admin, { contractId, trade, date, time, durationMinutes: duration, ignoreIds: [] }));
+    }
     let ownerFilter: string | null = null;
     let canCreate = fieldWorkRights(gate, "additional_works", null).create;
     if (contractId) {

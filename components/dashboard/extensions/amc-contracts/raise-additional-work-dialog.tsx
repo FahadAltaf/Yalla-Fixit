@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useState } from "react";
-import { ChevronDown, Hammer } from "lucide-react";
+import { ChevronDown, Hammer, Search } from "lucide-react";
 import { toast } from "sonner";
 
 import { ActionDialogContent, SubmitButton } from "@/components/dashboard/shared/kaizen-states";
@@ -25,13 +25,19 @@ import {
 import { TRADE_LABELS, TRADES } from "@/lib/amc/client-profile";
 import type { Trade } from "@/lib/amc/visits";
 import { cn } from "@/lib/utils";
-import { additionalWorksService } from "@/modules/amc-contracts/additional-works-service";
+import { additionalWorksService, type WorkCrewSuggestion } from "@/modules/amc-contracts/additional-works-service";
 
 import { ContractPicker, Field, errorText, type PickedContract } from "./call-out-shared";
 import { TechnicianSelect } from "./people-pickers";
 import { useBookingGuards } from "./booking-guards";
 import { AmcPhoneInput } from "@/components/dashboard/extensions/amc/components/amc-phone-input";
 
+import { CrewPicker, crewOptions, crewSummary } from "./crew-picker";
+import { useLeadTimeConfirm } from "./lead-time-confirm";
+import { formatContractDate } from "./contract-status";
+import DateSelect from "@/components/ui/date-select";
+import TimeSelect from "@/components/ui/time-select";
+import { todayInDubai } from "@/lib/amc/contracts";
 const NONE = "__none";
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -140,6 +146,8 @@ export function PartiesEditor({ value, onChange, disabled }: { value: PartyDraft
  * approves, pays and receives the invoice and report. Parties left empty
  * are the client. Mount it with a `key` that changes on every open.
  */
+const isIsoDate = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s);
+
 export function RaiseAdditionalWorkDialog({
   open,
   onOpenChange,
@@ -177,14 +185,57 @@ export function RaiseAdditionalWorkDialog({
   const [parties, setParties] = useState<PartyDrafts>(() => partyDrafts());
   const [partiesOpen, setPartiesOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const ids = { contract: useId(), finding: useId(), risk: useId(), trade: useId(), technician: useId() };
+  const ids = { contract: useId(), finding: useId(), risk: useId(), trade: useId(), technician: useId(), date: useId(), time: useId(), duration: useId(), override: useId() };
+  /*
+    27 Nov 2026 (the user): the crew as Crew & time picks it -- a day and a
+    time, then Find technicians, then choose -- so the work can be planned
+    as it is raised. Optional: left empty, it is scheduled later.
+  */
+  const { guard: leadTimeGuard, dialog: leadTimeDialog } = useLeadTimeConfirm();
+  const [date, setDate] = useState(() => todayInDubai());
+  const [time, setTime] = useState("09:00");
+  const [duration, setDuration] = useState("120");
+  const [suggestion, setSuggestion] = useState<{ key: string; data: WorkCrewSuggestion } | null>(null);
+  const [crew, setCrew] = useState<string[]>([]);
+  const [missingLogins, setMissingLogins] = useState(0);
+  const [crewReason, setCrewReason] = useState("");
+  const [finding_, setFinding_] = useState(false);
 
   const targetId = contractId ?? picked?.id ?? null;
+  const minutes = Number(duration);
+  const validSlot = isIsoDate(date) && /^\d{2}:\d{2}$/.test(time) && Number.isInteger(minutes) && minutes >= 15 && minutes <= 1440;
+  const slotKey = `${targetId}|${trade ?? ""}|${date}|${time}|${minutes}`;
+  const fresh = suggestion?.key === slotKey ? suggestion.data : null;
+  const options = fresh ? crewOptions(fresh) : null;
+  const suggestedIds = fresh?.suggested.technicianIds ?? [];
+  const crewDiffers = fresh !== null && crew.length > 0 && !(crew.length === suggestedIds.length && crew.every((c) => suggestedIds.includes(c)));
+  const reasonRequired = crewDiffers && suggestedIds.length > 0;
+  const planning = fresh !== null && crew.length > 0;
   const problem = !targetId
     ? "Choose the contract."
     : finding.trim().length < 3
       ? "Describe the finding."
-      : partiesProblem(parties);
+      : planning && reasonRequired && crewReason.trim().length < 3
+        ? "Say why this crew was chosen instead of the suggested one."
+        : planning && missingLogins > 0
+          ? "Create the mobile logins of the chosen crew first."
+          : partiesProblem(parties);
+
+  const findCrew = async () => {
+    if (!targetId || !validSlot) return;
+    setFinding_(true);
+    try {
+      const result = await additionalWorksService.suggestForContract(targetId, trade, date, time, minutes);
+      setSuggestion({ key: slotKey, data: result });
+      setCrew(result.suggested.technicianIds);
+      setCrewReason("");
+      if (!result.fits.some((f) => f.blockers.length === 0)) toast.warning("Nobody can be picked at that time: everyone is on leave or cannot take this work.");
+    } catch (e) {
+      toast.error(errorText(e, "Could not find technicians."));
+    } finally {
+      setFinding_(false);
+    }
+  };
 
   const submit = async () => {
     if (problem || !targetId) return;
@@ -203,6 +254,25 @@ export function RaiseAdditionalWorkDialog({
         parties: partiesInput(parties, false),
       }));
       toast.success(`Additional work ${result.workNo} raised`);
+      /* Planned on the slot and crew chosen here, as Crew & time would. */
+      if (planning) {
+        try {
+          await leadTimeGuard((insideLeadTime) =>
+            additionalWorksService.action(result.id, {
+              action: "schedule",
+              date,
+              time,
+              durationMinutes: minutes,
+              technicianIds: crew,
+              overrideReason: crewReason.trim() || null,
+              insideLeadTime,
+            }),
+          );
+          toast.success(`${result.workNo} planned for ${formatContractDate(date)} at ${time}`);
+        } catch (e) {
+          toast.warning(`${result.workNo} was raised but not planned`, { description: errorText(e, "Plan it on its Crew & time tab.") });
+        }
+      }
       onOpenChange(false);
       await onRaised?.(result);
     } catch (e) {
@@ -214,8 +284,9 @@ export function RaiseAdditionalWorkDialog({
 
   return (
     <Dialog open={open} onOpenChange={(next) => !busy && onOpenChange(next)}>
-      <ActionDialogContent busy={busy} className="max-h-[88vh] overflow-y-auto sm:max-w-xl">
+      <ActionDialogContent busy={busy} className="max-h-[88vh] overflow-y-auto sm:max-w-2xl">
         {bookingDialogs}
+        {leadTimeDialog}
         <DialogHeader>
           <DialogTitle>Raise additional work</DialogTitle>
           <DialogDescription>
@@ -262,9 +333,49 @@ export function RaiseAdditionalWorkDialog({
                 </SelectContent>
               </Select>
             </Field>
-            <Field id={ids.technician} label="Technician (optional)">
+            <Field id={ids.technician} label="Found by (optional)">
               <TechnicianSelect id={ids.technician} value={technicianId} onChange={setTechnicianId} disabled={busy} />
             </Field>
+          </div>
+
+          <div className="grid gap-3 rounded-lg border p-4">
+            <div>
+              <p className="text-sm font-medium">Schedule (optional)</p>
+              <p className="text-muted-foreground text-xs">Pick a day and time, then find who is competent for the trade and free. Left empty, it is scheduled later on Crew &amp; time.</p>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-3">
+              <Field id={ids.date} label="Date">
+                <DateSelect id={ids.date} value={date} onChange={setDate} />
+              </Field>
+              <Field id={ids.time} label="Start time">
+                <TimeSelect id={ids.time} step={900} value={time} onChange={setTime} />
+              </Field>
+              <Field id={ids.duration} label="Duration (minutes)">
+                <Input id={ids.duration} type="number" min={15} max={1440} step={15} value={duration} onChange={(e) => setDuration(e.target.value)} />
+              </Field>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-muted-foreground text-xs">
+                {!targetId
+                  ? "Choose the contract first."
+                  : suggestion && !fresh
+                    ? "The day, time or trade changed: find technicians again."
+                    : !validSlot
+                      ? "Enter a date, a start time and 15 to 1440 minutes."
+                      : !fresh
+                        ? `Then choose the crew${trade ? "" : " (with no trade set, every technician is offered)"}.`
+                        : crewSummary(crew)}
+              </p>
+              <SubmitButton variant="outline" pending={finding_} pendingLabel="Finding…" disabled={busy || finding_ || !targetId || !validSlot} icon={<Search className="size-4" />} onClick={() => void findCrew()}>
+                Find technicians
+              </SubmitButton>
+            </div>
+            {options ? <CrewPicker options={options} picked={crew} onPickedChange={setCrew} disabled={busy} onMissingLoginsChange={setMissingLogins} /> : null}
+            {crewDiffers ? (
+              <Field id={ids.override} label={reasonRequired ? "Why this crew" : "Why this crew (optional)"}>
+                <Textarea id={ids.override} rows={2} maxLength={500} value={crewReason} onChange={(e) => setCrewReason(e.target.value)} />
+              </Field>
+            ) : null}
           </div>
 
           {/* Hidden for now (18 Nov 2026): the client is every party unless changed on the work's Parties tab. */}

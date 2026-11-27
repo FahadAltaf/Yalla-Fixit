@@ -11,6 +11,9 @@ import { ContractError, isMissingTable } from "@/lib/server/amc/contracts";
 import { notifyUsers } from "@/lib/server/amc/notifications";
 import { getAssessment } from "@/lib/server/amc/business";
 import { performVisitAction, siteVisitAccess, visitDetail, writePassType } from "@/lib/server/amc/visits";
+import { fieldAccess } from "@/lib/server/amc/field-access";
+import { tidyPropertyLabel } from "@/lib/server/amc/contracts";
+import type { FieldStartKind } from "@/lib/amc/field-start";
 import { hashLinkToken, linkTokenExpiry, mintLinkToken } from "@/lib/server/link-token";
 
 type AccessRuleInput = z.infer<typeof accessRuleSchema>;
@@ -82,6 +85,75 @@ export async function createVisitClientLink(admin: Admin, input: { visitId: stri
 }
 
 const NOT_READY_SITE_VISIT = "Pass links for site visits need the database update 20261126110000 first.";
+const NOT_READY_FIELD_WORK = "Pass links for call outs and additional work need the database update 20261127120000 first.";
+
+const isFieldWork = (t: unknown): t is FieldStartKind => t === "call_out" || t === "additional_work";
+const FIELD_NOUN: Record<FieldStartKind, string> = { call_out: "call out", additional_work: "additional work" };
+const fieldPage = (kind: FieldStartKind, id: string) =>
+  kind === "call_out" ? `/extensions/amc-contracts/visits/${id}?tab=access` : `/extensions/amc-contracts/additional-works/${id}?tab=access`;
+
+/** A call out or additional work as its pass link shows it (27 Nov 2026): whose, where, when, its rules, who to tell. */
+async function fieldWorkFacts(admin: Admin, kind: FieldStartKind, id: string) {
+  const view = await fieldAccess(admin, kind, id);
+  const { data: row } = await admin.from(kind === "call_out" ? "amc_call_outs" : "amc_additional_works").select("contract_id").eq("id", id).maybeSingle<Row>();
+  const { data: contract } = await admin
+    .from("amc_contracts")
+    .select("id, contract_number, customer_name, property_label, customer_id, customer, submission:amc_submissions!amc_contracts_submission_id_fkey(owner_id)")
+    .eq("id", String(row?.contract_id ?? ""))
+    .maybeSingle<Row>();
+  if (!contract) throw new ContractError("The contract was not found.", 404);
+  const sub = Array.isArray(contract.submission) ? (contract.submission[0] as Row | undefined) : (contract.submission as Row | null);
+  const customer = (contract.customer ?? {}) as Row;
+  return {
+    view,
+    contractId: String(contract.id),
+    contractNumber: String(contract.contract_number ?? ""),
+    customerName: str(contract.customer_name) ?? "Client",
+    customerId: str(contract.customer_id),
+    phone: str(customer.customerPhone),
+    propertyLabel: tidyPropertyLabel(contract.property_label) ?? "the property",
+    ownerId: str(sub?.owner_id),
+    day: view.day,
+    time: view.scheduledStart ? new Date(view.scheduledStart).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Dubai" }) : null,
+  };
+}
+
+/** DEV-494 on a call out or additional work (27 Nov 2026): the pass and access-rule link (an earlier one stops working). */
+export async function createFieldWorkClientLink(admin: Admin, input: { kind: FieldStartKind; id: string; channel: ClientLinkChannel }, actor: Actor) {
+  const f = await fieldWorkFacts(admin, input.kind, input.id);
+  if (f.view.startedAt) throw new ContractError(`${f.view.ref} has already started: the crew is in.`, 409);
+  const now = new Date().toISOString();
+  const { error: revokeError } = await admin.from(TABLE).update({ revoked_at: now }).eq("entity_type", input.kind).eq("entity_id", input.id).eq("purpose", "access_upload").is("revoked_at", null);
+  if (revokeError) throw isMissingTable(revokeError) ? new ContractError(NOT_READY, 503) : new ContractError(revokeError.message, 500);
+  const token = mintLinkToken();
+  const expiresAt = linkTokenExpiry(TTL_DAYS.access_upload);
+  const { error } = await admin.from(TABLE).insert({
+    purpose: "access_upload",
+    entity_type: input.kind,
+    entity_id: input.id,
+    channel: input.channel,
+    token_hash: token.hash,
+    token_hint: token.hint,
+    expires_at: expiresAt,
+    created_by: actor.id,
+  });
+  if (error) {
+    if (isMissingTable(error)) throw new ContractError(NOT_READY, 503);
+    if (error.code === "23514") throw new ContractError(NOT_READY_FIELD_WORK, 503);
+    throw new ContractError(error.message, 500);
+  }
+  await recordAmcAudit(admin, {
+    entityType: "contract",
+    entityId: f.contractId,
+    eventType: "visit_access_link_created",
+    actorId: actor.id,
+    actorLabel: actor.label,
+    payload: { [input.kind === "call_out" ? "callOutId" : "additionalWorkId"]: input.id, ref: f.view.ref, channel: input.channel, hint: token.hint, expiresAt },
+  });
+  const url = `${appUrl()}/amc-visit/${token.raw}`;
+  const message = `Dear ${f.customerName}, for our ${FIELD_NOUN[input.kind]} ${f.view.ref} at ${f.propertyLabel} on ${fmtDay(f.day)}${f.time ? ` at ${f.time}` : ""} we need the gate pass or work permit, and anything the building asks for before our team can get in. Please send them here: ${url}`;
+  return { url, expiresAt, message, phone: f.phone };
+}
 
 /** The site visit as its pass link shows it: whose it is, where, when, and who to tell. */
 async function siteVisitFacts(admin: Admin, assessmentId: string) {
@@ -185,6 +257,27 @@ export async function resolveClientLink(admin: Admin, raw: string): Promise<{ li
 
 /** What the client sees: only the visit's own facts, nothing internal. */
 export async function clientLinkView(admin: Admin, link: Row, config: AmcConfig) {
+  if (isFieldWork(link.entity_type)) {
+    const f = await fieldWorkFacts(admin, link.entity_type, String(link.entity_id));
+    return {
+      purpose: "access_upload" as ClientLinkPurpose,
+      reference: `AMC ${f.contractNumber} · ${link.entity_type === "call_out" ? "Call out" : "Additional work"} ${f.view.ref}`,
+      customerName: f.customerName,
+      propertyLabel: f.propertyLabel,
+      contractNumber: f.contractNumber,
+      visitNo: 0,
+      day: f.day,
+      time: f.time,
+      windowStart: "",
+      windowEnd: "",
+      services: [link.entity_type === "call_out" ? "Call out" : "Additional work"],
+      confirmed: false,
+      status: f.view.status,
+      passesNeeded: f.view.accessRules.filter((r) => /pass|permit|clearance/i.test(String(r.accessType))).map((r) => `${String(r.accessType).replace(/_/g, " ")}${r.issuer ? ` (${r.issuer})` : ""}`),
+      rules: f.view.accessRules.map(clientRuleView),
+      lastResponse: (link.response ?? null) as Row | null,
+    };
+  }
   if (link.entity_type === "assessment") {
     const f = await siteVisitFacts(admin, String(link.entity_id));
     const access = await siteVisitAccess(admin, { id: f.a.id, propertyId: f.a.property?.id ?? null, day: f.day });
@@ -231,6 +324,22 @@ export async function clientLinkView(admin: Admin, link: Row, config: AmcConfig)
 }
 
 async function tellCoordinator(admin: Admin, link: Row, config: AmcConfig, title: string, body: string, kind: string) {
+  if (isFieldWork(link.entity_type)) {
+    const f = await fieldWorkFacts(admin, link.entity_type, String(link.entity_id));
+    if (!f.ownerId) return;
+    await notifyUsers(admin, {
+      event: kind,
+      userIds: [f.ownerId],
+      title: `${title}: ${f.contractNumber} ${FIELD_NOUN[link.entity_type]} ${f.view.ref}`,
+      body: `${f.customerName}: ${body}`,
+      link: fieldPage(link.entity_type, String(link.entity_id)),
+      entityType: link.entity_type,
+      entityId: String(link.entity_id),
+      contractId: f.contractId,
+      dedupeKey: `${kind}:${String(link.id)}:${Date.now()}`,
+    });
+    return;
+  }
   if (link.entity_type === "assessment") {
     const f = await siteVisitFacts(admin, String(link.entity_id));
     if (!f.tell.length) return;
@@ -273,7 +382,7 @@ export async function answerVisitConfirmation(
   input: { answer: "confirm" | "reschedule"; name: string; preferredDate?: string | null; note?: string | null },
   config: AmcConfig,
 ) {
-  if (link.purpose !== "visit_confirmation" || link.entity_type === "assessment") throw new ContractError("This link is not for confirming a visit.", 400);
+  if (link.purpose !== "visit_confirmation" || link.entity_type !== "visit") throw new ContractError("This link is not for confirming a visit.", 400);
   const name = input.name.trim();
   const note =
     input.answer === "confirm"
@@ -326,6 +435,10 @@ export type ClientPassMeta = {
 
 /** Where the client's pass and rules go: the visit (or site visit), its property, and its client. */
 async function passTarget(admin: Admin, link: Row, config: AmcConfig) {
+  if (isFieldWork(link.entity_type)) {
+    const f = await fieldWorkFacts(admin, link.entity_type, String(link.entity_id));
+    return { level: link.entity_type, entityId: String(link.entity_id), customerId: f.customerId, propertyId: f.view.propertyId };
+  }
   if (link.entity_type === "assessment") {
     const f = await siteVisitFacts(admin, String(link.entity_id));
     return { level: "site_visit" as const, entityId: f.a.id, customerId: f.a.customer?.id ?? null, propertyId: f.a.property?.id ?? null };

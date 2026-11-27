@@ -41,7 +41,7 @@ const STATUSES: ReadonlyArray<{ value: ContractListStatus; label: string }> = [
   { value: "expiring", label: "Expiring" },
   { value: "expired", label: "Expired" },
   { value: "pending_activation", label: "Pending activation" },
-  { value: "not_started", label: "Not started" },
+  { value: "not_started", label: "Active, starting later" },
   { value: "cancelled", label: "Cancelled" },
 ];
 
@@ -133,14 +133,20 @@ export function ContractsList({ onRefresh }: { onRefresh?: () => void }) {
       header: "Contract",
       accessorFn: (row) => row.proposalNumber,
       ...serverSorted,
+      /* The contract's number, its proposal under it (27 Nov 2026). */
       cell: ({ row }) => (
-        <Link
-          href={hrefOf(row.original)}
-          className="focus-visible:ring-ring rounded-md text-sm font-medium tabular-nums hover:underline focus-visible:ring-2 focus-visible:outline-none"
-          onClick={(event) => event.stopPropagation()}
-        >
-          {row.original.proposalNumber || "—"}
-        </Link>
+        <span className="flex flex-col">
+          <Link
+            href={hrefOf(row.original)}
+            className="focus-visible:ring-ring rounded-md text-sm font-medium tabular-nums hover:underline focus-visible:ring-2 focus-visible:outline-none"
+            onClick={(event) => event.stopPropagation()}
+          >
+            {row.original.contractNumber || row.original.proposalNumber || "—"}
+          </Link>
+          {row.original.contractNumber && row.original.proposalNumber ? (
+            <span className="text-muted-foreground text-xs tabular-nums">{row.original.proposalNumber}</span>
+          ) : null}
+        </span>
       ),
     },
     {
@@ -237,7 +243,7 @@ export function ContractsList({ onRefresh }: { onRefresh?: () => void }) {
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon" className="size-8">
                 <EllipsisVertical className="size-4" />
-                <span className="sr-only">Actions for {row.original.proposalNumber || "this contract"}</span>
+                <span className="sr-only">Actions for {row.original.contractNumber || row.original.proposalNumber || "this contract"}</span>
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
