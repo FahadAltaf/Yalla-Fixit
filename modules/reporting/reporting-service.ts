@@ -45,7 +45,7 @@ export const reportingService = {
 
 export const notificationsService = {
   list: (options: { limit: number; offset?: number; unread?: boolean; module?: NotificationModule | null }) =>
-    executeRESTBackend<{ notifications: InAppNotification[]; unread: number; unreadByModule?: Partial<Record<NotificationModule, number>> }>("/api/notifications", {
+    executeRESTBackend<{ notifications: InAppNotification[]; unread: number; unreadByModule?: Partial<Record<NotificationModule, number>>; total?: number }>("/api/notifications", {
       params: {
         limit: options.limit,
         offset: options.offset ?? 0,

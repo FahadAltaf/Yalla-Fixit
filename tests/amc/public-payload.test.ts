@@ -130,3 +130,13 @@ test("the client's contract prints the Customer ID and the payment plan, as the 
   assert.match(text, /Terms of Payment.*?50\/50/);
   assert.doesNotMatch(text, /Terms of Payment","bold"?.{0,40}Annual/);
 });
+
+test("a signature on the link that signs the contract is announced once, by the contract, with who signed and when (27 Nov 2026)", async () => {
+  const { readFileSync } = await import("node:fs");
+  const route = readFileSync("app/api/amc/[token]/route.ts", "utf8");
+  assert.match(route, /announced = await clientSignedOnLink\(/);
+  assert.ok(route.indexOf("if (announced) return;") < route.indexOf("await notifyProposalEvent(admin, {"), "the proposal's own notice is skipped then");
+  assert.ok(route.indexOf("archiveSignedContract(") < route.indexOf("if (announced) return;"), "the signed copy is still archived");
+  const lifecycle = readFileSync("lib/server/amc/contract-lifecycle.ts", "utf8");
+  assert.match(lifecycle, /event: "contract_signed"[^\n]*facts: typed/, "the contract's notice carries the typed name and time");
+});

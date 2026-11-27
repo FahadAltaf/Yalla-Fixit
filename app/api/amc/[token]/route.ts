@@ -358,8 +358,10 @@ export async function POST(
       if (body.action === "approve") {
         await createContractFromApproval(admin, submissionId, { id: null, label: body.name }, await readAmcConfig(admin));
       }
+      /* A signature that made the contract signed was announced by the contract itself. */
+      let announced = false;
       if (body.action === "sign") {
-        await clientSignedOnLink(admin, submissionId, body.name, now);
+        announced = await clientSignedOnLink(admin, submissionId, body.name, now);
       }
       if (body.action === "sign") {
         try {
@@ -371,6 +373,7 @@ export async function POST(
           );
         }
       }
+      if (announced) return;
       await notifyProposalEvent(admin, {
         event: body.action === "sign" ? "contract_signed" : body.action === "approve" ? "client_approved" : "client_rejected",
         submissionId,

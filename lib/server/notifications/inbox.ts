@@ -60,10 +60,11 @@ function toNotification(row: Row): InAppNotification {
   };
 }
 
-function inbox(admin: SupabaseClient, userId: string, columns: string, head = false) {
+/* head: only the count; count: the rows and how many match in all (the inbox's pages, 27 Nov 2026). */
+function inbox(admin: SupabaseClient, userId: string, columns: string, mode: "rows" | "head" | "count" = "rows") {
   return admin
     .from(TABLE)
-    .select(columns, head ? { count: "exact", head: true } : undefined)
+    .select(columns, mode === "head" ? { count: "exact", head: true } : mode === "count" ? { count: "exact" } : undefined)
     .eq("recipient_user_id", userId)
     .eq("channel", "in_app")
     .eq("status", "delivered");
@@ -110,7 +111,13 @@ export async function listMyNotifications(
   admin: SupabaseClient,
   userId: string,
   options: { limit: number; offset: number; unreadOnly: boolean; module?: NotificationModule | null },
-): Promise<{ notifications: InAppNotification[]; unread: number; unreadByModule: Partial<Record<NotificationModule, number>> }> {
+): Promise<{
+  notifications: InAppNotification[];
+  unread: number;
+  unreadByModule: Partial<Record<NotificationModule, number>>;
+  /** How many match this view (unread or all, this module) across both stores, for the pager. */
+  total: number;
+}> {
   /*
     Two stores feed one inbox: portal_notifications (Finance, Reports) and
     AMC's own amc_notifications (approvals, client decisions, signatures,
@@ -123,7 +130,7 @@ export async function listMyNotifications(
   /* One module: only its store (AMC's own, or the portal's narrowed to that module's events). */
   const wantPortal = only !== "amc";
   const wantAmc = only === null || only === "amc";
-  let list = inbox(admin, userId, COLUMNS)
+  let list = inbox(admin, userId, COLUMNS, "count")
     .order("created_at", { ascending: false })
     .order("id", { ascending: false })
     .range(0, upTo - 1);
@@ -131,8 +138,8 @@ export async function listMyNotifications(
   if (only && only !== "amc") list = forModule(list, only);
 
   const [page, unread, amc] = await Promise.all([
-    wantPortal ? list : Promise.resolve({ data: [], error: null }),
-    inbox(admin, userId, "id", true).is("read_at", null),
+    wantPortal ? list : Promise.resolve({ data: [], error: null, count: 0 }),
+    inbox(admin, userId, "id", "head").is("read_at", null),
     listAmcNotifications(admin as never, userId, wantAmc ? upTo : 1, { offset: 0, unreadOnly: options.unreadOnly }),
   ]);
   if (page.error) throw new Error(page.error.message);
@@ -147,6 +154,7 @@ export async function listMyNotifications(
     notifications: merged.slice(options.offset, upTo),
     unread: (unread.count ?? 0) + amc.unread,
     unreadByModule: await unreadByModule(admin, userId, amc.unread),
+    total: (wantPortal ? (page.count ?? 0) : 0) + (wantAmc ? amc.total : 0),
   };
 }
 

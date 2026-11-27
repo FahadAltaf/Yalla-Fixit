@@ -382,6 +382,10 @@ test("the shared inbox shows AMC and portal notifications together, newest first
   assert.equal(page.unread, 2);
   const second = await listInbox(w.client as never, "u-a", { limit: 1, offset: 1, unreadOnly: false });
   assert.deepEqual(second.notifications.map((n) => n.id), ["p1"], "paging runs across both stores");
+  /* The inbox's pager (27 Nov 2026): the total is both stores' own rows, whatever the page. */
+  assert.equal(page.total, 2);
+  assert.equal(second.total, 2);
+  assert.equal((await listInbox(w.client as never, "u-a", { limit: 10, offset: 0, unreadOnly: false, module: "amc" })).total, 1, "one module: its own count");
   await markInbox(w.client as never, "u-a", "all");
   assert.notEqual(w.table("amc_notifications").find((n) => n.id === "a1")!.read_at, null);
   assert.notEqual(w.table("portal_notifications").find((n) => n.id === "p1")!.read_at, null);

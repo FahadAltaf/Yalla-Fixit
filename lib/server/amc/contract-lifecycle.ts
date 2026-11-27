@@ -364,7 +364,9 @@ async function afterSignature(admin: Admin, c: Row, status: ContractStatus, sign
   await setStatus(admin, String(c.id), from, status, extra, actor, status === "signed" ? "All signatures recorded" : "Signature recorded");
   if (status === "signed") {
     await closeAmcTodos(admin, { entityType: "contract", entityId: String(c.id), kind: "contract_follow_up" }, { status: "done", reason: "Signed" }).catch(() => 0);
-    await notifyContractEvent(admin, { event: "contract_signed", contractId: String(c.id), actor: { id: actor.id, label: actor.label }, at: new Date().toISOString() }).catch(() => undefined);
+    /* Signed on the link: who typed their name and when, as the proposal's notice said (27 Nov 2026: that one is no longer sent as well). */
+    const typed = route === "link" && client ? { signedByName: client.signedName ?? client.name ?? null, signedAt: client.signedAt ?? null } : undefined;
+    await notifyContractEvent(admin, { event: "contract_signed", contractId: String(c.id), actor: { id: actor.id, label: actor.label }, at: new Date().toISOString(), facts: typed }).catch(() => undefined);
     /* DEV-504: the client becomes an FSM customer on signing, not at enquiry. */
     queueClientToFsmOnSigning(admin, String(c.id), { id: actor.id ?? null, label: actor.label ?? null });
   } else {
@@ -387,18 +389,25 @@ async function afterSignature(admin: Admin, c: Row, status: ContractStatus, sign
 }
 
 /** The client signed on the link (the proposal's submission is already signed). Best effort. */
-export async function clientSignedOnLink(admin: Admin, submissionId: string, name: string, signedAt: string): Promise<void> {
+/**
+ * The client signed on the link: recorded on the contract. True when that
+ * made the contract signed, which has told the team itself (27 Nov 2026:
+ * the link then sent its own "contract signed" too, so it came twice).
+ */
+export async function clientSignedOnLink(admin: Admin, submissionId: string, name: string, signedAt: string): Promise<boolean> {
   try {
     const c = await contractRow(admin, { submissionId });
-    if (!c || !AWAITING_SIGNATURE.includes(String(c.status) as ContractStatus)) return;
+    if (!c || !AWAITING_SIGNATURE.includes(String(c.status) as ContractStatus)) return false;
     const { signatories, migrated } = await listSignatories(admin, String(c.id));
-    if (!migrated) return;
+    if (!migrated) return false;
     const client = signatories.find((s) => s.party === "client" && s.status !== "signed");
-    if (!client) return;
+    if (!client) return false;
     const { status, signatories: after } = await signRow(admin, String(c.id), client.id, { method: "link", signedAt, signedName: name });
     await afterSignature(admin, c, status, after, { id: null, label: name }, "link");
+    return status === "signed" && String(c.status) !== "signed";
   } catch (error) {
     console.error("[amc:contract] client signature not recorded on the contract:", error instanceof Error ? error.message : error);
+    return false;
   }
 }
 
