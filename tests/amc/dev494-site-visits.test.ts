@@ -36,3 +36,9 @@ test("the Access card shows Add rule / Add pass once, with Ask client for pass o
   assert.match(button, /Copy link/);
   assert.match(button, /\/api\/amc-contracts\/assessments\/\$\{encodeURIComponent\(siteVisitId\)\}\/client-link/);
 });
+
+test("a pass from the client waits for the coordinator: marked pending on both visits and site visits", () => {
+  const src = read("lib/server/amc/client-links.ts");
+  assert.equal((src.match(/await markPending\(admin, /g) ?? []).length, 2);
+  assert.match(src, /update\(\{ access_status: "pending" \}\)/);
+});

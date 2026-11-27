@@ -16,7 +16,7 @@ import {
   type DocumentLevel,
   type scopeItemSchema,
 } from "@/lib/amc/client-profile";
-import { recordAmcAudit } from "@/lib/server/amc/audit";
+import { recordAmcAudit, recordAmcAudits as recordAmcAuditsFor } from "@/lib/server/amc/audit";
 import { ContractError, isMissingTable } from "@/lib/server/amc/contracts";
 import { AMC_DOCUMENTS_BUCKET } from "@/lib/server/amc/signed-archive";
 import { recordStatusChange } from "@/lib/server/amc/status-history";
@@ -645,6 +645,78 @@ const scopeRow = (input: ScopeInput) => ({
   notes: blank(input.notes),
   ...(input.active !== undefined ? { active: input.active } : {}),
 });
+
+/**
+ * Several new assets at once, each with the id it was given on site: one
+ * read, one insert and one audit write, whatever the number (26 Nov 2026:
+ * a site visit's approval added them one by one, ~3 s each on live). An id
+ * already on the property is left as it is, so a retry adds nothing twice.
+ */
+export async function createAssets(admin: Admin, propertyId: string, items: Array<{ id: string; input: AssetInput }>, actor: Actor): Promise<void> {
+  if (!items.length) return;
+  const { data: found, error: readError } = await admin.from("amc_property_assets").select("id, property_id").in("id", items.map((i) => i.id));
+  if (readError) throw fail(readError);
+  const there = new Set<string>();
+  for (const r of (found ?? []) as Row[]) {
+    if (String(r.property_id) !== propertyId) throw new ContractError("That asset belongs to another property.", 409);
+    there.add(String(r.id));
+  }
+  const fresh = items.filter((i) => !there.has(i.id));
+  if (!fresh.length) return;
+  const { data, error } = await admin
+    .from("amc_property_assets")
+    .insert(fresh.map((i) => ({ ...assetRow(i.input), property_id: propertyId, created_by: actor.id, id: i.id })))
+    .select("id");
+  if (error) throw assetError(error);
+  const made = new Set(((data ?? []) as Row[]).map((r) => String(r.id)));
+  await recordAmcAuditsFor(
+    admin,
+    fresh.filter((i) => made.has(i.id)).map((i) => ({
+      entityType: "asset",
+      entityId: i.id,
+      eventType: "asset_added",
+      actorId: actor.id,
+      actorLabel: actor.label,
+      payload: { propertyId, assetType: i.input.assetType, quantity: i.input.quantity },
+    })),
+  );
+}
+
+/** Several new scope items at once, as createAssets (each asset it names must be on the property). */
+export async function createScopeItems(admin: Admin, propertyId: string, items: Array<{ id: string; input: ScopeInput }>, actor: Actor): Promise<void> {
+  if (!items.length) return;
+  const { data: found, error: readError } = await admin.from("amc_scope_items").select("id, property_id").in("id", items.map((i) => i.id));
+  if (readError) throw fail(readError);
+  const there = new Set<string>();
+  for (const r of (found ?? []) as Row[]) {
+    if (String(r.property_id) !== propertyId) throw new ContractError("That scope item belongs to another property.", 409);
+    there.add(String(r.id));
+  }
+  const fresh = items.filter((i) => !there.has(i.id));
+  if (!fresh.length) return;
+  const assetIds = [...new Set(fresh.map((i) => i.input.assetId).filter((v): v is string => Boolean(v)))];
+  if (assetIds.length) {
+    const { data: onProperty, error: assetsError } = await admin.from("amc_property_assets").select("id").eq("property_id", propertyId).in("id", assetIds);
+    if (assetsError) throw fail(assetsError);
+    if ((onProperty ?? []).length !== assetIds.length) throw new ContractError("That asset is not on this property.", 400);
+  }
+  const { data, error } = await admin
+    .from("amc_scope_items")
+    .insert(fresh.map((i) => ({ ...scopeRow(i.input), property_id: propertyId, created_by: actor.id, id: i.id })))
+    .select("id, service_id");
+  if (error) throw fail(error);
+  await recordAmcAuditsFor(
+    admin,
+    ((data ?? []) as Row[]).map((r) => ({
+      entityType: "property",
+      entityId: propertyId,
+      eventType: "scope_item_added",
+      actorId: actor.id,
+      actorLabel: actor.label,
+      payload: { scopeItemId: r.id, serviceId: r.service_id },
+    })),
+  );
+}
 
 async function assertAssetOnProperty(admin: Admin, propertyId: string, assetId: string | null | undefined) {
   if (!assetId) return;

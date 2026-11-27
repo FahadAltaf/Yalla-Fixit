@@ -103,6 +103,7 @@ import {
   type AmcHistoryEvent,
   type AmcSubmission,
 } from "./amc-types";
+import { formatDubaiDateTime } from "@/lib/amc/dubai-clock";
 
 /**
  * A submission, read-only, on its own page: everything the team entered and everything
@@ -127,11 +128,9 @@ function listNames(names: readonly string[]) {
   return names.length <= 1 ? (names[0] ?? "") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
 }
 
+/* Dubai time, as the rest of AMC (26 Nov 2026). */
 function formatWhen(value: string) {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime())
-    ? value
-    : format(date, "d MMM yyyy, HH:mm");
+  return Number.isNaN(new Date(value).getTime()) ? value : formatDubaiDateTime(value);
 }
 
 /*

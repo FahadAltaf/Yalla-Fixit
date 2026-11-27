@@ -104,3 +104,29 @@ test("the signer's own name and time come back only for a signed contract", () =
   );
   assert.equal(proposal.signedByName, null);
 });
+
+/*
+  27 Nov 2026 (AMC-C-2026-0001 on live): the client's contract printed
+  "Customer ID: —" and "Terms of Payment: Annual" on a 50/50 proposal the
+  team's preview showed correctly. The link's document carries both now.
+*/
+test("the client's contract prints the Customer ID and the payment plan, as the team's preview does", async () => {
+  const { readFileSync } = await import("node:fs");
+  const route = readFileSync("app/api/amc/[token]/route.ts", "utf8");
+  assert.doesNotMatch(route, /delete customer\.customerId/, "the printed Customer ID reaches the client");
+  assert.match(route, /payment_plan: \(row\.payment_plan/, "the payment plan reaches the client");
+
+  /* What computeAmcClientData does on the client page, without the renderer. */
+  const { computeAmcData } = await import("@/components/dashboard/extensions/amc/amc-pricing");
+  const { buildAmcDocumentModel } = await import("@/components/dashboard/extensions/amc/amc-document-model");
+  const { getDefaultFormValues } = await import("@/components/dashboard/extensions/amc/amc-constants");
+  const { formDataToSubmissionPayload, submissionToFormData } = await import("@/components/dashboard/extensions/amc/amc-submission-mapper");
+  const form = { ...getDefaultFormValues(), customerId: "YFI1003", customerName: "A Client", startDate: "2026-12-01", endDate: "2027-12-01", paymentTerms: "annual" as const, paymentPlan: "fifty_fifty" as const };
+  const payload = formDataToSubmissionPayload(form) as unknown as Record<string, unknown>;
+  const source = { property: payload.property, customer: payload.customer, document_options: payload.document_options ?? {}, services: payload.services, discount_percent: 0, payment_plan: "fifty_fifty", payment_plan_custom: null };
+  const data = computeAmcData(submissionToFormData(source as never), "contract", getAmcSettingsDefaults(), "2026-11-27T10:00:00Z");
+  const text = JSON.stringify(buildAmcDocumentModel(data).blocks);
+  assert.match(text, /YFI1003/);
+  assert.match(text, /Terms of Payment.*?50\/50/);
+  assert.doesNotMatch(text, /Terms of Payment","bold"?.{0,40}Annual/);
+});

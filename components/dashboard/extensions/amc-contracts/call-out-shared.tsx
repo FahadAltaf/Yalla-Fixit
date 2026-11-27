@@ -2,7 +2,6 @@
 
 import { createContext, useCallback, useContext, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
-import { format } from "date-fns";
 import { Copy, ExternalLink, ImagePlus, LoaderCircleIcon, RefreshCwIcon, SearchIcon, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 
@@ -34,6 +33,7 @@ import { AMC_PHOTO_MAX_BYTES } from "@/lib/amc/photos";
 import { cn } from "@/lib/utils";
 import { amcContractsService, type ContractListRow } from "@/modules/amc-contracts/amc-contracts-service";
 import { amcRefresh } from "@/lib/amc/http-cache";
+import { dubaiInputIn, formatDubaiShort, fromDubaiInput, toDubaiInput } from "@/lib/amc/dubai-clock";
 
 /**
  * Pieces the call-out and additional-work screens share (Phase 11): the
@@ -142,27 +142,23 @@ export function RiskBadge({ risk }: { risk: WorkRisk | string }) {
 /* ------------------------------------------------------------------ */
 
 /** "12 Oct 14:30". */
+/* Dubai's clock on screen and in the inputs, wherever the viewer is (26 Nov 2026, lib/amc/dubai-clock). */
 export function shortDateTime(iso: string | null | undefined): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? "—" : format(d, "d MMM HH:mm");
+  return formatDubaiShort(iso);
 }
 
-/** An ISO timestamp as a datetime-local value, in the browser's time. */
+/** An ISO timestamp as a datetime-local value, on Dubai's clock. */
 export function toLocalInput(iso: string | null | undefined): string {
-  if (!iso) return "";
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? "" : format(d, "yyyy-MM-dd'T'HH:mm");
+  return toDubaiInput(iso);
 }
 
+/** A datetime-local value, typed as Dubai time, back to an instant. */
 export function fromLocalInput(value: string): string | null {
-  if (!value) return null;
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+  return fromDubaiInput(value);
 }
 
-/** Now, as a datetime-local value (for a form's first value). */
-export const nowLocalInput = () => format(new Date(), "yyyy-MM-dd'T'HH:mm");
+/** Now in Dubai, as a datetime-local value (for a form's first value). */
+export const nowLocalInput = () => dubaiInputIn(0);
 
 export const errorText = (e: unknown, fallback: string) => (e instanceof Error ? e.message : fallback);
 

@@ -198,11 +198,15 @@ export function mapContract(row: Row, extra: { renewedByContractId?: string | nu
   };
 }
 
-function propertyLabelOf(property: Row): string {
-  return [property.propertyDetail, property.propertyAddress]
-    .map((v) => (typeof v === "string" ? v.trim() : ""))
-    .filter(Boolean)
-    .join(" — ");
+/*
+  "Unit 101 — Villa Road, JLT". When the address already starts with the
+  unit ("Unit 101, Test Tower QA, JLT") it is the address alone (27 Nov
+  2026: the visit link read "at Unit 101 — Unit 101, Test Tower QA").
+*/
+export function propertyLabelOf(property: Row): string {
+  const [detail, address] = [property.propertyDetail, property.propertyAddress].map((v) => (typeof v === "string" ? v.trim() : ""));
+  if (detail && address.toLowerCase().startsWith(detail.toLowerCase())) return address;
+  return [detail, address].filter(Boolean).join(" — ");
 }
 
 /** A missing table means the Active AMC migration is not applied yet. */

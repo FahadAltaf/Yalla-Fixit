@@ -25,6 +25,7 @@ import type { PpmMonthItem } from "@/lib/server/amc/ppm-month";
 
 import { ConfirmationUrgencyBadge, ServiceBadges, visitDayOf } from "./visit-board-shared";
 import { useAmcData } from "./use-amc-data";
+import { formatDubaiShort } from "@/lib/amc/dubai-clock";
 
 type MonthResponse = { migrated: boolean; items: PpmMonthItem[]; month: string; mine: boolean; canSeeAll: boolean };
 
@@ -87,7 +88,7 @@ export function PpmMonthPage() {
         cell: ({ row }) => (
           <span className="flex flex-col text-sm whitespace-nowrap">
             <span className="font-medium">{dayLabel(row.original.targetDate)}</span>
-            {row.original.scheduledStart ? <span className="text-muted-foreground text-xs">Slot {format(new Date(row.original.scheduledStart), "d MMM HH:mm")}</span> : null}
+            {row.original.scheduledStart ? <span className="text-muted-foreground text-xs">Slot {formatDubaiShort(row.original.scheduledStart)}</span> : null}
           </span>
         ),
       },

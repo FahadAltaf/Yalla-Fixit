@@ -12,6 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import type { AvailableInspectors } from "@/lib/server/amc/visits";
 import { cn } from "@/lib/utils";
 import { visitsService } from "@/modules/amc-contracts/visits-service";
+import { formatDubaiShort } from "@/lib/amc/dubai-clock";
 
 /** As the server takes a site visit to last (SITE_VISIT_MINUTES). */
 const VISIT_MINUTES = 60;
@@ -22,13 +23,10 @@ type Person = { id: string; name: string; email: string | null };
 
 /*
   "18 Nov at 10:00", in the browser's own time: the date and time fields
-  above it are, so the two always read the same (16 Nov 2026; it was Dubai
-  time, an hour off for someone outside the UAE).
+  above it are, so the two always read the same (16 Nov 2026). Both are
+  Dubai time from 26 Nov 2026 (lib/amc/dubai-clock), as the server is.
 */
-const whenLabel = (iso: string) =>
-  new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false })
-    .format(new Date(iso))
-    .replace(", ", " at ");
+const whenLabel = (iso: string) => formatDubaiShort(iso).replace(/ (\d{2}:\d{2})$/, " at $1");
 
 /**
  * Who inspects a site visit (13-16 Nov 2026), found as a visit's crew is:

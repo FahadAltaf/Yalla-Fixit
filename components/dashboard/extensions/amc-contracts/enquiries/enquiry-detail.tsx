@@ -27,7 +27,6 @@ import {
   UserRound,
   X,
 } from "lucide-react";
-import { format } from "date-fns";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 
@@ -115,6 +114,7 @@ import {
 import { LinkPropertyDialog } from "./link-property-dialog";
 import { useLeadTimeConfirm } from "../lead-time-confirm";
 import { formatPhone, phoneHref, toE164Phone } from "@/lib/phone/format-phone";
+import { toDubaiInput } from "@/lib/amc/dubai-clock";
 
 /* Three tabs, as on a quotation: what it is, the work done for it (site visits), and what happened to it. */
 const TABS = ["details", "site-visits", "activity"] as const;
@@ -1227,8 +1227,8 @@ function EnquiryFact({ icon, label, value, badge, hint }: { icon: React.ReactNod
   );
 }
 
-/** "14:30", in the same 24-hour clock as formatDateTime. */
-const timeOf = (value: string) => format(new Date(value), "HH:mm");
+/** "14:30" in Dubai, the same clock as formatDateTime. */
+const timeOf = (value: string) => toDubaiInput(value).slice(11);
 
 const capitalise = (v: string) =>
   v ? v.charAt(0).toUpperCase() + v.slice(1) : v;

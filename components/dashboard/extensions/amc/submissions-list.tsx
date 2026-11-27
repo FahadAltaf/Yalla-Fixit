@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { format } from "date-fns";
 import type { ColumnDef } from "@tanstack/react-table";
 import {
   CheckCircle2,
@@ -59,6 +58,7 @@ import {
   type AmcSubmission,
   type AmcSubmissionStatus,
 } from "./amc-types";
+import { formatDubaiDateTime } from "@/lib/amc/dubai-clock";
 
 type Scope = "all" | "mine" | "others";
 
@@ -287,7 +287,7 @@ export function SubmissionsList() {
       header: "Created",
       cell: ({ row }) => (
         <IconText icon={Clock} muted>
-          {format(new Date(row.original.created_at), "dd MMM yyyy, HH:mm")}
+          {formatDubaiDateTime(row.original.created_at)}
         </IconText>
       ),
       enableSorting: false,

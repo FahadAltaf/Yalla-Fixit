@@ -1,11 +1,12 @@
+import { after } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import type { assetSchema, scopeItemSchema } from "@/lib/amc/client-profile";
-import { recordAmcAudit } from "@/lib/server/amc/audit";
+import { recordAmcAudit, recordAmcAudits } from "@/lib/server/amc/audit";
 import { getAssessment, type AssessmentRecord } from "@/lib/server/amc/business";
 import {
-  createAsset,
-  createScopeItem,
+  createAssets,
+  createScopeItems,
   listAssets,
   listScope,
   retireAsset,
@@ -38,6 +39,19 @@ import type { z } from "zod";
 type Admin = SupabaseClient;
 type Row = Record<string, unknown>;
 type Actor = { id: string; label: string | null };
+
+/** Runs work once the caller has answered; outside a request (tests, scripts) straight away. */
+function afterAnswer(work: () => Promise<unknown>): void {
+  const run = () => work().then(
+    () => undefined,
+    (e) => console.error("[amc] after the answer:", e instanceof Error ? e.message : e),
+  );
+  try {
+    after(run);
+  } catch {
+    void run();
+  }
+}
 type AssetInput = z.infer<typeof assetSchema>;
 type ScopeInput = z.infer<typeof scopeItemSchema>;
 
@@ -241,8 +255,14 @@ async function assertApprover(admin: Admin, a: AssessmentRecord, userId: string)
 /**
  * Approves a completed site visit: its held asset changes go onto the
  * property first (a new scope item can point at a new asset), then its
- * scope changes, each marked applied as it lands, so a retry after a
- * failure carries on where it stopped. Only its named approver may.
+ * scope changes. Only its named approver may.
+ *
+ * 26 Nov 2026: each change was applied and marked on its own, four calls
+ * one after another, ~3 s a change on live (10 changes took ~28 s). New
+ * assets and new scope items now go in one insert each, and the changes are
+ * marked applied together at the end; a retry after a failure applies them
+ * again harmlessly (an id already there is skipped, an update is the same
+ * update, a removal of something gone is nothing).
  */
 export async function approveSiteVisit(admin: Admin, id: string, actor: Actor): Promise<AssessmentRecord> {
   const a = await getAssessment(admin, id);
@@ -251,47 +271,45 @@ export async function approveSiteVisit(admin: Admin, id: string, actor: Actor): 
   const changes = await heldSiteChanges(admin, id);
   if (changes.length && !propertyId) throw new ContractError("The site visit has no property to apply its changes to.", 409);
   const where = `site visit ${a.assessmentNumber}`;
-  const ordered = [...changes.filter((c) => c.entity === "asset"), ...changes.filter((c) => c.entity === "scope")];
-  for (const c of ordered) {
-    const pid = propertyId!;
-    if (c.entity === "asset") {
-      if (c.op === "insert") await createAsset(admin, pid, c.payload as unknown as AssetInput, actor, c.targetId);
-      else if (c.op === "update") await updateAsset(admin, pid, c.targetId, c.payload as unknown as AssetInput, actor);
-      else {
-        try {
-          await retireAsset(admin, pid, c.targetId, `Removed on ${where}`, actor);
-        } catch (e) {
-          /* Already gone from the property: nothing left to remove. */
-          if (!(e instanceof ContractError && e.status === 404)) throw e;
-        }
-      }
-    } else if (c.op === "insert") await createScopeItem(admin, pid, c.payload as unknown as ScopeInput, actor, c.targetId);
-    else if (c.op === "update") await updateScopeItem(admin, pid, c.targetId, c.payload as unknown as ScopeInput, actor);
-    else {
-      const { data: off, error: offError } = await admin
-        .from("amc_scope_items")
-        .update({ active: false, updated_at: new Date().toISOString() })
-        .eq("id", c.targetId)
-        .eq("property_id", pid)
-        .select("id");
-      if (offError) throw new ContractError(offError.message, 500);
-      if (off?.length) {
-        await recordAmcAudit(admin, {
-          entityType: "property",
-          entityId: pid,
-          eventType: "scope_item_removed",
-          actorId: actor.id,
-          actorLabel: actor.label,
-          payload: { scopeItemId: c.targetId, assessmentId: id },
-        });
-      }
+  const pid = propertyId!;
+  const of = (entity: SiteChangeEntity, op: SiteChangeOp) => changes.filter((c) => c.entity === entity && c.op === op);
+
+  await createAssets(admin, pid, of("asset", "insert").map((c) => ({ id: c.targetId, input: c.payload as unknown as AssetInput })), actor);
+  for (const c of of("asset", "update")) await updateAsset(admin, pid, c.targetId, c.payload as unknown as AssetInput, actor);
+  for (const c of changes.filter((x) => x.entity === "asset" && x.op !== "insert" && x.op !== "update")) {
+    try {
+      await retireAsset(admin, pid, c.targetId, `Removed on ${where}`, actor);
+    } catch (e) {
+      /* Already gone from the property: nothing left to remove. */
+      if (!(e instanceof ContractError && e.status === 404)) throw e;
     }
-    const { error: marked } = await admin
-      .from(CHANGES)
-      .update({ applied_at: new Date().toISOString() })
-      .eq("assessment_id", id)
-      .eq("entity", c.entity)
-      .eq("target_id", c.targetId);
+  }
+  await createScopeItems(admin, pid, of("scope", "insert").map((c) => ({ id: c.targetId, input: c.payload as unknown as ScopeInput })), actor);
+  for (const c of of("scope", "update")) await updateScopeItem(admin, pid, c.targetId, c.payload as unknown as ScopeInput, actor);
+  const removedScope = changes.filter((x) => x.entity === "scope" && x.op !== "insert" && x.op !== "update").map((c) => c.targetId);
+  if (removedScope.length) {
+    const { data: off, error: offError } = await admin
+      .from("amc_scope_items")
+      .update({ active: false, updated_at: new Date().toISOString() })
+      .in("id", removedScope)
+      .eq("property_id", pid)
+      .eq("active", true)
+      .select("id");
+    if (offError) throw new ContractError(offError.message, 500);
+    await recordAmcAudits(
+      admin,
+      ((off ?? []) as Row[]).map((r) => ({
+        entityType: "property",
+        entityId: pid,
+        eventType: "scope_item_removed",
+        actorId: actor.id,
+        actorLabel: actor.label,
+        payload: { scopeItemId: r.id, assessmentId: id },
+      })),
+    );
+  }
+  if (changes.length) {
+    const { error: marked } = await admin.from(CHANGES).update({ applied_at: new Date().toISOString() }).eq("assessment_id", id).is("applied_at", null);
     if (marked) throw new ContractError(marked.message, 500);
   }
 
@@ -312,8 +330,10 @@ export async function approveSiteVisit(admin: Admin, id: string, actor: Actor): 
     payload: { applied: { assets: changes.filter((c) => c.entity === "asset").length, scope: changes.filter((c) => c.entity === "scope").length } },
   });
   const tell = [a.assessorId, a.createdBy].filter((u): u is string => Boolean(u) && u !== actor.id);
+  /* Sent once the approver has the answer (26 Nov 2026): the page is not kept waiting on it. */
   if (tell.length) {
-    await notifyUsers(admin, {
+    afterAnswer(() =>
+      notifyUsers(admin, {
       event: "site_visit_approved",
       userIds: tell,
       title: `Site visit ${a.assessmentNumber} approved`,
@@ -324,7 +344,8 @@ export async function approveSiteVisit(admin: Admin, id: string, actor: Actor): 
       entityType: "assessment",
       entityId: id,
       dedupeKey: `site_visit_approved:${id}`,
-    });
+      }),
+    );
   }
   return getAssessment(admin, id);
 }

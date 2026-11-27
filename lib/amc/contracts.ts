@@ -17,7 +17,7 @@
  * plus "renewed" when a later contract renews it, and
  * "pending_activation" for a signed proposal with no contract yet.
  */
-import type { ContractStatus } from "./contract-lifecycle";
+import { expiryFromCommencement, type ContractStatus } from "./contract-lifecycle";
 import { computeAmcPricing, filsToAed, roundAed, toFils } from "./pricing";
 
 /* ------------------------------------------------------------------ */
@@ -198,8 +198,16 @@ export function proposalTermMonths(startDate: string, endDate: string): number |
   return Math.max(1, Math.round(days / (365.25 / 12)));
 }
 
+/*
+  The last day of a term, the DEV-372 way activation and the PPM plan count
+  it: the day before the same date `months` later (1 Dec 2026 for a year
+  ends 30 Nov 2027). 27 Nov 2026 (AMC-C-2026-0001 on live): the proposal
+  offered 1 Dec 2027, the client signed that, and activation then set
+  30 Nov 2027; the proposal, renewal and activation now agree.
+*/
 export function defaultEndDate(startDate: string, termMonths = DEFAULT_TERM_MONTHS): string | null {
-  return addMonths(startDate, termMonths);
+  if (!parseDate(startDate)) return null;
+  return expiryFromCommencement(startDate, termMonths);
 }
 
 export type PeriodCheck = { ok: true } | { ok: false; error: string };
@@ -258,10 +266,18 @@ export function usageDate(occurredAt: string): string {
   return Number.isNaN(at.getTime()) ? occurredAt.slice(0, 10) : todayInDubai(at);
 }
 
+/*
+  Whole months from the start to the end date, the end date being the last
+  day covered. Counted to the day after it (27 Nov 2026), so a term ending
+  the day before (DEV-372: 1 Dec 2026 to 30 Nov 2027) is 12 months, as is
+  one written to the same date (1 Dec to 1 Dec). Counted to the end date
+  itself, the first was 11 months and each renewal came out a month short.
+*/
 export function termMonthsBetween(startDate: string, endDate: string): number | null {
   const start = parseDate(startDate);
-  const end = parseDate(endDate);
-  if (!start || !end) return null;
+  const last = parseDate(endDate);
+  if (!start || !last) return null;
+  const end = new Date(last.getTime() + 86_400_000);
   return (
     (end.getUTCFullYear() - start.getUTCFullYear()) * 12 +
     (end.getUTCMonth() - start.getUTCMonth()) -
